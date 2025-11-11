@@ -17,10 +17,10 @@
 //!
 //! Additionally, there are strongly typed values for common DWN messages, including:
 //! - [`messages::records::RecordsRead`]: A message for reading records.
-//! - [`messages::records::RecordsQuery`]: A descriptor for reading records.
-//! - [`messages::records::RecordsWrite`]: A descriptor for reading records.
-//! - [`messages::records::RecordsSubscribe`]: A descriptor for reading records.
-//! - [`messages::records::RecordsDelete`]: A descriptor for reading records.
+//! - [`messages::records::RecordsQuery`]: A message for querying records.
+//! - [`messages::records::RecordsWrite`]: A message for writing records.
+//! - [`messages::records::RecordsSubscribe`]: A message for subscribing to records.
+//! - [`messages::records::RecordsDelete`]: A message for deleting records.
 #![doc(issue_tracker_base_url = "https://github.com/enmand/dwn-rsissues/")]
 pub mod auth;
 pub mod encryption;

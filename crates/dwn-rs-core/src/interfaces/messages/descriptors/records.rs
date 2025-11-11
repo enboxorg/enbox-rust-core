@@ -622,8 +622,8 @@ mod test {
         assert_eq!(build_qd, de);
     }
 
-    #[test]
-    fn test_write_descriptor() {
+    #[tokio::test]
+    async fn test_write_descriptor() {
         let message_timestamp = DateTime::from_str(
             Utc::now()
                 .to_rfc3339_opts(SecondsFormat::Micros, true)
@@ -647,10 +647,23 @@ mod test {
             data_format: "test".to_string(),
         };
 
+        let (build_wd, _) = WriteParameters {
+            data_cid: Some("test".to_string()),
+            data_size: Some(0),
+            date_created: Some(message_timestamp),
+            message_timestamp: Some(message_timestamp),
+            data_format: "test".to_string(),
+            ..Default::default()
+        }
+        .build()
+        .await
+        .unwrap();
+
         let ser = serde_json::to_string(&wd).unwrap();
         let de: WriteDescriptor = serde_json::from_str(&ser).unwrap();
 
         assert_eq!(wd, de);
+        assert_eq!(build_wd, de);
     }
 
     #[test]

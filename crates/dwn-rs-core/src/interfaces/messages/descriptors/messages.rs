@@ -23,6 +23,21 @@ impl MessageValidator for ReadParameters {}
 impl MessageParameters for ReadParameters {
     type Descriptor = ReadDescriptor;
     type Fields = Authorization;
+
+    async fn build(
+        &self,
+    ) -> Result<(Self::Descriptor, Option<Self::Fields>), super::ValidationError> {
+        let descriptor = ReadDescriptor {
+            message_timestamp: self.message_timestamp,
+            message_cid: Some(self.message_cid),
+        };
+
+        Ok((descriptor, None))
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
+    }
 }
 
 #[descriptor(interface = MESSAGES, method = READ, fields = crate::auth::Authorization, parameters = ReadParameters)]
@@ -38,7 +53,7 @@ pub struct ReadDescriptor {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct QueryParameters {
-    pub filters: Option<MessagesFilter>,
+    pub filter: Option<Vec<MessagesFilter>>,
     pub cursor: Option<crate::Cursor>,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
@@ -51,6 +66,27 @@ impl MessageValidator for QueryParameters {}
 impl MessageParameters for QueryParameters {
     type Descriptor = QueryDescriptor;
     type Fields = Authorization;
+
+    async fn build(
+        &self,
+    ) -> Result<(Self::Descriptor, Option<Self::Fields>), super::ValidationError> {
+        let filters = match self.filter {
+            Some(ref filter) => filter.clone(),
+            None => Vec::new(),
+        };
+
+        let descriptor = QueryDescriptor {
+            message_timestamp: self.message_timestamp,
+            cursor: self.cursor.clone(),
+            filters,
+        };
+
+        Ok((descriptor, None))
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
+    }
 }
 
 #[descriptor(interface = MESSAGES, method = QUERY, fields = crate::auth::Authorization, parameters = QueryParameters)]
@@ -61,14 +97,14 @@ pub struct QueryDescriptor {
     )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub filters: Vec<crate::Filters>,
+    pub filters: Vec<MessagesFilter>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<crate::Cursor>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct SubscribeParameters {
-    pub filters: Option<MessagesFilter>,
+    pub filters: Vec<MessagesFilter>,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(rename = "permissionGrantId")]
@@ -80,6 +116,23 @@ impl MessageValidator for SubscribeParameters {}
 impl MessageParameters for SubscribeParameters {
     type Descriptor = SubscribeDescriptor;
     type Fields = Authorization;
+
+    async fn build(
+        &self,
+    ) -> Result<(Self::Descriptor, Option<Self::Fields>), super::ValidationError> {
+        let filters = self.filters.clone();
+
+        let descriptor = SubscribeDescriptor {
+            message_timestamp: self.message_timestamp,
+            filters,
+        };
+
+        Ok((descriptor, None))
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
+    }
 }
 
 #[descriptor(interface = MESSAGES, method = SUBSCRIBE, fields = crate::auth::Authorization, parameters = SubscribeParameters)]
@@ -90,7 +143,7 @@ pub struct SubscribeDescriptor {
     )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub filters: Vec<crate::Filters>,
+    pub filters: Vec<MessagesFilter>,
 }
 
 #[cfg(test)]
@@ -138,7 +191,7 @@ mod test {
         )
         .unwrap();
 
-        let filters = vec![crate::Filters::default()];
+        let filters = vec![MessagesFilter::default()];
         let cursor = Some(crate::Cursor::default());
         let descriptor = QueryDescriptor {
             message_timestamp,
@@ -147,7 +200,7 @@ mod test {
         };
         let json = json!({
             "messageTimestamp": message_timestamp,
-            "filters": [crate::Filters::default()],
+            "filters": [MessagesFilter::default()],
             "cursor": cursor,
             "interface": MESSAGES,
             "method": QUERY,
@@ -168,14 +221,14 @@ mod test {
         )
         .unwrap();
 
-        let filters = vec![crate::Filters::default()];
+        let filters = vec![MessagesFilter::default()];
         let descriptor = SubscribeDescriptor {
             message_timestamp,
             filters,
         };
         let json = json!({
             "messageTimestamp": message_timestamp,
-            "filters": [crate::Filters::default()],
+            "filters": [MessagesFilter::default()],
             "interface": MESSAGES,
             "method": SUBSCRIBE
         });

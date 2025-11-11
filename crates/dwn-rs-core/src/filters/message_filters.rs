@@ -41,7 +41,7 @@ pub struct Records {
     pub date_updated: Option<RangeFilter<String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 #[skip_serializing_none()]
 pub struct Messages {
     pub interface: Option<String>,

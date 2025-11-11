@@ -26,6 +26,22 @@ impl MessageValidator for ConfigureDescriptor {}
 impl MessageParameters for ConfigureParameters {
     type Descriptor = ConfigureDescriptor;
     type Fields = Authorization;
+
+    async fn build(
+        &self,
+    ) -> Result<(Self::Descriptor, Option<Self::Fields>), super::ValidationError> {
+        let message_timestamp = match self.message_timestamp {
+            Some(ts) => ts,
+            None => chrono::Utc::now(),
+        };
+
+        let descriptor = ConfigureDescriptor {
+            message_timestamp,
+            definition: self.definition.clone(),
+        };
+
+        Ok((descriptor, None))
+    }
 }
 
 #[descriptor(interface = PROTOCOLS, method = CONFIGURE, fields = crate::auth::Authorization, parameters = ConfigureParameters)]
@@ -49,6 +65,20 @@ impl MessageValidator for QueryParameters {}
 impl MessageParameters for QueryParameters {
     type Descriptor = QueryDescriptor;
     type Fields = Authorization;
+
+    async fn build(
+        &self,
+    ) -> Result<(Self::Descriptor, Option<Self::Fields>), super::ValidationError> {
+        let descriptor = QueryDescriptor {
+            message_timestamp: self.message_timestamp,
+            filter: self.filter.as_ref().map(|f| QueryFilter {
+                protocol: Some(f.protocol.clone()),
+                recipient: None,
+            }),
+        };
+
+        Ok((descriptor, None))
+    }
 }
 
 #[descriptor(interface = PROTOCOLS , method = QUERY, fields = crate::auth::Authorization, parameters = QueryParameters)]
