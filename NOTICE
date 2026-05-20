@@ -1,0 +1,9 @@
+enbox-rust-core
+
+This repository was cloned from dwn-rs by Enmand and contributors:
+
+  https://github.com/enmand/dwn-rs
+
+The original git history is intentionally preserved so prior work remains visible in commit history and contributor attribution. Enbox is continuing from that foundation to build a native Rust core for Enbox DWN, agent, sync, wallet, mobile, and desktop infrastructure.
+
+This project is licensed under the Apache License, Version 2.0.
