@@ -46,7 +46,10 @@ impl MessageParameters for ConfigureParameters {
 
 #[descriptor(interface = PROTOCOLS, method = CONFIGURE, fields = crate::auth::Authorization, parameters = ConfigureParameters)]
 pub struct ConfigureDescriptor {
-    #[serde(rename = "messageTimestamp")]
+    #[serde(
+        rename = "messageTimestamp",
+        serialize_with = "crate::ser::serialize_datetime"
+    )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     pub definition: protocols::Definition,
 }
@@ -111,13 +114,17 @@ mod test {
     use crate::protocols::ActionWho;
 
     use super::*;
-    use chrono::Utc;
+    use chrono::{SecondsFormat, Utc};
     use serde_json::json;
     use ssi_jwk::JWK;
 
     #[test]
     fn test_configure_descriptor() {
-        let message_timestamp = Utc::now();
+        let message_timestamp = chrono::DateTime::parse_from_rfc3339(
+            &Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+        )
+        .unwrap()
+        .with_timezone(&Utc);
         let definition = protocols::Definition {
             protocol: "example".to_string(),
             published: true,
@@ -129,7 +136,7 @@ mod test {
             definition,
         };
         let json = json!({
-            "messageTimestamp": message_timestamp,
+            "messageTimestamp": message_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
             "definition": {
                 "protocol": "example",
                 "published": true,
