@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "cidFunction": "Cid.computeCid"
+  },
+  "cases": [
+    {
+      "id": "messages-sync-root-protocol",
+      "description": "MessagesSync root request scoped to a protocol.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreieykhu5avbofples6p3nf64qx2p7owgq6qpi5x22qavlzpc43dhd4",
+      "messageCid": "bafyreiexrwjg743psdfgk4uqxjxyomsflpazlwf56t2752uhh4dfb56cne",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:00.000000Z",
+          "action": "root",
+          "protocol": "http://example.com/protocol"
+        }
+      }
+    },
+    {
+      "id": "messages-sync-subtree",
+      "description": "MessagesSync subtree hash request for a bit prefix.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreiffjny74e4vpojy24rybyoq7by222vyjdlb4gsrhkw2rqtpcbdige",
+      "messageCid": "bafyreidyhcv5ohcj2r3f4kldahzpse7pqkub3jfvcv5fn5y5jt6vccvkc4",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:01.000000Z",
+          "action": "subtree",
+          "prefix": "0101"
+        }
+      }
+    },
+    {
+      "id": "messages-sync-leaves",
+      "description": "MessagesSync leaves request for a bit prefix.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreihvv2n4ksbv5dtjeeapckgmvmwds24rjmhz44kfmer7gnkckcykpe",
+      "messageCid": "bafyreib5asotwnk6puti4tiztzinjxb4ejshv4uncfkjxahlp5e7usloiu",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:02.000000Z",
+          "action": "leaves",
+          "prefix": "0101"
+        }
+      }
+    },
+    {
+      "id": "messages-sync-diff",
+      "description": "MessagesSync diff request containing client subtree hashes at a requested depth.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreihcbr3gmhy6fmrtvulrqyziu5comn42oyj42fy7orjlcd5dnalygy",
+      "messageCid": "bafyreic7sbqe7yi2kofsdudufaviq2ydx4zgwzortofukcezzncpbxgg3u",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:03.000000Z",
+          "action": "diff",
+          "depth": 4,
+          "hashes": {
+            "0000": "0000000000000000000000000000000000000000000000000000000000000000",
+            "0101": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+          }
+        }
+      }
+    }
+  ]
+}

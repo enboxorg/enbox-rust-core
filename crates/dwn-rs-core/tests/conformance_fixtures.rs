@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 const BASIC_MESSAGES: &str =
     include_str!("../../../fixtures/dwn/messages/basic-interface-messages.json");
+const MESSAGES_SYNC: &str = include_str!("../../../fixtures/dwn/messages/sync-descriptors.json");
 const PROTOCOL_CONFIGURE: &str =
     include_str!("../../../fixtures/dwn/protocols/configure-definitions.json");
 
@@ -62,7 +63,7 @@ fn supported_fixture_descriptors_roundtrip_through_rust_models() {
 }
 
 fn load_fixture_sets() -> Vec<FixtureSet> {
-    [BASIC_MESSAGES, PROTOCOL_CONFIGURE]
+    [BASIC_MESSAGES, MESSAGES_SYNC, PROTOCOL_CONFIGURE]
         .into_iter()
         .map(|fixture| serde_json::from_str(fixture).expect("fixture file must be valid JSON"))
         .collect()
