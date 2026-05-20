@@ -19,7 +19,7 @@ futures-core = { version = "0.3.30", default-features = false, features = [
     "alloc",
 ] }
 tokio = { version = "1.39.2", features = ["io-util", "rt", "macros", "rt-multi-thread"] }
-thiserror = "1.0.64"
+thiserror = "2.0.18"
 serde = "1.0.210"
 serde_json = "1.0.128"
 tower = "0.5.1"
