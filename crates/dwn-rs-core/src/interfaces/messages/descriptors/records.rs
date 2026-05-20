@@ -282,13 +282,11 @@ impl MessageParameters for WriteParameters {
     ) -> Result<(Self::Descriptor, Option<Self::Fields>), super::ValidationError> {
         let data_cid = match &self.data_cid {
             Some(cid) => cid.clone(),
-            None => {
-                crate::cid::generate_cid(self.data.as_ref().map(|d| d.as_slice()).unwrap_or(&[]))
-                    .map_err(|e| ValidationError {
-                        message: e.to_string(),
-                    })?
-                    .to_string()
-            }
+            None => crate::cid::generate_cid(self.data.as_deref().unwrap_or(&[]))
+                .map_err(|e| ValidationError {
+                    message: e.to_string(),
+                })?
+                .to_string(),
         };
         let data_size = self.data_size.unwrap_or_else(|| {
             self.data
@@ -499,7 +497,7 @@ pub struct DeleteParameters {
     pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(rename = "protocolRole")]
     pub protocol_role: Option<String>,
-    #[serde(rename = "protocolRole")]
+    #[serde(rename = "prune")]
     pub prune: Option<bool>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,

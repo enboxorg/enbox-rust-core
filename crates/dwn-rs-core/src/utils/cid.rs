@@ -9,12 +9,14 @@ use multihash_codetable::MultihashDigest;
 use serde_ipld_dagcbor::EncodeError;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek};
 
+const DAG_CBOR_CODEC: u64 = 0x71;
+
 pub fn generate_cid<B>(data: B) -> Result<Cid, EncodeError<TryReserveError>>
 where
     B: AsRef<[u8]>,
 {
     let mh = Code::Sha2_256.digest(data.as_ref());
-    let cid = Cid::new_v1(multicodec::Codec::DagCbor.code(), mh);
+    let cid = Cid::new_v1(DAG_CBOR_CODEC, mh);
 
     Ok(cid)
 }
@@ -41,7 +43,7 @@ where
         .await;
 
     let mh = Code::Sha2_256.digest(&buf);
-    let cid = Cid::new_v1(multicodec::Codec::DagCbor.code(), mh);
+    let cid = Cid::new_v1(DAG_CBOR_CODEC, mh);
 
     Ok(cid)
 }
@@ -61,7 +63,7 @@ where
         .unwrap();
 
     let mh = Code::Sha2_256.digest(&buf);
-    let cid = Cid::new_v1(multicodec::Codec::DagCbor.code(), mh);
+    let cid = Cid::new_v1(DAG_CBOR_CODEC, mh);
 
     Ok(cid)
 }
@@ -85,7 +87,7 @@ mod tests {
             cid,
             Cid::from_str("bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra").unwrap(),
         );
-        assert_eq!(cid.codec(), multicodec::Codec::DagCbor.code());
+        assert_eq!(cid.codec(), DAG_CBOR_CODEC);
     }
 
     #[tokio::test]
@@ -104,7 +106,7 @@ mod tests {
         // Verify that the CID is generated correctly
         // For a real test, you might compare the cid with a known value
         assert_eq!(cid.version(), cid::Version::V1);
-        assert_eq!(cid.codec(), multicodec::Codec::DagCbor.code());
+        assert_eq!(cid.codec(), DAG_CBOR_CODEC);
 
         // For demonstration: hash the data using the same logic to get the expected hash
         let expected_mh = multihash_codetable::Code::Sha2_256.digest(data);

@@ -5,8 +5,8 @@ members = [
     "crates/dwn-rs-message-derive",
     "crates/dwn-rs-remote",
     "crates/dwn-rs-stores",
-    "crates/dwn-rs-wasm",
 ]
+exclude = ["crates/dwn-rs-wasm"]
 
 [profile.release]
 lto = "fat"

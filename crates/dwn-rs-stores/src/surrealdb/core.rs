@@ -51,7 +51,7 @@ impl SurrealDB {
                 return Err(StoreError::NoInitError);
             } else {
                 let connstr = self.constr.clone();
-                self.connect(&connstr).await.map_err(SurrealDBError::from)?;
+                self.connect(&connstr).await?;
             }
         }
 

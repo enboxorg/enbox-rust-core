@@ -1,5 +1,5 @@
-use async_std::stream::from_iter;
 use bytes::Bytes;
+use futures_util::stream::iter as from_iter;
 use futures_util::{pin_mut, Stream, StreamExt};
 use surrealdb::{
     sql::{
@@ -289,7 +289,7 @@ fn chunks_graph_query() -> Query {
 
 #[cfg(test)]
 mod test {
-    use async_std::stream;
+    use futures_util::stream;
     use futures_util::StreamExt;
     use std::iter::repeat_with;
 
@@ -321,7 +321,7 @@ mod test {
         );
 
         let put = db
-            .put(tenant, record_id, cid, stream::once(data.clone()))
+            .put(tenant, record_id, cid, stream::iter([data.clone()]))
             .await
             .unwrap();
         assert_eq!(put.size, data.len());
@@ -368,7 +368,7 @@ mod test {
         );
 
         let put = db
-            .put(tenant, record_id, cid, stream::once(data.clone()))
+            .put(tenant, record_id, cid, stream::iter([data.clone()]))
             .await
             .unwrap();
         assert_eq!(put.size, data.len());

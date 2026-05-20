@@ -91,7 +91,7 @@ impl EventLog for SurrealDB {
         })
     }
 
-    async fn delete<'a>(&self, tenant: &str, cids: &'a [&str]) -> Result<(), EventLogError> {
+    async fn delete(&self, tenant: &str, cids: &[&str]) -> Result<(), EventLogError> {
         Ok(self
             .with_database(tenant, |db| async move {
                 for c in cids {

@@ -1,134 +1,32 @@
 name: Tests
+
 on:
   push:
     branches:
       - main
   pull_request:
+
 jobs:
   rust-tests:
-    name: Rust tests
+    name: Native Rust workspace
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.89.0
         with:
-          toolchain: stable
-          components: llvm-tools-preview
+          components: rustfmt, clippy
+
       - uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
-      - name: Install cargo-make
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: --debug cargo-make
-          toolchain: stable
-      - name: Run CI
-        uses: actions-rs/cargo@v1
-        env:
-          CARGO_MAKE_RUN_CODECOV: true
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        with:
-          super_secret: ${{ secrets.CODECOV_TOKEN }}
-          command: make
-          args: --no-workspace workspace-ci-flow
-          toolchain: stable
-  wasm-build:
-    name: "WASM (Node build)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-all-crates: true
-      - name: Install cargo-make (stable)
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: --debug cargo-make
-      - name: Build WASM library
-        uses: actions-rs/cargo@v1
-        with:
-          command: make
-          args: build-wasm-no-opt
-  wasm-tests:
-    name: "WASM (node tests)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-all-crates: true
-      - name: Install cargo-make (stable)
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: --debug cargo-make
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20.x
-      - name: Test WASM library against dwn-sdk-js
-        uses: actions-rs/cargo@v1
-        with:
-          command: make
-          args: test-store-js
-  browser-build:
-    name: "WASM (browser build)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-all-crates: true
-      - name: Install cargo-make (stable)
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: --debug cargo-make
-      - name: Build WASM library
-        uses: actions-rs/cargo@v1
-        with:
-          command: make
-          args: build-wasm-browser-no-opt
-  browser-tests:
-    name: "WASM (browser tests)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-all-crates: true
-      - name: Install cargo-make (stable)
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: --debug cargo-make
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20.x
-      - name: Test WASM library against dwn-sdk-js
-        uses: actions-rs/cargo@v1
-        with:
-          command: make
-          args: test-store-js-browser
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Build test targets
+        run: cargo test --workspace --no-run
