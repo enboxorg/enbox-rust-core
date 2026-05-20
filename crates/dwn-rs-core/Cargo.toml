@@ -30,7 +30,7 @@ tokio = { version = "1.39.2", features = ["io-util", "rt", "macros"] }
 derive_more = { version = "1.0", features = ["display", "from", "try_into"] }
 ssi-dids-core = "0.1.0"
 base64 = "0.22.1"
-ssi-jwk = { version = "0.3.1", features = [
+ssi-jwk = { version = "0.4.0", features = [
     "secp256r1",
     "secp256k1",
     "ed25519",
