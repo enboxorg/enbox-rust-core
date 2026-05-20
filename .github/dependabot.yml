@@ -6,5 +6,6 @@ updates:
       interval: "weekly"
     ignore:
       - dependency-name: "surrealdb"
+      - dependency-name: "ssi-*"
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
