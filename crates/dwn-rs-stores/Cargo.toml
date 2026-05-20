@@ -52,5 +52,5 @@ memoize = { version = "0.4.2", default-features = false }
 bytes = { version = "1.8.0", features = ["serde"] }
 
 [dev-dependencies]
-rand = "0.8.5"
+rand = "0.9.4"
 tokio-util = "0.7.12"

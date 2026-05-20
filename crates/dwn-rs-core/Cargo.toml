@@ -43,7 +43,7 @@ serde_json = "1.0.113"
 tracing = "0.1.40"
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 bytes = "1.8.0"
-rand = "0.8.5"
+rand = "0.9.4"
 partially = { version = "0.2.1", features = ["derive"] }
 multihash = { version = "0.19.1", features = ["serde"] }
 multihash-codetable = { version = "0.2.2", features = ["serde", "sha2"] }
