@@ -83,8 +83,12 @@ impl MessageParameters for QueryParameters {
 
 #[descriptor(interface = PROTOCOLS , method = QUERY, fields = crate::auth::Authorization, parameters = QueryParameters)]
 pub struct QueryDescriptor {
-    #[serde(rename = "message_timestamp")]
+    #[serde(
+        rename = "messageTimestamp",
+        serialize_with = "crate::ser::serialize_datetime"
+    )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<QueryFilter>,
 }
 

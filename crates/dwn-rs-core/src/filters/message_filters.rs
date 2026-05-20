@@ -8,8 +8,8 @@ use crate::Value;
 
 use super::{Filter, RangeFilter};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Records {
     pub author: Option<Vec<String>>,
     pub attester: Option<String>,
@@ -41,8 +41,8 @@ pub struct Records {
     pub date_updated: Option<RangeFilter<String>>,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 #[skip_serializing_none()]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct Messages {
     pub interface: Option<String>,
     pub method: Option<String>,

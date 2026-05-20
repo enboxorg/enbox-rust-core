@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "cidFunction": "Cid.computeCid"
+  },
+  "cases": [
+    {
+      "id": "records-query-basic",
+      "description": "Unsigned RecordsQuery with a normalized schema URL, published filter, and created-descending sort.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreicu6xxflbmhqucas24waianc7hoh2e3vyqmkb2nzqbiytgply7hhq",
+      "messageCid": "bafyreia3vo2bkk4b4nshzup55wgkdgwpr5bsa474iyngfcegompdko6kt4",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Query",
+          "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+          "filter": {
+            "schema": "http://example.com/schema",
+            "published": true
+          },
+          "dateSort": "createdDescending"
+        }
+      }
+    },
+    {
+      "id": "records-read-basic",
+      "description": "Unsigned RecordsRead targeting a single record ID.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreiautkfm2xeskrbht63uul7flohzqpmbrmtztash3v4txtllamqhr4",
+      "messageCid": "bafyreifkpgsbj3zkxqaqofaklsqgctzijlwuvuqa35w7hzqv3wvtfpz2ae",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Read",
+          "messageTimestamp": "2025-01-01T00:00:01.000000Z",
+          "filter": {
+            "recordId": "record-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "protocols-query-basic",
+      "description": "Unsigned ProtocolsQuery with a normalized protocol URL filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreigmavpwhex2fnkicsxpihb4y4mopse5qe74di5ohvh4jqxmzdnptu",
+      "messageCid": "bafyreigwgs5bd3nxr7tcsaqyfbfsuj4htl2leoowzfjkrdv5sm77uyzlim",
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Query",
+          "messageTimestamp": "2025-01-01T00:00:02.000000Z",
+          "filter": {
+            "protocol": "http://example.com/protocol"
+          }
+        }
+      }
+    },
+    {
+      "id": "messages-read-basic",
+      "description": "MessagesRead descriptor for an existing DAG-CBOR message CID.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreibu5v4vxsraazjggp4kpiiumhecacjfrtofwaedndjxz7yh3gppny",
+      "messageCid": "bafyreih2xlou2l3pnfwpkcfnum3wjxnt4mqzn74n2gvhhlby5qshxoesyy",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Read",
+          "messageTimestamp": "2025-01-01T00:00:03.000000Z",
+          "messageCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra"
+        }
+      }
+    },
+    {
+      "id": "records-read-permission-grant",
+      "description": "Current TypeScript RecordsRead includes permissionGrantId in the descriptor when provided.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust RecordsReadDescriptor does not model descriptor.permissionGrantId yet.",
+      "descriptorCid": "bafyreigtnzzwed2jehiwqw7h43sbgehyn4mewinlnyk3xjjtp7mhxck7be",
+      "messageCid": "bafyreietwdt7zrljjemta4n7odeolfcbd2z7o4bl5tdxv5icsongg2wkz4",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Read",
+          "messageTimestamp": "2025-01-01T00:00:04.000000Z",
+          "filter": {
+            "recordId": "record-2"
+          },
+          "permissionGrantId": "grant-abc-123"
+        }
+      }
+    },
+    {
+      "id": "messages-sync-root",
+      "description": "Current TypeScript MessagesSync root request descriptor.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust message descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreifbks3ouv62szruagh43ecjkiid3daingbswi4jwormh4bgcbwnqe",
+      "messageCid": "bafyreie22b6s5pnkmqqboidwhqgq4zrahxtf3irdq5qyg7pge5ayaovfxu",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:00:05.000000Z",
+          "action": "root"
+        }
+      }
+    }
+  ]
+}

@@ -47,7 +47,12 @@ pub struct ReadDescriptor {
         serialize_with = "crate::ser::serialize_datetime"
     )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
-    #[serde(rename = "messageCid", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "messageCid",
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::ser::optional_cid_string"
+    )]
     pub message_cid: Option<Cid>,
 }
 
@@ -171,7 +176,7 @@ mod test {
         };
         let json = json!({
             "messageTimestamp": message_timestamp,
-            "messageCid": message_cid,
+            "messageCid": message_cid.to_string(),
             "interface": MESSAGES,
             "method": READ,
         });
