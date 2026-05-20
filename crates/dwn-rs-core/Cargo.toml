@@ -48,7 +48,7 @@ partially = { version = "0.2.1", features = ["derive"] }
 multihash = { version = "0.19.1", features = ["serde"] }
 multihash-codetable = { version = "0.2.2", features = ["serde", "sha2"] }
 dwn-rs-message-derive = { path = "../dwn-rs-message-derive" }
-ssi-claims-core = "0.1.2"
+ssi-claims-core = "0.2.0"
 k256 = { version = "0.13.4", features = ["ecdh"] }
 hkdf = "0.12.4"
 aes = "0.8.4"
