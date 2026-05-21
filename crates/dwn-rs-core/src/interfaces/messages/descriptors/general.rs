@@ -175,6 +175,7 @@ mod test {
         let desc = Descriptor::Records(Box::new(Records::Read(Box::new(ReadDescriptor {
             message_timestamp: now,
             filter: RecordsFilter::default(),
+            permission_grant_id: None,
         }))));
         let serialized = json!(&desc);
 

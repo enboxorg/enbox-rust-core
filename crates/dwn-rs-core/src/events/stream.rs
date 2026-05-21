@@ -288,6 +288,7 @@ mod test {
                                 chrono::Utc,
                             ),
                             filter: Default::default(),
+                            permission_grant_id: None,
                         },
                     )))),
                     fields: Fields::Authorization(Default::default()),

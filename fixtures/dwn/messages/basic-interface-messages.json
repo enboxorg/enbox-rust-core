@@ -157,8 +157,7 @@
     {
       "id": "records-read-permission-grant",
       "description": "Current TypeScript RecordsRead includes permissionGrantId in the descriptor when provided.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust RecordsReadDescriptor does not model descriptor.permissionGrantId yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreigtnzzwed2jehiwqw7h43sbgehyn4mewinlnyk3xjjtp7mhxck7be",
       "messageCid": "bafyreietwdt7zrljjemta4n7odeolfcbd2z7o4bl5tdxv5icsongg2wkz4",
       "message": {

@@ -47,6 +47,7 @@ impl MessageParameters for ReadParameters {
         let descriptor = ReadDescriptor {
             message_timestamp: self.message_timestamp.unwrap_or_else(chrono::Utc::now),
             filter: self.filters.clone(),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -75,6 +76,8 @@ pub struct ReadDescriptor {
     )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     pub filter: RecordsFilter,
+    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+    pub permission_grant_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -578,6 +581,7 @@ mod test {
         let rd = ReadDescriptor {
             message_timestamp,
             filter: RecordsFilter::default(),
+            permission_grant_id: None,
         };
 
         let ser = serde_json::to_string(&rd).unwrap();

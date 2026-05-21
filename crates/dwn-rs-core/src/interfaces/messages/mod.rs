@@ -273,6 +273,7 @@ mod test {
         let desc = Descriptor::Records(Box::new(Records::Read(Box::new(ReadDescriptor {
             message_timestamp: now,
             filter: crate::filters::Records::default(),
+            permission_grant_id: None,
         }))));
         let fields = Fields::Authorization(Authorization {
             ..Default::default()
