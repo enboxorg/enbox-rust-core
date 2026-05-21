@@ -10,8 +10,7 @@
     {
       "id": "dagpb-empty",
       "description": "DAG-PB/UnixFS CID for an empty byte payload.",
-      "rustStatus": "known_gap",
-      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "rustStatus": "supported",
       "cid": "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
       "data": {
         "encoding": "base64url",
@@ -21,8 +20,7 @@
     {
       "id": "dagpb-hello-world",
       "description": "DAG-PB/UnixFS CID for a small UTF-8 payload.",
-      "rustStatus": "known_gap",
-      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "rustStatus": "supported",
       "cid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
       "data": {
         "encoding": "utf8",
@@ -32,8 +30,7 @@
     {
       "id": "dagpb-binary-small",
       "description": "DAG-PB/UnixFS CID for a small binary payload.",
-      "rustStatus": "known_gap",
-      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "rustStatus": "supported",
       "cid": "bafkreif6ixfsmbn7g27l3zueqqncr4h5ipdjqufd3ts75w5gteuo4oujse",
       "data": {
         "encoding": "hex",
@@ -43,8 +40,7 @@
     {
       "id": "dagpb-repeated-large",
       "description": "DAG-PB/UnixFS CID for a large repeated-byte payload that exercises chunking.",
-      "rustStatus": "known_gap",
-      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "rustStatus": "supported",
       "cid": "bafybeicnrogxohr6rp6rlbv6s4q5gkpx5cmlm3oxqr3a7sfghbnz6sdyvq",
       "data": {
         "encoding": "repeatByte",

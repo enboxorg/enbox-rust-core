@@ -12,7 +12,10 @@ use multihash_codetable::MultihashDigest;
 use serde_ipld_dagcbor::EncodeError;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek};
 
+const DAG_PB_CODEC: u64 = 0x70;
 const DAG_CBOR_CODEC: u64 = 0x71;
+const RAW_CODEC: u64 = 0x55;
+const UNIXFS_CHUNK_SIZE: usize = 262_144;
 
 pub fn generate_cid<B>(data: B) -> Result<Cid, EncodeError<TryReserveError>>
 where
@@ -34,6 +37,41 @@ pub fn generate_cid_from_serialized<T: serde::Serialize>(
 /// Generates a DAG-CBOR CID from JSON using IPLD numeric semantics.
 pub fn generate_cid_from_json(value: &Value) -> Result<Cid, EncodeError<TryReserveError>> {
     generate_cid_from_serialized(json_value_to_ipld(value))
+}
+
+/// Generates a CID matching TypeScript `Cid.computeDagPbCidFromBytes`.
+pub fn generate_dag_pb_cid_from_bytes<B>(data: B) -> Cid
+where
+    B: AsRef<[u8]>,
+{
+    let data = data.as_ref();
+
+    if data.len() <= UNIXFS_CHUNK_SIZE {
+        return generate_raw_cid(data);
+    }
+
+    let links = data
+        .chunks(UNIXFS_CHUNK_SIZE)
+        .map(|chunk| (generate_raw_cid(chunk), chunk.len() as u64))
+        .collect::<Vec<_>>();
+    let block_sizes = links.iter().map(|(_, size)| *size).collect::<Vec<_>>();
+    let unixfs_data = encode_unixfs_file(data.len() as u64, &block_sizes);
+    let dag_pb_node = encode_dag_pb_node(&unixfs_data, &links);
+
+    Cid::new_v1(DAG_PB_CODEC, Code::Sha2_256.digest(&dag_pb_node))
+}
+
+/// Generates a CID matching TypeScript `Cid.computeDagPbCidFromStream`.
+pub async fn generate_dag_pb_cid_from_stream<S, E>(mut stream: S) -> Result<Cid, E>
+where
+    S: TryStream<Ok = Bytes, Error = E> + Unpin,
+{
+    let mut buf = Vec::new();
+    while let Some(chunk) = stream.try_next().await? {
+        buf.extend_from_slice(&chunk);
+    }
+
+    Ok(generate_dag_pb_cid_from_bytes(buf))
 }
 
 /// Converts JSON into IPLD before DAG-CBOR serialization.
@@ -101,9 +139,67 @@ where
     Ok(cid)
 }
 
+fn generate_raw_cid(data: &[u8]) -> Cid {
+    Cid::new_v1(RAW_CODEC, Code::Sha2_256.digest(data))
+}
+
+fn encode_unixfs_file(file_size: u64, block_sizes: &[u64]) -> Vec<u8> {
+    let mut data = Vec::new();
+    push_varint_field(&mut data, 1, 2);
+    push_varint_field(&mut data, 3, file_size);
+
+    for block_size in block_sizes {
+        push_varint_field(&mut data, 4, *block_size);
+    }
+
+    data
+}
+
+fn encode_dag_pb_node(data: &[u8], links: &[(Cid, u64)]) -> Vec<u8> {
+    let mut node = Vec::new();
+
+    for (cid, total_size) in links {
+        let link = encode_dag_pb_link(cid, *total_size);
+        push_bytes_field(&mut node, 2, &link);
+    }
+
+    push_bytes_field(&mut node, 1, data);
+
+    node
+}
+
+fn encode_dag_pb_link(cid: &Cid, total_size: u64) -> Vec<u8> {
+    let mut link = Vec::new();
+    push_bytes_field(&mut link, 1, &cid.to_bytes());
+    push_bytes_field(&mut link, 2, b"");
+    push_varint_field(&mut link, 3, total_size);
+    link
+}
+
+fn push_bytes_field(out: &mut Vec<u8>, field_number: u64, value: &[u8]) {
+    push_varint(out, (field_number << 3) | 2);
+    push_varint(out, value.len() as u64);
+    out.extend_from_slice(value);
+}
+
+fn push_varint_field(out: &mut Vec<u8>, field_number: u64, value: u64) {
+    push_varint(out, field_number << 3);
+    push_varint(out, value);
+}
+
+fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        out.push(((value & 0x7f) as u8) | 0x80);
+        value >>= 7;
+    }
+
+    out.push(value as u8);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::stream;
     use serde_json::json;
     use std::io::Cursor;
     use std::str::FromStr;
@@ -173,5 +269,40 @@ mod tests {
 
         // Compare multihashes
         assert_eq!(cid.hash(), &expected_mh);
+    }
+
+    #[test]
+    fn test_generate_dag_pb_cid_from_bytes_matches_typescript_vectors() {
+        assert_eq!(
+            generate_dag_pb_cid_from_bytes([]).to_string(),
+            "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"
+        );
+        assert_eq!(
+            generate_dag_pb_cid_from_bytes(b"hello world").to_string(),
+            "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e"
+        );
+        assert_eq!(
+            generate_dag_pb_cid_from_bytes((0_u8..16).collect::<Vec<_>>()).to_string(),
+            "bafkreif6ixfsmbn7g27l3zueqqncr4h5ipdjqufd3ts75w5gteuo4oujse"
+        );
+        assert_eq!(
+            generate_dag_pb_cid_from_bytes(vec![97; 300_000]).to_string(),
+            "bafybeicnrogxohr6rp6rlbv6s4q5gkpx5cmlm3oxqr3a7sfghbnz6sdyvq"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_dag_pb_cid_from_stream_matches_bytes() {
+        let chunks = vec![
+            Ok::<_, std::convert::Infallible>(Bytes::from(vec![97; 65_536])),
+            Ok(Bytes::from(vec![98; 270_000])),
+        ];
+        let stream = stream::iter(chunks);
+        let cid = generate_dag_pb_cid_from_stream(stream).await.unwrap();
+
+        let mut data = vec![97; 65_536];
+        data.extend(vec![98; 270_000]);
+
+        assert_eq!(cid, generate_dag_pb_cid_from_bytes(data));
     }
 }
