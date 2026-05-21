@@ -25,6 +25,22 @@
       }
     },
     {
+      "id": "messages-sync-root-global",
+      "description": "MessagesSync root request for a tenant's global state.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreifbewu6bdsgffnrt3vx25j73euzs522fcxfn5z3yszzwdqp4w4uha",
+      "messageCid": "bafyreid77jyfvdi5dkcgmvt7af6foyu6u2wqpfr2phf6maa7oup4irpupy",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:04.000000Z",
+          "action": "root"
+        }
+      }
+    },
+    {
       "id": "messages-sync-subtree",
       "description": "MessagesSync subtree hash request for a bit prefix.",
       "rustStatus": "known_gap",
@@ -38,6 +54,24 @@
           "messageTimestamp": "2025-01-01T00:02:01.000000Z",
           "action": "subtree",
           "prefix": "0101"
+        }
+      }
+    },
+    {
+      "id": "messages-sync-subtree-protocol",
+      "description": "MessagesSync subtree hash request for a protocol-scoped bit prefix.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreidakki2xoyyxstvfuhzs3xdfrkjsyzuajil2cjs6uwsqnxbm2d7n4",
+      "messageCid": "bafyreic7yhv6ucuatvyyyr4ujd5yh3sbmaq6wfjhna6kbfdxpvysp22kci",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:05.000000Z",
+          "action": "subtree",
+          "protocol": "http://example.com/protocol",
+          "prefix": "1010"
         }
       }
     },
@@ -59,6 +93,24 @@
       }
     },
     {
+      "id": "messages-sync-leaves-protocol",
+      "description": "MessagesSync leaves request for a protocol-scoped bit prefix.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreidoqv6oqq26piovf23zghphgva7tol6b3ikznq7tadeealgynilty",
+      "messageCid": "bafyreib4hgnuv4xtyai5em5dncgkllb4jgnylp27rvl33ovtp5gpu5waiq",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:06.000000Z",
+          "action": "leaves",
+          "protocol": "http://example.com/protocol",
+          "prefix": "1010"
+        }
+      }
+    },
+    {
       "id": "messages-sync-diff",
       "description": "MessagesSync diff request containing client subtree hashes at a requested depth.",
       "rustStatus": "known_gap",
@@ -75,6 +127,28 @@
           "hashes": {
             "0000": "0000000000000000000000000000000000000000000000000000000000000000",
             "0101": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+          }
+        }
+      }
+    },
+    {
+      "id": "messages-sync-diff-protocol",
+      "description": "MessagesSync diff request containing protocol-scoped client subtree hashes.",
+      "rustStatus": "known_gap",
+      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "descriptorCid": "bafyreihe4yz6qvbevwtprsnhq3tvxnpakcjqn5nluncwsvpinnpuxxwkn4",
+      "messageCid": "bafyreihgjuknrzittk4w5pg4wzhlqlhiosa5j4rczz5k674kmhme43ji3m",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-01-01T00:02:07.000000Z",
+          "action": "diff",
+          "protocol": "http://example.com/protocol",
+          "depth": 3,
+          "hashes": {
+            "000": "0000000000000000000000000000000000000000000000000000000000000000",
+            "101": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
           }
         }
       }
