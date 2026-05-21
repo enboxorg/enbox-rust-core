@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "cidFunctions": ["Cid.computeDagPbCidFromBytes", "Cid.computeDagPbCidFromStream"]
+  },
+  "cases": [
+    {
+      "id": "dagpb-empty",
+      "description": "DAG-PB/UnixFS CID for an empty byte payload.",
+      "rustStatus": "known_gap",
+      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "cid": "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+      "data": {
+        "encoding": "base64url",
+        "value": ""
+      }
+    },
+    {
+      "id": "dagpb-hello-world",
+      "description": "DAG-PB/UnixFS CID for a small UTF-8 payload.",
+      "rustStatus": "known_gap",
+      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "cid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+      "data": {
+        "encoding": "utf8",
+        "value": "hello world"
+      }
+    },
+    {
+      "id": "dagpb-binary-small",
+      "description": "DAG-PB/UnixFS CID for a small binary payload.",
+      "rustStatus": "known_gap",
+      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "cid": "bafkreif6ixfsmbn7g27l3zueqqncr4h5ipdjqufd3ts75w5gteuo4oujse",
+      "data": {
+        "encoding": "hex",
+        "value": "000102030405060708090a0b0c0d0e0f"
+      }
+    },
+    {
+      "id": "dagpb-repeated-large",
+      "description": "DAG-PB/UnixFS CID for a large repeated-byte payload that exercises chunking.",
+      "rustStatus": "known_gap",
+      "gap": "Rust does not implement Enbox DAG-PB/UnixFS CID parity yet.",
+      "cid": "bafybeicnrogxohr6rp6rlbv6s4q5gkpx5cmlm3oxqr3a7sfghbnz6sdyvq",
+      "data": {
+        "encoding": "repeatByte",
+        "byte": 97,
+        "length": 300000
+      }
+    }
+  ]
+}

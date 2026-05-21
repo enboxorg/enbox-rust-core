@@ -7,6 +7,11 @@
       "assertions": ["cid.json"]
     },
     {
+      "id": "crypto.cid-dag-pb-values",
+      "path": "crypto/cid-dag-pb-values.json",
+      "assertions": ["cid.dagpb.bytes", "cid.dagpb.stream"]
+    },
+    {
       "id": "dwn.messages.basic-interface-messages",
       "path": "dwn/messages/basic-interface-messages.json",
       "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]

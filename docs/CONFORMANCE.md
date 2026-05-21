@@ -15,6 +15,8 @@ Current assertion types:
 - `cid.message`: compute a DAG-CBOR CID for `case.message` and compare it to `case.messageCid`.
 - `cid.descriptor`: compute a DAG-CBOR CID for `case.message.descriptor` and compare it to `case.descriptorCid`.
 - `cid.json`: compute a DAG-CBOR CID for `case.value` and compare it to `case.cid`.
+- `cid.dagpb.bytes`: compute a DAG-PB/UnixFS CID for `case.data` bytes and compare it to `case.cid`.
+- `cid.dagpb.stream`: compute a DAG-PB/UnixFS CID for `case.data` as a stream and compare it to `case.cid`.
 - `descriptor.roundtrip`: parse and re-serialize supported descriptors without changing JSON shape.
 
 Each case contains current TypeScript outputs and a Rust migration status:

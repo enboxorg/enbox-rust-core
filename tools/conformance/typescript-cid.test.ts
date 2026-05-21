@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Buffer } from 'node:buffer';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -23,6 +24,7 @@ type FixtureSet = {
 type FixtureCase = {
   id: string;
   cid?: string;
+  data?: FixtureData;
   descriptorCid?: string;
   messageCid?: string;
   message?: {
@@ -32,15 +34,25 @@ type FixtureCase = {
   value?: unknown;
 };
 
+type FixtureData =
+  | { encoding: 'base64url'; value: string }
+  | { encoding: 'hex'; value: string }
+  | { encoding: 'repeatByte'; byte: number; length: number }
+  | { encoding: 'utf8'; value: string };
+
 type CidModule = {
   Cid: {
     computeCid(payload: unknown): Promise<string>;
+    computeDagPbCidFromBytes(content: Uint8Array): Promise<string>;
+    computeDagPbCidFromStream(dataStream: ReadableStream<Uint8Array>): Promise<string>;
   };
 };
 
 const cidMessageAssertion = 'cid.message';
 const cidDescriptorAssertion = 'cid.descriptor';
 const cidJsonAssertion = 'cid.json';
+const cidDagPbBytesAssertion = 'cid.dagpb.bytes';
+const cidDagPbStreamAssertion = 'cid.dagpb.stream';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
@@ -70,7 +82,9 @@ describe('TypeScript DWN conformance fixtures', () => {
     if (
       !suite.assertions.includes(cidMessageAssertion) &&
       !suite.assertions.includes(cidDescriptorAssertion) &&
-      !suite.assertions.includes(cidJsonAssertion)
+      !suite.assertions.includes(cidJsonAssertion) &&
+      !suite.assertions.includes(cidDagPbBytesAssertion) &&
+      !suite.assertions.includes(cidDagPbStreamAssertion)
     ) {
       continue;
     }
@@ -91,7 +105,20 @@ describe('TypeScript DWN conformance fixtures', () => {
 
         if (suite.assertions.includes(cidJsonAssertion)) {
           test(`${fixtureCase.id} JSON CID`, async () => {
-            await expect(Cid.computeCid(jsonValue(fixtureCase))).resolves.toBe(expectedJsonCid(fixtureCase));
+            await expect(Cid.computeCid(jsonValue(fixtureCase))).resolves.toBe(expectedCid(fixtureCase));
+          });
+        }
+
+        if (suite.assertions.includes(cidDagPbBytesAssertion)) {
+          test(`${fixtureCase.id} DAG-PB bytes CID`, async () => {
+            await expect(Cid.computeDagPbCidFromBytes(bytes(fixtureCase))).resolves.toBe(expectedCid(fixtureCase));
+          });
+        }
+
+        if (suite.assertions.includes(cidDagPbStreamAssertion)) {
+          test(`${fixtureCase.id} DAG-PB stream CID`, async () => {
+            const payload = bytes(fixtureCase);
+            await expect(Cid.computeDagPbCidFromStream(byteStream(payload))).resolves.toBe(expectedCid(fixtureCase));
           });
         }
       }
@@ -119,6 +146,36 @@ function jsonValue(fixtureCase: FixtureCase): unknown {
   return fixtureCase.value;
 }
 
+function bytes(fixtureCase: FixtureCase): Uint8Array {
+  const data = fixtureCase.data;
+  if (data === undefined) {
+    throw new Error(`${fixtureCase.id} must include byte data`);
+  }
+
+  switch (data.encoding) {
+  case 'base64url':
+    return Uint8Array.from(Buffer.from(data.value, 'base64url'));
+  case 'hex':
+    return Uint8Array.from(Buffer.from(data.value, 'hex'));
+  case 'repeatByte':
+    return new Uint8Array(data.length).fill(data.byte);
+  case 'utf8':
+    return new TextEncoder().encode(data.value);
+  }
+}
+
+function byteStream(payload: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller): void {
+      for (let offset = 0; offset < payload.length; offset += 65536) {
+        controller.enqueue(payload.slice(offset, offset + 65536));
+      }
+
+      controller.close();
+    },
+  });
+}
+
 function expectedMessageCid(fixtureCase: FixtureCase): string {
   if (fixtureCase.messageCid === undefined) {
     throw new Error(`${fixtureCase.id} must include a messageCid`);
@@ -135,7 +192,7 @@ function expectedDescriptorCid(fixtureCase: FixtureCase): string {
   return fixtureCase.descriptorCid;
 }
 
-function expectedJsonCid(fixtureCase: FixtureCase): string {
+function expectedCid(fixtureCase: FixtureCase): string {
   if (fixtureCase.cid === undefined) {
     throw new Error(`${fixtureCase.id} must include a cid`);
   }
