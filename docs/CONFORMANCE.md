@@ -17,6 +17,9 @@ Current assertion types:
 - `cid.json`: compute a DAG-CBOR CID for `case.value` and compare it to `case.cid`.
 - `cid.dagpb.bytes`: compute a DAG-PB/UnixFS CID for `case.data` bytes and compare it to `case.cid`.
 - `cid.dagpb.stream`: compute a DAG-PB/UnixFS CID for `case.data` as a stream and compare it to `case.cid`.
+- `jws.general.sign`: create a General JWS from fixture payload/signers and compare it to `case.jws`.
+- `jws.general.verify`: verify `case.jws` signatures against fixture public keys and compare signers or expected error code.
+- `jws.general.payload`: encode fixture payload bytes and compare them to `case.jws.payload`.
 - `descriptor.roundtrip`: parse and re-serialize supported descriptors without changing JSON shape.
 
 Each case contains current TypeScript outputs and a Rust migration status:

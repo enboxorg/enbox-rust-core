@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "jwsFunctions": ["GeneralJwsBuilder.create", "GeneralJwsVerifier.verifySignatures", "Jws.verifySignature"]
+  },
+  "keys": {
+    "aliceEd25519": {
+      "kid": "did:example:alice#key1",
+      "algorithm": "EdDSA",
+      "publicJwk": {
+        "alg": "EdDSA",
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"
+      },
+      "privateJwk": {
+        "alg": "EdDSA",
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+        "d": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+      }
+    },
+    "bobEd25519": {
+      "kid": "did:example:bob#key1",
+      "algorithm": "EdDSA",
+      "publicJwk": {
+        "alg": "EdDSA",
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc"
+      },
+      "privateJwk": {
+        "alg": "EdDSA",
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
+        "d": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "ed25519-general-single",
+      "description": "General JWS with a single Ed25519 signer and a UTF-8 payload.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "anyPayloadValue"
+      },
+      "signerIds": ["aliceEd25519"],
+      "expectedSigners": ["did:example:alice"],
+      "jws": {
+        "payload": "YW55UGF5bG9hZFZhbHVl",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+            "signature": "8mmMgru8Ysv9eqNydfkY_64pCzzOdWutDsDHpNMJxqNUANnLmwYvDX7B6AXGa5xojr893qxF5_L7OXDrlq60AA"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ed25519-descriptor-grant-payload",
+      "description": "General JWS over descriptor/grant payload fields used by DWN authorization signatures.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "{\"descriptorCid\":\"bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra\",\"delegatedGrantId\":\"bafyreia3vo2bkk4b4nshzup55wgkdgwpr5bsa474iyngfcegompdko6kt4\",\"permissionGrantId\":\"grant-123\",\"protocolRole\":\"adminRole\"}"
+      },
+      "signerIds": ["aliceEd25519"],
+      "expectedSigners": ["did:example:alice"],
+      "jws": {
+        "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWV0dWk0eGRraXU0eHZteDRmaTJqaXZqdG5kYmhiNGRyenB4b21yanZkNG1kejR3MmF2cmEiLCJkZWxlZ2F0ZWRHcmFudElkIjoiYmFmeXJlaWEzdm8yYmtrNGI0bnNoenVwNTV3Z2tkZ3dwcjVic2E0NzRpeW5nZmNlZ29tcGRrbzZrdDQiLCJwZXJtaXNzaW9uR3JhbnRJZCI6ImdyYW50LTEyMyIsInByb3RvY29sUm9sZSI6ImFkbWluUm9sZSJ9",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+            "signature": "M6AsUVNBsQqgv7OhWXw_vV867l88i7ke_i2k_uSOHQpvYXNtBRREJfBj9g8TlqT3IBWE3LWAvYEcAR4kVgUzDQ"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ed25519-general-multi-signer",
+      "description": "General JWS with two Ed25519 signers preserving signature order.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "multiSignerPayload"
+      },
+      "signerIds": ["aliceEd25519", "bobEd25519"],
+      "expectedSigners": ["did:example:alice", "did:example:bob"],
+      "jws": {
+        "payload": "bXVsdGlTaWduZXJQYXlsb2Fk",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+            "signature": "Tcc0URnrUH7a8T9NQ1UOtbRz5PblVC-AXI0WmxeQoSUCcsHuVh6QetdnPPaS2oh_IJuR7Wpj_w5OnTgPacHUDA"
+          },
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTpib2Ija2V5MSIsImFsZyI6IkVkRFNBIn0",
+            "signature": "I8HT2LomswD7GVdwIF3HVm8XSDeCEUvA0VI9NFCPbDleWBDWs98-qndTxYPmoQ0YFddAWiW0Cj8a0fpCbKNIDg"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ed25519-invalid-signature",
+      "description": "General JWS verification fails when the signature bytes are tampered.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "anyPayloadValue"
+      },
+      "signerIds": ["aliceEd25519"],
+      "expectedErrorCode": "GeneralJwsVerifierInvalidSignature",
+      "jws": {
+        "payload": "YW55UGF5bG9hZFZhbHVl",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+            "signature": "9mmMgru8Ysv9eqNydfkY_64pCzzOdWutDsDHpNMJxqNUANnLmwYvDX7B6AXGa5xojr893qxF5_L7OXDrlq60AA"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ed25519-missing-kid",
+      "description": "General JWS verification fails when a protected header omits kid.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "anyPayloadValue"
+      },
+      "signerIds": ["aliceEd25519"],
+      "expectedErrorCode": "GeneralJwsVerifierMissingKid",
+      "jws": {
+        "payload": "YW55UGF5bG9hZFZhbHVl",
+        "signatures": [
+          {
+            "protected": "eyJhbGciOiJFZERTQSJ9",
+            "signature": "8mmMgru8Ysv9eqNydfkY_64pCzzOdWutDsDHpNMJxqNUANnLmwYvDX7B6AXGa5xojr893qxF5_L7OXDrlq60AA"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ed25519-missing-alg",
+      "description": "General JWS verification fails when a protected header omits alg.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "anyPayloadValue"
+      },
+      "signerIds": ["aliceEd25519"],
+      "expectedErrorCode": "GeneralJwsVerifierMissingAlg",
+      "jws": {
+        "payload": "YW55UGF5bG9hZFZhbHVl",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIn0",
+            "signature": "8mmMgru8Ysv9eqNydfkY_64pCzzOdWutDsDHpNMJxqNUANnLmwYvDX7B6AXGa5xojr893qxF5_L7OXDrlq60AA"
+          }
+        ]
+      }
+    }
+  ]
+}

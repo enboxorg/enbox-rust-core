@@ -12,6 +12,11 @@
       "assertions": ["cid.dagpb.bytes", "cid.dagpb.stream"]
     },
     {
+      "id": "crypto.jws-general",
+      "path": "crypto/jws-general.json",
+      "assertions": ["jws.general.sign", "jws.general.verify", "jws.general.payload"]
+    },
+    {
       "id": "dwn.messages.basic-interface-messages",
       "path": "dwn/messages/basic-interface-messages.json",
       "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
