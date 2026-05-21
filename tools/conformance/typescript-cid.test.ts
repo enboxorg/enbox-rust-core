@@ -22,12 +22,14 @@ type FixtureSet = {
 
 type FixtureCase = {
   id: string;
-  descriptorCid: string;
-  messageCid: string;
-  message: {
+  cid?: string;
+  descriptorCid?: string;
+  messageCid?: string;
+  message?: {
     descriptor: Record<string, unknown>;
     [key: string]: unknown;
   };
+  value?: unknown;
 };
 
 type CidModule = {
@@ -38,6 +40,7 @@ type CidModule = {
 
 const cidMessageAssertion = 'cid.message';
 const cidDescriptorAssertion = 'cid.descriptor';
+const cidJsonAssertion = 'cid.json';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
@@ -64,7 +67,11 @@ const fixtureSuites = await Promise.all(
 
 describe('TypeScript DWN conformance fixtures', () => {
   for (const { fixtureSet, suite } of fixtureSuites) {
-    if (!suite.assertions.includes(cidMessageAssertion) && !suite.assertions.includes(cidDescriptorAssertion)) {
+    if (
+      !suite.assertions.includes(cidMessageAssertion) &&
+      !suite.assertions.includes(cidDescriptorAssertion) &&
+      !suite.assertions.includes(cidJsonAssertion)
+    ) {
       continue;
     }
 
@@ -72,13 +79,19 @@ describe('TypeScript DWN conformance fixtures', () => {
       for (const fixtureCase of fixtureSet.cases) {
         if (suite.assertions.includes(cidMessageAssertion)) {
           test(`${fixtureCase.id} message CID`, async () => {
-            await expect(Cid.computeCid(fixtureCase.message)).resolves.toBe(fixtureCase.messageCid);
+            await expect(Cid.computeCid(message(fixtureCase))).resolves.toBe(expectedMessageCid(fixtureCase));
           });
         }
 
         if (suite.assertions.includes(cidDescriptorAssertion)) {
           test(`${fixtureCase.id} descriptor CID`, async () => {
-            await expect(Cid.computeCid(fixtureCase.message.descriptor)).resolves.toBe(fixtureCase.descriptorCid);
+            await expect(Cid.computeCid(message(fixtureCase).descriptor)).resolves.toBe(expectedDescriptorCid(fixtureCase));
+          });
+        }
+
+        if (suite.assertions.includes(cidJsonAssertion)) {
+          test(`${fixtureCase.id} JSON CID`, async () => {
+            await expect(Cid.computeCid(jsonValue(fixtureCase))).resolves.toBe(expectedJsonCid(fixtureCase));
           });
         }
       }
@@ -88,4 +101,44 @@ describe('TypeScript DWN conformance fixtures', () => {
 
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, 'utf8')) as T;
+}
+
+function message(fixtureCase: FixtureCase): NonNullable<FixtureCase['message']> {
+  if (fixtureCase.message === undefined) {
+    throw new Error(`${fixtureCase.id} must include a message`);
+  }
+
+  return fixtureCase.message;
+}
+
+function jsonValue(fixtureCase: FixtureCase): unknown {
+  if (!Object.prototype.hasOwnProperty.call(fixtureCase, 'value')) {
+    throw new Error(`${fixtureCase.id} must include a JSON value`);
+  }
+
+  return fixtureCase.value;
+}
+
+function expectedMessageCid(fixtureCase: FixtureCase): string {
+  if (fixtureCase.messageCid === undefined) {
+    throw new Error(`${fixtureCase.id} must include a messageCid`);
+  }
+
+  return fixtureCase.messageCid;
+}
+
+function expectedDescriptorCid(fixtureCase: FixtureCase): string {
+  if (fixtureCase.descriptorCid === undefined) {
+    throw new Error(`${fixtureCase.id} must include a descriptorCid`);
+  }
+
+  return fixtureCase.descriptorCid;
+}
+
+function expectedJsonCid(fixtureCase: FixtureCase): string {
+  if (fixtureCase.cid === undefined) {
+    throw new Error(`${fixtureCase.id} must include a cid`);
+  }
+
+  return fixtureCase.cid;
 }

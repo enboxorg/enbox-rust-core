@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "cidFunction": "Cid.computeCid"
+  },
+  "cases": [
+    {
+      "id": "json-object-basic",
+      "description": "DAG-CBOR CID for a flat JSON object with string, boolean, and integer fields.",
+      "rustStatus": "supported",
+      "cid": "bafyreibuluooswxjk33enbkvcjgibvt4jifh4pri3hys2fafksucymuzn4",
+      "value": {
+        "hello": "world",
+        "active": true,
+        "count": 3
+      }
+    },
+    {
+      "id": "json-numeric-types",
+      "description": "DAG-CBOR CID for JSON numbers that must preserve IPLD integer and float semantics.",
+      "rustStatus": "supported",
+      "cid": "bafyreihnvbzd4ujkew7yi27mpdxy2rcsam54p43jjygxdwfvdprqi7jj6m",
+      "value": {
+        "zero": 0,
+        "negative": -7,
+        "safeInteger": 9007199254740991,
+        "float": 1.5
+      }
+    },
+    {
+      "id": "json-nested-array",
+      "description": "DAG-CBOR CID for a nested array containing scalar values and an object.",
+      "rustStatus": "supported",
+      "cid": "bafyreihr64xja4qxuewv7etjhy7c47ysbaanby3ergdjqo2n55tonohzda",
+      "value": {
+        "items": ["alpha", 2, false, null, { "child": "value" }]
+      }
+    },
+    {
+      "id": "json-canonical-map-order",
+      "description": "DAG-CBOR CID for map entries that must be canonicalized independent of JSON insertion order.",
+      "rustStatus": "supported",
+      "cid": "bafyreia4ngukmpmirhovxtknsykvo4kqi7zh2ehygy7tgjohdkhhnpwzde",
+      "value": {
+        "z": "last",
+        "a": "first",
+        "middle": {
+          "b": 2,
+          "a": 1
+        }
+      }
+    }
+  ]
+}

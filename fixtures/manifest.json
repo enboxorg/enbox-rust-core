@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "suites": [
     {
+      "id": "crypto.cid-json-values",
+      "path": "crypto/cid-json-values.json",
+      "assertions": ["cid.json"]
+    },
+    {
       "id": "dwn.messages.basic-interface-messages",
       "path": "dwn/messages/basic-interface-messages.json",
       "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]

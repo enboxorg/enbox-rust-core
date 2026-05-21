@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 const CID_MESSAGE_ASSERTION: &str = "cid.message";
 const CID_DESCRIPTOR_ASSERTION: &str = "cid.descriptor";
+const CID_JSON_ASSERTION: &str = "cid.json";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 
 #[derive(Debug, Deserialize)]
@@ -45,9 +46,11 @@ struct FixtureSet {
 struct FixtureCase {
     id: String,
     rust_status: RustStatus,
-    descriptor_cid: String,
-    message_cid: String,
-    message: Value,
+    descriptor_cid: Option<String>,
+    message_cid: Option<String>,
+    message: Option<Value>,
+    cid: Option<String>,
+    value: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -71,13 +74,41 @@ fn fixture_message_cids_match_typescript() {
 
         for case in &suite.fixture_set.cases {
             if check_message_cid {
-                assert_eq!(compute_cid(&case.message), case.message_cid, "{}", case.id);
+                assert_eq!(
+                    compute_cid(message(case)),
+                    expected_message_cid(case),
+                    "{}",
+                    case.id
+                );
             }
 
             if check_descriptor_cid {
                 let descriptor = descriptor(case);
-                assert_eq!(compute_cid(descriptor), case.descriptor_cid, "{}", case.id);
+                assert_eq!(
+                    compute_cid(descriptor),
+                    expected_descriptor_cid(case),
+                    "{}",
+                    case.id
+                );
             }
+        }
+    }
+}
+
+#[test]
+fn fixture_json_cids_match_typescript() {
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(CID_JSON_ASSERTION) {
+            continue;
+        }
+
+        for case in &suite.fixture_set.cases {
+            assert_eq!(
+                compute_cid(json_value(case)),
+                expected_json_cid(case),
+                "{}",
+                case.id
+            );
         }
     }
 }
@@ -160,10 +191,40 @@ fn compute_cid(value: &Value) -> String {
         .to_string()
 }
 
-fn descriptor(case: &FixtureCase) -> &Value {
+fn message(case: &FixtureCase) -> &Value {
     case.message
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a message", case.id))
+}
+
+fn descriptor(case: &FixtureCase) -> &Value {
+    message(case)
         .get("descriptor")
         .unwrap_or_else(|| panic!("{} must include a descriptor", case.id))
+}
+
+fn json_value(case: &FixtureCase) -> &Value {
+    case.value
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a JSON value", case.id))
+}
+
+fn expected_message_cid(case: &FixtureCase) -> &str {
+    case.message_cid
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include a messageCid", case.id))
+}
+
+fn expected_descriptor_cid(case: &FixtureCase) -> &str {
+    case.descriptor_cid
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include a descriptorCid", case.id))
+}
+
+fn expected_json_cid(case: &FixtureCase) -> &str {
+    case.cid
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include a cid", case.id))
 }
 
 fn assert_supported_descriptor_roundtrip(case: &FixtureCase) {
