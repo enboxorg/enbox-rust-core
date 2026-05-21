@@ -42,6 +42,75 @@
       }
     },
     {
+      "id": "protocols-configure-role-and-tags",
+      "description": "ProtocolsConfigure descriptor with protocol roles, role-based actions, size limits, and tag schemas.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreigqub3gj3ughthblluykvkv57sfx6ppshfjompob6gsqdfcvevofi",
+      "messageCid": "bafyreidofmoaczlux4wdjv6v3eicm3nm5htwldqpev6dwxyz6kmwmignvy",
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Configure",
+          "messageTimestamp": "2025-01-01T00:01:04.000000Z",
+          "definition": {
+            "protocol": "http://example.com/roles",
+            "published": true,
+            "types": {
+              "adminRole": {
+                "schema": "http://schema.example.com/admin-role",
+                "dataFormats": ["application/json"]
+              },
+              "task": {
+                "schema": "http://schema.example.com/task",
+                "dataFormats": ["application/json"]
+              }
+            },
+            "structure": {
+              "adminRole": {
+                "$role": true,
+                "$actions": [
+                  {
+                    "who": "anyone",
+                    "can": ["create"]
+                  }
+                ]
+              },
+              "task": {
+                "$actions": [
+                  {
+                    "role": "adminRole",
+                    "can": ["create", "read", "update", "delete"]
+                  },
+                  {
+                    "who": "author",
+                    "of": "task",
+                    "can": ["read", "update", "delete"]
+                  }
+                ],
+                "$size": {
+                  "min": 1,
+                  "max": 4096
+                },
+                "$tags": {
+                  "$requiredTags": ["status"],
+                  "$allowUndefinedTags": false,
+                  "status": {
+                    "type": "string",
+                    "enum": ["open", "closed"]
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "id": "protocols-configure-encryption-required",
       "description": "ProtocolsConfigure descriptor using Enbox type-level encryptionRequired.",
       "rustStatus": "known_gap",

@@ -151,8 +151,8 @@ pub enum ItemType {
     Integer,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ProvidedTags {
     #[serde(rename = "type")]
     pub tag_type: TagType,
@@ -182,8 +182,8 @@ pub struct ProvidedTags {
     pub max_contains: Option<usize>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct TagItems {
     #[serde(rename = "type")]
     pub tag_type: ItemType,
@@ -201,8 +201,8 @@ pub struct TagItems {
     pub max_length: Option<usize>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct TagContains {
     #[serde(rename = "type")]
     pub tag_type: ItemType,
