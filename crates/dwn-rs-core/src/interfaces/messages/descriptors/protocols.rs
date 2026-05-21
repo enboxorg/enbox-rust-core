@@ -38,6 +38,7 @@ impl MessageParameters for ConfigureParameters {
         let descriptor = ConfigureDescriptor {
             message_timestamp,
             definition: self.definition.clone(),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -52,6 +53,8 @@ pub struct ConfigureDescriptor {
     )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     pub definition: protocols::Definition,
+    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+    pub permission_grant_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -78,6 +81,7 @@ impl MessageParameters for QueryParameters {
                 protocol: Some(f.protocol.clone()),
                 recipient: None,
             }),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -93,6 +97,8 @@ pub struct QueryDescriptor {
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<QueryFilter>,
+    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+    pub permission_grant_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -135,6 +141,7 @@ mod test {
         let descriptor = ConfigureDescriptor {
             message_timestamp,
             definition,
+            permission_grant_id: None,
         };
         let json = json!({
             "messageTimestamp": message_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),

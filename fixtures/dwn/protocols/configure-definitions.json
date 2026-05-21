@@ -42,6 +42,41 @@
       }
     },
     {
+      "id": "protocols-configure-permission-grant",
+      "description": "ProtocolsConfigure descriptor carrying a permissionGrantId.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreieqfvfv42c6d62w3aj5hqudwkvysvqwj4taueaepk4ltq3nizbghq",
+      "messageCid": "bafyreigvwdycqsjkrogodr3hebyqdgy5llz6h2nyai6xiqzfge33jjm6s4",
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Configure",
+          "messageTimestamp": "2025-01-01T00:01:06.000000Z",
+          "definition": {
+            "protocol": "http://example.com/permission-configure",
+            "published": true,
+            "types": {
+              "note": {
+                "schema": "http://schema.example.com/note",
+                "dataFormats": ["text/plain"]
+              }
+            },
+            "structure": {
+              "note": {
+                "$actions": [
+                  {
+                    "who": "anyone",
+                    "can": ["create", "read"]
+                  }
+                ]
+              }
+            }
+          },
+          "permissionGrantId": "grant-protocol-configure-123"
+        }
+      }
+    },
+    {
       "id": "protocols-configure-role-and-tags",
       "description": "ProtocolsConfigure descriptor with protocol roles, role-based actions, size limits, and tag schemas.",
       "rustStatus": "supported",

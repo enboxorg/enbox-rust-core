@@ -225,6 +225,7 @@ pub struct WriteParameters {
     pub encryption_input: Option<EncryptionInput>,
     #[serde(rename = "permissionGrantId")]
     pub permission_grant_id: Option<String>,
+    pub squash: Option<bool>,
 }
 
 impl MessageValidator for WriteParameters {
@@ -323,6 +324,8 @@ impl MessageParameters for WriteParameters {
             published: self.published,
             date_published: self.date_published,
             data_format: self.data_format.clone(),
+            permission_grant_id: self.permission_grant_id.clone(),
+            squash: self.squash,
         };
 
         if let (Some(published), None) = (self.published, self.date_published) {
@@ -441,6 +444,9 @@ pub struct WriteDescriptor {
     pub date_published: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(rename = "dataFormat")]
     pub data_format: String,
+    #[serde(rename = "permissionGrantId")]
+    pub permission_grant_id: Option<String>,
+    pub squash: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -647,6 +653,8 @@ mod test {
             published: None,
             date_published: None,
             data_format: "test".to_string(),
+            permission_grant_id: None,
+            squash: None,
         };
 
         let (build_wd, _) = WriteParameters {

@@ -61,6 +61,24 @@
       }
     },
     {
+      "id": "protocols-query-permission-grant",
+      "description": "Unsigned ProtocolsQuery carrying a permissionGrantId in the descriptor.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreie3hagsm33bo4x2cvneoeak7uo6pz2xsoqgwfwzwvctfax2szpaky",
+      "messageCid": "bafyreihgpwtp56ztdobilbvwrahz7lztjak6i4namkkcphcqxqp2spitxm",
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Query",
+          "messageTimestamp": "2025-01-01T00:00:14.000000Z",
+          "filter": {
+            "protocol": "http://example.com/protocol"
+          },
+          "permissionGrantId": "grant-protocol-query-123"
+        }
+      }
+    },
+    {
       "id": "messages-read-basic",
       "description": "MessagesRead descriptor for an existing DAG-CBOR message CID.",
       "rustStatus": "supported",
@@ -72,6 +90,22 @@
           "method": "Read",
           "messageTimestamp": "2025-01-01T00:00:03.000000Z",
           "messageCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra"
+        }
+      }
+    },
+    {
+      "id": "messages-read-permission-grant",
+      "description": "MessagesRead descriptor carrying a permissionGrantId.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreignqu5g7iy6yx3ejfxypwn5eqpfy6i67534ehpmvb334emorarqsu",
+      "messageCid": "bafyreihf2ij7dx3tpzadpg4wytwt6e5hn6of4hlfbkn6ylvbpknyan5edu",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Read",
+          "messageTimestamp": "2025-01-01T00:00:12.000000Z",
+          "messageCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+          "permissionGrantId": "grant-message-read-123"
         }
       }
     },
@@ -90,6 +124,26 @@
           "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
           "dataSize": 11,
           "dataFormat": "text/plain"
+        }
+      }
+    },
+    {
+      "id": "records-write-permission-grant-squash",
+      "description": "Unsigned RecordsWrite descriptor carrying permissionGrantId and Enbox squash metadata.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreicmnd65x4tyw5y5gzndvcuogyeb7tl2ty2pgwcm6tcf2hz3jwaabe",
+      "messageCid": "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "messageTimestamp": "2025-01-01T00:00:11.000000Z",
+          "dateCreated": "2025-01-01T00:00:11.000000Z",
+          "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+          "dataSize": 11,
+          "dataFormat": "text/plain",
+          "permissionGrantId": "grant-write-123",
+          "squash": true
         }
       }
     },
@@ -151,6 +205,21 @@
           "interface": "Messages",
           "method": "Subscribe",
           "messageTimestamp": "2025-01-01T00:00:10.000000Z"
+        }
+      }
+    },
+    {
+      "id": "messages-subscribe-permission-grant",
+      "description": "Unsigned MessagesSubscribe descriptor carrying a permissionGrantId.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreicnjt6omiw7av3orvhslzetpy3gw2kqdrb4sgxfpaqoocr26poxay",
+      "messageCid": "bafyreid3snduzfyvbqxzdm6iftxq4dluxo2nv4bg6jyaavop74m2ymtalq",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-01-01T00:00:13.000000Z",
+          "permissionGrantId": "grant-message-subscribe-123"
         }
       }
     },

@@ -30,6 +30,7 @@ impl MessageParameters for ReadParameters {
         let descriptor = ReadDescriptor {
             message_timestamp: self.message_timestamp,
             message_cid: Some(self.message_cid),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -54,6 +55,8 @@ pub struct ReadDescriptor {
         with = "crate::ser::optional_cid_string"
     )]
     pub message_cid: Option<Cid>,
+    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+    pub permission_grant_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -130,6 +133,7 @@ impl MessageParameters for SubscribeParameters {
         let descriptor = SubscribeDescriptor {
             message_timestamp: self.message_timestamp,
             filters,
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -149,6 +153,8 @@ pub struct SubscribeDescriptor {
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<MessagesFilter>,
+    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+    pub permission_grant_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -173,6 +179,7 @@ mod test {
         let descriptor = ReadDescriptor {
             message_timestamp,
             message_cid: Some(message_cid),
+            permission_grant_id: None,
         };
         let json = json!({
             "messageTimestamp": message_timestamp,
@@ -230,6 +237,7 @@ mod test {
         let descriptor = SubscribeDescriptor {
             message_timestamp,
             filters,
+            permission_grant_id: None,
         };
         let json = json!({
             "messageTimestamp": message_timestamp,
