@@ -1,7 +1,8 @@
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{
-    ConfigureDescriptor, MessagesReadDescriptor, ProtocolQueryDescriptor, ReadDescriptor,
-    RecordsQueryDescriptor,
+    ConfigureDescriptor, DeleteDescriptor, MessagesQueryDescriptor, MessagesReadDescriptor,
+    MessagesSubscribeDescriptor, ProtocolQueryDescriptor, ReadDescriptor, RecordsQueryDescriptor,
+    RecordsWriteDescriptor, SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -179,9 +180,16 @@ fn assert_supported_descriptor_roundtrip(case: &FixtureCase) {
     let roundtrip = match (interface, method) {
         ("Records", "Read") => roundtrip_descriptor::<ReadDescriptor>(descriptor),
         ("Records", "Query") => roundtrip_descriptor::<RecordsQueryDescriptor>(descriptor),
+        ("Records", "Write") => roundtrip_descriptor::<RecordsWriteDescriptor>(descriptor),
+        ("Records", "Delete") => roundtrip_descriptor::<DeleteDescriptor>(descriptor),
+        ("Records", "Subscribe") => roundtrip_descriptor::<RecordsSubscribeDescriptor>(descriptor),
         ("Protocols", "Configure") => roundtrip_descriptor::<ConfigureDescriptor>(descriptor),
         ("Protocols", "Query") => roundtrip_descriptor::<ProtocolQueryDescriptor>(descriptor),
         ("Messages", "Read") => roundtrip_descriptor::<MessagesReadDescriptor>(descriptor),
+        ("Messages", "Query") => roundtrip_descriptor::<MessagesQueryDescriptor>(descriptor),
+        ("Messages", "Subscribe") => {
+            roundtrip_descriptor::<MessagesSubscribeDescriptor>(descriptor)
+        }
         _ => panic!("{} has no Rust descriptor roundtrip mapping", case.id),
     };
 

@@ -76,6 +76,85 @@
       }
     },
     {
+      "id": "records-write-basic",
+      "description": "Unsigned RecordsWrite descriptor with external data CID metadata.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreidgpqe6zujtci3k7gze4dh7e7prapj3tqer6cvpzhuyzil7ju6wo4",
+      "messageCid": "bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "messageTimestamp": "2025-01-01T00:00:06.000000Z",
+          "dateCreated": "2025-01-01T00:00:06.000000Z",
+          "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+          "dataSize": 11,
+          "dataFormat": "text/plain"
+        }
+      }
+    },
+    {
+      "id": "records-delete-basic",
+      "description": "Unsigned RecordsDelete descriptor targeting a record without pruning.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreifm4m57obirqlm46cmvoiidwuswrp7g4qs335ztqwnrl7cpj5hiae",
+      "messageCid": "bafyreiecm6rwhveayghbxyst5qasejwwopweyytki6mw5ta4jjcb3gwuwa",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Delete",
+          "messageTimestamp": "2025-01-01T00:00:07.000000Z",
+          "recordId": "record-1",
+          "prune": false
+        }
+      }
+    },
+    {
+      "id": "records-subscribe-basic",
+      "description": "Unsigned RecordsSubscribe descriptor filtered by protocol.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreihgi7mluqi2zslcyc77sl4gnfl2nwqjfvzv6tfzqutjsq4b326hja",
+      "messageCid": "bafyreicap2eleobmc7xavrplmbgafasfpknfpvfartoq22uf2uehbtf7da",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-01-01T00:00:08.000000Z",
+          "filter": {
+            "protocol": "http://example.com/protocol"
+          }
+        }
+      }
+    },
+    {
+      "id": "messages-query-basic",
+      "description": "Unsigned MessagesQuery descriptor without filters.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreibxw2t36ke7rhzmifwcda3ecg27almbsxucnc3jclxc4xcdxn6f5m",
+      "messageCid": "bafyreicgs3cmrlllymyfxnvw3caxsicq3we447azoyphpe6a7xcpnqj2yu",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Query",
+          "messageTimestamp": "2025-01-01T00:00:09.000000Z"
+        }
+      }
+    },
+    {
+      "id": "messages-subscribe-basic",
+      "description": "Unsigned MessagesSubscribe descriptor without filters.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreif73ir63r3qbsua5rzxzrw6ks3fqtv6tai67a7f32dshyp6mrwozu",
+      "messageCid": "bafyreicqig6fsmetvqvfhrzlyzwtjpj5z3rolhjmgqtgdafaqyrbngdaa4",
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-01-01T00:00:10.000000Z"
+        }
+      }
+    },
+    {
       "id": "records-read-permission-grant",
       "description": "Current TypeScript RecordsRead includes permissionGrantId in the descriptor when provided.",
       "rustStatus": "known_gap",
