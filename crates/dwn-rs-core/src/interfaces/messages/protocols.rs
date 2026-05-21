@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Number;
 use serde_with::skip_serializing_none;
 use ssi_jwk::JWK;
 
@@ -172,6 +173,14 @@ pub enum ItemType {
     Integer,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(untagged)]
+pub enum TagValue {
+    String(String),
+    Number(Number),
+    Boolean(bool),
+}
+
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ProvidedTags {
@@ -180,7 +189,7 @@ pub struct ProvidedTags {
     pub items: Option<TagItems>,
     pub contains: Option<TagContains>,
     #[serde(rename = "enum", default, skip_serializing_if = "Vec::is_empty")]
-    pub enum_values: Vec<String>,
+    pub enum_values: Vec<TagValue>,
     #[serde(rename = "maxLength")]
     pub max_length: Option<usize>,
     #[serde(rename = "minLength")]
@@ -209,7 +218,7 @@ pub struct TagItems {
     #[serde(rename = "type")]
     pub tag_type: ItemType,
     #[serde(rename = "enum", default, skip_serializing_if = "Vec::is_empty")]
-    pub enum_values: Vec<String>,
+    pub enum_values: Vec<TagValue>,
     pub minimum: Option<usize>,
     pub maximum: Option<usize>,
     #[serde(rename = "exclusiveMinimum")]
@@ -228,7 +237,7 @@ pub struct TagContains {
     #[serde(rename = "type")]
     pub tag_type: ItemType,
     #[serde(rename = "enum", default, skip_serializing_if = "Vec::is_empty")]
-    pub enum_values: Vec<String>,
+    pub enum_values: Vec<TagValue>,
     pub minimum: Option<usize>,
     pub maximum: Option<usize>,
     #[serde(rename = "exclusiveMinimum")]

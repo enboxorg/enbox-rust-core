@@ -230,6 +230,59 @@
           }
         }
       }
+    },
+    {
+      "id": "protocols-configure-tag-value-types",
+      "description": "ProtocolsConfigure descriptor using tag schema enum values across string, number, integer, and boolean types.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreibomrrq23mhg5tzauenemxb4jt5yxxvfdtzminuwkqakvh7zpq5wy",
+      "messageCid": "bafyreid33sbytzonlnxnfrss4of7xrci7a3nho5l2kladr46crd7hlhlay",
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Configure",
+          "messageTimestamp": "2025-01-01T00:01:05.000000Z",
+          "definition": {
+            "protocol": "http://example.com/tag-values",
+            "published": true,
+            "types": {
+              "entry": {
+                "schema": "http://schema.example.com/entry",
+                "dataFormats": ["application/json"]
+              }
+            },
+            "structure": {
+              "entry": {
+                "$actions": [
+                  {
+                    "who": "anyone",
+                    "can": ["create", "read"]
+                  }
+                ],
+                "$tags": {
+                  "$requiredTags": ["status", "rank", "featured"],
+                  "status": {
+                    "type": "string",
+                    "enum": ["open", "closed"]
+                  },
+                  "score": {
+                    "type": "number",
+                    "enum": [1.5, 2.5]
+                  },
+                  "rank": {
+                    "type": "integer",
+                    "enum": [1, 2]
+                  },
+                  "featured": {
+                    "type": "boolean",
+                    "enum": [true, false]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }
