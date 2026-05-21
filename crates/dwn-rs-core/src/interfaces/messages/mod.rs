@@ -97,7 +97,7 @@ where
         signer: S,
         delegated_grant: Option<Message<RecordsWriteDescriptor>>,
         permission_grant_id: Option<String>,
-        protocol_rule: Option<String>,
+        protocol_role: Option<String>,
     ) -> Result<Authorization, ValidationError> {
         let delegated_grant_id: Option<Cid> = if let Some(delegated_grant) = delegated_grant.clone()
         {
@@ -113,7 +113,7 @@ where
             signer,
             delegated_grant_id,
             permission_grant_id,
-            protocol_rule,
+            protocol_role,
         )
         .await?;
 
@@ -134,7 +134,7 @@ where
         signer: S,
         delegated_grant_id: Option<Cid>,
         permission_grant_id: Option<String>,
-        protocol_rule: Option<String>,
+        protocol_role: Option<String>,
     ) -> Result<JWS, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
@@ -142,7 +142,7 @@ where
             descriptor_cid,
             delegated_grant_id,
             permission_grant_id,
-            protocol_rule,
+            protocol_role,
         };
 
         let signature = jws::JWS::create(payload, Some(vec![signer]))

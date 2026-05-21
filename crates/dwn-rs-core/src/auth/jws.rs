@@ -30,14 +30,18 @@ pub struct JWS {
 
 #[derive(Serialize)]
 pub struct Payload {
-    #[serde(rename = "descriptorCid")]
+    #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
     pub descriptor_cid: Cid,
-    #[serde(rename = "delegatedGrantId", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "delegatedGrantId",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::ser::optional_cid_string::serialize"
+    )]
     pub delegated_grant_id: Option<Cid>,
     #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
     pub permission_grant_id: Option<String>,
-    #[serde(rename = "protocolRule", skip_serializing_if = "Option::is_none")]
-    pub protocol_rule: Option<String>,
+    #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
+    pub protocol_role: Option<String>,
 }
 
 impl JwsPayload for Payload {
@@ -49,7 +53,7 @@ impl JwsPayload for Payload {
 
 #[derive(Serialize)]
 pub struct AttestationPayload {
-    #[serde(rename = "descriptorCid")]
+    #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
     pub descriptor_cid: Cid,
 }
 
@@ -143,7 +147,9 @@ impl JwsSigner for NoSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use ssi_jwk::JWK;
+    use std::str::FromStr;
 
     #[tokio::test]
     async fn test_jws_create() {
@@ -167,5 +173,30 @@ mod tests {
             .as_ref()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn test_payload_serializes_grant_fields() {
+        let descriptor_cid =
+            Cid::from_str("bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra").unwrap();
+        let delegated_grant_id =
+            Cid::from_str("bafyreia3vo2bkk4b4nshzup55wgkdgwpr5bsa474iyngfcegompdko6kt4").unwrap();
+
+        let payload = Payload {
+            descriptor_cid,
+            delegated_grant_id: Some(delegated_grant_id),
+            permission_grant_id: Some("grant-123".to_string()),
+            protocol_role: Some("adminRole".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(payload).unwrap(),
+            json!({
+                "descriptorCid": descriptor_cid.to_string(),
+                "delegatedGrantId": delegated_grant_id.to_string(),
+                "permissionGrantId": "grant-123",
+                "protocolRole": "adminRole",
+            })
+        );
     }
 }
