@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "suites": [
+    {
+      "id": "dwn.messages.basic-interface-messages",
+      "path": "dwn/messages/basic-interface-messages.json",
+      "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
+    },
+    {
+      "id": "dwn.messages.sync-descriptors",
+      "path": "dwn/messages/sync-descriptors.json",
+      "assertions": ["cid.message", "cid.descriptor"]
+    },
+    {
+      "id": "dwn.protocols.configure-definitions",
+      "path": "dwn/protocols/configure-definitions.json",
+      "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
+    }
+  ]
+}

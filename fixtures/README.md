@@ -4,6 +4,8 @@ Fixtures under this directory capture observable behavior from the current TypeS
 
 Rust tests must load these files directly and must not require Bun, Node, or the TypeScript workspace at test runtime.
 
+`manifest.json` is the entry point used by conformance runners. See `docs/CONFORMANCE.md` for the shared runner contract.
+
 ## Status Values
 
 - `supported`: the active Rust model is expected to parse and re-serialize the fixture descriptor byte-for-byte at the JSON level.
