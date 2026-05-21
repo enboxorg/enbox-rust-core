@@ -281,13 +281,15 @@ mod test {
             let now = chrono::DateTime::<chrono::Utc>::MIN_UTC.naive_utc();
             MessageEvent {
                 message: Message {
-                    descriptor: Descriptor::Records(Records::Read(records::ReadDescriptor {
-                        message_timestamp: chrono::DateTime::from_naive_utc_and_offset(
-                            now,
-                            chrono::Utc,
-                        ),
-                        filter: Default::default(),
-                    })),
+                    descriptor: Descriptor::Records(Box::new(Records::Read(Box::new(
+                        records::ReadDescriptor {
+                            message_timestamp: chrono::DateTime::from_naive_utc_and_offset(
+                                now,
+                                chrono::Utc,
+                            ),
+                            filter: Default::default(),
+                        },
+                    )))),
                     fields: Fields::Authorization(Default::default()),
                 },
                 initial_write: None,

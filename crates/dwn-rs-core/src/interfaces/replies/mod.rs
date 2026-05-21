@@ -33,10 +33,10 @@ pub struct Subscribe {
 #[serde(untagged)]
 pub enum Reply {
     Empty(Empty),
-    RecordsRead(records::Read),
-    RecordsQuery(records::Query),
-    MessageRead(messages::Read),
-    MessageQuery(messages::Query),
-    ProtocolsQuery(protocols::Query),
+    RecordsRead(Box<records::Read>),
+    RecordsQuery(Box<records::Query>),
+    MessageRead(Box<messages::Read>),
+    MessageQuery(Box<messages::Query>),
+    ProtocolsQuery(Box<protocols::Query>),
     Subscribe(Subscribe),
 }

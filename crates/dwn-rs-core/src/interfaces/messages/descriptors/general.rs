@@ -17,9 +17,9 @@ use super::{
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum Descriptor {
-    Records(Records),
-    Protocols(Protocols),
-    Messages(Messages),
+    Records(Box<Records>),
+    Protocols(Box<Protocols>),
+    Messages(Box<Messages>),
 }
 
 impl MessageValidator for Descriptor {
@@ -56,11 +56,11 @@ impl MessageDescriptor for Descriptor {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum Records {
-    Read(ReadDescriptor),
-    Query(RecordsQueryDescriptor),
-    Write(RecordsWriteDescriptor),
-    Delete(DeleteDescriptor),
-    Subscribe(SubscribeDescriptor),
+    Read(Box<ReadDescriptor>),
+    Query(Box<RecordsQueryDescriptor>),
+    Write(Box<RecordsWriteDescriptor>),
+    Delete(Box<DeleteDescriptor>),
+    Subscribe(Box<SubscribeDescriptor>),
 }
 
 impl MessageValidator for Records {
@@ -172,10 +172,10 @@ mod test {
         use super::*;
 
         let now = chrono::Utc::now();
-        let desc = Descriptor::Records(Records::Read(ReadDescriptor {
+        let desc = Descriptor::Records(Box::new(Records::Read(Box::new(ReadDescriptor {
             message_timestamp: now,
             filter: RecordsFilter::default(),
-        }));
+        }))));
         let serialized = json!(&desc);
 
         let fmt_now = now.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);

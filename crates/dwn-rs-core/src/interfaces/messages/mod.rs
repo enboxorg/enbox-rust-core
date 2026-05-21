@@ -270,10 +270,10 @@ mod test {
 
         let now = Utc::now();
 
-        let desc = Descriptor::Records(Records::Read(ReadDescriptor {
+        let desc = Descriptor::Records(Box::new(Records::Read(Box::new(ReadDescriptor {
             message_timestamp: now,
             filter: crate::filters::Records::default(),
-        }));
+        }))));
         let fields = Fields::Authorization(Authorization {
             ..Default::default()
         });
