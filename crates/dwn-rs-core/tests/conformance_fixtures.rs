@@ -1,12 +1,10 @@
-use dwn_rs_core::cid::generate_cid_from_serialized;
+use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{
     ConfigureDescriptor, MessagesReadDescriptor, ProtocolQueryDescriptor, ReadDescriptor,
     RecordsQueryDescriptor,
 };
-use ipld_core::ipld::Ipld;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -156,33 +154,9 @@ fn fixtures_root() -> PathBuf {
 }
 
 fn compute_cid(value: &Value) -> String {
-    generate_cid_from_serialized(to_ipld(value))
+    generate_cid_from_json(value)
         .expect("fixture value must be DAG-CBOR encodable")
         .to_string()
-}
-
-fn to_ipld(value: &Value) -> Ipld {
-    match value {
-        Value::Null => Ipld::Null,
-        Value::Bool(value) => Ipld::Bool(*value),
-        Value::Number(value) => {
-            if let Some(value) = value.as_i64() {
-                Ipld::Integer(value.into())
-            } else if let Some(value) = value.as_u64() {
-                Ipld::Integer(value.into())
-            } else {
-                Ipld::Float(value.as_f64().expect("JSON number must be finite"))
-            }
-        }
-        Value::String(value) => Ipld::String(value.clone()),
-        Value::Array(values) => Ipld::List(values.iter().map(to_ipld).collect()),
-        Value::Object(values) => Ipld::Map(
-            values
-                .iter()
-                .map(|(key, value)| (key.clone(), to_ipld(value)))
-                .collect::<BTreeMap<_, _>>(),
-        ),
-    }
 }
 
 fn descriptor(case: &FixtureCase) -> &Value {

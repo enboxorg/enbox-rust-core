@@ -1,5 +1,8 @@
 use bytes::Bytes;
 use futures_util::TryStreamExt;
+use ipld_core::ipld::Ipld;
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::collections::TryReserveError;
 
 use cid::Cid;
@@ -26,6 +29,36 @@ pub fn generate_cid_from_serialized<T: serde::Serialize>(
 ) -> Result<Cid, EncodeError<TryReserveError>> {
     let serialized = serde_ipld_dagcbor::to_vec(&data)?;
     generate_cid(serialized)
+}
+
+/// Generates a DAG-CBOR CID from JSON using IPLD numeric semantics.
+pub fn generate_cid_from_json(value: &Value) -> Result<Cid, EncodeError<TryReserveError>> {
+    generate_cid_from_serialized(json_value_to_ipld(value))
+}
+
+/// Converts JSON into IPLD before DAG-CBOR serialization.
+pub fn json_value_to_ipld(value: &Value) -> Ipld {
+    match value {
+        Value::Null => Ipld::Null,
+        Value::Bool(value) => Ipld::Bool(*value),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ipld::Integer(value.into())
+            } else if let Some(value) = value.as_u64() {
+                Ipld::Integer(value.into())
+            } else {
+                Ipld::Float(value.as_f64().expect("JSON number must be finite"))
+            }
+        }
+        Value::String(value) => Ipld::String(value.clone()),
+        Value::Array(values) => Ipld::List(values.iter().map(json_value_to_ipld).collect()),
+        Value::Object(values) => Ipld::Map(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), json_value_to_ipld(value)))
+                .collect::<BTreeMap<_, _>>(),
+        ),
+    }
 }
 
 pub async fn generate_cid_from_stream<S: TryStream<Ok = Bytes> + Unpin>(
@@ -88,6 +121,33 @@ mod tests {
             Cid::from_str("bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra").unwrap(),
         );
         assert_eq!(cid.codec(), DAG_CBOR_CODEC);
+    }
+
+    #[test]
+    fn test_json_value_to_ipld_uses_ipld_numeric_types() {
+        let data = json!({
+            "integer": 1,
+            "negative": -1,
+            "float": 1.5,
+            "list": [true, null, "value"],
+        });
+
+        let converted = json_value_to_ipld(&data);
+        let expected = Ipld::Map(BTreeMap::from([
+            ("float".to_string(), Ipld::Float(1.5)),
+            ("integer".to_string(), Ipld::Integer(1.into())),
+            (
+                "list".to_string(),
+                Ipld::List(vec![
+                    Ipld::Bool(true),
+                    Ipld::Null,
+                    Ipld::String("value".to_string()),
+                ]),
+            ),
+            ("negative".to_string(), Ipld::Integer((-1).into())),
+        ]));
+
+        assert_eq!(converted, expected);
     }
 
     #[tokio::test]
