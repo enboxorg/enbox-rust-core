@@ -113,8 +113,7 @@
     {
       "id": "protocols-configure-encryption-required",
       "description": "ProtocolsConfigure descriptor using Enbox type-level encryptionRequired.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust ProtocolType model does not include encryptionRequired yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreico7zcj3jga6viejyj263jyjkxphfovmqzm7oipbqebtkowxqnmeq",
       "messageCid": "bafyreigyk7urkpepubmp5mzmebds6c6nutoohrf2mbecstmynw333prpie",
       "message": {
@@ -154,8 +153,7 @@
     {
       "id": "protocols-configure-composition-ref",
       "description": "ProtocolsConfigure descriptor using Enbox protocol composition with uses and $ref.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust protocol model does not include uses or $ref composition yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreigscf2az4ywg27tgflfz7fzcconbdfbsh6pgrzp3k6hdfwguqnmxa",
       "messageCid": "bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e",
       "message": {
@@ -195,8 +193,7 @@
     {
       "id": "protocols-configure-enbox-directives",
       "description": "ProtocolsConfigure descriptor using Enbox $recordLimit, $immutable, $delivery, and $squash directives.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust protocol model does not include $recordLimit, $immutable, $delivery, or $squash yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreiam5a5h3n4xreg3ge43x2qcbt53cdrbzobb3xjsnqlhs2fqhk3p6q",
       "messageCid": "bafyreida2df4ptfdiesyxr3dyt6uoney2dvvbc2p3og72twkiqjzi5lf7u",
       "message": {

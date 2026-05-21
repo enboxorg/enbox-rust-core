@@ -10,6 +10,8 @@ pub struct Type {
     pub schema: Option<String>,
     #[serde(rename = "dataFormats")]
     pub data_formats: Option<Vec<String>>,
+    #[serde(rename = "encryptionRequired")]
+    pub encryption_required: Option<bool>,
 }
 
 #[skip_serializing_none]
@@ -17,6 +19,7 @@ pub struct Type {
 pub struct Definition {
     pub protocol: String,
     pub published: bool,
+    pub uses: Option<BTreeMap<String, String>>,
     pub types: BTreeMap<String, Type>,
     pub structure: BTreeMap<String, RuleSet>,
 }
@@ -53,6 +56,8 @@ pub enum Can {
     Subscribe,
     #[serde(rename = "query")]
     Query,
+    #[serde(rename = "squash")]
+    Squash,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -104,12 +109,28 @@ pub struct RuleSet {
     pub actions: Vec<Action>,
     #[serde(rename = "$role")]
     pub role: Option<bool>,
+    #[serde(rename = "$ref")]
+    pub reference: Option<String>,
     #[serde(rename = "$size")]
     pub size: Option<Size>,
     #[serde(rename = "$tags")]
     pub tags: Option<Tags>,
+    #[serde(rename = "$recordLimit")]
+    pub record_limit: Option<RecordLimit>,
+    #[serde(rename = "$immutable")]
+    pub immutable: Option<bool>,
+    #[serde(rename = "$delivery")]
+    pub delivery: Option<String>,
+    #[serde(rename = "$squash")]
+    pub squash: Option<bool>,
     #[serde(flatten, skip_serializing_if = "BTreeMap::is_empty")]
     pub rules: BTreeMap<String, RuleSet>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct RecordLimit {
+    pub max: u64,
+    pub strategy: String,
 }
 
 #[skip_serializing_none]

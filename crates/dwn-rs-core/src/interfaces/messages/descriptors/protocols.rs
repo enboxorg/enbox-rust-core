@@ -128,6 +128,7 @@ mod test {
         let definition = protocols::Definition {
             protocol: "example".to_string(),
             published: true,
+            uses: None,
             types: BTreeMap::new(),
             structure: BTreeMap::new(),
         };
@@ -162,6 +163,7 @@ mod test {
         let definition = protocols::Definition {
             protocol: protocol.clone(),
             published,
+            uses: None,
             types,
             structure,
         };
@@ -185,6 +187,7 @@ mod test {
         let protocol_type = protocols::Type {
             schema: schema.clone(),
             data_formats: data_formats.clone(),
+            encryption_required: None,
         };
         let json = json!({
             "schema": schema,
@@ -225,8 +228,13 @@ mod test {
             encryption: encryption.clone(),
             actions: actions.clone(),
             role,
+            reference: None,
             size: size.clone(),
             tags: tags.clone(),
+            record_limit: None,
+            immutable: None,
+            delivery: None,
+            squash: None,
             rules,
         };
 
@@ -259,8 +267,13 @@ mod test {
             encryption,
             actions,
             role,
+            reference: None,
             size,
             tags,
+            record_limit: None,
+            immutable: None,
+            delivery: None,
+            squash: None,
             rules,
         };
 
