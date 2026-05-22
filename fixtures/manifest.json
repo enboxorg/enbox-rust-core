@@ -35,6 +35,17 @@
       "id": "dwn.protocols.configure-definitions",
       "path": "dwn/protocols/configure-definitions.json",
       "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
+    },
+    {
+      "id": "dwn.protocols.permissions-records",
+      "path": "dwn/protocols/permissions-protocol-records.json",
+      "assertions": [
+        "cid.message",
+        "cid.descriptor",
+        "cid.dagpb.bytes",
+        "cid.dagpb.stream",
+        "descriptor.roundtrip"
+      ]
     }
   ]
 }
