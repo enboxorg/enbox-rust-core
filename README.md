@@ -31,6 +31,7 @@ Known inherited gaps:
 The migration plan is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md) and mirrored into GitHub milestones/issues.
 The active crate audit and target crate graph are tracked in [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md).
 The native mobile/desktop binding strategy is tracked in [`docs/BINDINGS.md`](docs/BINDINGS.md).
+The mobile background sync entry points are tracked in [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md).
 
 ## Repository Policy
 

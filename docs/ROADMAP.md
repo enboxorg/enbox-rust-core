@@ -46,7 +46,7 @@ Goal: port Enbox sync behavior for local native nodes.
 - Implement `MessagesSync` root/subtree/leaves/diff actions.
 - Implement `ProgressToken`, EOSE, gap detection, and replay bounds.
 - Port poll/live sync behavior, WebSocket subscription client support, push/pull reconciliation, dead-letter handling, repair, and scoped protocol sync.
-- Add mobile-friendly background sync entry points.
+- Add mobile-friendly background sync entry points, documented in [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md).
 
 ## Milestone 5: Agent, Auth, And Wallet Core
 
