@@ -24,6 +24,7 @@ Current assertion types:
 - `jwe.aead`: encrypt/decrypt fixture plaintext with the fixed CEK, IV, and content-encryption algorithm.
 - `jwe.keywrap`: wrap/unwrap the CEK with X25519 ECDH-ES plus A256KW using fixed recipient and ephemeral keys.
 - `jwe.decrypt`: unwrap the CEK from `case.jwe`, decrypt fixture ciphertext, and compare plaintext or expected failure.
+- `state-index.operations`: parse StateIndex operation fixtures and, while Rust StateIndex is not implemented, validate fixture shape only for `known_gap` cases.
 - `descriptor.roundtrip`: parse and re-serialize supported descriptors without changing JSON shape.
 
 Each case contains current TypeScript outputs and a Rust migration status:
@@ -40,6 +41,7 @@ Optional TypeScript runners are available under `tools/conformance/`:
 ```bash
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-cid.test.ts
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-jws.test.ts tools/conformance/typescript-jwe.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-state-index.test.ts
 ```
 
 If `ENBOX_TS_ROOT` is not set, the runners look for a sibling `../enbox` checkout. They import the current TypeScript implementations and verify the same assertions in the fixture manifest.
@@ -50,7 +52,7 @@ As Rust gains full DWN engine behavior, add new assertion types rather than dupl
 
 - `descriptor.parse`: parse valid descriptors and reject invalid descriptors with expected error codes.
 - `message.process`: process a message against a seeded store and compare reply/status output.
-- `state-index`: apply fixture operations and compare roots, subtree hashes, and leaves.
+- `state-index.operations`: apply fixture operations and compare roots, subtree hashes, and leaves.
 - `crypto.jws` and `crypto.jwe`: validate signature/encryption/decryption behavior using deterministic vectors where possible.
 
 The rule is: one fixture case, multiple implementation adapters. Differences should be represented as `known_gap` status or explicit expected error/status output, not by forking fixtures per language.

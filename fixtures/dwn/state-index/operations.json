@@ -1,0 +1,254 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "stateIndex": "StateIndexLevel",
+    "functions": [
+      "StateIndexLevel.insert",
+      "StateIndexLevel.delete",
+      "StateIndexLevel.getRoot",
+      "StateIndexLevel.getProtocolRoot",
+      "StateIndexLevel.getSubtreeHash",
+      "StateIndexLevel.getProtocolSubtreeHash",
+      "StateIndexLevel.getLeaves",
+      "StateIndexLevel.getProtocolLeaves",
+      "hashToHex"
+    ]
+  },
+  "cases": [
+    {
+      "id": "state-index-global-protocol-delete",
+      "description": "StateIndex operations covering empty roots, global/protocol insertions, tenant isolation, subtree hashes, leaves, and deletes.",
+      "rustStatus": "known_gap",
+      "gap": "Rust has the EnboxStateIndex trait but no StateIndex implementation yet.",
+      "tenants": ["did:example:alice", "did:example:bob"],
+      "prefixes": {
+        "note1First8Bits": "00010100"
+      },
+      "operations": [
+        {
+          "type": "getRoot",
+          "tenant": "did:example:alice",
+          "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
+        },
+        {
+          "type": "getProtocolRoot",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/notes",
+          "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
+        },
+        {
+          "type": "getSubtreeHash",
+          "tenant": "did:example:alice",
+          "prefix": "0",
+          "expected": "b9d06312bf5aee1fa7c879fc61c62edf16e9b523a9f89e04c02000223fbd0de9"
+        },
+        {
+          "type": "insert",
+          "tenant": "did:example:alice",
+          "messageCid": "bafyreigyk7urkpepubmp5mzmebds6c6nutoohrf2mbecstmynw333prpie",
+          "indexes": {
+            "interface": "Protocols",
+            "method": "Configure"
+          }
+        },
+        {
+          "type": "insert",
+          "tenant": "did:example:alice",
+          "messageCid": "bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi",
+          "indexes": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "https://example.com/protocol/notes",
+            "protocolPath": "note"
+          }
+        },
+        {
+          "type": "insert",
+          "tenant": "did:example:alice",
+          "messageCid": "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty",
+          "indexes": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "https://example.com/protocol/notes",
+            "protocolPath": "note"
+          }
+        },
+        {
+          "type": "insert",
+          "tenant": "did:example:alice",
+          "messageCid": "bafyreida2df4ptfdiesyxr3dyt6uoney2dvvbc2p3og72twkiqjzi5lf7u",
+          "indexes": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "https://example.com/protocol/chat",
+            "protocolPath": "thread"
+          }
+        },
+        {
+          "type": "getRoot",
+          "tenant": "did:example:alice",
+          "expected": "f2f21ea039eb03aea488757bdaf27ef520794160acf30d04f574fa5fd7fd62c4"
+        },
+        {
+          "type": "getProtocolRoot",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/notes",
+          "expected": "fb369b80738fefcd406fa18e211d4425432399a0d62c64392bd0d5169a97a3f4"
+        },
+        {
+          "type": "getProtocolRoot",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/chat",
+          "expected": "7ed3e96de1e7f5f8119e778aa41a4b4805e64cf3094c0489cdee772bc8bc7b99"
+        },
+        {
+          "type": "getProtocolRoot",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/unknown",
+          "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
+        },
+        {
+          "type": "getSubtreeHash",
+          "tenant": "did:example:alice",
+          "prefix": "0",
+          "expected": "56a55f876c95dcd06f642605fffc0fc72567e8a22d8ba38221fb4b044005366e"
+        },
+        {
+          "type": "getSubtreeHash",
+          "tenant": "did:example:alice",
+          "prefix": "00010100",
+          "expected": "ea7fcee5517fa21a3a0d23050f5c3d27c7d49c78418de314432b8b3804a72552"
+        },
+        {
+          "type": "getProtocolSubtreeHash",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/notes",
+          "prefix": "0",
+          "expected": "df04fd049956ad3b1945b07a3711316fb2f6a70c441c3571691a69abd17cf7cc"
+        },
+        {
+          "type": "getLeaves",
+          "tenant": "did:example:alice",
+          "prefix": "",
+          "expected": [
+            "bafyreida2df4ptfdiesyxr3dyt6uoney2dvvbc2p3og72twkiqjzi5lf7u",
+            "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty",
+            "bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi",
+            "bafyreigyk7urkpepubmp5mzmebds6c6nutoohrf2mbecstmynw333prpie"
+          ]
+        },
+        {
+          "type": "getLeaves",
+          "tenant": "did:example:alice",
+          "prefix": "00010100",
+          "expected": ["bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi"]
+        },
+        {
+          "type": "getProtocolLeaves",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/notes",
+          "prefix": "",
+          "expected": [
+            "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty",
+            "bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi"
+          ]
+        },
+        {
+          "type": "delete",
+          "tenant": "did:example:alice",
+          "messageCids": ["bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi"]
+        },
+        {
+          "type": "getRoot",
+          "tenant": "did:example:alice",
+          "expected": "e3ec6f484e238b585f6619e3efdc11a4880289ec8b47d220fbbde3bc1788b4d2"
+        },
+        {
+          "type": "getProtocolRoot",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/notes",
+          "expected": "6fd35d20ba5522f54dce0a1f121a40e6a3f6ff4a5cd2ef385600cacdff6a06b0"
+        },
+        {
+          "type": "getProtocolLeaves",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/notes",
+          "prefix": "",
+          "expected": ["bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty"]
+        },
+        {
+          "type": "insert",
+          "tenant": "did:example:bob",
+          "messageCid": "bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e",
+          "indexes": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "https://example.com/protocol/notes",
+            "protocolPath": "note"
+          }
+        },
+        {
+          "type": "getRoot",
+          "tenant": "did:example:alice",
+          "expected": "e3ec6f484e238b585f6619e3efdc11a4880289ec8b47d220fbbde3bc1788b4d2"
+        },
+        {
+          "type": "getRoot",
+          "tenant": "did:example:bob",
+          "expected": "3ec3587348b0303f963e76cd19374f05904f9ea6dc0affb9ca0052e49a9bab14"
+        },
+        {
+          "type": "getProtocolLeaves",
+          "tenant": "did:example:bob",
+          "protocol": "https://example.com/protocol/notes",
+          "prefix": "",
+          "expected": ["bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e"]
+        },
+        {
+          "type": "delete",
+          "tenant": "did:example:alice",
+          "messageCids": [
+            "bafyreigyk7urkpepubmp5mzmebds6c6nutoohrf2mbecstmynw333prpie",
+            "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty",
+            "bafyreida2df4ptfdiesyxr3dyt6uoney2dvvbc2p3og72twkiqjzi5lf7u"
+          ]
+        },
+        {
+          "type": "getRoot",
+          "tenant": "did:example:alice",
+          "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
+        },
+        {
+          "type": "getProtocolRoot",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/notes",
+          "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
+        },
+        {
+          "type": "getProtocolRoot",
+          "tenant": "did:example:alice",
+          "protocol": "https://example.com/protocol/chat",
+          "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
+        },
+        {
+          "type": "getRoot",
+          "tenant": "did:example:bob",
+          "expected": "3ec3587348b0303f963e76cd19374f05904f9ea6dc0affb9ca0052e49a9bab14"
+        },
+        {
+          "type": "delete",
+          "tenant": "did:example:bob",
+          "messageCids": ["bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e"]
+        },
+        {
+          "type": "getRoot",
+          "tenant": "did:example:bob",
+          "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
+        }
+      ]
+    }
+  ]
+}

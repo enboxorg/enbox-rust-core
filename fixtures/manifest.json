@@ -46,6 +46,11 @@
         "cid.dagpb.stream",
         "descriptor.roundtrip"
       ]
+    },
+    {
+      "id": "dwn.state-index.operations",
+      "path": "dwn/state-index/operations.json",
+      "assertions": ["state-index.operations"]
     }
   ]
 }

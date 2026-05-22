@@ -38,6 +38,7 @@ const JWE_PROTECTED_ASSERTION: &str = "jwe.protected";
 const JWE_AEAD_ASSERTION: &str = "jwe.aead";
 const JWE_KEYWRAP_ASSERTION: &str = "jwe.keywrap";
 const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
+const STATE_INDEX_OPERATIONS_ASSERTION: &str = "state-index.operations";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 
 const JWE_ERROR_DECRYPT_FAILED: &str = "JweDecryptFailed";
@@ -100,6 +101,8 @@ struct FixtureCase {
     record: Option<Value>,
     signer_ids: Option<Vec<String>>,
     tag: Option<FixtureData>,
+    tenants: Option<Vec<String>>,
+    operations: Option<Vec<StateIndexOperation>>,
     value: Option<Value>,
 }
 
@@ -158,6 +161,58 @@ struct FixtureJweRecipientHeader {
     epk: FixtureX25519PublicJwk,
     derivation_scheme: String,
     derived_public_key: Option<FixtureX25519PublicJwk>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+enum StateIndexOperation {
+    #[serde(rename = "insert")]
+    Insert {
+        tenant: String,
+        #[serde(rename = "messageCid")]
+        message_cid: String,
+        indexes: BTreeMap<String, Value>,
+    },
+    #[serde(rename = "delete")]
+    Delete {
+        tenant: String,
+        #[serde(rename = "messageCids")]
+        message_cids: Vec<String>,
+    },
+    #[serde(rename = "getRoot")]
+    GetRoot { tenant: String, expected: String },
+    #[serde(rename = "getProtocolRoot")]
+    GetProtocolRoot {
+        tenant: String,
+        protocol: String,
+        expected: String,
+    },
+    #[serde(rename = "getSubtreeHash")]
+    GetSubtreeHash {
+        tenant: String,
+        prefix: String,
+        expected: String,
+    },
+    #[serde(rename = "getProtocolSubtreeHash")]
+    GetProtocolSubtreeHash {
+        tenant: String,
+        protocol: String,
+        prefix: String,
+        expected: String,
+    },
+    #[serde(rename = "getLeaves")]
+    GetLeaves {
+        tenant: String,
+        prefix: String,
+        expected: Vec<String>,
+    },
+    #[serde(rename = "getProtocolLeaves")]
+    GetProtocolLeaves {
+        tenant: String,
+        protocol: String,
+        prefix: String,
+        expected: Vec<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -413,6 +468,25 @@ fn supported_fixture_descriptors_roundtrip_through_rust_models() {
     }
 }
 
+#[test]
+fn known_gap_state_index_operation_fixtures_parse_and_validate_shape() {
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(STATE_INDEX_OPERATIONS_ASSERTION) {
+            continue;
+        }
+
+        for case in &suite.fixture_set.cases {
+            assert_eq!(
+                case.rust_status,
+                RustStatus::KnownGap,
+                "{} must remain known_gap until Rust StateIndex behavior is implemented",
+                case.id
+            );
+            assert_state_index_operation_fixture_shape(case);
+        }
+    }
+}
+
 impl LoadedFixtureSuite {
     fn has_assertion(&self, assertion: &str) -> bool {
         self.suite_ref
@@ -471,6 +545,178 @@ fn compute_cid(value: &Value) -> String {
     generate_cid_from_json(value)
         .expect("fixture value must be DAG-CBOR encodable")
         .to_string()
+}
+
+fn assert_state_index_operation_fixture_shape(case: &FixtureCase) {
+    let tenants = case
+        .tenants
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include StateIndex tenants", case.id));
+    assert!(
+        !tenants.is_empty(),
+        "{} must include at least one StateIndex tenant",
+        case.id
+    );
+    for tenant in tenants {
+        assert!(!tenant.is_empty(), "{} tenant must not be empty", case.id);
+    }
+
+    let operations = case
+        .operations
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include StateIndex operations", case.id));
+    assert!(
+        !operations.is_empty(),
+        "{} must include at least one StateIndex operation",
+        case.id
+    );
+
+    for operation in operations {
+        match operation {
+            StateIndexOperation::Insert {
+                tenant,
+                message_cid,
+                indexes,
+            } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert!(
+                    !message_cid.is_empty(),
+                    "{} insert messageCid must not be empty",
+                    case.id
+                );
+                assert!(
+                    !indexes.is_empty(),
+                    "{} insert indexes must not be empty",
+                    case.id
+                );
+            }
+            StateIndexOperation::Delete {
+                tenant,
+                message_cids,
+            } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert!(
+                    !message_cids.is_empty(),
+                    "{} delete messageCids must not be empty",
+                    case.id
+                );
+                for message_cid in message_cids {
+                    assert!(
+                        !message_cid.is_empty(),
+                        "{} delete messageCid must not be empty",
+                        case.id
+                    );
+                }
+            }
+            StateIndexOperation::GetRoot { tenant, expected } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert_state_hash_hex(case, expected);
+            }
+            StateIndexOperation::GetProtocolRoot {
+                tenant,
+                protocol,
+                expected,
+            } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert_state_index_protocol(case, protocol);
+                assert_state_hash_hex(case, expected);
+            }
+            StateIndexOperation::GetSubtreeHash {
+                tenant,
+                prefix,
+                expected,
+            } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert_bit_prefix(case, prefix);
+                assert_state_hash_hex(case, expected);
+            }
+            StateIndexOperation::GetProtocolSubtreeHash {
+                tenant,
+                protocol,
+                prefix,
+                expected,
+            } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert_state_index_protocol(case, protocol);
+                assert_bit_prefix(case, prefix);
+                assert_state_hash_hex(case, expected);
+            }
+            StateIndexOperation::GetLeaves {
+                tenant,
+                prefix,
+                expected,
+            } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert_bit_prefix(case, prefix);
+                assert_state_index_leaves(case, expected);
+            }
+            StateIndexOperation::GetProtocolLeaves {
+                tenant,
+                protocol,
+                prefix,
+                expected,
+            } => {
+                assert_state_index_tenant(case, tenants, tenant);
+                assert_state_index_protocol(case, protocol);
+                assert_bit_prefix(case, prefix);
+                assert_state_index_leaves(case, expected);
+            }
+        }
+    }
+}
+
+fn assert_state_index_tenant(case: &FixtureCase, tenants: &[String], tenant: &str) {
+    assert!(
+        tenants.iter().any(|candidate| candidate == tenant),
+        "{} operation tenant {} must be listed in case tenants",
+        case.id,
+        tenant
+    );
+}
+
+fn assert_state_index_protocol(case: &FixtureCase, protocol: &str) {
+    assert!(
+        !protocol.is_empty(),
+        "{} StateIndex protocol must not be empty",
+        case.id
+    );
+}
+
+fn assert_state_hash_hex(case: &FixtureCase, value: &str) {
+    assert_eq!(
+        value.len(),
+        64,
+        "{} StateIndex hash must be 32-byte hex",
+        case.id
+    );
+    assert!(
+        value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{} StateIndex hash must be hex",
+        case.id
+    );
+}
+
+fn assert_bit_prefix(case: &FixtureCase, prefix: &str) {
+    assert!(
+        prefix.bytes().all(|byte| byte == b'0' || byte == b'1'),
+        "{} StateIndex prefix must be a bit string",
+        case.id
+    );
+    assert!(
+        prefix.len() <= 256,
+        "{} StateIndex prefix must be no longer than 256 bits",
+        case.id
+    );
+}
+
+fn assert_state_index_leaves(case: &FixtureCase, leaves: &[String]) {
+    for leaf in leaves {
+        assert!(
+            !leaf.is_empty(),
+            "{} StateIndex leaf CID must not be empty",
+            case.id
+        );
+    }
 }
 
 fn message(case: &FixtureCase) -> &Value {
