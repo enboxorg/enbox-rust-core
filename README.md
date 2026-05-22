@@ -14,7 +14,9 @@ This repository was cloned from [`enmand/dwn-rs`](https://github.com/enmand/dwn-
 
 ## Current State
 
-This repository is at the start of the Enbox migration. The inherited `dwn-rs` code is useful reference material, but it is not yet a complete Enbox DWN engine.
+This repository is early in the Enbox migration. The inherited `dwn-rs` code is useful reference material, and the active Rust workspace now builds natively with the pinned Rust toolchain.
+
+Active workspace members are listed in [`Cargo.toml`](Cargo.toml). The inherited WASM bridge is excluded from the active workspace while the native core takes shape.
 
 Known inherited gaps:
 
@@ -22,8 +24,7 @@ Known inherited gaps:
 - Current Enbox handlers are missing, including Enbox `MessagesSync`.
 - Enbox `StateIndex` / Sparse Merkle Tree sync state is missing.
 - Current Enbox protocol directives and permission behavior need to be ported.
-- The WASM bridge still references the old `@tbd54566975/dwn-sdk-js` package.
-- The current build is blocked by an unavailable `multicodec` git revision.
+- The WASM bridge still references the old `@tbd54566975/dwn-sdk-js` package and remains legacy-only.
 
 ## Roadmap
 
@@ -35,6 +36,18 @@ The migration plan is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md) and mirror
 - Prefer mechanical moves/renames in separate commits from semantic code changes.
 - Use the current Enbox TypeScript implementation as the behavioral source of truth.
 - Add conformance fixtures before porting behavior so Rust and TypeScript outputs can be compared.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the supported Rust toolchain, local checks, and branch policy.
+
+## Development
+
+The supported Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Run these checks before pushing changes:
+
+```bash
+cargo +1.89.0 fmt --all -- --check
+cargo +1.89.0 clippy --workspace --all-targets
+cargo +1.89.0 test --workspace
+```
 
 ## License
 
