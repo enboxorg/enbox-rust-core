@@ -20,6 +20,10 @@ Current assertion types:
 - `jws.general.sign`: create a General JWS from fixture payload/signers and compare it to `case.jws`.
 - `jws.general.verify`: verify `case.jws` signatures against fixture public keys and compare signers or expected error code.
 - `jws.general.payload`: encode fixture payload bytes and compare them to `case.jws.payload`.
+- `jwe.protected`: parse the JWE protected header and verify the deterministic base64url encoding.
+- `jwe.aead`: encrypt/decrypt fixture plaintext with the fixed CEK, IV, and content-encryption algorithm.
+- `jwe.keywrap`: wrap/unwrap the CEK with X25519 ECDH-ES plus A256KW using fixed recipient and ephemeral keys.
+- `jwe.decrypt`: unwrap the CEK from `case.jwe`, decrypt fixture ciphertext, and compare plaintext or expected failure.
 - `descriptor.roundtrip`: parse and re-serialize supported descriptors without changing JSON shape.
 
 Each case contains current TypeScript outputs and a Rust migration status:
@@ -31,13 +35,14 @@ Each case contains current TypeScript outputs and a Rust migration status:
 
 Rust CI runs `crates/dwn-rs-core/tests/conformance_fixtures.rs` as part of `cargo test --workspace`. This runner discovers suites from `fixtures/manifest.json`, computes JSON CIDs with `dwn_rs_core::cid::generate_cid_from_json`, and does not require Bun, Node, or the TypeScript workspace.
 
-An optional TypeScript runner is available at `tools/conformance/typescript-cid.test.ts`:
+Optional TypeScript runners are available under `tools/conformance/`:
 
 ```bash
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-cid.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-jws.test.ts tools/conformance/typescript-jwe.test.ts
 ```
 
-If `ENBOX_TS_ROOT` is not set, the runner looks for a sibling `../enbox` checkout. It imports the current TypeScript `Cid.computeCid` implementation and verifies the same CID assertions in the fixture manifest.
+If `ENBOX_TS_ROOT` is not set, the runners look for a sibling `../enbox` checkout. They import the current TypeScript implementations and verify the same assertions in the fixture manifest.
 
 ## Adapter Model
 

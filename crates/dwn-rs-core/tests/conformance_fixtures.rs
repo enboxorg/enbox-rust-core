@@ -1,6 +1,14 @@
+use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit};
+use aes_gcm::aead::AeadInPlace;
+use aes_gcm::{Aes256Gcm, Nonce as AesGcmNonce, Tag as AesGcmTag};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use bytes::Bytes;
+use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
+use dwn_rs_core::auth::{
+    GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner,
+    StaticPublicKeyResolver,
+};
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
 };
@@ -9,8 +17,8 @@ use dwn_rs_core::descriptors::{
     MessagesSubscribeDescriptor, ProtocolQueryDescriptor, ReadDescriptor, RecordsQueryDescriptor,
     RecordsWriteDescriptor, SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use futures_util::stream;
+use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -26,12 +34,13 @@ const CID_DAG_PB_STREAM_ASSERTION: &str = "cid.dagpb.stream";
 const JWS_GENERAL_SIGN_ASSERTION: &str = "jws.general.sign";
 const JWS_GENERAL_VERIFY_ASSERTION: &str = "jws.general.verify";
 const JWS_GENERAL_PAYLOAD_ASSERTION: &str = "jws.general.payload";
+const JWE_PROTECTED_ASSERTION: &str = "jwe.protected";
+const JWE_AEAD_ASSERTION: &str = "jwe.aead";
+const JWE_KEYWRAP_ASSERTION: &str = "jwe.keywrap";
+const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 
-const JWS_ERROR_INVALID_SIGNATURE: &str = "GeneralJwsVerifierInvalidSignature";
-const JWS_ERROR_MISSING_ALG: &str = "GeneralJwsVerifierMissingAlg";
-const JWS_ERROR_MISSING_KID: &str = "GeneralJwsVerifierMissingKid";
-const JWS_ERROR_PUBLIC_KEY_NOT_FOUND: &str = "GeneralJwsVerifierGetPublicKeyNotFound";
+const JWE_ERROR_DECRYPT_FAILED: &str = "JweDecryptFailed";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,16 +75,31 @@ struct FixtureSet {
 struct FixtureCase {
     id: String,
     rust_status: RustStatus,
+    cek: Option<FixtureData>,
+    ciphertext: Option<FixtureData>,
+    content_encryption_algorithm: Option<String>,
     descriptor_cid: Option<String>,
+    derivation_scheme: Option<String>,
+    derived_private_jwk: Option<FixtureDerivedPrivateJwk>,
+    ephemeral_private_jwk: Option<FixtureX25519PrivateJwk>,
+    ephemeral_public_jwk: Option<FixtureX25519PublicJwk>,
     message_cid: Option<String>,
     message: Option<Value>,
     cid: Option<String>,
     data: Option<FixtureData>,
     expected_error_code: Option<String>,
     expected_signers: Option<Vec<String>>,
-    jws: Option<FixtureJws>,
+    iv: Option<FixtureData>,
+    jwe: Option<FixtureJwe>,
+    jws: Option<GeneralJws>,
+    key_agreement_algorithm: Option<String>,
     payload: Option<FixtureJwsPayload>,
+    plaintext: Option<FixtureData>,
+    recipient_private_jwk: Option<FixtureX25519PrivateJwk>,
+    recipient_public_jwk: Option<FixtureX25519PublicJwk>,
+    record: Option<Value>,
     signer_ids: Option<Vec<String>>,
+    tag: Option<FixtureData>,
     value: Option<Value>,
 }
 
@@ -97,37 +121,8 @@ enum FixtureData {
 struct FixtureJwsKey {
     kid: String,
     algorithm: String,
-    public_jwk: FixtureEd25519PublicJwk,
-    private_jwk: Option<FixtureEd25519PrivateJwk>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FixtureEd25519PublicJwk {
-    alg: String,
-    kty: String,
-    crv: String,
-    x: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct FixtureEd25519PrivateJwk {
-    alg: String,
-    kty: String,
-    crv: String,
-    x: String,
-    d: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct FixtureJws {
-    payload: String,
-    signatures: Vec<FixtureJwsSignature>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FixtureJwsSignature {
-    protected: String,
-    signature: String,
+    public_jwk: GeneralJwsPublicJwk,
+    private_jwk: Option<GeneralJwsPrivateJwk>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,9 +137,59 @@ enum FixtureJwsPayload {
 }
 
 #[derive(Debug, Deserialize)]
-struct FixtureJwsProtectedHeader {
-    alg: Option<String>,
+#[serde(rename_all = "camelCase")]
+struct FixtureJwe {
+    protected: String,
+    iv: String,
+    tag: String,
+    recipients: Vec<FixtureJweRecipient>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureJweRecipient {
+    header: FixtureJweRecipientHeader,
+    encrypted_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureJweRecipientHeader {
+    kid: String,
+    epk: FixtureX25519PublicJwk,
+    derivation_scheme: String,
+    derived_public_key: Option<FixtureX25519PublicJwk>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureDerivedPrivateJwk {
+    root_key_id: String,
+    derivation_scheme: String,
+    derivation_path: Vec<String>,
+    derived_private_key: FixtureX25519PrivateJwk,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureX25519PublicJwk {
+    kty: String,
+    crv: String,
+    x: String,
     kid: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureX25519PrivateJwk {
+    kty: String,
+    crv: String,
+    d: String,
+    x: String,
+    kid: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureJweProtectedHeader {
+    alg: String,
+    enc: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -310,6 +355,47 @@ fn fixture_general_jws_matches_typescript() {
 }
 
 #[test]
+fn fixture_jwe_matches_typescript() {
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(JWE_PROTECTED_ASSERTION)
+            && !suite.has_assertion(JWE_AEAD_ASSERTION)
+            && !suite.has_assertion(JWE_KEYWRAP_ASSERTION)
+            && !suite.has_assertion(JWE_DECRYPT_ASSERTION)
+        {
+            continue;
+        }
+
+        let check_protected = suite.has_assertion(JWE_PROTECTED_ASSERTION);
+        let check_aead = suite.has_assertion(JWE_AEAD_ASSERTION);
+        let check_keywrap = suite.has_assertion(JWE_KEYWRAP_ASSERTION);
+        let check_decrypt = suite.has_assertion(JWE_DECRYPT_ASSERTION);
+
+        for case in suite
+            .fixture_set
+            .cases
+            .iter()
+            .filter(|case| case.rust_status == RustStatus::Supported)
+        {
+            if check_protected {
+                assert_jwe_protected_header(case);
+            }
+
+            if check_aead && case.expected_error_code.is_none() {
+                assert_jwe_aead(case);
+            }
+
+            if check_keywrap {
+                assert_jwe_keywrap(case);
+            }
+
+            if check_decrypt {
+                assert_jwe_decrypt(case);
+            }
+        }
+    }
+}
+
+#[test]
 fn supported_fixture_descriptors_roundtrip_through_rust_models() {
     for suite in load_fixture_suites() {
         if !suite.has_assertion(DESCRIPTOR_ROUNDTRIP_ASSERTION) {
@@ -438,160 +524,537 @@ fn jws_payload_bytes(case: &FixtureCase) -> Vec<u8> {
     }
 }
 
-fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
-    let jws = jws(case);
+fn assert_jwe_protected_header(case: &FixtureCase) {
+    let protected = decode_base64url(&jwe(case).protected, &case.id, "JWE protected header");
+    let header: FixtureJweProtectedHeader =
+        serde_json::from_slice(&protected).unwrap_or_else(|err| {
+            panic!(
+                "{} must include a valid JWE protected header: {}",
+                case.id, err
+            )
+        });
+
     assert_eq!(
-        URL_SAFE_NO_PAD.encode(jws_payload_bytes(case)),
-        jws.payload,
-        "{} payload",
+        header.alg,
+        key_agreement_algorithm(case),
+        "{} JWE alg",
         case.id
     );
     assert_eq!(
-        signer_ids(case).len(),
-        jws.signatures.len(),
-        "{} signer count",
+        header.enc,
+        content_encryption_algorithm(case),
+        "{} JWE enc",
         case.id
     );
 
-    for (signature, signer_id) in jws.signatures.iter().zip(signer_ids(case)) {
-        let key = fixture_jws_key(fixture_set, case, signer_id);
-        let protected = format!(
-            "{{\"kid\":{},\"alg\":{}}}",
-            serde_json::to_string(&key.kid).expect("kid must serialize"),
-            serde_json::to_string(&key.algorithm).expect("algorithm must serialize")
-        );
-        assert_eq!(
-            URL_SAFE_NO_PAD.encode(protected.as_bytes()),
-            signature.protected,
-            "{} protected header",
-            case.id
-        );
+    let expected_protected = format!(
+        "{{\"alg\":{},\"enc\":{}}}",
+        serde_json::to_string(key_agreement_algorithm(case)).expect("alg must serialize"),
+        serde_json::to_string(content_encryption_algorithm(case)).expect("enc must serialize")
+    );
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(expected_protected.as_bytes()),
+        jwe(case).protected,
+        "{} protected header encoding",
+        case.id
+    );
+}
 
-        let signing_key = signing_key_from_fixture(key, &case.id);
-        let signing_input = signing_input(jws, signature);
-        let expected_signature = signing_key.sign(signing_input.as_bytes());
-        assert_eq!(
-            URL_SAFE_NO_PAD.encode(expected_signature.to_bytes()),
-            signature.signature,
-            "{} signature",
+fn assert_jwe_aead(case: &FixtureCase) {
+    let cek = fixture_value_bytes(case, &case.cek, "CEK");
+    let iv = fixture_value_bytes(case, &case.iv, "IV");
+    let plaintext = fixture_value_bytes(case, &case.plaintext, "plaintext");
+    let (ciphertext, tag) =
+        jwe_aead_encrypt(content_encryption_algorithm(case), &cek, &iv, &plaintext)
+            .unwrap_or_else(|err| panic!("{} AEAD encrypt failed: {}", case.id, err));
+
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(&ciphertext),
+        fixture_value_base64url(case, &case.ciphertext, "ciphertext"),
+        "{} ciphertext",
+        case.id
+    );
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(&tag),
+        fixture_value_base64url(case, &case.tag, "tag"),
+        "{} tag",
+        case.id
+    );
+
+    let decrypted = jwe_aead_decrypt(
+        content_encryption_algorithm(case),
+        &cek,
+        &iv,
+        &ciphertext,
+        &tag,
+    )
+    .unwrap_or_else(|err| panic!("{} AEAD decrypt failed: {}", case.id, err));
+    assert_eq!(decrypted, plaintext, "{} plaintext", case.id);
+}
+
+fn assert_jwe_keywrap(case: &FixtureCase) {
+    let recipient = single_jwe_recipient(case);
+    let cek = fixture_value_bytes(case, &case.cek, "CEK");
+    let wrapped = ecdh_es_wrap_key(
+        ephemeral_private_jwk(case),
+        recipient_public_jwk(case),
+        &cek,
+    )
+    .unwrap_or_else(|err| panic!("{} ECDH-ES wrap failed: {}", case.id, err));
+
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(&wrapped),
+        recipient.encrypted_key,
+        "{} encrypted_key",
+        case.id
+    );
+    assert_eq!(
+        recipient.header.epk.x,
+        ephemeral_public_jwk(case).x,
+        "{} ephemeral public key",
+        case.id
+    );
+    match derivation_scheme(case) {
+        "protocolContext" => assert_eq!(
+            recipient
+                .header
+                .derived_public_key
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} must include derivedPublicKey", case.id))
+                .x,
+            recipient_public_jwk(case).x,
+            "{} derived public key",
             case.id
-        );
+        ),
+        _ => assert!(
+            recipient.header.derived_public_key.is_none(),
+            "{} must not include derivedPublicKey",
+            case.id
+        ),
     }
+
+    let unwrapped =
+        ecdh_es_unwrap_key(recipient_private_jwk(case), &recipient.header.epk, &wrapped)
+            .unwrap_or_else(|err| panic!("{} ECDH-ES unwrap failed: {}", case.id, err));
+    assert_eq!(unwrapped, cek, "{} unwrapped CEK", case.id);
+}
+
+fn assert_jwe_decrypt(case: &FixtureCase) {
+    let decrypt_result = decrypt_jwe_case(case);
+
+    match case.expected_error_code.as_deref() {
+        Some(JWE_ERROR_DECRYPT_FAILED) => assert!(
+            decrypt_result.is_err(),
+            "{} must fail JWE decryption",
+            case.id
+        ),
+        Some(error_code) => panic!("{} unsupported JWE error code {}", case.id, error_code),
+        None => assert_eq!(
+            decrypt_result.unwrap_or_else(|err| panic!("{} JWE decrypt failed: {}", case.id, err)),
+            fixture_value_bytes(case, &case.plaintext, "plaintext"),
+            "{} decrypted plaintext",
+            case.id
+        ),
+    }
+}
+
+fn decrypt_jwe_case(case: &FixtureCase) -> Result<Vec<u8>, String> {
+    let recipient = single_jwe_recipient(case);
+    let derived_private_jwk = derived_private_jwk(case);
+
+    assert_eq!(
+        recipient.header.kid, derived_private_jwk.root_key_id,
+        "{} recipient kid",
+        case.id
+    );
+    assert_eq!(
+        recipient.header.derivation_scheme, derived_private_jwk.derivation_scheme,
+        "{} recipient derivationScheme",
+        case.id
+    );
+    assert_eq!(
+        construct_jwe_derivation_path(case),
+        derived_private_jwk.derivation_path,
+        "{} derivation path",
+        case.id
+    );
+
+    let encrypted_key = decode_base64url(&recipient.encrypted_key, &case.id, "encrypted_key");
+    let cek = ecdh_es_unwrap_key(
+        &derived_private_jwk.derived_private_key,
+        &recipient.header.epk,
+        &encrypted_key,
+    )?;
+    assert_eq!(
+        cek,
+        fixture_value_bytes(case, &case.cek, "CEK"),
+        "{} unwrapped decrypt CEK",
+        case.id
+    );
+
+    jwe_aead_decrypt(
+        content_encryption_algorithm(case),
+        &cek,
+        &decode_base64url(&jwe(case).iv, &case.id, "JWE IV"),
+        &fixture_value_bytes(case, &case.ciphertext, "ciphertext"),
+        &decode_base64url(&jwe(case).tag, &case.id, "JWE tag"),
+    )
+}
+
+fn jwe_aead_encrypt(
+    algorithm: &str,
+    key: &[u8],
+    iv: &[u8],
+    plaintext: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    match algorithm {
+        "A256GCM" => {
+            let cipher = Aes256Gcm::new_from_slice(key).map_err(|err| err.to_string())?;
+            let mut ciphertext = plaintext.to_vec();
+            let tag = cipher
+                .encrypt_in_place_detached(AesGcmNonce::from_slice(iv), b"", &mut ciphertext)
+                .map_err(|err| err.to_string())?;
+
+            Ok((ciphertext, tag.to_vec()))
+        }
+        "XC20P" => {
+            let cipher = XChaCha20Poly1305::new_from_slice(key).map_err(|err| err.to_string())?;
+            let mut ciphertext = plaintext.to_vec();
+            let tag = cipher
+                .encrypt_in_place_detached(XNonce::from_slice(iv), b"", &mut ciphertext)
+                .map_err(|err| err.to_string())?;
+
+            Ok((ciphertext, tag.to_vec()))
+        }
+        _ => Err(format!(
+            "unsupported content encryption algorithm {algorithm}"
+        )),
+    }
+}
+
+fn jwe_aead_decrypt(
+    algorithm: &str,
+    key: &[u8],
+    iv: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Result<Vec<u8>, String> {
+    match algorithm {
+        "A256GCM" => {
+            let cipher = Aes256Gcm::new_from_slice(key).map_err(|err| err.to_string())?;
+            let mut plaintext = ciphertext.to_vec();
+            cipher
+                .decrypt_in_place_detached(
+                    AesGcmNonce::from_slice(iv),
+                    b"",
+                    &mut plaintext,
+                    AesGcmTag::from_slice(tag),
+                )
+                .map_err(|err| err.to_string())?;
+
+            Ok(plaintext)
+        }
+        "XC20P" => {
+            let cipher = XChaCha20Poly1305::new_from_slice(key).map_err(|err| err.to_string())?;
+            let mut plaintext = ciphertext.to_vec();
+            cipher
+                .decrypt_in_place_detached(
+                    XNonce::from_slice(iv),
+                    b"",
+                    &mut plaintext,
+                    XChaCha20Poly1305Tag::from_slice(tag),
+                )
+                .map_err(|err| err.to_string())?;
+
+            Ok(plaintext)
+        }
+        _ => Err(format!(
+            "unsupported content encryption algorithm {algorithm}"
+        )),
+    }
+}
+
+fn ecdh_es_wrap_key(
+    ephemeral_private_jwk: &FixtureX25519PrivateJwk,
+    recipient_public_jwk: &FixtureX25519PublicJwk,
+    cek: &[u8],
+) -> Result<Vec<u8>, String> {
+    let shared_secret = x25519_shared_secret(ephemeral_private_jwk, recipient_public_jwk)?;
+    let kek = concat_kdf_a256kw(&shared_secret);
+    aes_key_wrap(&kek, cek)
+}
+
+fn ecdh_es_unwrap_key(
+    recipient_private_jwk: &FixtureX25519PrivateJwk,
+    ephemeral_public_jwk: &FixtureX25519PublicJwk,
+    wrapped_key: &[u8],
+) -> Result<Vec<u8>, String> {
+    let shared_secret = x25519_shared_secret(recipient_private_jwk, ephemeral_public_jwk)?;
+    let kek = concat_kdf_a256kw(&shared_secret);
+    aes_key_unwrap(&kek, wrapped_key)
+}
+
+fn x25519_shared_secret(
+    private_jwk: &FixtureX25519PrivateJwk,
+    public_jwk: &FixtureX25519PublicJwk,
+) -> Result<Vec<u8>, String> {
+    assert_x25519_private_jwk(private_jwk);
+    assert_x25519_public_jwk(public_jwk);
+
+    let private_key = decode_base64url(&private_jwk.d, "JWE", "X25519 private key");
+    let public_key = decode_base64url(&public_jwk.x, "JWE", "X25519 public key");
+    let private_key: [u8; 32] = private_key
+        .try_into()
+        .map_err(|_| "X25519 private key must be 32 bytes".to_string())?;
+    let public_key: [u8; 32] = public_key
+        .try_into()
+        .map_err(|_| "X25519 public key must be 32 bytes".to_string())?;
+
+    let secret = x25519_dalek::StaticSecret::from(private_key);
+    let public = x25519_dalek::PublicKey::from(public_key);
+    Ok(secret.diffie_hellman(&public).as_bytes().to_vec())
+}
+
+fn concat_kdf_a256kw(shared_secret: &[u8]) -> Vec<u8> {
+    let mut fixed_info = Vec::new();
+    append_length_prefixed(&mut fixed_info, b"A256KW");
+    append_length_prefixed(&mut fixed_info, b"");
+    append_length_prefixed(&mut fixed_info, b"");
+    fixed_info.extend_from_slice(&256u32.to_be_bytes());
+
+    let mut hasher = Sha256::new();
+    hasher.update(1u32.to_be_bytes());
+    hasher.update(shared_secret);
+    hasher.update(fixed_info);
+    hasher.finalize()[..32].to_vec()
+}
+
+fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
+    output.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    output.extend_from_slice(value);
+}
+
+fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    if plaintext.len() < 16 || plaintext.len() % 8 != 0 {
+        return Err("AES-KW plaintext must be at least 16 bytes and 64-bit aligned".to_string());
+    }
+
+    let cipher = aes::Aes256::new_from_slice(kek).map_err(|err| err.to_string())?;
+    let n = plaintext.len() / 8;
+    let mut a = [0xa6; 8];
+    let mut r = plaintext
+        .chunks_exact(8)
+        .map(|chunk| {
+            let mut block = [0u8; 8];
+            block.copy_from_slice(chunk);
+            block
+        })
+        .collect::<Vec<_>>();
+
+    for j in 0..6 {
+        for (i, block) in r.iter_mut().enumerate() {
+            let mut input = [0u8; 16];
+            input[..8].copy_from_slice(&a);
+            input[8..].copy_from_slice(block);
+
+            let mut encrypted = GenericArray::clone_from_slice(&input);
+            cipher.encrypt_block(&mut encrypted);
+
+            a.copy_from_slice(&encrypted[..8]);
+            xor_aes_kw_counter(&mut a, (n * j + i + 1) as u64);
+            block.copy_from_slice(&encrypted[8..]);
+        }
+    }
+
+    let mut wrapped = Vec::with_capacity(8 + plaintext.len());
+    wrapped.extend_from_slice(&a);
+    for block in r {
+        wrapped.extend_from_slice(&block);
+    }
+
+    Ok(wrapped)
+}
+
+fn aes_key_unwrap(kek: &[u8], wrapped_key: &[u8]) -> Result<Vec<u8>, String> {
+    if wrapped_key.len() < 24 || wrapped_key.len() % 8 != 0 {
+        return Err("AES-KW ciphertext must be at least 24 bytes and 64-bit aligned".to_string());
+    }
+
+    let cipher = aes::Aes256::new_from_slice(kek).map_err(|err| err.to_string())?;
+    let n = wrapped_key.len() / 8 - 1;
+    let mut a = [0u8; 8];
+    a.copy_from_slice(&wrapped_key[..8]);
+    let mut r = wrapped_key[8..]
+        .chunks_exact(8)
+        .map(|chunk| {
+            let mut block = [0u8; 8];
+            block.copy_from_slice(chunk);
+            block
+        })
+        .collect::<Vec<_>>();
+
+    for j in (0..6).rev() {
+        for i in (0..n).rev() {
+            let mut block_a = a;
+            xor_aes_kw_counter(&mut block_a, (n * j + i + 1) as u64);
+
+            let mut input = [0u8; 16];
+            input[..8].copy_from_slice(&block_a);
+            input[8..].copy_from_slice(&r[i]);
+
+            let mut decrypted = GenericArray::clone_from_slice(&input);
+            cipher.decrypt_block(&mut decrypted);
+
+            a.copy_from_slice(&decrypted[..8]);
+            r[i].copy_from_slice(&decrypted[8..]);
+        }
+    }
+
+    if a != [0xa6; 8] {
+        return Err("AES-KW integrity check failed".to_string());
+    }
+
+    let mut plaintext = Vec::with_capacity(wrapped_key.len() - 8);
+    for block in r {
+        plaintext.extend_from_slice(&block);
+    }
+
+    Ok(plaintext)
+}
+
+fn xor_aes_kw_counter(a: &mut [u8; 8], counter: u64) {
+    for (left, right) in a.iter_mut().zip(counter.to_be_bytes()) {
+        *left ^= right;
+    }
+}
+
+fn construct_jwe_derivation_path(case: &FixtureCase) -> Vec<String> {
+    let record = record(case);
+    let descriptor = record
+        .get("descriptor")
+        .unwrap_or_else(|| panic!("{} JWE record must include descriptor", case.id));
+
+    match derivation_scheme(case) {
+        "protocolPath" => {
+            let protocol = descriptor
+                .get("protocol")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{} descriptor must include protocol", case.id));
+            let protocol_path = descriptor
+                .get("protocolPath")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{} descriptor must include protocolPath", case.id));
+            let mut path = vec!["protocolPath".to_string(), protocol.to_string()];
+            path.extend(protocol_path.split('/').map(str::to_string));
+            path
+        }
+        "protocolContext" => {
+            let context_id = record
+                .get("contextId")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{} JWE record must include contextId", case.id));
+            vec![
+                "protocolContext".to_string(),
+                context_id
+                    .split('/')
+                    .next()
+                    .expect("split always returns one item")
+                    .to_string(),
+            ]
+        }
+        scheme => panic!("{} unsupported derivation scheme {}", case.id, scheme),
+    }
+}
+
+fn assert_x25519_public_jwk(jwk: &FixtureX25519PublicJwk) {
+    assert_eq!(jwk.kty, "OKP", "X25519 public JWK kty");
+    assert_eq!(jwk.crv, "X25519", "X25519 public JWK crv");
+    assert_eq!(
+        decode_base64url(&jwk.x, "JWE", "X25519 public key").len(),
+        32,
+        "X25519 public key length"
+    );
+    assert!(jwk.kid.as_deref().unwrap_or_default().len() <= 128);
+}
+
+fn assert_x25519_private_jwk(jwk: &FixtureX25519PrivateJwk) {
+    assert_eq!(jwk.kty, "OKP", "X25519 private JWK kty");
+    assert_eq!(jwk.crv, "X25519", "X25519 private JWK crv");
+    assert_eq!(
+        decode_base64url(&jwk.d, "JWE", "X25519 private key").len(),
+        32,
+        "X25519 private key length"
+    );
+    assert_eq!(
+        decode_base64url(&jwk.x, "JWE", "X25519 private public key").len(),
+        32,
+        "X25519 private public key length"
+    );
+    assert!(jwk.kid.as_deref().unwrap_or_default().len() <= 128);
+}
+
+fn fixture_value_bytes(case: &FixtureCase, data: &Option<FixtureData>, label: &str) -> Vec<u8> {
+    match data
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include {}", case.id, label))
+    {
+        FixtureData::Base64Url { value } => URL_SAFE_NO_PAD.decode(value).unwrap_or_else(|err| {
+            panic!(
+                "{} must include valid base64url {}: {}",
+                case.id, label, err
+            )
+        }),
+        FixtureData::Hex { value } => decode_hex(value, &case.id),
+        FixtureData::RepeatByte { byte, length } => vec![*byte; *length],
+        FixtureData::Utf8 { value } => value.as_bytes().to_vec(),
+    }
+}
+
+fn fixture_value_base64url(case: &FixtureCase, data: &Option<FixtureData>, label: &str) -> String {
+    URL_SAFE_NO_PAD.encode(fixture_value_bytes(case, data, label))
+}
+
+fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
+    let actual = GeneralJws::create(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
+        .unwrap_or_else(|err| panic!("{} General JWS signing failed: {}", case.id, err));
+
+    assert_eq!(actual, *jws(case), "{}", case.id);
 }
 
 fn verify_general_jws(
     fixture_set: &FixtureSet,
     case: &FixtureCase,
 ) -> Result<Vec<String>, &'static str> {
-    let jws = jws(case);
-    let mut signers = Vec::new();
-
-    for signature in &jws.signatures {
-        let protected_header = protected_header(case, signature);
-        let kid = protected_header
-            .kid
-            .as_deref()
-            .ok_or(JWS_ERROR_MISSING_KID)?;
-
-        if protected_header.alg.is_none() {
-            return Err(JWS_ERROR_MISSING_ALG);
-        }
-
-        let did = did_from_kid(kid).to_string();
-        let key = signer_ids(case)
-            .iter()
-            .map(|signer_id| fixture_jws_key(fixture_set, case, signer_id))
-            .find(|key| kid.ends_with(&key.kid))
-            .ok_or(JWS_ERROR_PUBLIC_KEY_NOT_FOUND)?;
-
-        if verify_jws_signature(jws, signature, key, &case.id) {
-            signers.push(did);
-        } else {
-            return Err(JWS_ERROR_INVALID_SIGNATURE);
-        }
-    }
-
-    Ok(signers)
+    let resolver = public_key_resolver(fixture_set, case);
+    jws(case)
+        .verify_signatures(&resolver)
+        .map_err(|err| err.code())
 }
 
-fn verify_jws_signature(
-    jws: &FixtureJws,
-    fixture_signature: &FixtureJwsSignature,
-    key: &FixtureJwsKey,
-    case_id: &str,
-) -> bool {
-    let verifying_key = verifying_key_from_fixture(key, case_id);
-    let signature_bytes = decode_base64url(&fixture_signature.signature, case_id, "signature");
-    let ed25519_signature = Signature::from_slice(&signature_bytes).unwrap_or_else(|err| {
-        panic!(
-            "{} must include a valid Ed25519 signature: {}",
-            case_id, err
-        )
-    });
+fn signing_keys(fixture_set: &FixtureSet, case: &FixtureCase) -> Vec<PrivateJwkSigner> {
+    signer_ids(case)
+        .iter()
+        .map(|signer_id| {
+            let key = fixture_jws_key(fixture_set, case, signer_id);
+            let private_jwk = key.private_jwk.clone().unwrap_or_else(|| {
+                panic!("{} signer {} must include a privateJwk", case.id, signer_id)
+            });
 
-    verifying_key
-        .verify(
-            signing_input(jws, fixture_signature).as_bytes(),
-            &ed25519_signature,
-        )
-        .is_ok()
+            PrivateJwkSigner::new(key.kid.clone(), key.algorithm.clone(), private_jwk)
+        })
+        .collect()
 }
 
-fn protected_header(
-    case: &FixtureCase,
-    signature: &FixtureJwsSignature,
-) -> FixtureJwsProtectedHeader {
-    let protected = decode_base64url(&signature.protected, &case.id, "protected header");
-    serde_json::from_slice(&protected)
-        .unwrap_or_else(|err| panic!("{} must include a valid protected header: {}", case.id, err))
-}
+fn public_key_resolver(fixture_set: &FixtureSet, case: &FixtureCase) -> StaticPublicKeyResolver {
+    let public_keys = signer_ids(case)
+        .iter()
+        .map(|signer_id| {
+            let key = fixture_jws_key(fixture_set, case, signer_id);
+            (key.kid.clone(), key.public_jwk.clone())
+        })
+        .collect();
 
-fn signing_input(jws: &FixtureJws, signature: &FixtureJwsSignature) -> String {
-    format!("{}.{}", signature.protected, jws.payload)
-}
-
-fn signing_key_from_fixture(key: &FixtureJwsKey, case_id: &str) -> SigningKey {
-    let private_jwk = key
-        .private_jwk
-        .as_ref()
-        .unwrap_or_else(|| panic!("{} key {} must include a privateJwk", case_id, key.kid));
-    assert_ed25519_private_jwk(private_jwk, case_id);
-
-    let private_key = decode_base64url(&private_jwk.d, case_id, "private key");
-    SigningKey::from_bytes(&ed25519_key_bytes(private_key, case_id, "private key"))
-}
-
-fn verifying_key_from_fixture(key: &FixtureJwsKey, case_id: &str) -> VerifyingKey {
-    assert_ed25519_public_jwk(&key.public_jwk, case_id);
-
-    let public_key = decode_base64url(&key.public_jwk.x, case_id, "public key");
-    VerifyingKey::from_bytes(&ed25519_key_bytes(public_key, case_id, "public key")).unwrap_or_else(
-        |err| {
-            panic!(
-                "{} must include a valid Ed25519 public key: {}",
-                case_id, err
-            )
-        },
-    )
-}
-
-fn assert_ed25519_public_jwk(jwk: &FixtureEd25519PublicJwk, case_id: &str) {
-    assert_eq!(jwk.alg, "EdDSA", "{} JWK alg", case_id);
-    assert_eq!(jwk.kty, "OKP", "{} JWK kty", case_id);
-    assert_eq!(jwk.crv, "Ed25519", "{} JWK crv", case_id);
-}
-
-fn assert_ed25519_private_jwk(jwk: &FixtureEd25519PrivateJwk, case_id: &str) {
-    assert_eq!(jwk.alg, "EdDSA", "{} private JWK alg", case_id);
-    assert_eq!(jwk.kty, "OKP", "{} private JWK kty", case_id);
-    assert_eq!(jwk.crv, "Ed25519", "{} private JWK crv", case_id);
-    assert!(!jwk.x.is_empty(), "{} private JWK x", case_id);
-}
-
-fn ed25519_key_bytes(value: Vec<u8>, case_id: &str, label: &str) -> [u8; 32] {
-    value
-        .try_into()
-        .unwrap_or_else(|_| panic!("{} {} must be 32 bytes", case_id, label))
+    StaticPublicKeyResolver::new(public_keys)
 }
 
 fn decode_base64url(value: &str, case_id: &str, label: &str) -> Vec<u8> {
@@ -674,16 +1137,76 @@ fn fixture_jws_key<'a>(
         .unwrap_or_else(|| panic!("{} references missing signer {}", case.id, signer_id))
 }
 
-fn jws(case: &FixtureCase) -> &FixtureJws {
+fn jws(case: &FixtureCase) -> &GeneralJws {
     case.jws
         .as_ref()
         .unwrap_or_else(|| panic!("{} must include a JWS", case.id))
 }
 
-fn did_from_kid(kid: &str) -> &str {
-    kid.split('#')
-        .next()
-        .expect("split always returns one item")
+fn jwe(case: &FixtureCase) -> &FixtureJwe {
+    case.jwe
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a JWE", case.id))
+}
+
+fn single_jwe_recipient(case: &FixtureCase) -> &FixtureJweRecipient {
+    let recipients = &jwe(case).recipients;
+    assert_eq!(recipients.len(), 1, "{} JWE recipient count", case.id);
+    &recipients[0]
+}
+
+fn recipient_private_jwk(case: &FixtureCase) -> &FixtureX25519PrivateJwk {
+    case.recipient_private_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include recipientPrivateJwk", case.id))
+}
+
+fn recipient_public_jwk(case: &FixtureCase) -> &FixtureX25519PublicJwk {
+    case.recipient_public_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include recipientPublicJwk", case.id))
+}
+
+fn ephemeral_private_jwk(case: &FixtureCase) -> &FixtureX25519PrivateJwk {
+    case.ephemeral_private_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include ephemeralPrivateJwk", case.id))
+}
+
+fn ephemeral_public_jwk(case: &FixtureCase) -> &FixtureX25519PublicJwk {
+    case.ephemeral_public_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include ephemeralPublicJwk", case.id))
+}
+
+fn derived_private_jwk(case: &FixtureCase) -> &FixtureDerivedPrivateJwk {
+    case.derived_private_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include derivedPrivateJwk", case.id))
+}
+
+fn key_agreement_algorithm(case: &FixtureCase) -> &str {
+    case.key_agreement_algorithm
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include keyAgreementAlgorithm", case.id))
+}
+
+fn content_encryption_algorithm(case: &FixtureCase) -> &str {
+    case.content_encryption_algorithm
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include contentEncryptionAlgorithm", case.id))
+}
+
+fn derivation_scheme(case: &FixtureCase) -> &str {
+    case.derivation_scheme
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include derivationScheme", case.id))
+}
+
+fn record(case: &FixtureCase) -> &Value {
+    case.record
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a record", case.id))
 }
 
 fn assert_supported_descriptor_roundtrip(case: &FixtureCase) {

@@ -40,6 +40,48 @@
         "x": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
         "d": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"
       }
+    },
+    "carolSecp256k1": {
+      "kid": "did:example:carol#key1",
+      "algorithm": "ES256K",
+      "publicJwk": {
+        "kty": "EC",
+        "crv": "secp256k1",
+        "x": "hL91YiYrvWlACFdI875q-lKuMXFVGB7OMbZjUcz_pLA",
+        "y": "jMQ9Y7KFnUaf7hXzHJ7bUyQmbm_QQH6HOC1g_EURrNg",
+        "kid": "sHVsPsw-yovOh9b_K7fFCws-lXIyEPLYkQerigODPfg",
+        "alg": "ES256K"
+      },
+      "privateJwk": {
+        "kty": "EC",
+        "crv": "secp256k1",
+        "d": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+        "x": "hL91YiYrvWlACFdI875q-lKuMXFVGB7OMbZjUcz_pLA",
+        "y": "jMQ9Y7KFnUaf7hXzHJ7bUyQmbm_QQH6HOC1g_EURrNg",
+        "kid": "sHVsPsw-yovOh9b_K7fFCws-lXIyEPLYkQerigODPfg",
+        "alg": "ES256K"
+      }
+    },
+    "daveP256": {
+      "kid": "did:example:dave#key1",
+      "algorithm": "ES256",
+      "publicJwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "HxQBRr-xslH4T03b4NTNz9d6_ZhKlSDjV5QCH4MSu54",
+        "y": "7JlaCLH6dwTfPcwLUKlmUmP7dxH5X5-KRJxQluR8iSs",
+        "kid": "tRj77tAX2xZJqBQ6OIfN2gv3_fP7JE6vXzIHKQYFg7w",
+        "alg": "ES256"
+      },
+      "privateJwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "d": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
+        "x": "HxQBRr-xslH4T03b4NTNz9d6_ZhKlSDjV5QCH4MSu54",
+        "y": "7JlaCLH6dwTfPcwLUKlmUmP7dxH5X5-KRJxQluR8iSs",
+        "kid": "tRj77tAX2xZJqBQ6OIfN2gv3_fP7JE6vXzIHKQYFg7w",
+        "alg": "ES256"
+      }
     }
   },
   "cases": [
@@ -163,6 +205,90 @@
           {
             "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIn0",
             "signature": "8mmMgru8Ysv9eqNydfkY_64pCzzOdWutDsDHpNMJxqNUANnLmwYvDX7B6AXGa5xojr893qxF5_L7OXDrlq60AA"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ecdsa-es256k-general-single",
+      "description": "General JWS with a single secp256k1 ES256K signer.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "secp256k1Payload"
+      },
+      "signerIds": ["carolSecp256k1"],
+      "expectedSigners": ["did:example:carol"],
+      "jws": {
+        "payload": "c2VjcDI1NmsxUGF5bG9hZA",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTpjYXJvbCNrZXkxIiwiYWxnIjoiRVMyNTZLIn0",
+            "signature": "r7ePObq2UTSMP2GSZGCKEF9YuhIxF0rQPPlwP-j2EOliCgm4k6y7LkDlDg1_NYIeXt0wzpSkmuQr9zAiidiAoA"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ecdsa-es256-general-single",
+      "description": "General JWS with a single P-256 ES256 signer.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "p256Payload"
+      },
+      "signerIds": ["daveP256"],
+      "expectedSigners": ["did:example:dave"],
+      "jws": {
+        "payload": "cDI1NlBheWxvYWQ",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTpkYXZlI2tleTEiLCJhbGciOiJFUzI1NiJ9",
+            "signature": "u9E_dL4Ky3UYmvcPKiJKhLiqvMX45dWfbPAE5QyDzTWycTjXBvfKUoebEzDBXvLCrsaIiU_lJ7LV8HPARWhlzQ"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ecdsa-mixed-ed25519-es256k",
+      "description": "General JWS with Ed25519 and ES256K signers preserving mixed-curve order.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "mixedCurvePayload"
+      },
+      "signerIds": ["aliceEd25519", "carolSecp256k1"],
+      "expectedSigners": ["did:example:alice", "did:example:carol"],
+      "jws": {
+        "payload": "bWl4ZWRDdXJ2ZVBheWxvYWQ",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+            "signature": "p9dMm1KQ54SuIAZGHsSGO_E_6Ph1RsSjkO5YTXwda96B2FBer9Z9Yv9gverX7GzOqcf0w7QAKiPaHuw6xET8Dg"
+          },
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTpjYXJvbCNrZXkxIiwiYWxnIjoiRVMyNTZLIn0",
+            "signature": "0OwPG1ry6Rvich09ZavtjZhHSReBgg1gBDxpcuoS13tD0ZOz54_lxXGKj9w_66QBHHfbadenTDj2SOjw_KKFzA"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ecdsa-es256k-invalid-signature",
+      "description": "General JWS verification fails when an ES256K signature is tampered.",
+      "rustStatus": "supported",
+      "payload": {
+        "encoding": "utf8",
+        "value": "secp256k1Payload"
+      },
+      "signerIds": ["carolSecp256k1"],
+      "expectedErrorCode": "GeneralJwsVerifierInvalidSignature",
+      "jws": {
+        "payload": "c2VjcDI1NmsxUGF5bG9hZA",
+        "signatures": [
+          {
+            "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTpjYXJvbCNrZXkxIiwiYWxnIjoiRVMyNTZLIn0",
+            "signature": "ULePObq2UTSMP2GSZGCKEF9YuhIxF0rQPPlwP-j2EOliCgm4k6y7LkDlDg1_NYIeXt0wzpSkmuQr9zAiidiAoA"
           }
         ]
       }

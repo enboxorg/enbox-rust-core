@@ -1,0 +1,382 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "jwe-a256gcm-protocol-path",
+      "rustStatus": "supported",
+      "keyAgreementAlgorithm": "ECDH-ES+A256KW",
+      "contentEncryptionAlgorithm": "A256GCM",
+      "derivationScheme": "protocolPath",
+      "recipientPrivateJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "d": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "x": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ",
+        "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E"
+      },
+      "recipientPublicJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ",
+        "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E"
+      },
+      "ephemeralPrivateJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "d": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+        "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+        "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+      },
+      "ephemeralPublicJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+        "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+      },
+      "cek": {
+        "encoding": "hex",
+        "value": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      },
+      "plaintext": {
+        "encoding": "utf8",
+        "value": "Enbox JWE A256GCM fixture"
+      },
+      "ciphertext": {
+        "encoding": "base64url",
+        "value": "o3YeQj3rSOgnRcbhMkyHnT2MP3nqwzce-Q"
+      },
+      "iv": {
+        "encoding": "base64url",
+        "value": "oKGio6Slpqeoqaqr"
+      },
+      "tag": {
+        "encoding": "base64url",
+        "value": "Qn6Zl31VdFAn6N7tHEdBmg"
+      },
+      "jwe": {
+        "protected": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00ifQ",
+        "iv": "oKGio6Slpqeoqaqr",
+        "tag": "Qn6Zl31VdFAn6N7tHEdBmg",
+        "recipients": [
+          {
+            "header": {
+              "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E",
+              "epk": {
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+                "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+              },
+              "derivationScheme": "protocolPath"
+            },
+            "encrypted_key": "7FJVLl-3hWYz4Y8YyGAKPE1NCJFick8KqUykzlOOzQo3V8V7czDFQw"
+          }
+        ]
+      },
+      "record": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "protocol": "https://example.com/protocol/jwe",
+          "protocolPath": "thread/message",
+          "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+          "dataSize": 32,
+          "dataFormat": "text/plain"
+        },
+        "contextId": "root-context/child",
+        "encryption": {
+          "protected": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00ifQ",
+          "iv": "oKGio6Slpqeoqaqr",
+          "tag": "Qn6Zl31VdFAn6N7tHEdBmg",
+          "recipients": [
+            {
+              "header": {
+                "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E",
+                "epk": {
+                  "kty": "OKP",
+                  "crv": "X25519",
+                  "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+                  "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+                },
+                "derivationScheme": "protocolPath"
+              },
+              "encrypted_key": "7FJVLl-3hWYz4Y8YyGAKPE1NCJFick8KqUykzlOOzQo3V8V7czDFQw"
+            }
+          ]
+        }
+      },
+      "derivedPrivateJwk": {
+        "rootKeyId": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E",
+        "derivationScheme": "protocolPath",
+        "derivationPath": [
+          "protocolPath",
+          "https://example.com/protocol/jwe",
+          "thread",
+          "message"
+        ],
+        "derivedPrivateKey": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "d": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+          "x": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ",
+          "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E"
+        }
+      }
+    },
+    {
+      "id": "jwe-xc20p-protocol-context",
+      "rustStatus": "supported",
+      "keyAgreementAlgorithm": "ECDH-ES+A256KW",
+      "contentEncryptionAlgorithm": "XC20P",
+      "derivationScheme": "protocolContext",
+      "recipientPrivateJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "d": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+        "x": "Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8",
+        "kid": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk"
+      },
+      "recipientPublicJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8",
+        "kid": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk"
+      },
+      "ephemeralPrivateJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "d": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8",
+        "x": "ST6C_HRGSlkmiBdiPSBTxeuOLMSpiLT-4XnsawENUx0",
+        "kid": "96RWz574V_t7txo1oAbLlnHzNSxGAVxHg_tTIDUPCB8"
+      },
+      "ephemeralPublicJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "ST6C_HRGSlkmiBdiPSBTxeuOLMSpiLT-4XnsawENUx0",
+        "kid": "96RWz574V_t7txo1oAbLlnHzNSxGAVxHg_tTIDUPCB8"
+      },
+      "cek": {
+        "encoding": "hex",
+        "value": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      },
+      "plaintext": {
+        "encoding": "utf8",
+        "value": "Enbox JWE XC20P fixture"
+      },
+      "ciphertext": {
+        "encoding": "base64url",
+        "value": "LTgbOJHTjWKhloxbkfaugiPkEm3TmUY"
+      },
+      "iv": {
+        "encoding": "base64url",
+        "value": "sLGys7S1tre4ubq7vL2-v8DBwsPExcbH"
+      },
+      "tag": {
+        "encoding": "base64url",
+        "value": "t-36BjVZJnJWk8mxtTBdhg"
+      },
+      "jwe": {
+        "protected": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IlhDMjBQIn0",
+        "iv": "sLGys7S1tre4ubq7vL2-v8DBwsPExcbH",
+        "tag": "t-36BjVZJnJWk8mxtTBdhg",
+        "recipients": [
+          {
+            "header": {
+              "kid": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk",
+              "epk": {
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "ST6C_HRGSlkmiBdiPSBTxeuOLMSpiLT-4XnsawENUx0",
+                "kid": "96RWz574V_t7txo1oAbLlnHzNSxGAVxHg_tTIDUPCB8"
+              },
+              "derivationScheme": "protocolContext",
+              "derivedPublicKey": {
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8",
+                "kid": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk"
+              }
+            },
+            "encrypted_key": "6Pp295aiYwztfq303S60_BXqvBzQgI_tiXnUYKV-ETj_5w0pbYJnsw"
+          }
+        ]
+      },
+      "record": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "protocol": "https://example.com/protocol/jwe",
+          "protocolPath": "thread/reply",
+          "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+          "dataSize": 31,
+          "dataFormat": "text/plain"
+        },
+        "contextId": "root-context/child",
+        "encryption": {
+          "protected": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IlhDMjBQIn0",
+          "iv": "sLGys7S1tre4ubq7vL2-v8DBwsPExcbH",
+          "tag": "t-36BjVZJnJWk8mxtTBdhg",
+          "recipients": [
+            {
+              "header": {
+                "kid": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk",
+                "epk": {
+                  "kty": "OKP",
+                  "crv": "X25519",
+                  "x": "ST6C_HRGSlkmiBdiPSBTxeuOLMSpiLT-4XnsawENUx0",
+                  "kid": "96RWz574V_t7txo1oAbLlnHzNSxGAVxHg_tTIDUPCB8"
+                },
+                "derivationScheme": "protocolContext",
+                "derivedPublicKey": {
+                  "kty": "OKP",
+                  "crv": "X25519",
+                  "x": "Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8",
+                  "kid": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk"
+                }
+              },
+              "encrypted_key": "6Pp295aiYwztfq303S60_BXqvBzQgI_tiXnUYKV-ETj_5w0pbYJnsw"
+            }
+          ]
+        }
+      },
+      "derivedPrivateJwk": {
+        "rootKeyId": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk",
+        "derivationScheme": "protocolContext",
+        "derivationPath": [
+          "protocolContext",
+          "root-context"
+        ],
+        "derivedPrivateKey": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "d": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+          "x": "Z13VdO13iTELPS52gfN5C0ZsdzsVIf7PNld5WDcepS8",
+          "kid": "LiYg-5ySVLOUBN0khvkqlhjDXIjBOPo7X1XBi-3Gmxk"
+        }
+      }
+    },
+    {
+      "id": "jwe-a256gcm-invalid-tag",
+      "rustStatus": "supported",
+      "keyAgreementAlgorithm": "ECDH-ES+A256KW",
+      "contentEncryptionAlgorithm": "A256GCM",
+      "derivationScheme": "protocolPath",
+      "recipientPrivateJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "d": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "x": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ",
+        "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E"
+      },
+      "recipientPublicJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ",
+        "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E"
+      },
+      "ephemeralPrivateJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "d": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+        "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+        "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+      },
+      "ephemeralPublicJwk": {
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+        "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+      },
+      "cek": {
+        "encoding": "hex",
+        "value": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      },
+      "plaintext": {
+        "encoding": "utf8",
+        "value": "Enbox JWE A256GCM fixture"
+      },
+      "ciphertext": {
+        "encoding": "base64url",
+        "value": "o3YeQj3rSOgnRcbhMkyHnT2MP3nqwzce-Q"
+      },
+      "iv": {
+        "encoding": "base64url",
+        "value": "oKGio6Slpqeoqaqr"
+      },
+      "tag": {
+        "encoding": "base64url",
+        "value": "vX6Zl31VdFAn6N7tHEdBmg"
+      },
+      "jwe": {
+        "protected": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00ifQ",
+        "iv": "oKGio6Slpqeoqaqr",
+        "tag": "vX6Zl31VdFAn6N7tHEdBmg",
+        "recipients": [
+          {
+            "header": {
+              "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E",
+              "epk": {
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+                "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+              },
+              "derivationScheme": "protocolPath"
+            },
+            "encrypted_key": "7FJVLl-3hWYz4Y8YyGAKPE1NCJFick8KqUykzlOOzQo3V8V7czDFQw"
+          }
+        ]
+      },
+      "record": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "protocol": "https://example.com/protocol/jwe",
+          "protocolPath": "thread/message",
+          "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+          "dataSize": 32,
+          "dataFormat": "text/plain"
+        },
+        "contextId": "root-context/child",
+        "encryption": {
+          "protected": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00ifQ",
+          "iv": "oKGio6Slpqeoqaqr",
+          "tag": "vX6Zl31VdFAn6N7tHEdBmg",
+          "recipients": [
+            {
+              "header": {
+                "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E",
+                "epk": {
+                  "kty": "OKP",
+                  "crv": "X25519",
+                  "x": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+                  "kid": "YKbZ9qRn_duml9RTz_7p5FNztMst4VCEVI2fzJCu4TE"
+                },
+                "derivationScheme": "protocolPath"
+              },
+              "encrypted_key": "7FJVLl-3hWYz4Y8YyGAKPE1NCJFick8KqUykzlOOzQo3V8V7czDFQw"
+            }
+          ]
+        }
+      },
+      "derivedPrivateJwk": {
+        "rootKeyId": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E",
+        "derivationScheme": "protocolPath",
+        "derivationPath": [
+          "protocolPath",
+          "https://example.com/protocol/jwe",
+          "thread",
+          "message"
+        ],
+        "derivedPrivateKey": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "d": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+          "x": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ",
+          "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E"
+        }
+      },
+      "expectedErrorCode": "JweDecryptFailed"
+    }
+  ]
+}

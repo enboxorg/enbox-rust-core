@@ -17,6 +17,11 @@
       "assertions": ["jws.general.sign", "jws.general.verify", "jws.general.payload"]
     },
     {
+      "id": "crypto.jwe-encryption",
+      "path": "crypto/jwe-encryption.json",
+      "assertions": ["jwe.protected", "jwe.aead", "jwe.keywrap", "jwe.decrypt"]
+    },
+    {
       "id": "dwn.messages.basic-interface-messages",
       "path": "dwn/messages/basic-interface-messages.json",
       "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
