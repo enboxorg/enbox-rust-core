@@ -51,7 +51,7 @@ Planned crate responsibilities:
 | `enbox-dwn-state-index` | Sparse Merkle Tree and `StateIndex` roots/subtrees/leaves used by sync. |
 | `enbox-dwn-sync` | `MessagesSync`, sync diff helpers, live/poll reconciliation, replay bounds, and progress tokens. |
 | `enbox-agent-core` | Identity lifecycle, tenant registration, protocol installation, delegated grants, key delivery, and wallet recovery semantics. |
-| `enbox-ffi` | Mobile/desktop native bindings and optional local server entry points. |
+| `enbox-ffi` | Mobile/desktop native bindings and optional local server entry points. The binding strategy is documented in [`BINDINGS.md`](BINDINGS.md). |
 
 ## Migration Sequence
 
