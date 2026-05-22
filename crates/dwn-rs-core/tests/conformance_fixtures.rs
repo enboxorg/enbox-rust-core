@@ -17,6 +17,9 @@ use dwn_rs_core::descriptors::{
     MessagesSubscribeDescriptor, ProtocolQueryDescriptor, ReadDescriptor, RecordsQueryDescriptor,
     RecordsWriteDescriptor, SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
+use dwn_rs_core::dwn::{
+    current_handler_kinds, Dwn, DwnReply, MessageKind, MethodHandler, MethodHandlerRequest,
+};
 use dwn_rs_core::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::EnboxStateIndex;
 use futures_util::stream;
@@ -26,7 +29,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 const CID_MESSAGE_ASSERTION: &str = "cid.message";
 const CID_DESCRIPTOR_ASSERTION: &str = "cid.descriptor";
@@ -335,6 +340,44 @@ fn fixture_json_cids_match_typescript() {
 }
 
 #[tokio::test]
+async fn fixture_messages_route_through_dwn_dispatch() {
+    let mut dwn = Dwn::default();
+    let current_kinds = current_handler_kinds();
+    for kind in current_kinds.clone() {
+        dwn.register_handler(kind, RouteEchoHandler);
+    }
+
+    let mut routed = 0usize;
+    for suite in load_fixture_suites() {
+        for case in &suite.fixture_set.cases {
+            let Some(message) = &case.message else {
+                continue;
+            };
+            let kind = MessageKind::from_message(message).unwrap_or_else(|err| {
+                panic!("{} fixture message must have route: {err:?}", case.id)
+            });
+            if !current_kinds.contains(&kind) {
+                continue;
+            }
+
+            let reply = dwn
+                .process_message("did:example:alice", message.clone())
+                .await;
+            assert_eq!(reply.status.code, 200, "{} route status", case.id);
+            assert_eq!(
+                reply.body.get("handler"),
+                Some(&Value::String(kind.handler_key())),
+                "{} route handler",
+                case.id
+            );
+            routed += 1;
+        }
+    }
+
+    assert!(routed > 0, "at least one fixture message must route");
+}
+
+#[tokio::test]
 async fn fixture_dag_pb_cids_match_typescript() {
     for suite in load_fixture_suites() {
         if !suite.has_assertion(CID_DAG_PB_BYTES_ASSERTION)
@@ -581,6 +624,19 @@ where
 
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+}
+
+#[derive(Clone, Copy)]
+struct RouteEchoHandler;
+
+impl MethodHandler for RouteEchoHandler {
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        let handler_key = request.kind.handler_key();
+        Box::pin(async move { DwnReply::ok().with_body("handler", Value::String(handler_key)) })
+    }
 }
 
 fn compute_cid(value: &Value) -> String {

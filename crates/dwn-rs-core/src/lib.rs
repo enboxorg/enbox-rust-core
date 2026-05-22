@@ -23,6 +23,7 @@
 //! - [`messages::records::RecordsDelete`]: A message for deleting records.
 #![doc(issue_tracker_base_url = "https://github.com/enmand/dwn-rsissues/")]
 pub mod auth;
+pub mod dwn;
 pub mod encryption;
 pub mod errors;
 pub mod events;
@@ -34,6 +35,7 @@ pub mod state_index;
 pub mod stores;
 pub mod value;
 
+pub use dwn::*;
 pub use events::*;
 pub use filters::*;
 pub use interfaces::*;
