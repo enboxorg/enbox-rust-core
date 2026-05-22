@@ -141,6 +141,15 @@ pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
     pub retry_count: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct EnboxManagedResumableTask<T: Serialize + Sync + Send + Debug> {
+    pub id: String,
+    pub task: T,
+    pub timeout: u64,
+    #[serde(rename = "retryCount")]
+    pub retry_count: u64,
+}
+
 pub trait ResumableTaskStore: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
 
@@ -473,17 +482,17 @@ pub trait EnboxResumableTaskStore: Default {
         &self,
         task: T,
         timeout_in_seconds: u64,
-    ) -> impl Future<Output = Result<ManagedResumableTask<T>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<EnboxManagedResumableTask<T>, ResumableTaskStoreError>> + Send;
 
     fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
         &self,
         count: u64,
-    ) -> impl Future<Output = Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
 
     fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
         &self,
         task_id: &str,
-    ) -> impl Future<Output = Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
 
     fn extend(
         &self,

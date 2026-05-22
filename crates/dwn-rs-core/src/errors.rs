@@ -3,7 +3,7 @@ use std::{collections::TryReserveError, convert::Infallible};
 use thiserror::Error;
 use ulid::MonotonicError;
 
-use crate::{FilterError, QueryError};
+use crate::{stores::ProgressGapInfo, FilterError, QueryError};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -88,6 +88,9 @@ pub enum DataStoreError {
 
 #[derive(Error, Debug)]
 pub enum EventLogError {
+    #[error("progress token gap: {0:?}")]
+    ProgressGap(Box<ProgressGapInfo>),
+
     #[error("error operating the store: {0}")]
     StoreError(#[from] StoreError),
 

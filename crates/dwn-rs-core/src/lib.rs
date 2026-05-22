@@ -28,6 +28,7 @@ pub mod errors;
 pub mod events;
 pub mod filters;
 pub mod interfaces;
+pub mod local;
 mod ser;
 pub mod state_index;
 pub mod stores;
