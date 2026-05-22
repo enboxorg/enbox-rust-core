@@ -23,7 +23,7 @@ use futures_util::stream;
 use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,9 +41,11 @@ const JWE_AEAD_ASSERTION: &str = "jwe.aead";
 const JWE_KEYWRAP_ASSERTION: &str = "jwe.keywrap";
 const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
 const STATE_INDEX_OPERATIONS_ASSERTION: &str = "state-index.operations";
+const MESSAGES_SYNC_REPLIES_ASSERTION: &str = "messages-sync.replies";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 
 const JWE_ERROR_DECRYPT_FAILED: &str = "JweDecryptFailed";
+const MAX_INLINE_DATA_SIZE: usize = 30_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,6 +72,7 @@ struct LoadedFixtureSuite {
 struct FixtureSet {
     schema_version: u64,
     keys: Option<BTreeMap<String, FixtureJwsKey>>,
+    seed_sets: Option<BTreeMap<String, Vec<MessagesSyncSeedEntry>>>,
     cases: Vec<FixtureCase>,
 }
 
@@ -105,7 +108,29 @@ struct FixtureCase {
     tag: Option<FixtureData>,
     tenants: Option<Vec<String>>,
     operations: Option<Vec<StateIndexOperation>>,
+    sync: Option<MessagesSyncFixture>,
     value: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessagesSyncSeedEntry {
+    id: String,
+    #[serde(rename = "messageCid")]
+    message_cid: String,
+    indexes: BTreeMap<String, Value>,
+    message: Value,
+    encoded_data: Option<String>,
+    data: Option<FixtureData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessagesSyncFixture {
+    tenant: String,
+    seed_set: String,
+    request: Value,
+    reply: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -483,6 +508,22 @@ async fn fixture_state_index_operations_match_typescript() {
             assert_state_index_operation_fixture_shape(case);
             if case.rust_status == RustStatus::Supported {
                 assert_state_index_operations(case).await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn fixture_messages_sync_replies_match_typescript() {
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(MESSAGES_SYNC_REPLIES_ASSERTION) {
+            continue;
+        }
+
+        for case in &suite.fixture_set.cases {
+            assert_messages_sync_fixture_shape(&suite.fixture_set, case);
+            if case.rust_status == RustStatus::Supported {
+                assert_messages_sync_reply(&suite.fixture_set, case).await;
             }
         }
     }
@@ -892,6 +933,528 @@ fn state_hash_hex(hash: &[u8; 32]) -> String {
     hash.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn assert_messages_sync_fixture_shape(fixture_set: &FixtureSet, case: &FixtureCase) {
+    let sync = messages_sync_fixture(case);
+    assert!(
+        !sync.tenant.is_empty(),
+        "{} MessagesSync tenant must not be empty",
+        case.id
+    );
+
+    let seed = messages_sync_seed(fixture_set, case, sync);
+    assert!(
+        !seed.is_empty(),
+        "{} MessagesSync seed set must not be empty",
+        case.id
+    );
+
+    for entry in seed {
+        assert!(
+            !entry.id.is_empty(),
+            "{} MessagesSync seed entry id must not be empty",
+            case.id
+        );
+        assert!(
+            !entry.message_cid.is_empty(),
+            "{} MessagesSync seed messageCid must not be empty",
+            case.id
+        );
+        assert!(
+            !entry.indexes.is_empty(),
+            "{} MessagesSync seed indexes must not be empty",
+            case.id
+        );
+        assert_eq!(
+            compute_cid(&entry.message),
+            entry.message_cid,
+            "{} MessagesSync seed {} messageCid",
+            case.id,
+            entry.id
+        );
+        assert_messages_sync_seed_data(case, entry);
+    }
+
+    let descriptor = messages_sync_descriptor(case, sync);
+    assert_eq!(
+        descriptor
+            .get("interface")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "Messages",
+        "{} MessagesSync request interface",
+        case.id
+    );
+    assert_eq!(
+        descriptor
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        "Sync",
+        "{} MessagesSync request method",
+        case.id
+    );
+
+    match messages_sync_action(case, descriptor) {
+        "root" => {}
+        "subtree" | "leaves" => assert_bit_prefix(case, messages_sync_prefix(case, descriptor)),
+        "diff" => {
+            let depth = messages_sync_depth(case, descriptor);
+            assert!(
+                depth <= 16,
+                "{} MessagesSync diff fixture depth must be <= 16 for exhaustive native checking",
+                case.id
+            );
+            for (prefix, hash) in messages_sync_hashes(case, descriptor) {
+                assert_bit_prefix(case, prefix);
+                assert_state_hash_hex(
+                    case,
+                    hash.as_str()
+                        .unwrap_or_else(|| panic!("{} diff hash must be a string", case.id)),
+                );
+            }
+        }
+        action => panic!("{} unsupported MessagesSync action {}", case.id, action),
+    }
+
+    assert_eq!(
+        sync.reply
+            .get("status")
+            .and_then(|status| status.get("code"))
+            .and_then(Value::as_u64),
+        Some(200),
+        "{} MessagesSync reply must be a successful reply",
+        case.id
+    );
+}
+
+async fn assert_messages_sync_reply(fixture_set: &FixtureSet, case: &FixtureCase) {
+    let sync = messages_sync_fixture(case);
+    let seed = messages_sync_seed(fixture_set, case, sync);
+    let mut state_index = MemoryStateIndex::default();
+    state_index
+        .open()
+        .await
+        .unwrap_or_else(|err| panic!("{} MessagesSync StateIndex open failed: {}", case.id, err));
+
+    for entry in seed {
+        state_index
+            .insert(
+                &sync.tenant,
+                &entry.message_cid,
+                state_index_indexes(case, &entry.indexes),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "{} MessagesSync StateIndex seed insert {} failed: {}",
+                    case.id, entry.id, err
+                )
+            });
+    }
+
+    let actual = messages_sync_reply(case, &state_index, seed, sync).await;
+    assert_eq!(actual, sync.reply, "{} MessagesSync reply", case.id);
+}
+
+async fn messages_sync_reply(
+    case: &FixtureCase,
+    state_index: &MemoryStateIndex,
+    seed: &[MessagesSyncSeedEntry],
+    sync: &MessagesSyncFixture,
+) -> Value {
+    let descriptor = messages_sync_descriptor(case, sync);
+    let protocol = descriptor.get("protocol").and_then(Value::as_str);
+
+    match messages_sync_action(case, descriptor) {
+        "root" => {
+            let root = match protocol {
+                Some(protocol) => state_index
+                    .get_protocol_root(&sync.tenant, protocol)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("{} MessagesSync getProtocolRoot failed: {}", case.id, err)
+                    }),
+                None => state_index
+                    .get_root(&sync.tenant)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("{} MessagesSync getRoot failed: {}", case.id, err)
+                    }),
+            };
+            serde_json::json!({
+                "status": { "code": 200, "detail": "OK" },
+                "root": state_hash_hex(&root),
+            })
+        }
+        "subtree" => {
+            let prefix = bit_prefix(messages_sync_prefix(case, descriptor));
+            let hash =
+                messages_sync_subtree_hash(case, state_index, &sync.tenant, protocol, &prefix)
+                    .await;
+            serde_json::json!({
+                "status": { "code": 200, "detail": "OK" },
+                "hash": hash,
+            })
+        }
+        "leaves" => {
+            let prefix = bit_prefix(messages_sync_prefix(case, descriptor));
+            let entries =
+                messages_sync_leaves(case, state_index, &sync.tenant, protocol, &prefix).await;
+            serde_json::json!({
+                "status": { "code": 200, "detail": "OK" },
+                "entries": entries,
+            })
+        }
+        "diff" => messages_sync_diff_reply(case, state_index, seed, sync, descriptor).await,
+        action => panic!("{} unsupported MessagesSync action {}", case.id, action),
+    }
+}
+
+async fn messages_sync_diff_reply(
+    case: &FixtureCase,
+    state_index: &MemoryStateIndex,
+    seed: &[MessagesSyncSeedEntry],
+    sync: &MessagesSyncFixture,
+    descriptor: &Value,
+) -> Value {
+    let protocol = descriptor.get("protocol").and_then(Value::as_str);
+    let depth = messages_sync_depth(case, descriptor);
+    let client_hashes = messages_sync_hashes(case, descriptor);
+    let default_hash = default_messages_sync_hash_hex(depth).await;
+    let server_hashes = collect_messages_sync_subtree_hashes(
+        case,
+        state_index,
+        &sync.tenant,
+        protocol,
+        depth,
+        &default_hash,
+    )
+    .await;
+
+    let mut all_prefixes = BTreeSet::new();
+    for (prefix, hash) in client_hashes {
+        let hash = hash
+            .as_str()
+            .unwrap_or_else(|| panic!("{} diff hash must be a string", case.id));
+        if hash != default_hash {
+            all_prefixes.insert(prefix.clone());
+        }
+    }
+    all_prefixes.extend(server_hashes.keys().cloned());
+
+    let mut only_remote_cids = Vec::new();
+    let mut only_local = Vec::new();
+    for prefix in all_prefixes {
+        let client_hash = client_hashes.get(&prefix).and_then(Value::as_str);
+        let server_hash = server_hashes.get(&prefix).map(String::as_str);
+
+        if client_hash == server_hash {
+            continue;
+        }
+
+        if server_hash.is_none() {
+            only_local.push(prefix);
+            continue;
+        }
+
+        if client_hash.is_none() {
+            only_remote_cids.extend(
+                messages_sync_leaves(
+                    case,
+                    state_index,
+                    &sync.tenant,
+                    protocol,
+                    &bit_prefix(&prefix),
+                )
+                .await,
+            );
+            continue;
+        }
+
+        only_remote_cids.extend(
+            messages_sync_leaves(
+                case,
+                state_index,
+                &sync.tenant,
+                protocol,
+                &bit_prefix(&prefix),
+            )
+            .await,
+        );
+        only_local.push(prefix);
+    }
+
+    serde_json::json!({
+        "status": { "code": 200, "detail": "OK" },
+        "onlyRemote": messages_sync_diff_entries(case, seed, &only_remote_cids),
+        "onlyLocal": only_local,
+    })
+}
+
+async fn collect_messages_sync_subtree_hashes(
+    case: &FixtureCase,
+    state_index: &MemoryStateIndex,
+    tenant: &str,
+    protocol: Option<&str>,
+    depth: usize,
+    default_hash: &str,
+) -> BTreeMap<String, String> {
+    let mut hashes = BTreeMap::new();
+    for prefix in bit_prefixes(depth) {
+        let hash =
+            messages_sync_subtree_hash(case, state_index, tenant, protocol, &bit_prefix(&prefix))
+                .await;
+        if hash != default_hash {
+            hashes.insert(prefix, hash);
+        }
+    }
+    hashes
+}
+
+async fn messages_sync_subtree_hash(
+    case: &FixtureCase,
+    state_index: &MemoryStateIndex,
+    tenant: &str,
+    protocol: Option<&str>,
+    prefix: &[bool],
+) -> String {
+    let hash = match protocol {
+        Some(protocol) => state_index
+            .get_protocol_subtree_hash(tenant, protocol, prefix)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "{} MessagesSync getProtocolSubtreeHash failed: {}",
+                    case.id, err
+                )
+            }),
+        None => state_index
+            .get_subtree_hash(tenant, prefix)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("{} MessagesSync getSubtreeHash failed: {}", case.id, err)
+            }),
+    };
+    state_hash_hex(&hash)
+}
+
+async fn messages_sync_leaves(
+    case: &FixtureCase,
+    state_index: &MemoryStateIndex,
+    tenant: &str,
+    protocol: Option<&str>,
+    prefix: &[bool],
+) -> Vec<String> {
+    match protocol {
+        Some(protocol) => state_index
+            .get_protocol_leaves(tenant, protocol, prefix)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("{} MessagesSync getProtocolLeaves failed: {}", case.id, err)
+            }),
+        None => state_index
+            .get_leaves(tenant, prefix)
+            .await
+            .unwrap_or_else(|err| panic!("{} MessagesSync getLeaves failed: {}", case.id, err)),
+    }
+}
+
+async fn default_messages_sync_hash_hex(depth: usize) -> String {
+    let mut state_index = MemoryStateIndex::default();
+    state_index
+        .open()
+        .await
+        .expect("default MessagesSync StateIndex must open");
+    let prefix = vec![false; depth];
+    state_hash_hex(
+        &state_index
+            .get_subtree_hash("did:example:empty", &prefix)
+            .await
+            .expect("default MessagesSync subtree hash"),
+    )
+}
+
+fn messages_sync_diff_entries(
+    case: &FixtureCase,
+    seed: &[MessagesSyncSeedEntry],
+    message_cids: &[String],
+) -> Vec<Value> {
+    let seed_by_cid = seed
+        .iter()
+        .map(|entry| (entry.message_cid.as_str(), entry))
+        .collect::<BTreeMap<_, _>>();
+
+    message_cids
+        .iter()
+        .map(|message_cid| {
+            let entry = seed_by_cid.get(message_cid.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "{} MessagesSync diff seed missing messageCid {}",
+                    case.id, message_cid
+                )
+            });
+            let mut value = serde_json::Map::new();
+            value.insert("messageCid".to_string(), Value::String(message_cid.clone()));
+            value.insert("message".to_string(), entry.message.clone());
+            if let Some(encoded_data) = messages_sync_inline_data(case, entry) {
+                value.insert("encodedData".to_string(), Value::String(encoded_data));
+            }
+            Value::Object(value)
+        })
+        .collect()
+}
+
+fn messages_sync_inline_data(case: &FixtureCase, entry: &MessagesSyncSeedEntry) -> Option<String> {
+    if let Some(encoded_data) = &entry.encoded_data {
+        return Some(encoded_data.clone());
+    }
+
+    let data = entry
+        .data
+        .as_ref()
+        .map(|data| fixture_data_bytes(data, &case.id))?;
+    (data.len() <= MAX_INLINE_DATA_SIZE).then(|| URL_SAFE_NO_PAD.encode(data))
+}
+
+fn assert_messages_sync_seed_data(case: &FixtureCase, entry: &MessagesSyncSeedEntry) {
+    let Some(data) = messages_sync_seed_data(case, entry) else {
+        return;
+    };
+
+    if let Some(data_size) = messages_sync_descriptor_data_size(&entry.message) {
+        assert_eq!(
+            data.len(),
+            data_size,
+            "{} MessagesSync seed {} dataSize",
+            case.id,
+            entry.id
+        );
+    }
+
+    if let Some(data_cid) = messages_sync_descriptor_data_cid(&entry.message) {
+        assert_eq!(
+            generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_cid,
+            "{} MessagesSync seed {} dataCid",
+            case.id,
+            entry.id
+        );
+    }
+}
+
+fn messages_sync_seed_data(case: &FixtureCase, entry: &MessagesSyncSeedEntry) -> Option<Vec<u8>> {
+    if let Some(encoded_data) = &entry.encoded_data {
+        return Some(URL_SAFE_NO_PAD.decode(encoded_data).unwrap_or_else(|err| {
+            panic!(
+                "{} MessagesSync seed {} encodedData must be base64url: {}",
+                case.id, entry.id, err
+            )
+        }));
+    }
+
+    entry
+        .data
+        .as_ref()
+        .map(|data| fixture_data_bytes(data, &case.id))
+}
+
+fn messages_sync_fixture(case: &FixtureCase) -> &MessagesSyncFixture {
+    case.sync
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include MessagesSync fixture data", case.id))
+}
+
+fn messages_sync_seed<'a>(
+    fixture_set: &'a FixtureSet,
+    case: &FixtureCase,
+    sync: &MessagesSyncFixture,
+) -> &'a [MessagesSyncSeedEntry] {
+    fixture_set
+        .seed_sets
+        .as_ref()
+        .and_then(|seed_sets| seed_sets.get(&sync.seed_set))
+        .map(Vec::as_slice)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} must reference an existing MessagesSync seed set {}",
+                case.id, sync.seed_set
+            )
+        })
+}
+
+fn messages_sync_descriptor<'a>(case: &FixtureCase, sync: &'a MessagesSyncFixture) -> &'a Value {
+    sync.request
+        .get("descriptor")
+        .unwrap_or_else(|| panic!("{} MessagesSync request must include descriptor", case.id))
+}
+
+fn messages_sync_action<'a>(case: &FixtureCase, descriptor: &'a Value) -> &'a str {
+    descriptor
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("{} MessagesSync descriptor must include action", case.id))
+}
+
+fn messages_sync_prefix<'a>(case: &FixtureCase, descriptor: &'a Value) -> &'a str {
+    descriptor
+        .get("prefix")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("{} MessagesSync descriptor must include prefix", case.id))
+}
+
+fn messages_sync_depth(case: &FixtureCase, descriptor: &Value) -> usize {
+    descriptor
+        .get("depth")
+        .and_then(Value::as_u64)
+        .and_then(|depth| usize::try_from(depth).ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "{} MessagesSync diff descriptor must include depth",
+                case.id
+            )
+        })
+}
+
+fn messages_sync_hashes<'a>(
+    case: &FixtureCase,
+    descriptor: &'a Value,
+) -> &'a serde_json::Map<String, Value> {
+    descriptor
+        .get("hashes")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} MessagesSync diff descriptor must include hashes",
+                case.id
+            )
+        })
+}
+
+fn messages_sync_descriptor_data_cid(message: &Value) -> Option<&str> {
+    message
+        .get("descriptor")
+        .and_then(|descriptor| descriptor.get("dataCid"))
+        .and_then(Value::as_str)
+}
+
+fn messages_sync_descriptor_data_size(message: &Value) -> Option<usize> {
+    message
+        .get("descriptor")
+        .and_then(|descriptor| descriptor.get("dataSize"))
+        .and_then(Value::as_u64)
+        .and_then(|size| usize::try_from(size).ok())
+}
+
+fn bit_prefixes(depth: usize) -> Vec<String> {
+    if depth == 0 {
+        return vec![String::new()];
+    }
+
+    (0..(1usize << depth))
+        .map(|value| format!("{value:0depth$b}"))
+        .collect()
+}
+
 fn message(case: &FixtureCase) -> &Value {
     case.message
         .as_ref()
@@ -911,15 +1474,20 @@ fn json_value(case: &FixtureCase) -> &Value {
 }
 
 fn fixture_data(case: &FixtureCase) -> Vec<u8> {
-    match case
-        .data
-        .as_ref()
-        .unwrap_or_else(|| panic!("{} must include byte data", case.id))
-    {
+    fixture_data_bytes(
+        case.data
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} must include byte data", case.id)),
+        &case.id,
+    )
+}
+
+fn fixture_data_bytes(data: &FixtureData, fixture_id: &str) -> Vec<u8> {
+    match data {
         FixtureData::Base64Url { value } => URL_SAFE_NO_PAD
             .decode(value)
-            .unwrap_or_else(|err| panic!("{} must include valid base64url data: {}", case.id, err)),
-        FixtureData::Hex { value } => decode_hex(value, &case.id),
+            .unwrap_or_else(|err| panic!("{fixture_id} must include valid base64url data: {err}")),
+        FixtureData::Hex { value } => decode_hex(value, fixture_id),
         FixtureData::RepeatByte { byte, length } => vec![*byte; *length],
         FixtureData::Utf8 { value } => value.as_bytes().to_vec(),
     }

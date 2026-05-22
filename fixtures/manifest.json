@@ -32,6 +32,11 @@
       "assertions": ["cid.message", "cid.descriptor"]
     },
     {
+      "id": "dwn.messages.sync-replies",
+      "path": "dwn/messages/sync-replies.json",
+      "assertions": ["messages-sync.replies"]
+    },
+    {
       "id": "dwn.protocols.configure-definitions",
       "path": "dwn/protocols/configure-definitions.json",
       "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
