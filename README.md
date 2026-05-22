@@ -29,6 +29,7 @@ Known inherited gaps:
 ## Roadmap
 
 The migration plan is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md) and mirrored into GitHub milestones/issues.
+The active crate audit and target crate graph are tracked in [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md).
 
 ## Repository Policy
 

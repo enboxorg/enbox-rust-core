@@ -11,6 +11,8 @@ Goal: preserve history, document origin, and make the inherited workspace builda
 - Decide which inherited crates remain active, move legacy-only pieces behind features or out of the active workspace, and fix the broken `multicodec` dependency.
 - Establish CI for format, lint, build, and tests.
 
+The active workspace and target crate migration plan are documented in [`docs/MIGRATION_PLAN.md`](MIGRATION_PLAN.md).
+
 ## Milestone 1: Enbox Conformance Fixtures
 
 Goal: capture the current TypeScript behavior before porting.
