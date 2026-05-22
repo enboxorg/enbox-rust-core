@@ -64,4 +64,4 @@ Goal: expose the Rust core to product surfaces.
 - Add mobile bindings for iOS/Android, likely through UniFFI or a C ABI depending on consumer needs.
 - Add desktop bindings and optional local HTTP/WebSocket server mode.
 - Integrate with mobile notification wake/background sync.
-- Produce migration guides from the TypeScript local DWN path to the native core.
+- Produce migration guides from the TypeScript local DWN path to the native core, starting with [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md).
