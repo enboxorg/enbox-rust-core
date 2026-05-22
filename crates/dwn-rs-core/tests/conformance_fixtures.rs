@@ -17,6 +17,8 @@ use dwn_rs_core::descriptors::{
     MessagesSubscribeDescriptor, ProtocolQueryDescriptor, ReadDescriptor, RecordsQueryDescriptor,
     RecordsWriteDescriptor, SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
+use dwn_rs_core::state_index::MemoryStateIndex;
+use dwn_rs_core::stores::EnboxStateIndex;
 use futures_util::stream;
 use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
@@ -468,21 +470,18 @@ fn supported_fixture_descriptors_roundtrip_through_rust_models() {
     }
 }
 
-#[test]
-fn known_gap_state_index_operation_fixtures_parse_and_validate_shape() {
+#[tokio::test]
+async fn fixture_state_index_operations_match_typescript() {
     for suite in load_fixture_suites() {
         if !suite.has_assertion(STATE_INDEX_OPERATIONS_ASSERTION) {
             continue;
         }
 
         for case in &suite.fixture_set.cases {
-            assert_eq!(
-                case.rust_status,
-                RustStatus::KnownGap,
-                "{} must remain known_gap until Rust StateIndex behavior is implemented",
-                case.id
-            );
             assert_state_index_operation_fixture_shape(case);
+            if case.rust_status == RustStatus::Supported {
+                assert_state_index_operations(case).await;
+            }
         }
     }
 }
@@ -717,6 +716,178 @@ fn assert_state_index_leaves(case: &FixtureCase, leaves: &[String]) {
             case.id
         );
     }
+}
+
+async fn assert_state_index_operations(case: &FixtureCase) {
+    let mut state_index = MemoryStateIndex::default();
+    state_index
+        .open()
+        .await
+        .unwrap_or_else(|err| panic!("{} StateIndex open failed: {}", case.id, err));
+
+    for operation in state_index_operations(case) {
+        match operation {
+            StateIndexOperation::Insert {
+                tenant,
+                message_cid,
+                indexes,
+            } => {
+                state_index
+                    .insert(tenant, message_cid, state_index_indexes(case, indexes))
+                    .await
+                    .unwrap_or_else(|err| panic!("{} StateIndex insert failed: {}", case.id, err));
+            }
+            StateIndexOperation::Delete {
+                tenant,
+                message_cids,
+            } => {
+                state_index
+                    .delete(tenant, message_cids)
+                    .await
+                    .unwrap_or_else(|err| panic!("{} StateIndex delete failed: {}", case.id, err));
+            }
+            StateIndexOperation::GetRoot { tenant, expected } => {
+                assert_eq!(
+                    state_hash_hex(&state_index.get_root(tenant).await.unwrap_or_else(|err| {
+                        panic!("{} StateIndex getRoot failed: {}", case.id, err)
+                    })),
+                    *expected,
+                    "{} getRoot {}",
+                    case.id,
+                    tenant
+                );
+            }
+            StateIndexOperation::GetProtocolRoot {
+                tenant,
+                protocol,
+                expected,
+            } => {
+                assert_eq!(
+                    state_hash_hex(
+                        &state_index
+                            .get_protocol_root(tenant, protocol)
+                            .await
+                            .unwrap_or_else(|err| {
+                                panic!("{} StateIndex getProtocolRoot failed: {}", case.id, err)
+                            })
+                    ),
+                    *expected,
+                    "{} getProtocolRoot {} {}",
+                    case.id,
+                    tenant,
+                    protocol
+                );
+            }
+            StateIndexOperation::GetSubtreeHash {
+                tenant,
+                prefix,
+                expected,
+            } => {
+                assert_eq!(
+                    state_hash_hex(
+                        &state_index
+                            .get_subtree_hash(tenant, &bit_prefix(prefix))
+                            .await
+                            .unwrap_or_else(|err| {
+                                panic!("{} StateIndex getSubtreeHash failed: {}", case.id, err)
+                            })
+                    ),
+                    *expected,
+                    "{} getSubtreeHash {} {}",
+                    case.id,
+                    tenant,
+                    prefix
+                );
+            }
+            StateIndexOperation::GetProtocolSubtreeHash {
+                tenant,
+                protocol,
+                prefix,
+                expected,
+            } => {
+                assert_eq!(
+                    state_hash_hex(
+                        &state_index
+                            .get_protocol_subtree_hash(tenant, protocol, &bit_prefix(prefix))
+                            .await
+                            .unwrap_or_else(|err| {
+                                panic!(
+                                    "{} StateIndex getProtocolSubtreeHash failed: {}",
+                                    case.id, err
+                                )
+                            })
+                    ),
+                    *expected,
+                    "{} getProtocolSubtreeHash {} {} {}",
+                    case.id,
+                    tenant,
+                    protocol,
+                    prefix
+                );
+            }
+            StateIndexOperation::GetLeaves {
+                tenant,
+                prefix,
+                expected,
+            } => {
+                let mut leaves = state_index
+                    .get_leaves(tenant, &bit_prefix(prefix))
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("{} StateIndex getLeaves failed: {}", case.id, err)
+                    });
+                leaves.sort();
+                assert_eq!(
+                    leaves, *expected,
+                    "{} getLeaves {} {}",
+                    case.id, tenant, prefix
+                );
+            }
+            StateIndexOperation::GetProtocolLeaves {
+                tenant,
+                protocol,
+                prefix,
+                expected,
+            } => {
+                let mut leaves = state_index
+                    .get_protocol_leaves(tenant, protocol, &bit_prefix(prefix))
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("{} StateIndex getProtocolLeaves failed: {}", case.id, err)
+                    });
+                leaves.sort();
+                assert_eq!(
+                    leaves, *expected,
+                    "{} getProtocolLeaves {} {} {}",
+                    case.id, tenant, protocol, prefix
+                );
+            }
+        }
+    }
+}
+
+fn state_index_operations(case: &FixtureCase) -> &[StateIndexOperation] {
+    case.operations
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include StateIndex operations", case.id))
+}
+
+fn state_index_indexes(
+    case: &FixtureCase,
+    indexes: &BTreeMap<String, Value>,
+) -> dwn_rs_core::MapValue {
+    let value = serde_json::to_value(indexes)
+        .unwrap_or_else(|err| panic!("{} StateIndex indexes must serialize: {}", case.id, err));
+    serde_json::from_value(value)
+        .unwrap_or_else(|err| panic!("{} StateIndex indexes must deserialize: {}", case.id, err))
+}
+
+fn bit_prefix(prefix: &str) -> Vec<bool> {
+    prefix.bytes().map(|byte| byte == b'1').collect()
+}
+
+fn state_hash_hex(hash: &[u8; 32]) -> String {
+    hash.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn message(case: &FixtureCase) -> &Value {

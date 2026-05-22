@@ -21,8 +21,7 @@
     {
       "id": "state-index-global-protocol-delete",
       "description": "StateIndex operations covering empty roots, global/protocol insertions, tenant isolation, subtree hashes, leaves, and deletes.",
-      "rustStatus": "known_gap",
-      "gap": "Rust has the EnboxStateIndex trait but no StateIndex implementation yet.",
+      "rustStatus": "supported",
       "tenants": ["did:example:alice", "did:example:bob"],
       "prefixes": {
         "note1First8Bits": "00010100"

@@ -24,7 +24,7 @@ Current assertion types:
 - `jwe.aead`: encrypt/decrypt fixture plaintext with the fixed CEK, IV, and content-encryption algorithm.
 - `jwe.keywrap`: wrap/unwrap the CEK with X25519 ECDH-ES plus A256KW using fixed recipient and ephemeral keys.
 - `jwe.decrypt`: unwrap the CEK from `case.jwe`, decrypt fixture ciphertext, and compare plaintext or expected failure.
-- `state-index.operations`: parse StateIndex operation fixtures and, while Rust StateIndex is not implemented, validate fixture shape only for `known_gap` cases.
+- `state-index.operations`: apply StateIndex insert/delete/read operations and compare roots, protocol roots, subtree hashes, and leaves for supported cases.
 - `descriptor.roundtrip`: parse and re-serialize supported descriptors without changing JSON shape.
 
 Each case contains current TypeScript outputs and a Rust migration status:

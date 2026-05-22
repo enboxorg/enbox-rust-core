@@ -29,6 +29,7 @@ pub mod events;
 pub mod filters;
 pub mod interfaces;
 mod ser;
+pub mod state_index;
 pub mod stores;
 pub mod value;
 
