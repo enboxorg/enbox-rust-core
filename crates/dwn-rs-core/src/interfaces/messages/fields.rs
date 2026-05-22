@@ -149,10 +149,7 @@ impl MessageFields for WriteFields {
 mod tests {
     use crate::{
         auth::jws::SignatureEntry,
-        encryption::{
-            DerivationScheme, KeyEncryption, KeyEncryptionAlgorithm,
-            KeyEncryptionAlgorithmAsymmetric, KeyEncryptionAlgorithmSymmetric,
-        },
+        encryption::{DerivationScheme, Encryption, JweRecipient, JweRecipientHeader},
     };
 
     use super::*;
@@ -188,21 +185,17 @@ mod tests {
                     ..Default::default()
                 },
                 encryption: Some(Encryption {
-                    algorithm: KeyEncryptionAlgorithm::Symmetric(
-                        KeyEncryptionAlgorithmSymmetric::AES256GCM,
-                    ),
-                    initialization_vector: "initialization_vector".to_string(),
-                    key_encryption: vec![KeyEncryption {
-                        algorithm: KeyEncryptionAlgorithm::Asymmetric(
-                            KeyEncryptionAlgorithmAsymmetric::EciesSecp256k1,
-                        ),
-                        root_key_id: "root_key_id".to_string(),
-                        derivation_scheme: DerivationScheme::DataFormats,
-                        derived_public_key: None,
+                    protected: "protected".to_string(),
+                    iv: "initialization_vector".to_string(),
+                    tag: "tag".to_string(),
+                    recipients: vec![JweRecipient {
+                        header: JweRecipientHeader {
+                            kid: "root_key_id".to_string(),
+                            epk: jwk.clone(),
+                            derivation_scheme: DerivationScheme::DataFormats,
+                            derived_public_key: None,
+                        },
                         encrypted_key: "encrypted_key".to_string(),
-                        initialization_vector: "initialization_vector".to_string(),
-                        ephemeral_public_key: jwk.clone(),
-                        message_authentication_code: "message_authentication_code".to_string(),
                     }],
                 }),
                 attestation: Some(JWS {
@@ -221,18 +214,17 @@ mod tests {
                     "recordId": "record_id",
                     "contextId": "context_id",
                     "encryption": {{
-                        "algorithm": "A256GCM",
-                        "initializationVector": "initialization_vector",
-                        "keyEncryption": [
+                        "protected": "protected",
+                        "iv": "initialization_vector",
+                        "tag": "tag",
+                        "recipients": [
                             {{
-                                "algorithm": "ECIES-ES256K",
-                                "rootKeyId": "root_key_id",
-                                "derivationScheme": "dataFormats",
-                                "derivedPublicKey": null,
-                                "encryptedKey": "encrypted_key",
-                                "initializationVector": "initialization_vector",
-                                "ephemeralPublicKey": {jwk},
-                                "messageAuthenticationCode": "message_authentication_code"
+                                "header": {{
+                                    "kid": "root_key_id",
+                                    "epk": {jwk},
+                                    "derivationScheme": "dataFormats"
+                                }},
+                                "encrypted_key": "encrypted_key"
                             }}
                         ]
                     }},
@@ -278,18 +270,17 @@ mod tests {
                 "recordId": "record_id",
                 "contextId": "context_id",
                 "encryption": {{
-                    "algorithm": "A256GCM",
-                    "initializationVector": "initialization_vector",
-                    "keyEncryption": [
+                    "protected": "protected",
+                    "iv": "initialization_vector",
+                    "tag": "tag",
+                    "recipients": [
                         {{
-                            "algorithm": "ECIES-ES256K",
-                            "rootKeyId": "root_key_id",
-                            "derivationScheme": "dataFormats",
-                            "derivedPublicKey": null,
-                            "encryptedKey": "encrypted_key",
-                            "initializationVector": "initialization_vector",
-                            "ephemeralPublicKey": {jwk},
-                            "messageAuthenticationCode": "message_authentication_code"
+                            "header": {{
+                                "kid": "root_key_id",
+                                "epk": {jwk},
+                                "derivationScheme": "dataFormats"
+                            }},
+                            "encrypted_key": "encrypted_key"
                         }}
                     ]
                 }},

@@ -1,11 +1,7 @@
 use super::{MessageParameters, MessageValidator};
 use crate::auth::Authorization;
 use crate::descriptors::{MessageDescriptor, ValidationError};
-use crate::encryption::asymmetric::publickey::PublicKey;
-use crate::encryption::{
-    DerivationScheme, Encryption, KeyEncryption, KeyEncryptionAlgorithm,
-    KeyEncryptionAlgorithmAsymmetric, KeyEncryptionAlgorithmSymmetric,
-};
+use crate::encryption::{DerivationScheme, Encryption};
 use crate::fields::WriteFields;
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::interfaces::messages::descriptors::{DELETE, QUERY, READ, RECORDS, SUBSCRIBE, WRITE};
@@ -13,10 +9,10 @@ use crate::{normalize_url, MapValue, Message, Pagination};
 
 use dwn_rs_message_derive::descriptor;
 
-use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD as base64url};
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use ssi_jwk::JWK;
+
+pub use crate::encryption::{EncryptionInput, KeyEncryptionInput};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ReadParameters {
@@ -171,27 +167,6 @@ pub enum DateSort {
     PublishedDescending,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct EncryptionInput {
-    pub algorithm: Option<KeyEncryptionAlgorithm>,
-    #[serde(rename = "initializationVector")]
-    pub initialization_vector: Vec<u8>,
-    key: Vec<u8>,
-    #[serde(rename = "keyEncryptionInput")]
-    pub key_encryption_input: Vec<KeyEncryptionInput>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct KeyEncryptionInput {
-    #[serde(rename = "derivationSchema")]
-    pub derivation_schema: DerivationScheme,
-    #[serde(rename = "publicKeyId")]
-    pub public_key_id: String,
-    #[serde(rename = "publicKey")]
-    pub public_key: JWK,
-    pub algorithm: Option<KeyEncryptionAlgorithm>,
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct WriteParameters {
     pub recipient: Option<String>,
@@ -257,10 +232,10 @@ impl MessageValidator for WriteParameters {
 
         if let Some(encryption_input) = &self.encryption_input {
             encryption_input
-                .key_encryption_input
+                .key_encryption_inputs
                 .iter()
                 .try_for_each(|input| {
-                    match (&input.derivation_schema, &self.protocol, &self.schema) {
+                    match (&input.derivation_scheme, &self.protocol, &self.schema) {
                         (DerivationScheme::ProtocolPath, None, _) => Err(ValidationError {
                             message: "'protocols' encryption requires a protocol".to_string(),
                         }),
@@ -339,56 +314,12 @@ impl MessageParameters for WriteParameters {
         };
 
         if let Some(encryption_input) = &self.encryption_input {
-            let key_encryption = encryption_input
-                .key_encryption_input
-                .iter()
-                .map(
-                    |input| -> Result<KeyEncryption, crate::encryption::asymmetric::Error> {
-                        let jwk = PublicKey::try_from(input.public_key.to_public())?;
-                        let key_enc_output = jwk.encrypt(&encryption_input.key)?;
-
-                        let key = base64url
-                            .encode(key_enc_output.ciphertext.as_slice())
-                            .to_string();
-                        let initialization_vector = base64url
-                            .encode(key_enc_output.nonce.as_slice())
-                            .to_string();
-                        let ephemeral_public_key =
-                            PublicKey::from_bytes(key_enc_output.ephemeral_pk.as_slice())?.jwk();
-                        let message_authentication_code =
-                            base64url.encode(key_enc_output.tag.as_slice()).to_string();
-
-                        Ok(KeyEncryption {
-                            algorithm: input.algorithm.clone().unwrap_or(
-                                KeyEncryptionAlgorithm::Asymmetric(
-                                    KeyEncryptionAlgorithmAsymmetric::EciesSecp256k1,
-                                ),
-                            ),
-                            derivation_scheme: input.derivation_schema.clone(),
-                            root_key_id: input.public_key_id.clone(),
-                            ephemeral_public_key,
-                            initialization_vector,
-                            encrypted_key: key,
-                            message_authentication_code,
-                            derived_public_key: match input.derivation_schema {
-                                DerivationScheme::ProtocolContext => Some(input.public_key.clone()),
-                                _ => None,
-                            },
-                        })
-                    },
-                )
-                .filter_map(|result| result.ok())
-                .collect();
-
-            fields.encryption = Some(Encryption {
-                algorithm: encryption_input.algorithm.clone().unwrap_or(
-                    KeyEncryptionAlgorithm::Symmetric(KeyEncryptionAlgorithmSymmetric::AES256GCM),
-                ),
-                initialization_vector: base64url
-                    .encode(encryption_input.initialization_vector.as_slice())
-                    .to_string(),
-                key_encryption,
-            });
+            fields.encryption =
+                Some(
+                    Encryption::build_jwe(encryption_input).map_err(|e| ValidationError {
+                        message: e.to_string(),
+                    })?,
+                );
         }
         fields.record_id = self.record_id.clone();
 
@@ -674,6 +605,65 @@ mod test {
 
         assert_eq!(wd, de);
         assert_eq!(build_wd, de);
+    }
+
+    #[tokio::test]
+    async fn test_write_builds_jwe_encryption_fields() {
+        let public_key = serde_json::from_value(serde_json::json!({
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": "NYBy1jZYgNGu6jKa35EhODhR7SGijjt16WXQ0s0WYlQ",
+            "kid": "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E"
+        }))
+        .unwrap();
+        let (_, fields) = WriteParameters {
+            protocol: Some("https://example.com/protocol/jwe".to_string()),
+            protocol_path: Some("thread/message".to_string()),
+            data_cid: Some(
+                "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e".to_string(),
+            ),
+            data_size: Some(32),
+            data_format: "text/plain".to_string(),
+            encryption_input: Some(EncryptionInput {
+                algorithm: Some(crate::encryption::ContentEncryptionAlgorithm::A256GCM),
+                key: (0u8..32).collect(),
+                initialization_vector: vec![0xa0; 12],
+                authentication_tag: vec![0x42; 16],
+                key_encryption_inputs: vec![KeyEncryptionInput {
+                    derivation_scheme: DerivationScheme::ProtocolPath,
+                    public_key_id: "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E".to_string(),
+                    public_key,
+                    algorithm: None,
+                }],
+            }),
+            ..Default::default()
+        }
+        .build()
+        .await
+        .unwrap();
+
+        let encryption = fields.unwrap().encryption.unwrap();
+        assert_eq!(
+            encryption.protected_header().unwrap(),
+            crate::encryption::JweProtectedHeader {
+                alg: crate::encryption::KeyAgreementAlgorithm::EcdhEsA256kw,
+                enc: crate::encryption::ContentEncryptionAlgorithm::A256GCM,
+            }
+        );
+        let encryption_json = serde_json::to_value(encryption).unwrap();
+        assert!(encryption_json.get("protected").is_some());
+        assert!(encryption_json.get("iv").is_some());
+        assert!(encryption_json.get("tag").is_some());
+        assert!(encryption_json.get("recipients").is_some());
+        assert!(encryption_json.get("keyEncryption").is_none());
+        assert_eq!(
+            encryption_json["recipients"][0]["header"]["derivationScheme"],
+            "protocolPath"
+        );
+        assert!(!encryption_json["recipients"][0]["encrypted_key"]
+            .as_str()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

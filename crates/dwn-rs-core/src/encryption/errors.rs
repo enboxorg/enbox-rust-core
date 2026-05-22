@@ -9,4 +9,6 @@ pub enum Error {
     JWKSecretKeyError(#[from] asymmetric::Error),
     #[error("Error deriving key: {0}")]
     DeriveKeyError(#[from] HDKeysError),
+    #[error("JWE error: {0}")]
+    JweError(String),
 }

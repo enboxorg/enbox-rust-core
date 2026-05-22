@@ -433,6 +433,8 @@ fn fixture_jwe_matches_typescript() {
             .iter()
             .filter(|case| case.rust_status == RustStatus::Supported)
         {
+            assert_jwe_production_model(case);
+
             if check_protected {
                 assert_jwe_protected_header(case);
             }
@@ -938,6 +940,53 @@ fn jws_payload_bytes(case: &FixtureCase) -> Vec<u8> {
             serde_json::to_vec(value).expect("JWS JSON payload must serialize")
         }
         FixtureJwsPayload::Utf8 { value } => value.as_bytes().to_vec(),
+    }
+}
+
+fn assert_jwe_production_model(case: &FixtureCase) {
+    let encryption_value = record(case)
+        .get("encryption")
+        .unwrap_or_else(|| panic!("{} record must include encryption", case.id));
+    let encryption: dwn_rs_core::encryption::Encryption =
+        serde_json::from_value(encryption_value.clone())
+            .unwrap_or_else(|err| panic!("{} production JWE model decode failed: {err}", case.id));
+    assert_eq!(
+        serde_json::to_value(&encryption).unwrap(),
+        *encryption_value,
+        "{} production JWE model roundtrip",
+        case.id
+    );
+
+    let protected = encryption
+        .protected_header()
+        .unwrap_or_else(|err| panic!("{} production JWE protected parse failed: {err}", case.id));
+    assert_eq!(
+        serde_json::to_value(protected).unwrap(),
+        serde_json::json!({
+            "alg": key_agreement_algorithm(case),
+            "enc": content_encryption_algorithm(case),
+        }),
+        "{} production JWE protected header",
+        case.id
+    );
+
+    let ciphertext = fixture_value_bytes(case, &case.ciphertext, "ciphertext");
+    let private_jwk = fixture_private_jwk_to_jwk(&derived_private_jwk(case).derived_private_key);
+    let decrypt_result = encryption.decrypt(&private_jwk, &ciphertext);
+    match case.expected_error_code.as_deref() {
+        Some(JWE_ERROR_DECRYPT_FAILED) => assert!(
+            decrypt_result.is_err(),
+            "{} production JWE decrypt must fail",
+            case.id
+        ),
+        Some(error_code) => panic!("{} unsupported JWE error code {}", case.id, error_code),
+        None => assert_eq!(
+            decrypt_result
+                .unwrap_or_else(|err| panic!("{} production JWE decrypt failed: {err}", case.id)),
+            fixture_value_bytes(case, &case.plaintext, "plaintext"),
+            "{} production JWE decrypt",
+            case.id
+        ),
     }
 }
 
@@ -1624,6 +1673,22 @@ fn record(case: &FixtureCase) -> &Value {
     case.record
         .as_ref()
         .unwrap_or_else(|| panic!("{} must include a record", case.id))
+}
+
+fn fixture_private_jwk_to_jwk(jwk: &FixtureX25519PrivateJwk) -> ssi_jwk::JWK {
+    let mut value = serde_json::json!({
+        "kty": jwk.kty.clone(),
+        "crv": jwk.crv.clone(),
+        "d": jwk.d.clone(),
+        "x": jwk.x.clone(),
+    });
+    if let Some(kid) = &jwk.kid {
+        value
+            .as_object_mut()
+            .expect("private JWK must be an object")
+            .insert("kid".to_string(), Value::String(kid.clone()));
+    }
+    serde_json::from_value(value).expect("fixture private JWK must deserialize")
 }
 
 fn assert_supported_descriptor_roundtrip(case: &FixtureCase) {
