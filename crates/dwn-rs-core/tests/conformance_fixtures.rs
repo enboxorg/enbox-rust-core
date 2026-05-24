@@ -14,8 +14,8 @@ use dwn_rs_core::cid::{
 };
 use dwn_rs_core::descriptors::{
     ConfigureDescriptor, DeleteDescriptor, MessagesQueryDescriptor, MessagesReadDescriptor,
-    MessagesSubscribeDescriptor, ProtocolQueryDescriptor, ReadDescriptor, RecordsCountDescriptor,
-    RecordsQueryDescriptor, RecordsWriteDescriptor,
+    MessagesSubscribeDescriptor, MessagesSyncDescriptor, ProtocolQueryDescriptor, ReadDescriptor,
+    RecordsCountDescriptor, RecordsQueryDescriptor, RecordsWriteDescriptor,
     SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
 use dwn_rs_core::dwn::{
@@ -2341,6 +2341,7 @@ fn assert_supported_descriptor_roundtrip(case: &FixtureCase) {
         ("Messages", "Subscribe") => {
             roundtrip_descriptor::<MessagesSubscribeDescriptor>(descriptor)
         }
+        ("Messages", "Sync") => roundtrip_descriptor::<MessagesSyncDescriptor>(descriptor),
         _ => panic!("{} has no Rust descriptor roundtrip mapping", case.id),
     };
 

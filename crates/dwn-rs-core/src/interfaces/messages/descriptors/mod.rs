@@ -8,7 +8,7 @@ pub use general::*;
 use crate::cid::generate_cid_from_serialized;
 pub use messages::{
     QueryDescriptor as MessagesQueryDescriptor, ReadDescriptor as MessagesReadDescriptor,
-    SubscribeDescriptor as MessagesSubscribeDescriptor,
+    SubscribeDescriptor as MessagesSubscribeDescriptor, SyncDescriptor as MessagesSyncDescriptor,
 };
 pub use protocols::{ConfigureDescriptor, QueryDescriptor as ProtocolQueryDescriptor};
 pub use records::{
@@ -30,6 +30,7 @@ pub const QUERY: &str = "Query";
 pub const WRITE: &str = "Write";
 pub const DELETE: &str = "Delete";
 pub const SUBSCRIBE: &str = "Subscribe";
+pub const SYNC: &str = "Sync";
 pub const CONFIGURE: &str = "Configure";
 pub const COUNT: &str = "Count";
 

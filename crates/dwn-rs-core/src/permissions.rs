@@ -916,6 +916,11 @@ where
     )
     .await?;
     if let Some(scoped_protocol) = permission_grant.scope.protocol.as_deref() {
+        if protocols_in_message.is_empty() {
+            return Err(format!(
+                "MessagesGrantAuthorizationMismatchedProtocol: The scoped protocol {scoped_protocol} is not present in the incoming message"
+            ));
+        }
         for protocol in protocols_in_message {
             if protocol != scoped_protocol {
                 return Err(format!(
@@ -1394,6 +1399,7 @@ fn message_timestamp(
             crate::descriptors::Messages::Read(descriptor) => Ok(descriptor.message_timestamp),
             crate::descriptors::Messages::Query(descriptor) => Ok(descriptor.message_timestamp),
             crate::descriptors::Messages::Subscribe(descriptor) => Ok(descriptor.message_timestamp),
+            crate::descriptors::Messages::Sync(descriptor) => Ok(descriptor.message_timestamp),
         },
     }
 }
@@ -1482,6 +1488,7 @@ impl DescriptorMethod for crate::descriptors::Messages {
             crate::descriptors::Messages::Read(_) => "Read",
             crate::descriptors::Messages::Query(_) => "Query",
             crate::descriptors::Messages::Subscribe(_) => "Subscribe",
+            crate::descriptors::Messages::Sync(_) => "Sync",
         }
     }
 }

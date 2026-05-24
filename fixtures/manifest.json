@@ -29,7 +29,7 @@
     {
       "id": "dwn.messages.sync-descriptors",
       "path": "dwn/messages/sync-descriptors.json",
-      "assertions": ["cid.message", "cid.descriptor"]
+      "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
     },
     {
       "id": "dwn.messages.sync-replies",

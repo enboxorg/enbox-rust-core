@@ -10,8 +10,7 @@
     {
       "id": "messages-sync-root-protocol",
       "description": "MessagesSync root request scoped to a protocol.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreieykhu5avbofples6p3nf64qx2p7owgq6qpi5x22qavlzpc43dhd4",
       "messageCid": "bafyreiexrwjg743psdfgk4uqxjxyomsflpazlwf56t2752uhh4dfb56cne",
       "message": {
@@ -27,8 +26,7 @@
     {
       "id": "messages-sync-root-global",
       "description": "MessagesSync root request for a tenant's global state.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreifbewu6bdsgffnrt3vx25j73euzs522fcxfn5z3yszzwdqp4w4uha",
       "messageCid": "bafyreid77jyfvdi5dkcgmvt7af6foyu6u2wqpfr2phf6maa7oup4irpupy",
       "message": {
@@ -43,8 +41,7 @@
     {
       "id": "messages-sync-subtree",
       "description": "MessagesSync subtree hash request for a bit prefix.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreiffjny74e4vpojy24rybyoq7by222vyjdlb4gsrhkw2rqtpcbdige",
       "messageCid": "bafyreidyhcv5ohcj2r3f4kldahzpse7pqkub3jfvcv5fn5y5jt6vccvkc4",
       "message": {
@@ -60,8 +57,7 @@
     {
       "id": "messages-sync-subtree-protocol",
       "description": "MessagesSync subtree hash request for a protocol-scoped bit prefix.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreidakki2xoyyxstvfuhzs3xdfrkjsyzuajil2cjs6uwsqnxbm2d7n4",
       "messageCid": "bafyreic7yhv6ucuatvyyyr4ujd5yh3sbmaq6wfjhna6kbfdxpvysp22kci",
       "message": {
@@ -78,8 +74,7 @@
     {
       "id": "messages-sync-leaves",
       "description": "MessagesSync leaves request for a bit prefix.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreihvv2n4ksbv5dtjeeapckgmvmwds24rjmhz44kfmer7gnkckcykpe",
       "messageCid": "bafyreib5asotwnk6puti4tiztzinjxb4ejshv4uncfkjxahlp5e7usloiu",
       "message": {
@@ -95,8 +90,7 @@
     {
       "id": "messages-sync-leaves-protocol",
       "description": "MessagesSync leaves request for a protocol-scoped bit prefix.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreidoqv6oqq26piovf23zghphgva7tol6b3ikznq7tadeealgynilty",
       "messageCid": "bafyreib4hgnuv4xtyai5em5dncgkllb4jgnylp27rvl33ovtp5gpu5waiq",
       "message": {
@@ -113,8 +107,7 @@
     {
       "id": "messages-sync-diff",
       "description": "MessagesSync diff request containing client subtree hashes at a requested depth.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreihcbr3gmhy6fmrtvulrqyziu5comn42oyj42fy7orjlcd5dnalygy",
       "messageCid": "bafyreic7sbqe7yi2kofsdudufaviq2ydx4zgwzortofukcezzncpbxgg3u",
       "message": {
@@ -134,8 +127,7 @@
     {
       "id": "messages-sync-diff-protocol",
       "description": "MessagesSync diff request containing protocol-scoped client subtree hashes.",
-      "rustStatus": "known_gap",
-      "gap": "The inherited Rust descriptor set does not include MessagesSync yet.",
+      "rustStatus": "supported",
       "descriptorCid": "bafyreihe4yz6qvbevwtprsnhq3tvxnpakcjqn5nluncwsvpinnpuxxwkn4",
       "messageCid": "bafyreihgjuknrzittk4w5pg4wzhlqlhiosa5j4rczz5k674kmhme43ji3m",
       "message": {
