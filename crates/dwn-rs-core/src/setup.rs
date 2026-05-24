@@ -535,7 +535,7 @@ impl MemoryProtocolEndpoint {
     pub fn protocol(&self, tenant: &str, protocol: &str) -> Option<Definition> {
         self.protocols
             .read()
-            .unwrap()
+            .expect("MemoryProtocolEndpoint lock poisoned")
             .get(&protocol_key(tenant, protocol))
             .cloned()
     }
@@ -551,7 +551,7 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
             Ok(self
                 .protocols
                 .read()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .get(&protocol_key(tenant, protocol))
                 .cloned())
         })
@@ -565,7 +565,7 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
         Box::pin(async move {
             self.protocols
                 .write()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .insert(protocol_key(tenant, &definition.protocol), definition);
             Ok(())
         })

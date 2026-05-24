@@ -49,6 +49,13 @@ impl DesktopError {
             format!("desktop local server must bind to a loopback host, got {host}"),
         )
     }
+
+    pub(crate) fn lock_poisoned<E: Display>(err: E) -> Self {
+        Self::new(
+            "DesktopLockPoisoned",
+            format!("desktop runtime lock poisoned: {err}"),
+        )
+    }
 }
 
 impl Display for DesktopError {
@@ -354,7 +361,12 @@ where
     }
 
     pub async fn start(&self, request: DesktopStartRequest) -> DesktopResult<DesktopRuntimeStatus> {
-        if self.state.read().unwrap().running {
+        if self
+            .state
+            .read()
+            .map_err(DesktopError::lock_poisoned)?
+            .running
+        {
             return Err(DesktopError::already_running());
         }
 
@@ -375,7 +387,7 @@ where
         }
 
         {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().map_err(DesktopError::lock_poisoned)?;
             state.running = true;
             state.mode = Some(mode);
             state.advert = Some(advert);
@@ -391,7 +403,7 @@ where
             self.discovery.remove(&node_id).await?;
         }
         {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().map_err(DesktopError::lock_poisoned)?;
             state.running = false;
             state.mode = None;
             state.advert = None;
@@ -444,7 +456,10 @@ where
     }
 
     pub fn status(&self) -> DesktopRuntimeStatus {
-        let state = self.state.read().unwrap();
+        let state = self
+            .state
+            .read()
+            .expect("DesktopLocalNode state lock poisoned");
         DesktopRuntimeStatus {
             running: state.running,
             mode: state.mode,
@@ -476,7 +491,12 @@ where
     }
 
     fn ensure_running(&self) -> DesktopResult<()> {
-        if !self.state.read().unwrap().running {
+        if !self
+            .state
+            .read()
+            .map_err(DesktopError::lock_poisoned)?
+            .running
+        {
             return Err(DesktopError::not_running());
         }
         Ok(())
@@ -508,20 +528,24 @@ impl DesktopLocalServer for MemoryDesktopLocalServer {
                 port: Some(config.port),
                 websocket_enabled: config.websocket_enabled,
             };
-            *self.status.write().unwrap() = status.clone();
+            *self.status.write().map_err(DesktopError::lock_poisoned)? = status.clone();
             Ok(status)
         })
     }
 
     fn stop<'a>(&'a self) -> DesktopFuture<'a, ()> {
         Box::pin(async move {
-            *self.status.write().unwrap() = DesktopServerStatus::default();
+            *self.status.write().map_err(DesktopError::lock_poisoned)? =
+                DesktopServerStatus::default();
             Ok(())
         })
     }
 
     fn status(&self) -> DesktopServerStatus {
-        self.status.read().unwrap().clone()
+        self.status
+            .read()
+            .expect("MemoryDesktopLocalServer status lock poisoned")
+            .clone()
     }
 }
 
@@ -535,7 +559,7 @@ impl DesktopDiscoveryRegistry for MemoryDesktopDiscoveryRegistry {
         Box::pin(async move {
             self.adverts
                 .write()
-                .unwrap()
+                .map_err(DesktopError::lock_poisoned)?
                 .insert(advert.node_id.clone(), advert);
             Ok(())
         })
@@ -543,17 +567,35 @@ impl DesktopDiscoveryRegistry for MemoryDesktopDiscoveryRegistry {
 
     fn remove<'a>(&'a self, node_id: &'a str) -> DesktopFuture<'a, ()> {
         Box::pin(async move {
-            self.adverts.write().unwrap().remove(node_id);
+            self.adverts
+                .write()
+                .map_err(DesktopError::lock_poisoned)?
+                .remove(node_id);
             Ok(())
         })
     }
 
     fn resolve<'a>(&'a self, node_id: &'a str) -> DesktopFuture<'a, Option<DesktopNodeAdvert>> {
-        Box::pin(async move { Ok(self.adverts.read().unwrap().get(node_id).cloned()) })
+        Box::pin(async move {
+            Ok(self
+                .adverts
+                .read()
+                .map_err(DesktopError::lock_poisoned)?
+                .get(node_id)
+                .cloned())
+        })
     }
 
     fn list<'a>(&'a self) -> DesktopFuture<'a, Vec<DesktopNodeAdvert>> {
-        Box::pin(async move { Ok(self.adverts.read().unwrap().values().cloned().collect()) })
+        Box::pin(async move {
+            Ok(self
+                .adverts
+                .read()
+                .map_err(DesktopError::lock_poisoned)?
+                .values()
+                .cloned()
+                .collect())
+        })
     }
 }
 
@@ -574,7 +616,7 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
         delivery: DesktopQueuedDelivery,
     ) -> DesktopFuture<'a, DesktopDeliveryReceipt> {
         Box::pin(async move {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().map_err(DesktopError::lock_poisoned)?;
             if let Some(dedup_key) = &delivery.request.dedup_key {
                 if let Some(delivery_id) = inner.dedup_keys.get(dedup_key) {
                     return Ok(DesktopDeliveryReceipt {
@@ -604,7 +646,7 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
             Ok(self
                 .inner
                 .read()
-                .unwrap()
+                .map_err(DesktopError::lock_poisoned)?
                 .deliveries
                 .values()
                 .filter(|delivery| {
@@ -619,7 +661,7 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
 
     fn ack<'a>(&'a self, delivery_id: &'a str) -> DesktopFuture<'a, ()> {
         Box::pin(async move {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().map_err(DesktopError::lock_poisoned)?;
             if let Some(delivery) = inner.deliveries.remove(delivery_id) {
                 if let Some(dedup_key) = delivery.request.dedup_key {
                     inner.dedup_keys.remove(&dedup_key);

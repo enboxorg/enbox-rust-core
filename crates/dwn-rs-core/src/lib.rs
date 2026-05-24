@@ -50,6 +50,7 @@ pub mod sync;
 pub mod value;
 
 pub use dwn::*;
+pub use errors::lock_error;
 pub use events::*;
 pub use filters::*;
 pub use interfaces::*;

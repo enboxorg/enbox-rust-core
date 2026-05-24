@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use k256::sha2::{Digest, Sha256};
 
-use crate::errors::StoreError;
+use crate::errors::{lock_error, StoreError};
 use crate::stores::{EnboxStateIndex, KeyValues, StateHash};
 use crate::Value;
 
@@ -331,9 +331,6 @@ fn leaf_matches_prefix(key_hash: &StateHash, prefix: &[bool]) -> bool {
         .all(|(depth, bit)| get_bit(key_hash, depth) == *bit)
 }
 
-fn lock_error<T>(_: T) -> StoreError {
-    StoreError::InternalException("StateIndex lock poisoned".to_string())
-}
 
 #[cfg(test)]
 mod tests {

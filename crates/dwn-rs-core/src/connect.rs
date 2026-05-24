@@ -415,33 +415,53 @@ impl DelegateSessionCache {
     pub fn insert_grant(&self, grant: DelegateGrant) {
         self.state
             .write()
-            .unwrap()
+            .expect("DelegateSessionCache lock poisoned")
             .grants
             .insert(grant.id.clone(), grant);
     }
 
     pub fn set_decryption_keys(&self, keys: Vec<DelegateDecryptionKey>) {
-        self.state.write().unwrap().decryption_keys = keys;
+        self.state
+            .write()
+            .expect("DelegateSessionCache lock poisoned")
+            .decryption_keys = keys;
     }
 
     pub fn set_context_keys(&self, keys: Vec<DelegateContextKey>) {
-        self.state.write().unwrap().context_keys = keys;
+        self.state
+            .write()
+            .expect("DelegateSessionCache lock poisoned")
+            .context_keys = keys;
     }
 
     pub fn set_multi_party_protocols(&self, protocols: Vec<String>) {
-        self.state.write().unwrap().multi_party_protocols = protocols.into_iter().collect();
+        self.state
+            .write()
+            .expect("DelegateSessionCache lock poisoned")
+            .multi_party_protocols = protocols.into_iter().collect();
     }
 
     pub fn decryption_keys(&self) -> Vec<DelegateDecryptionKey> {
-        self.state.read().unwrap().decryption_keys.clone()
+        self.state
+            .read()
+            .expect("DelegateSessionCache lock poisoned")
+            .decryption_keys
+            .clone()
     }
 
     pub fn context_keys(&self) -> Vec<DelegateContextKey> {
-        self.state.read().unwrap().context_keys.clone()
+        self.state
+            .read()
+            .expect("DelegateSessionCache lock poisoned")
+            .context_keys
+            .clone()
     }
 
     pub fn revoke_grant(&self, grant_id: &str, revocation_grant_id: &str) -> bool {
-        let mut state = self.state.write().unwrap();
+        let mut state = self
+            .state
+            .write()
+            .expect("DelegateSessionCache lock poisoned");
         let Some(grant) = state.grants.remove(grant_id) else {
             return false;
         };
@@ -480,7 +500,10 @@ impl KeyDeliveryStore for MemoryKeyDeliveryStore {
     ) -> ConnectFuture<'a, String> {
         Box::pin(async move {
             let id = record.id.clone();
-            self.records.write().unwrap().insert(id.clone(), record);
+            self.records
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .insert(id.clone(), record);
             Ok(id)
         })
     }
@@ -496,7 +519,7 @@ impl KeyDeliveryStore for MemoryKeyDeliveryStore {
             Ok(self
                 .records
                 .read()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .values()
                 .find(|record| {
                     record.tenant_did == owner_did
@@ -510,7 +533,10 @@ impl KeyDeliveryStore for MemoryKeyDeliveryStore {
 
     fn delete_for_recipient<'a>(&'a self, recipient_did: &'a str) -> ConnectFuture<'a, usize> {
         Box::pin(async move {
-            let mut records = self.records.write().unwrap();
+            let mut records = self
+                .records
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?;
             let before = records.len();
             records.retain(|_, record| record.recipient_did != recipient_did);
             Ok(before - records.len())
