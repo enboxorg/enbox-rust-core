@@ -33,6 +33,7 @@ pub mod filters;
 pub mod handlers;
 pub mod interfaces;
 pub mod local;
+pub mod mobile;
 pub mod permissions;
 mod ser;
 pub mod setup;
