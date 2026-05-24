@@ -58,6 +58,11 @@
       ]
     },
     {
+      "id": "dwn.protocols.authorization-corpus",
+      "path": "dwn/protocols/authorization-corpus.json",
+      "assertions": ["protocol.authorization-corpus"]
+    },
+    {
       "id": "dwn.state-index.operations",
       "path": "dwn/state-index/operations.json",
       "assertions": ["state-index.operations"]

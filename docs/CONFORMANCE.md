@@ -27,6 +27,7 @@ Current assertion types:
 - `state-index.operations`: apply StateIndex insert/delete/read operations and compare roots, protocol roots, subtree hashes, and leaves for supported cases.
 - `messages-sync.replies`: seed native sync state from fixture entries and compare `MessagesSync` root/subtree/leaves/diff replies.
 - `message.process`: route a fixture message through the native `Dwn.process_message` boundary and compare the fixture reply/status shape; suites using this assertion must include valid and invalid cases for every current handler key.
+- `protocol.authorization-corpus`: validate protocol definition directives and grant authorization status/error outcomes for scope, publication conditions, expiry, delegation, and revocation.
 - `descriptor.roundtrip`: parse and re-serialize supported descriptors without changing JSON shape.
 
 Each case contains current TypeScript outputs and a Rust migration status:
@@ -54,6 +55,7 @@ As Rust gains full DWN engine behavior, add new assertion types rather than dupl
 
 - `descriptor.parse`: parse valid descriptors and reject invalid descriptors with expected error codes.
 - `message.process`: process a message against a seeded store and compare reply/status output; the current corpus records per-handler messages, CIDs, and reply shapes so implementations can replace the fixture echo adapter with real handlers incrementally.
+- `protocol.authorization-corpus`: compare protocol-definition validation and grant authorization decisions against the shared corpus as authorization behavior moves from fixture evaluation into full handler execution.
 - `state-index.operations`: apply fixture operations and compare roots, subtree hashes, and leaves.
 - `crypto.jws` and `crypto.jwe`: validate signature/encryption/decryption behavior using deterministic vectors where possible.
 

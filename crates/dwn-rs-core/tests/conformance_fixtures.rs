@@ -21,6 +21,7 @@ use dwn_rs_core::descriptors::{
 use dwn_rs_core::dwn::{
     current_handler_kinds, Dwn, DwnReply, MessageKind, MethodHandler, MethodHandlerRequest,
 };
+use dwn_rs_core::interfaces::messages::protocols as protocol_types;
 use dwn_rs_core::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::EnboxStateIndex;
 use futures_util::stream;
@@ -49,6 +50,7 @@ const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
 const STATE_INDEX_OPERATIONS_ASSERTION: &str = "state-index.operations";
 const MESSAGES_SYNC_REPLIES_ASSERTION: &str = "messages-sync.replies";
 const MESSAGE_PROCESS_ASSERTION: &str = "message.process";
+const PROTOCOL_AUTHORIZATION_CORPUS_ASSERTION: &str = "protocol.authorization-corpus";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 
 const JWE_ERROR_DECRYPT_FAILED: &str = "JweDecryptFailed";
@@ -116,6 +118,8 @@ struct FixtureCase {
     tenants: Option<Vec<String>>,
     operations: Option<Vec<StateIndexOperation>>,
     process: Option<MessageProcessFixture>,
+    protocol_authorization: Option<ProtocolAuthorizationFixture>,
+    grant_authorization: Option<GrantAuthorizationFixture>,
     sync: Option<MessagesSyncFixture>,
     value: Option<Value>,
 }
@@ -129,6 +133,44 @@ struct MessageProcessFixture {
     #[serde(default = "default_true")]
     register_handler: bool,
     reply: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProtocolAuthorizationFixture {
+    directives: Vec<String>,
+    definition: Value,
+    expected_status_code: u16,
+    expected_error_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantAuthorizationFixture {
+    grant_id: String,
+    grantor: String,
+    grantee: String,
+    delegated: bool,
+    revoked: Option<bool>,
+    revocation_id: Option<String>,
+    revoked_at: Option<String>,
+    date_granted: Option<String>,
+    date_expires: Option<String>,
+    message_timestamp: Option<String>,
+    scope: GrantScopeFixture,
+    conditions: Option<Value>,
+    incoming_message: Value,
+    expected_status_code: u16,
+    expected_error_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantScopeFixture {
+    interface: String,
+    method: String,
+    protocol: Option<String>,
+    protocol_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -637,6 +679,53 @@ async fn fixture_process_replies_are_measurable_by_handler() {
     }
 }
 
+#[test]
+fn fixture_protocol_authorization_corpus_matches_expected_validation() {
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(PROTOCOL_AUTHORIZATION_CORPUS_ASSERTION) {
+            continue;
+        }
+
+        let mut directives = BTreeSet::new();
+        let mut grant_interfaces = BTreeSet::new();
+        let mut grant_behavior_set = BTreeSet::new();
+        let mut valid_protocol_cases = 0usize;
+        let mut invalid_protocol_cases = 0usize;
+
+        for case in &suite.fixture_set.cases {
+            if let Some(protocol) = &case.protocol_authorization {
+                assert_protocol_authorization_fixture(case, protocol);
+                directives.extend(protocol.directives.iter().cloned());
+                if protocol.expected_status_code < 400 {
+                    valid_protocol_cases += 1;
+                } else {
+                    invalid_protocol_cases += 1;
+                }
+            }
+
+            if let Some(grant) = &case.grant_authorization {
+                assert_grant_authorization_fixture(case, grant);
+                grant_interfaces.insert(grant.scope.interface.clone());
+                grant_behavior_set.extend(grant_behaviors(case, grant));
+            }
+        }
+
+        assert_protocol_directive_coverage(&suite.suite_ref.id, &directives);
+        assert!(
+            valid_protocol_cases > 0,
+            "{} must include valid protocol cases",
+            suite.suite_ref.id
+        );
+        assert!(
+            invalid_protocol_cases > 0,
+            "{} must include invalid protocol cases",
+            suite.suite_ref.id
+        );
+        assert_grant_scope_coverage(&suite.suite_ref.id, &grant_interfaces);
+        assert_grant_behavior_coverage(&suite.suite_ref.id, &grant_behavior_set);
+    }
+}
+
 impl LoadedFixtureSuite {
     fn has_assertion(&self, assertion: &str) -> bool {
         self.suite_ref
@@ -836,6 +925,399 @@ fn process_reply(case: &FixtureCase) -> DwnReply {
 
 fn default_true() -> bool {
     true
+}
+
+fn assert_protocol_authorization_fixture(
+    case: &FixtureCase,
+    protocol: &ProtocolAuthorizationFixture,
+) {
+    assert!(
+        !protocol.directives.is_empty(),
+        "{} protocol directives must not be empty",
+        case.id
+    );
+    assert!(
+        matches!(protocol.expected_status_code, 200..=299 | 400..=499),
+        "{} protocol expectedStatusCode must be explicit",
+        case.id
+    );
+
+    let definition: protocol_types::Definition =
+        serde_json::from_value(protocol.definition.clone()).unwrap_or_else(|err| {
+            panic!("{} protocol definition must deserialize: {}", case.id, err)
+        });
+    let validation = protocol_types::validate_definition(&definition);
+
+    if protocol.expected_status_code < 400 {
+        validation.unwrap_or_else(|err| {
+            panic!(
+                "{} protocol definition should validate, got {}",
+                case.id, err
+            )
+        });
+    } else {
+        let err = match validation {
+            Ok(()) => panic!(
+                "{} protocol definition should fail with {:?}",
+                case.id, protocol.expected_error_code
+            ),
+            Err(err) => err,
+        };
+        if let Some(expected_error_code) = &protocol.expected_error_code {
+            assert_eq!(
+                err.code,
+                expected_error_code.as_str(),
+                "{} protocol error",
+                case.id
+            );
+        }
+    }
+}
+
+fn assert_grant_authorization_fixture(case: &FixtureCase, grant: &GrantAuthorizationFixture) {
+    assert!(!grant.grant_id.is_empty(), "{} grantId", case.id);
+    assert!(!grant.grantor.is_empty(), "{} grantor", case.id);
+    assert!(!grant.grantee.is_empty(), "{} grantee", case.id);
+    assert!(
+        matches!(
+            grant.scope.interface.as_str(),
+            "Records" | "Protocols" | "Messages"
+        ),
+        "{} grant scope interface must be a DWN interface",
+        case.id
+    );
+    assert!(
+        !grant.scope.method.is_empty(),
+        "{} grant scope method must not be empty",
+        case.id
+    );
+    assert!(
+        grant.incoming_message.get("interface").is_some(),
+        "{} incomingMessage.interface must be present",
+        case.id
+    );
+    assert!(
+        grant.incoming_message.get("method").is_some(),
+        "{} incomingMessage.method must be present",
+        case.id
+    );
+    assert!(
+        matches!(grant.expected_status_code, 200..=299 | 400..=499),
+        "{} grant expectedStatusCode must be explicit",
+        case.id
+    );
+    if grant.expected_status_code >= 400 {
+        assert!(
+            grant.expected_error_code.is_some(),
+            "{} rejected grant cases must include expectedErrorCode",
+            case.id
+        );
+    }
+    if grant.revoked == Some(true) {
+        assert!(
+            grant
+                .revocation_id
+                .as_ref()
+                .is_some_and(|value| !value.is_empty()),
+            "{} revoked grant cases must include revocationId",
+            case.id
+        );
+        assert!(
+            grant
+                .revoked_at
+                .as_ref()
+                .is_some_and(|value| !value.is_empty()),
+            "{} revoked grant cases must include revokedAt",
+            case.id
+        );
+    }
+    if grant.date_expires.is_some() {
+        assert!(
+            grant
+                .message_timestamp
+                .as_ref()
+                .is_some_and(|value| !value.is_empty()),
+            "{} expiry cases must include messageTimestamp",
+            case.id
+        );
+    }
+    match evaluate_grant_authorization_fixture(case, grant) {
+        Ok(()) => assert!(
+            grant.expected_status_code < 400,
+            "{} grant fixture should have failed with {:?}",
+            case.id,
+            grant.expected_error_code
+        ),
+        Err(actual_error_code) => {
+            assert!(
+                grant.expected_status_code >= 400,
+                "{} grant fixture failed unexpectedly with {}",
+                case.id,
+                actual_error_code
+            );
+            assert_eq!(
+                Some(actual_error_code.as_str()),
+                grant.expected_error_code.as_deref(),
+                "{} grant error",
+                case.id
+            );
+        }
+    }
+}
+
+fn evaluate_grant_authorization_fixture(
+    case: &FixtureCase,
+    grant: &GrantAuthorizationFixture,
+) -> Result<(), String> {
+    let incoming_timestamp = grant_timestamp(
+        case,
+        grant
+            .message_timestamp
+            .as_deref()
+            .unwrap_or("2025-01-01T12:00:00.000000Z"),
+        "messageTimestamp",
+    );
+    let date_granted = grant_timestamp(
+        case,
+        grant
+            .date_granted
+            .as_deref()
+            .unwrap_or("2025-01-01T00:00:00.000000Z"),
+        "dateGranted",
+    );
+    let date_expires = grant_timestamp(
+        case,
+        grant
+            .date_expires
+            .as_deref()
+            .unwrap_or("2026-01-01T00:00:00.000000Z"),
+        "dateExpires",
+    );
+
+    if incoming_timestamp < date_granted {
+        return Err("GrantAuthorizationGrantNotYetActive".to_string());
+    }
+    if incoming_timestamp >= date_expires {
+        return Err("GrantAuthorizationGrantExpired".to_string());
+    }
+    if grant.revoked == Some(true) {
+        let revoked_at = grant_timestamp(
+            case,
+            grant.revoked_at.as_deref().unwrap_or_default(),
+            "revokedAt",
+        );
+        if revoked_at <= incoming_timestamp {
+            return Err("GrantAuthorizationGrantRevoked".to_string());
+        }
+    }
+
+    let incoming_interface = incoming_message_str(case, grant, "interface");
+    let incoming_method = incoming_message_str(case, grant, "method");
+    if incoming_interface != grant.scope.interface {
+        return Err("GrantAuthorizationInterfaceMismatch".to_string());
+    }
+    if grant.scope.interface == "Messages" {
+        if grant.scope.method != "Read" || !matches!(incoming_method, "Read" | "Subscribe" | "Sync")
+        {
+            return Err("GrantAuthorizationMethodMismatch".to_string());
+        }
+    } else if incoming_method != grant.scope.method {
+        return Err("GrantAuthorizationMethodMismatch".to_string());
+    }
+
+    match grant.scope.interface.as_str() {
+        "Records" => evaluate_records_grant_authorization(case, grant),
+        "Protocols" => evaluate_protocols_grant_authorization(case, grant),
+        "Messages" => evaluate_messages_grant_authorization(case, grant),
+        _ => Ok(()),
+    }
+}
+
+fn evaluate_records_grant_authorization(
+    case: &FixtureCase,
+    grant: &GrantAuthorizationFixture,
+) -> Result<(), String> {
+    if grant.scope.protocol.as_deref() != incoming_message_str_optional(grant, "protocol") {
+        return Err("RecordsGrantAuthorizationScopeProtocolMismatch".to_string());
+    }
+    if let Some(scope_protocol_path) = grant.scope.protocol_path.as_deref() {
+        if incoming_message_str_optional(grant, "protocolPath") != Some(scope_protocol_path) {
+            return Err("RecordsGrantAuthorizationScopeProtocolPathMismatch".to_string());
+        }
+    }
+
+    match grant
+        .conditions
+        .as_ref()
+        .and_then(|conditions| conditions.get("publication"))
+        .and_then(Value::as_str)
+    {
+        Some("Required") if incoming_message_bool(grant, "published") != Some(true) => {
+            Err("RecordsGrantAuthorizationConditionPublicationRequired".to_string())
+        }
+        Some("Prohibited") if incoming_message_bool(grant, "published") == Some(true) => {
+            Err("RecordsGrantAuthorizationConditionPublicationProhibited".to_string())
+        }
+        Some(value) if !matches!(value, "Required" | "Prohibited") => {
+            panic!("{} unsupported publication condition {}", case.id, value)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn evaluate_protocols_grant_authorization(
+    _case: &FixtureCase,
+    grant: &GrantAuthorizationFixture,
+) -> Result<(), String> {
+    let Some(scope_protocol) = grant.scope.protocol.as_deref() else {
+        return Ok(());
+    };
+    if incoming_message_str_optional(grant, "protocol")
+        .is_some_and(|protocol| protocol != scope_protocol)
+    {
+        return Err("ProtocolsGrantAuthorizationQueryProtocolScopeMismatch".to_string());
+    }
+    Ok(())
+}
+
+fn evaluate_messages_grant_authorization(
+    _case: &FixtureCase,
+    grant: &GrantAuthorizationFixture,
+) -> Result<(), String> {
+    let Some(scope_protocol) = grant.scope.protocol.as_deref() else {
+        return Ok(());
+    };
+    let incoming_protocols = incoming_message_protocols(grant);
+    if incoming_protocols.is_empty()
+        || incoming_protocols
+            .iter()
+            .any(|protocol| *protocol != scope_protocol)
+    {
+        return Err("MessagesGrantAuthorizationMismatchedProtocol".to_string());
+    }
+    Ok(())
+}
+
+fn incoming_message_str<'a>(
+    case: &FixtureCase,
+    grant: &'a GrantAuthorizationFixture,
+    field: &str,
+) -> &'a str {
+    incoming_message_str_optional(grant, field)
+        .unwrap_or_else(|| panic!("{} incomingMessage.{} must be a string", case.id, field))
+}
+
+fn incoming_message_str_optional<'a>(
+    grant: &'a GrantAuthorizationFixture,
+    field: &str,
+) -> Option<&'a str> {
+    grant.incoming_message.get(field).and_then(Value::as_str)
+}
+
+fn incoming_message_bool(grant: &GrantAuthorizationFixture, field: &str) -> Option<bool> {
+    grant.incoming_message.get(field).and_then(Value::as_bool)
+}
+
+fn incoming_message_protocols(grant: &GrantAuthorizationFixture) -> Vec<&str> {
+    let mut protocols = Vec::new();
+    if let Some(protocol) = incoming_message_str_optional(grant, "protocol") {
+        protocols.push(protocol);
+    }
+    if let Some(filters) = grant
+        .incoming_message
+        .get("filters")
+        .and_then(Value::as_array)
+    {
+        protocols.extend(
+            filters
+                .iter()
+                .filter_map(|filter| filter.get("protocol"))
+                .filter_map(Value::as_str),
+        );
+    }
+    protocols
+}
+
+fn grant_timestamp(case: &FixtureCase, value: &str, field: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .unwrap_or_else(|err| panic!("{} invalid {}: {}", case.id, field, err))
+        .with_timezone(&chrono::Utc)
+}
+
+fn assert_protocol_directive_coverage(suite_id: &str, actual: &BTreeSet<String>) {
+    let expected = [
+        "uses",
+        "$ref",
+        "crossProtocolRole",
+        "$role",
+        "$size",
+        "$tags",
+        "$recordLimit",
+        "$immutable",
+        "$delivery",
+        "$squash",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+    let missing = expected.difference(actual).cloned().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "{} missing protocol directive fixtures: {:?}",
+        suite_id,
+        missing
+    );
+}
+
+fn assert_grant_scope_coverage(suite_id: &str, actual: &BTreeSet<String>) {
+    let expected = ["Records", "Protocols", "Messages"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    let missing = expected.difference(actual).cloned().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "{} missing grant scope fixtures: {:?}",
+        suite_id,
+        missing
+    );
+}
+
+fn assert_grant_behavior_coverage(suite_id: &str, actual: &BTreeSet<String>) {
+    let expected = ["scope", "condition", "expiry", "revocation", "delegate"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    let missing = expected.difference(actual).cloned().collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "{} missing grant behavior fixtures: {:?}",
+        suite_id,
+        missing
+    );
+}
+
+fn grant_behaviors(case: &FixtureCase, grant: &GrantAuthorizationFixture) -> BTreeSet<String> {
+    let mut behaviors = BTreeSet::from(["scope".to_string()]);
+    if grant.conditions.is_some() {
+        behaviors.insert("condition".to_string());
+    }
+    if grant.date_expires.is_some() {
+        behaviors.insert("expiry".to_string());
+    }
+    if grant.revoked == Some(true) {
+        behaviors.insert("revocation".to_string());
+    }
+    if grant.delegated {
+        behaviors.insert("delegate".to_string());
+    }
+    if grant.scope.protocol_path.is_some() {
+        behaviors.insert("scope".to_string());
+    }
+    if grant.scope.protocol.is_none() && grant.scope.interface == "Records" {
+        panic!("{} Records grants must include protocol scope", case.id);
+    }
+    behaviors
 }
 
 fn compute_cid(value: &Value) -> String {

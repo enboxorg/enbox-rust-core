@@ -1,0 +1,358 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "functions": [
+      "ProtocolsConfigure.validateDefinition",
+      "GrantAuthorization.authorizeGenericMessage",
+      "PermissionsProtocol.validateSchema"
+    ]
+  },
+  "cases": [
+    {
+      "id": "protocol-valid-composition-ref",
+      "description": "Valid protocol composition using uses and a root $ref node.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["uses", "$ref"],
+        "expectedStatusCode": 202,
+        "definition": {
+          "protocol": "http://example.com/comments",
+          "published": true,
+          "uses": {
+            "threads": "http://example.com/threads"
+          },
+          "types": {
+            "comment": {
+              "schema": "http://schema.example.com/comment",
+              "dataFormats": ["text/plain"]
+            }
+          },
+          "structure": {
+            "thread": {
+              "$ref": "threads:thread"
+            },
+            "comment": {
+              "$actions": [
+                { "who": "anyone", "can": ["create", "read"] }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "protocol-valid-roles-tags-limits-delivery",
+      "description": "Valid Enbox directives: $role, $size, $tags, $recordLimit, $immutable, $delivery, and $squash.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["$role", "$size", "$tags", "$recordLimit", "$immutable", "$delivery", "$squash"],
+        "expectedStatusCode": 202,
+        "definition": {
+          "protocol": "http://example.com/tasks",
+          "published": true,
+          "types": {
+            "adminRole": {
+              "schema": "http://schema.example.com/admin-role",
+              "dataFormats": ["application/json"]
+            },
+            "task": {
+              "schema": "http://schema.example.com/task",
+              "dataFormats": ["application/json"]
+            }
+          },
+          "structure": {
+            "adminRole": {
+              "$role": true,
+              "$actions": [
+                { "who": "anyone", "can": ["create"] }
+              ]
+            },
+            "task": {
+              "$actions": [
+                { "role": "adminRole", "can": ["create", "read"] }
+              ],
+              "$size": { "min": 1, "max": 4096 },
+              "$tags": {
+                "$requiredTags": ["status"],
+                "$allowUndefinedTags": false,
+                "status": { "type": "string", "enum": ["open", "closed"] },
+                "priority": { "type": "integer", "minimum": 1, "maximum": 5 }
+              },
+              "$recordLimit": { "max": 100, "strategy": "reject" },
+              "$immutable": true,
+              "$delivery": "direct",
+              "$squash": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "protocol-valid-cross-protocol-role",
+      "description": "Valid cross-protocol role reference using an alias declared in uses.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["uses", "crossProtocolRole"],
+        "expectedStatusCode": 202,
+        "definition": {
+          "protocol": "http://example.com/projects",
+          "published": true,
+          "uses": {
+            "team": "http://example.com/team"
+          },
+          "types": {
+            "project": {
+              "schema": "http://schema.example.com/project",
+              "dataFormats": ["application/json"]
+            }
+          },
+          "structure": {
+            "project": {
+              "$actions": [
+                { "role": "team:member", "can": ["create", "read"] }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "protocol-invalid-uses-alias",
+      "description": "Invalid uses alias must be rejected.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["uses"],
+        "expectedStatusCode": 400,
+        "expectedErrorCode": "ProtocolsConfigureInvalidUsesAlias",
+        "definition": {
+          "protocol": "http://example.com/invalid-uses",
+          "published": true,
+          "uses": {
+            "1bad": "http://example.com/other"
+          },
+          "types": {
+            "note": { "schema": "http://schema.example.com/note", "dataFormats": ["text/plain"] }
+          },
+          "structure": {
+            "note": { "$actions": [{ "who": "anyone", "can": ["create"] }] }
+          }
+        }
+      }
+    },
+    {
+      "id": "protocol-invalid-ref-alias",
+      "description": "A $ref alias that is missing from uses must be rejected.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["$ref"],
+        "expectedStatusCode": 400,
+        "expectedErrorCode": "ProtocolsConfigureInvalidRefAlias",
+        "definition": {
+          "protocol": "http://example.com/invalid-ref",
+          "published": true,
+          "types": {},
+          "structure": {
+            "thread": { "$ref": "missing:thread" }
+          }
+        }
+      }
+    },
+    {
+      "id": "protocol-invalid-size-range",
+      "description": "$size max must not be less than min.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["$size"],
+        "expectedStatusCode": 400,
+        "expectedErrorCode": "ProtocolsConfigureInvalidSize",
+        "definition": {
+          "protocol": "http://example.com/invalid-size",
+          "published": true,
+          "types": {
+            "entry": { "schema": "http://schema.example.com/entry", "dataFormats": ["text/plain"] }
+          },
+          "structure": {
+            "entry": {
+              "$actions": [{ "who": "anyone", "can": ["create"] }],
+              "$size": { "min": 10, "max": 1 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "protocol-invalid-record-limit",
+      "description": "$recordLimit max must be positive and strategy must be supported.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["$recordLimit"],
+        "expectedStatusCode": 400,
+        "expectedErrorCode": "ProtocolsConfigureInvalidRecordLimit",
+        "definition": {
+          "protocol": "http://example.com/invalid-limit",
+          "published": true,
+          "types": {
+            "entry": { "schema": "http://schema.example.com/entry", "dataFormats": ["text/plain"] }
+          },
+          "structure": {
+            "entry": {
+              "$actions": [{ "who": "anyone", "can": ["create"] }],
+              "$recordLimit": { "max": 0, "strategy": "reject" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "protocol-invalid-update-without-create",
+      "description": "Update/delete/prune actions require create in the same action rule.",
+      "rustStatus": "supported",
+      "protocolAuthorization": {
+        "directives": ["$actions"],
+        "expectedStatusCode": 400,
+        "expectedErrorCode": "ProtocolsConfigureInvalidActionUpdateWithoutCreate",
+        "definition": {
+          "protocol": "http://example.com/invalid-action",
+          "published": true,
+          "types": {
+            "task": { "schema": "http://schema.example.com/task", "dataFormats": ["application/json"] }
+          },
+          "structure": {
+            "task": {
+              "$actions": [{ "who": "anyone", "can": ["update"] }]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "grant-records-write-valid-publication-required",
+      "description": "Records.Write grant scoped to a protocol path with a publication condition.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-records-write",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:bob",
+        "delegated": false,
+        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
+        "conditions": { "publication": "Required" },
+        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "expectedStatusCode": 202
+      }
+    },
+    {
+      "id": "grant-records-write-condition-mismatch",
+      "description": "Publication Required condition rejects unpublished Records.Write messages.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-records-write-condition",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:bob",
+        "delegated": false,
+        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
+        "conditions": { "publication": "Required" },
+        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": false },
+        "expectedStatusCode": 401,
+        "expectedErrorCode": "RecordsGrantAuthorizationConditionPublicationRequired"
+      }
+    },
+    {
+      "id": "grant-protocols-query-valid",
+      "description": "Protocols.Query grant scoped to a specific protocol.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-protocols-query",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:bob",
+        "delegated": false,
+        "scope": { "interface": "Protocols", "method": "Query", "protocol": "https://example.com/protocol/notes" },
+        "incomingMessage": { "interface": "Protocols", "method": "Query", "protocol": "https://example.com/protocol/notes" },
+        "expectedStatusCode": 200
+      }
+    },
+    {
+      "id": "grant-messages-read-valid",
+      "description": "Messages.Read grant scoped to a protocol for sync/read delegation.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-messages-read",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:bob",
+        "delegated": false,
+        "scope": { "interface": "Messages", "method": "Read", "protocol": "https://example.com/protocol/notes" },
+        "incomingMessage": { "interface": "Messages", "method": "Read", "protocol": "https://example.com/protocol/notes" },
+        "expectedStatusCode": 200
+      }
+    },
+    {
+      "id": "grant-messages-subscribe-scope-mismatch",
+      "description": "Messages.Subscribe request is outside the protocol scoped by a Messages.Read grant.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-messages-read-scope",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:bob",
+        "delegated": false,
+        "scope": { "interface": "Messages", "method": "Read", "protocol": "https://example.com/protocol/notes" },
+        "incomingMessage": { "interface": "Messages", "method": "Subscribe", "protocol": "https://example.com/protocol/tasks" },
+        "expectedStatusCode": 401,
+        "expectedErrorCode": "MessagesGrantAuthorizationMismatchedProtocol"
+      }
+    },
+    {
+      "id": "grant-records-write-expired",
+      "description": "Expired grants must be rejected.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-records-write-expired",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:bob",
+        "delegated": false,
+        "dateGranted": "2025-01-01T00:00:00.000000Z",
+        "dateExpires": "2025-01-02T00:00:00.000000Z",
+        "messageTimestamp": "2025-02-01T00:00:00.000000Z",
+        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
+        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "expectedStatusCode": 401,
+        "expectedErrorCode": "GrantAuthorizationGrantExpired"
+      }
+    },
+    {
+      "id": "grant-records-write-delegate-valid",
+      "description": "Delegated Records.Write grant for a delegate DID.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-records-write-delegate",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:device",
+        "delegated": true,
+        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
+        "conditions": { "publication": "Required" },
+        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "expectedStatusCode": 202
+      }
+    },
+    {
+      "id": "grant-records-write-revoked",
+      "description": "Revoked Records.Write grant must be rejected after revocation timestamp.",
+      "rustStatus": "supported",
+      "grantAuthorization": {
+        "grantId": "grant-records-write-revoked",
+        "grantor": "did:example:alice",
+        "grantee": "did:example:bob",
+        "delegated": true,
+        "revoked": true,
+        "revocationId": "revocation-records-write",
+        "revokedAt": "2025-01-15T00:00:00.000000Z",
+        "messageTimestamp": "2025-02-01T00:00:00.000000Z",
+        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
+        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "expectedStatusCode": 401,
+        "expectedErrorCode": "GrantAuthorizationGrantRevoked"
+      }
+    }
+  ]
+}
