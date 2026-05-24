@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::{
-    auth::{authorization::Authorization, jws::JWS},
+    auth::{authorization::Authorization, jws::Jws},
     encryption::Encryption,
     Value,
 };
@@ -129,7 +129,7 @@ pub struct WriteFields {
     #[serde(rename = "contextId")]
     pub context_id: Option<String>,
     pub encryption: Option<Encryption>,
-    pub attestation: Option<JWS>,
+    pub attestation: Option<Jws>,
     #[serde(rename = "encodedData")]
     pub encoded_data: Option<String>,
 }
@@ -156,7 +156,7 @@ impl MessageFields for WriteFields {
 #[cfg(test)]
 mod tests {
     use crate::{
-        auth::jws::SignatureEntry,
+        auth::jws::JwsSignature,
         encryption::{DerivationScheme, Encryption, JweRecipient, JweRecipientHeader},
     };
 
@@ -181,9 +181,9 @@ mod tests {
                 record_id: Some("record_id".to_string()),
                 context_id: Some("context_id".to_string()),
                 authorization: Authorization {
-                    signature: JWS {
+                    signature: Jws {
                         payload: Some("payload".to_string()),
-                        signatures: Some(vec![SignatureEntry {
+                        signatures: Some(vec![JwsSignature {
                             protected: Some("protected".to_string()),
                             signature: Some("signature".to_string()),
                             ..Default::default()
@@ -206,9 +206,9 @@ mod tests {
                         encrypted_key: "encrypted_key".to_string(),
                     }],
                 }),
-                attestation: Some(JWS {
+                attestation: Some(Jws {
                     payload: Some("payload".to_string()),
-                    signatures: Some(vec![SignatureEntry {
+                    signatures: Some(vec![JwsSignature {
                         protected: Some("protected".to_string()),
                         signature: Some("signature".to_string()),
                         ..Default::default()

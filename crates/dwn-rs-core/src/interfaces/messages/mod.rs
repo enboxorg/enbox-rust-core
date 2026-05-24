@@ -4,7 +4,7 @@ pub mod protocols;
 
 use std::collections::TryReserveError;
 
-use crate::auth::{jws, JWS};
+use crate::auth::{jws, Jws};
 use crate::cid::generate_cid_from_serialized;
 use crate::fields::MessageFields;
 use crate::{auth::Authorization, interfaces::messages::descriptors::MessageParameters};
@@ -39,7 +39,7 @@ impl Message<RecordsWriteDescriptor> {
 
         let payload = jws::AttestationPayload { descriptor_cid };
 
-        let signature = jws::JWS::create(payload, Some(signers))
+        let signature = jws::Jws::create(payload, Some(signers))
             .await
             .map_err(|e| ValidationError {
                 message: e.to_string(),
@@ -135,7 +135,7 @@ where
         delegated_grant_id: Option<Cid>,
         permission_grant_id: Option<String>,
         protocol_role: Option<String>,
-    ) -> Result<JWS, ValidationError> {
+    ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
         let payload = jws::Payload {
@@ -145,7 +145,7 @@ where
             protocol_role,
         };
 
-        let signature = jws::JWS::create(payload, Some(vec![signer]))
+        let signature = jws::Jws::create(payload, Some(vec![signer]))
             .await
             .map_err(|e| ValidationError {
                 message: e.to_string(),

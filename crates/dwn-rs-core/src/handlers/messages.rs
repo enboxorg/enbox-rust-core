@@ -10,7 +10,7 @@ use futures_util::TryStreamExt;
 use k256::sha2::{Digest, Sha256};
 use serde_json::Value as JsonValue;
 
-use crate::auth::GeneralJwsPublicKeyResolver;
+use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{
     Descriptor, Messages, MessagesSubscribeDescriptor, MessagesSyncDescriptor, Records,
@@ -21,10 +21,7 @@ use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions;
-use crate::stores::{
-    EnboxDataStore, EnboxEventLog, EnboxMessageStore, EnboxStateIndex, EventLogSubscribeOptions,
-    EventSubscription, StateHash, SubscriptionListener,
-};
+use crate::stores::{EventLogSubscribeOptions, EventSubscription, StateHash, SubscriptionListener};
 use crate::{Fields, Message};
 
 const MAX_SYNC_DEPTH: usize = 256;
@@ -36,7 +33,7 @@ static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
     message_store: MessageStore,
     event_log: EventLog,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 pub struct SubscribeReply {
@@ -49,7 +46,7 @@ pub struct MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
@@ -64,7 +61,7 @@ impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
     pub fn with_public_key_resolver(
         message_store: MessageStore,
         event_log: EventLog,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -76,8 +73,8 @@ impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
 
 impl<MessageStore, EventLog> MethodHandler for MessagesSubscribeHandler<MessageStore, EventLog>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -93,8 +90,8 @@ where
 
 impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     pub async fn handle_subscribe(
         &self,
@@ -218,7 +215,7 @@ impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, Data
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -232,9 +229,9 @@ impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, Data
 impl<MessageStore, DataStore, StateIndex> MethodHandler
     for MessagesSyncHandler<MessageStore, DataStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -246,9 +243,9 @@ where
 
 impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, DataStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     pub async fn handle_sync(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message, "MessagesSyncParseFailed") {
@@ -797,8 +794,7 @@ mod tests {
     use serde_json::json;
 
     use crate::auth::{
-        GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner,
-        StaticPublicKeyResolver,
+        Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
     };
     use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
     use crate::descriptors::{
@@ -810,8 +806,8 @@ mod tests {
     use crate::local::MemoryEventLog;
     use crate::state_index::MemoryStateIndex;
     use crate::stores::{
-        EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
-        SubscriptionMessage,
+        DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult,
+        MessageStore, StateIndex, SubscriptionMessage,
     };
     use crate::{MapValue, Value};
 
@@ -1159,7 +1155,7 @@ mod tests {
             "contextId": grant_id,
             "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
         });
-        let signature = GeneralJws::create(
+        let signature = Jws::create_general(
             serde_json::to_vec(&payload).unwrap().as_slice(),
             &[test_signer()],
         )
@@ -1217,7 +1213,7 @@ mod tests {
                 JsonValue::String(permission_grant_id),
             );
         }
-        let signature = GeneralJws::create(
+        let signature = Jws::create_general(
             serde_json::to_vec(&JsonValue::Object(payload))
                 .unwrap()
                 .as_slice(),
@@ -1282,7 +1278,7 @@ mod tests {
                 JsonValue::String(permission_grant_id),
             );
         }
-        let signature = GeneralJws::create(
+        let signature = Jws::create_general(
             serde_json::to_vec(&JsonValue::Object(payload))
                 .unwrap()
                 .as_slice(),
@@ -1314,7 +1310,7 @@ mod tests {
         PrivateJwkSigner::new(
             &key_id,
             "EdDSA",
-            GeneralJwsPrivateJwk {
+            JwsPrivateJwk {
                 kty: "OKP".to_string(),
                 crv: "Ed25519".to_string(),
                 d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
@@ -1339,8 +1335,8 @@ mod tests {
         ]))
     }
 
-    fn test_public_jwk(key_id: &str) -> GeneralJwsPublicJwk {
-        GeneralJwsPublicJwk {
+    fn test_public_jwk(key_id: &str) -> JwsPublicJwk {
+        JwsPublicJwk {
             kty: "OKP".to_string(),
             crv: "Ed25519".to_string(),
             x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
@@ -1366,7 +1362,7 @@ mod tests {
         }
     }
 
-    impl EnboxMessageStore for TestMessageStore {
+    impl MessageStore for TestMessageStore {
         async fn open(&mut self) -> Result<(), MessageStoreError> {
             Ok(())
         }
@@ -1405,7 +1401,7 @@ mod tests {
             filters: crate::filters::Filters,
             _sort: Option<crate::MessageSort>,
             _pagination: Option<crate::Pagination>,
-        ) -> Result<EnboxMessageQueryResult, MessageStoreError> {
+        ) -> Result<MessageQueryResult, MessageStoreError> {
             let record_id = filters.into_iter().find_map(|filter| {
                 filter
                     .get(&crate::filters::FilterKey::Index("recordId".to_string()))
@@ -1424,7 +1420,7 @@ mod tests {
                 })
                 .map(|(_, message)| message.clone())
                 .collect();
-            Ok(EnboxMessageQueryResult {
+            Ok(MessageQueryResult {
                 messages,
                 cursor: None,
             })
@@ -1452,7 +1448,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct TestDataStore;
 
-    impl EnboxDataStore for TestDataStore {
+    impl DataStore for TestDataStore {
         async fn open(&mut self) -> Result<(), DataStoreError> {
             Ok(())
         }
@@ -1465,8 +1461,8 @@ mod tests {
             _record_id: &str,
             _data_cid: &str,
             _data_stream: T,
-        ) -> Result<EnboxDataStorePutResult, DataStoreError> {
-            Ok(EnboxDataStorePutResult { data_size: 0 })
+        ) -> Result<DataStorePutResult, DataStoreError> {
+            Ok(DataStorePutResult { data_size: 0 })
         }
 
         async fn get(
@@ -1474,8 +1470,8 @@ mod tests {
             _tenant: &str,
             _record_id: &str,
             _data_cid: &str,
-        ) -> Result<Option<EnboxDataStoreGetResult>, DataStoreError> {
-            Ok(Some(EnboxDataStoreGetResult {
+        ) -> Result<Option<DataStoreGetResult>, DataStoreError> {
+            Ok(Some(DataStoreGetResult {
                 data_size: 0,
                 data_stream: Box::pin(stream::iter(Vec::<Result<Bytes, std::io::Error>>::new())),
             }))
