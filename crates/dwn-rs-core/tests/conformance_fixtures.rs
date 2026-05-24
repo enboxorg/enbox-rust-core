@@ -48,6 +48,7 @@ const JWE_KEYWRAP_ASSERTION: &str = "jwe.keywrap";
 const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
 const STATE_INDEX_OPERATIONS_ASSERTION: &str = "state-index.operations";
 const MESSAGES_SYNC_REPLIES_ASSERTION: &str = "messages-sync.replies";
+const MESSAGE_PROCESS_ASSERTION: &str = "message.process";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 
 const JWE_ERROR_DECRYPT_FAILED: &str = "JweDecryptFailed";
@@ -114,8 +115,20 @@ struct FixtureCase {
     tag: Option<FixtureData>,
     tenants: Option<Vec<String>>,
     operations: Option<Vec<StateIndexOperation>>,
+    process: Option<MessageProcessFixture>,
     sync: Option<MessagesSyncFixture>,
     value: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageProcessFixture {
+    tenant: String,
+    handler: Option<String>,
+    valid: bool,
+    #[serde(default = "default_true")]
+    register_handler: bool,
+    reply: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -354,9 +367,18 @@ async fn fixture_messages_route_through_dwn_dispatch() {
             let Some(message) = &case.message else {
                 continue;
             };
-            let kind = MessageKind::from_message(message).unwrap_or_else(|err| {
-                panic!("{} fixture message must have route: {err:?}", case.id)
-            });
+            let kind = match MessageKind::from_message(message) {
+                Ok(kind) => kind,
+                Err(_)
+                    if case
+                        .process
+                        .as_ref()
+                        .is_some_and(|process| !process.register_handler) =>
+                {
+                    continue;
+                }
+                Err(err) => panic!("{} fixture message must have route: {err:?}", case.id),
+            };
             if !current_kinds.contains(&kind) {
                 continue;
             }
@@ -573,6 +595,48 @@ async fn fixture_messages_sync_replies_match_typescript() {
     }
 }
 
+#[tokio::test]
+async fn fixture_process_replies_are_measurable_by_handler() {
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(MESSAGE_PROCESS_ASSERTION) {
+            continue;
+        }
+
+        let expected_handlers = current_handler_keys();
+        let mut valid_handlers = BTreeSet::new();
+        let mut invalid_handlers = BTreeSet::new();
+
+        for case in &suite.fixture_set.cases {
+            assert_message_process_fixture_shape(case);
+            let process = message_process_fixture(case);
+            if let Some(handler) = &process.handler {
+                if process.valid {
+                    valid_handlers.insert(handler.clone());
+                } else {
+                    invalid_handlers.insert(handler.clone());
+                }
+            }
+
+            if case.rust_status == RustStatus::Supported {
+                assert_message_process_reply(case).await;
+            }
+        }
+
+        assert_handler_coverage(
+            &suite.suite_ref.id,
+            "valid",
+            &expected_handlers,
+            &valid_handlers,
+        );
+        assert_handler_coverage(
+            &suite.suite_ref.id,
+            "invalid",
+            &expected_handlers,
+            &invalid_handlers,
+        );
+    }
+}
+
 impl LoadedFixtureSuite {
     fn has_assertion(&self, assertion: &str) -> bool {
         self.suite_ref
@@ -638,6 +702,140 @@ impl MethodHandler for RouteEchoHandler {
         let handler_key = request.kind.handler_key();
         Box::pin(async move { DwnReply::ok().with_body("handler", Value::String(handler_key)) })
     }
+}
+
+#[derive(Clone)]
+struct FixtureReplyHandler {
+    reply: DwnReply,
+}
+
+impl MethodHandler for FixtureReplyHandler {
+    fn handle<'a>(
+        &'a self,
+        _request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        let reply = self.reply.clone();
+        Box::pin(async move { reply })
+    }
+}
+
+fn assert_message_process_fixture_shape(case: &FixtureCase) {
+    let process = message_process_fixture(case);
+    assert!(
+        !process.tenant.is_empty(),
+        "{} process tenant must not be empty",
+        case.id
+    );
+    if let Some(handler) = &process.handler {
+        assert!(
+            !handler.is_empty(),
+            "{} process handler must not be empty",
+            case.id
+        );
+    }
+    assert!(
+        process.reply.get("status").is_some(),
+        "{} process reply must include status",
+        case.id
+    );
+    assert!(
+        process
+            .reply
+            .get("status")
+            .and_then(|status| status.get("code"))
+            .and_then(Value::as_u64)
+            .is_some(),
+        "{} process reply status.code must be numeric",
+        case.id
+    );
+    assert!(
+        process
+            .reply
+            .get("status")
+            .and_then(|status| status.get("detail"))
+            .and_then(Value::as_str)
+            .is_some(),
+        "{} process reply status.detail must be a string",
+        case.id
+    );
+}
+
+async fn assert_message_process_reply(case: &FixtureCase) {
+    let process = message_process_fixture(case);
+    let mut dwn = Dwn::default();
+    if process.register_handler {
+        let kind = MessageKind::from_message(message(case)).unwrap_or_else(|err| {
+            panic!(
+                "{} process fixture with registerHandler must route: {err:?}",
+                case.id
+            )
+        });
+        if let Some(handler) = &process.handler {
+            assert_eq!(
+                kind.handler_key(),
+                *handler,
+                "{} process handler key",
+                case.id
+            );
+        }
+        dwn.register_handler(
+            kind,
+            FixtureReplyHandler {
+                reply: process_reply(case),
+            },
+        );
+    }
+
+    let reply = dwn
+        .process_message(&process.tenant, message(case).clone())
+        .await;
+    assert_eq!(
+        serde_json::to_value(reply).expect("DwnReply must serialize"),
+        process.reply,
+        "{} process reply",
+        case.id
+    );
+}
+
+fn assert_handler_coverage(
+    suite_id: &str,
+    label: &str,
+    expected_handlers: &BTreeSet<String>,
+    actual_handlers: &BTreeSet<String>,
+) {
+    let missing = expected_handlers
+        .difference(actual_handlers)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "{} missing {} process fixtures for handlers: {:?}",
+        suite_id,
+        label,
+        missing
+    );
+}
+
+fn current_handler_keys() -> BTreeSet<String> {
+    current_handler_kinds()
+        .into_iter()
+        .map(|kind| kind.handler_key())
+        .collect()
+}
+
+fn message_process_fixture(case: &FixtureCase) -> &MessageProcessFixture {
+    case.process
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include process fixture", case.id))
+}
+
+fn process_reply(case: &FixtureCase) -> DwnReply {
+    serde_json::from_value(message_process_fixture(case).reply.clone())
+        .unwrap_or_else(|err| panic!("{} process reply must deserialize: {}", case.id, err))
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn compute_cid(value: &Value) -> String {

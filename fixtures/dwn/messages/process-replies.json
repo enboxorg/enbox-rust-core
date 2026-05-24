@@ -1,0 +1,500 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "cidFunction": "Cid.computeCid",
+    "replyBoundary": "Dwn.processMessage"
+  },
+  "cases": [
+    {
+      "id": "process-messages-read-valid",
+      "description": "MessagesRead process fixture for a syntactically valid descriptor.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreig5jnuu2ecv7mksrpf7mwc5wtnvfcu3cio5ithj5d5tflfspyt3ju",
+      "messageCid": "bafyreihjrg6hexpfuooxghvlu4dovfnquigtdu6tnfwgxvonisrszgfgda",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesRead",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "MessagesRead" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Read",
+          "messageTimestamp": "2025-02-01T00:00:00.000000Z",
+          "messageCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra"
+        }
+      }
+    },
+    {
+      "id": "process-messages-read-invalid",
+      "description": "MessagesRead process fixture for a descriptor missing messageCid.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreidp32rgndqeijtzekhxhilcyi2yolixy2fsolbf4ybuwce5yq7gzi",
+      "messageCid": "bafyreielw4c3k4i4dacwdigugbl5kk422tcv5g3rkq3r2aznfa7ojh26fa",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesRead",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "MessagesRead invalid fixture" }, "handler": "MessagesRead" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Read",
+          "messageTimestamp": "2025-02-01T00:00:01.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-messages-subscribe-valid",
+      "description": "MessagesSubscribe process fixture for a syntactically valid descriptor.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreib53slmiw7mvnpfedhvq54n37mrsekqtli6wnwry5shp5c7pu4f2u",
+      "messageCid": "bafyreihnziz7irnk4pgf6pg5p6v67fbkmnwpdmypa3k4gqs5pf7ohf2bfm",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesSubscribe",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "MessagesSubscribe" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-02-01T00:00:02.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-messages-subscribe-invalid",
+      "description": "MessagesSubscribe process fixture for a malformed filters value.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreifroeebjluqvqiabwdlinulhtfbmv7ts67ycf2uhgpn4pfkexlgva",
+      "messageCid": "bafyreiez4pzl7lxhvgugif5dqfazdhi26s4exnd4th4rwjrafc4tk3muqe",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesSubscribe",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "MessagesSubscribe invalid fixture" }, "handler": "MessagesSubscribe" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-02-01T00:00:03.000000Z",
+          "filters": "not-an-array"
+        }
+      }
+    },
+    {
+      "id": "process-messages-sync-valid",
+      "description": "MessagesSync process fixture for a root request.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreihikrofiqjkuauglvsjtsekp3q4yfmrmmbxodc5yvewele763y5vm",
+      "messageCid": "bafyreif3mru4gqnbmkdrb3tclmw3k2354uhhiltjkwdvtcqbw63uv4ajbe",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesSync",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "MessagesSync" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-02-01T00:00:04.000000Z",
+          "action": "root"
+        }
+      }
+    },
+    {
+      "id": "process-messages-sync-invalid",
+      "description": "MessagesSync process fixture for an unsupported action.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreidbguadtbsc3pily6dnr4ohcaz37cw3xnhow4oxkul63cgfc2r5qm",
+      "messageCid": "bafyreia2vjwf77lprjqzeadny2ptaqmowx22jrh2q5lrakme5cq633xyau",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesSync",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "MessagesSync invalid fixture" }, "handler": "MessagesSync" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Sync",
+          "messageTimestamp": "2025-02-01T00:00:05.000000Z",
+          "action": "not-a-sync-action"
+        }
+      }
+    },
+    {
+      "id": "process-protocols-configure-valid",
+      "description": "ProtocolsConfigure process fixture for a minimal protocol definition.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreihdgcagpa7qvwxbyomcs2ac4a7lxmj2a4ygmv6xc62gzfxnt7bcpm",
+      "messageCid": "bafyreidxjfexpgzesjbf22reinefstax3usbhzn2jvoyacf3eeyc6w4ikq",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "ProtocolsConfigure",
+        "valid": true,
+        "reply": { "status": { "code": 202, "detail": "Accepted" }, "handler": "ProtocolsConfigure" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Configure",
+          "messageTimestamp": "2025-02-01T00:00:06.000000Z",
+          "definition": {
+            "protocol": "http://example.com/process",
+            "published": true,
+            "types": { "note": { "schema": "http://schema.example.com/note", "dataFormats": ["text/plain"] } },
+            "structure": { "note": { "$actions": [{ "who": "anyone", "can": ["create", "read"] }] } }
+          }
+        }
+      }
+    },
+    {
+      "id": "process-protocols-configure-invalid",
+      "description": "ProtocolsConfigure process fixture missing the definition.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreifyuchrdeo6l2vbcizwttepgg5zuqoc5donyg3lvf652lj27mg3ci",
+      "messageCid": "bafyreicod33xxmhtvf7ugyfwctatppx7hklizefolu5rjvr3eox5mwnat4",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "ProtocolsConfigure",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "ProtocolsConfigure invalid fixture" }, "handler": "ProtocolsConfigure" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Configure",
+          "messageTimestamp": "2025-02-01T00:00:07.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-protocols-query-valid",
+      "description": "ProtocolsQuery process fixture for a protocol filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreib6gvtnyzdxfrqzlssstcrfiz5m4ayjojfugkfppae4lpavzvbqba",
+      "messageCid": "bafyreibxfzxg4jpwshzxalrpujpijooni4qg4hqc52zsa6egsfjta3xn74",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "ProtocolsQuery",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "ProtocolsQuery", "entries": [] }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Query",
+          "messageTimestamp": "2025-02-01T00:00:08.000000Z",
+          "filter": { "protocol": "http://example.com/process" }
+        }
+      }
+    },
+    {
+      "id": "process-protocols-query-invalid",
+      "description": "ProtocolsQuery process fixture for a malformed protocol filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreidkmobose25pdgk3vpmnfbo3agd775pfb22ec3z5jmt53xkqlxo5q",
+      "messageCid": "bafyreigngvo7eyns7ghz6l56mthxpzlbjl4eipy43ntg4xrrvkp636bvpa",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "ProtocolsQuery",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "ProtocolsQuery invalid fixture" }, "handler": "ProtocolsQuery" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Protocols",
+          "method": "Query",
+          "messageTimestamp": "2025-02-01T00:00:09.000000Z",
+          "filter": { "protocol": 7 }
+        }
+      }
+    },
+    {
+      "id": "process-records-count-valid",
+      "description": "RecordsCount process fixture for a published filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreicoxlzhuyiknhzskoxdmtvmwkewhtckb7qvujotggggu4mniukop4",
+      "messageCid": "bafyreic425tbsvxkndcde746gi72g3q752sm3577v4pjnhrtjeeuidj5ue",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsCount",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "RecordsCount", "count": 0 }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Count",
+          "messageTimestamp": "2025-02-01T00:00:10.000000Z",
+          "filter": { "published": true }
+        }
+      }
+    },
+    {
+      "id": "process-records-count-invalid",
+      "description": "RecordsCount process fixture missing the required filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreiavfxawirpa67hmckfwlceddbul6flpeeryqy7kb3sfa4hmydv7qe",
+      "messageCid": "bafyreiaunn6sytgryeqv35pczpi5k6nkpny2fr67uuyjky4cczosqsr2pi",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsCount",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "RecordsCount invalid fixture" }, "handler": "RecordsCount" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Count",
+          "messageTimestamp": "2025-02-01T00:00:11.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-records-delete-valid",
+      "description": "RecordsDelete process fixture for a record ID.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreiauhmgazfxikby3ixvb3nmwrmhj3cjraxtsa6amostekemvlwvmwa",
+      "messageCid": "bafyreia5kfmpaxzhqibgo7mjxwe4gd7mggwfzjcpbh7x5nmnwexr6sgjum",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsDelete",
+        "valid": true,
+        "reply": { "status": { "code": 202, "detail": "Accepted" }, "handler": "RecordsDelete" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Delete",
+          "messageTimestamp": "2025-02-01T00:00:12.000000Z",
+          "recordId": "record-1",
+          "prune": false
+        }
+      }
+    },
+    {
+      "id": "process-records-delete-invalid",
+      "description": "RecordsDelete process fixture missing recordId.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreic5jl5cyceqjfh46kup5rlwdyf4tupa6mu6a6m3ktaiiwg22cniva",
+      "messageCid": "bafyreihkeecuseyizqcyg7nga4apgmfxuayuifgwh5vqxgn3zpgl5jxpzm",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsDelete",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "RecordsDelete invalid fixture" }, "handler": "RecordsDelete" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Delete",
+          "messageTimestamp": "2025-02-01T00:00:13.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-records-query-valid",
+      "description": "RecordsQuery process fixture for a published filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreibjsxfw7xz4eu7g6nnmpgif2sivduntgbc6fkiq7ouc5arkqwmt5u",
+      "messageCid": "bafyreiguvovfamlb6fvn5bfujuh7lxnu7tujgg4n5pff7zk63j4svzzgee",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsQuery",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "RecordsQuery", "entries": [] }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Query",
+          "messageTimestamp": "2025-02-01T00:00:14.000000Z",
+          "filter": { "published": true }
+        }
+      }
+    },
+    {
+      "id": "process-records-query-invalid",
+      "description": "RecordsQuery process fixture for an empty filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreifw672bs5r65w4qzals5sxlbnu6fkjtp2r3ixtc5ysxmuovy2t7ha",
+      "messageCid": "bafyreia7vikmhag45jk6q75lqnkxcex6ih4l6is6rzkkjmcg4mswnivsqu",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsQuery",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "RecordsQuery invalid fixture" }, "handler": "RecordsQuery" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Query",
+          "messageTimestamp": "2025-02-01T00:00:15.000000Z",
+          "filter": {}
+        }
+      }
+    },
+    {
+      "id": "process-records-read-valid",
+      "description": "RecordsRead process fixture for a record ID.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreialjgjl2qluqrlv7xmjrxuqdm6bixn4c7p5s57okjq37262q3pk64",
+      "messageCid": "bafyreieweq6t7r6mewml5nwcigbjegl67w5mw3utg7epqzkbsfaw6p53de",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsRead",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "RecordsRead" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Read",
+          "messageTimestamp": "2025-02-01T00:00:16.000000Z",
+          "filter": { "recordId": "record-1" }
+        }
+      }
+    },
+    {
+      "id": "process-records-read-invalid",
+      "description": "RecordsRead process fixture missing filter.recordId.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreig34iue364cxhkwr6djgnq7bglcchwzmqnc6d2z43emkvvz5w3c7e",
+      "messageCid": "bafyreihcyymfxklavcw4xpq5xr4urjxrg4eyjh7vquzorour6ki7mlqpiq",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsRead",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "RecordsRead invalid fixture" }, "handler": "RecordsRead" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Read",
+          "messageTimestamp": "2025-02-01T00:00:17.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-records-subscribe-valid",
+      "description": "RecordsSubscribe process fixture for a protocol filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreiahed7hqbuz3wzu46imxfvxdmdhz3ruhdjithc4bv7oqfoubdgoxi",
+      "messageCid": "bafyreieel32x46uxabwnctczwpyxe6mmby5ojafayenp255feo64g3kk4i",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsSubscribe",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "RecordsSubscribe" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-02-01T00:00:18.000000Z",
+          "filter": { "protocol": "http://example.com/process" }
+        }
+      }
+    },
+    {
+      "id": "process-records-subscribe-invalid",
+      "description": "RecordsSubscribe process fixture missing the required filter.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreiafyxfz3qprjy22kxiamuocnidjcmpapjnjxlwk4urmm64n3gzp4u",
+      "messageCid": "bafyreickzevudz35cspxtipytpk2xzve2zvxvoua7x3wuqvs3l46jt7qea",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsSubscribe",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "RecordsSubscribe invalid fixture" }, "handler": "RecordsSubscribe" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-02-01T00:00:19.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-records-write-valid",
+      "description": "RecordsWrite process fixture with external data CID metadata.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreie2zil56tajwfw4e6gmpn2x265c23nclplvmjtmvus7wtuoog7zfq",
+      "messageCid": "bafyreienvylcalvfsqfh7etgtakzvty4pnufurmrkjejb5wzginlh223le",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsWrite",
+        "valid": true,
+        "reply": { "status": { "code": 202, "detail": "Accepted" }, "handler": "RecordsWrite" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "messageTimestamp": "2025-02-01T00:00:20.000000Z",
+          "dateCreated": "2025-02-01T00:00:20.000000Z",
+          "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+          "dataSize": 11,
+          "dataFormat": "text/plain"
+        }
+      }
+    },
+    {
+      "id": "process-records-write-invalid",
+      "description": "RecordsWrite process fixture missing data CID metadata.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreiguld535zy4vrd34ex4strbocj2s7o42rdcvvsexbcjbmejvkb5gq",
+      "messageCid": "bafyreidj4mjj43stjntucth5vsdhtsa2s7izhdf4qd6evjzcgaxvchfzky",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "RecordsWrite",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "RecordsWrite invalid fixture" }, "handler": "RecordsWrite" }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "messageTimestamp": "2025-02-01T00:00:21.000000Z",
+          "dateCreated": "2025-02-01T00:00:21.000000Z"
+        }
+      }
+    },
+    {
+      "id": "process-missing-interface-method",
+      "description": "Dwn.processMessage rejects messages missing interface or method before handler dispatch.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreibrav77ogtmgpclgmeujrkjzdgw4u5754hix4gj7e2oqafdb6jbu4",
+      "messageCid": "bafyreidyqon7uor3kz6eujjdsar7fzlq5ddfttor3jnjzcpbwseqwogeb4",
+      "process": {
+        "tenant": "did:example:alice",
+        "valid": false,
+        "registerHandler": false,
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "Both interface and method must be present, interface: Records, method: undefined"
+          }
+        }
+      },
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "messageTimestamp": "2025-02-01T00:00:22.000000Z"
+        }
+      }
+    }
+  ]
+}

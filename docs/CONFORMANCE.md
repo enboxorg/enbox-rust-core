@@ -25,6 +25,8 @@ Current assertion types:
 - `jwe.keywrap`: wrap/unwrap the CEK with X25519 ECDH-ES plus A256KW using fixed recipient and ephemeral keys.
 - `jwe.decrypt`: unwrap the CEK from `case.jwe`, decrypt fixture ciphertext, and compare plaintext or expected failure.
 - `state-index.operations`: apply StateIndex insert/delete/read operations and compare roots, protocol roots, subtree hashes, and leaves for supported cases.
+- `messages-sync.replies`: seed native sync state from fixture entries and compare `MessagesSync` root/subtree/leaves/diff replies.
+- `message.process`: route a fixture message through the native `Dwn.process_message` boundary and compare the fixture reply/status shape; suites using this assertion must include valid and invalid cases for every current handler key.
 - `descriptor.roundtrip`: parse and re-serialize supported descriptors without changing JSON shape.
 
 Each case contains current TypeScript outputs and a Rust migration status:
@@ -44,14 +46,14 @@ ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-jws.test.ts t
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-state-index.test.ts
 ```
 
-If `ENBOX_TS_ROOT` is not set, the runners look for a sibling `../enbox` checkout. They import the current TypeScript implementations and verify the same assertions in the fixture manifest.
+If `ENBOX_TS_ROOT` is not set, the runners look for a sibling `../enbox` checkout. They import the current TypeScript implementations and verify the manifest assertions where a TypeScript adapter exists.
 
 ## Adapter Model
 
 As Rust gains full DWN engine behavior, add new assertion types rather than duplicating fixture files. Expected future adapters:
 
 - `descriptor.parse`: parse valid descriptors and reject invalid descriptors with expected error codes.
-- `message.process`: process a message against a seeded store and compare reply/status output.
+- `message.process`: process a message against a seeded store and compare reply/status output; the current corpus records per-handler messages, CIDs, and reply shapes so implementations can replace the fixture echo adapter with real handlers incrementally.
 - `state-index.operations`: apply fixture operations and compare roots, subtree hashes, and leaves.
 - `crypto.jws` and `crypto.jwe`: validate signature/encryption/decryption behavior using deterministic vectors where possible.
 
