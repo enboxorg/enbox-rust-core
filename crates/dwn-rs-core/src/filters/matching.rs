@@ -148,10 +148,18 @@ mod tests {
     #[test]
     fn equal_matches_exact_value() {
         let idx = indexes(&[("k", Value::String("v".into()))]);
-        let filters: Filters = vec![filter_set(vec![("k", Filter::Equal(Value::String("v".into())))])].into();
+        let filters: Filters = vec![filter_set(vec![(
+            "k",
+            Filter::Equal(Value::String("v".into())),
+        )])]
+        .into();
         assert!(matches_filters(&idx, Some(&filters)));
 
-        let filters_no: Filters = vec![filter_set(vec![("k", Filter::Equal(Value::String("other".into())))])].into();
+        let filters_no: Filters = vec![filter_set(vec![(
+            "k",
+            Filter::Equal(Value::String("other".into())),
+        )])]
+        .into();
         assert!(!matches_filters(&idx, Some(&filters_no)));
     }
 
@@ -219,14 +227,19 @@ mod tests {
             "k",
             Value::Array(vec![Value::String("a".into()), Value::String("b".into())]),
         )]);
-        let filters: Filters = vec![filter_set(vec![("k", Filter::Equal(Value::String("b".into())))])].into();
+        let filters: Filters = vec![filter_set(vec![(
+            "k",
+            Filter::Equal(Value::String("b".into())),
+        )])]
+        .into();
         assert!(matches_filters(&idx, Some(&filters)));
     }
 
     #[test]
     fn missing_index_does_not_match() {
         let idx = indexes(&[("a", Value::Number(1))]);
-        let filters: Filters = vec![filter_set(vec![("b", Filter::Equal(Value::Number(1)))])].into();
+        let filters: Filters =
+            vec![filter_set(vec![("b", Filter::Equal(Value::Number(1)))])].into();
         assert!(!matches_filters(&idx, Some(&filters)));
     }
 

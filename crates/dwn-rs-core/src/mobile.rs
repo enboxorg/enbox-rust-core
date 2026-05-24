@@ -203,10 +203,7 @@ where
     }
 
     pub fn initialize(&self, request: MobileInitializeRequest) -> MobileRuntimeStatus {
-        let mut state = self
-            .state
-            .write()
-            .expect("MobileCore state lock poisoned");
+        let mut state = self.state.write().expect("MobileCore state lock poisoned");
         state.initialized = true;
         state.device_id = Some(request.device_id);
         state.app_group = request.app_group;
@@ -269,10 +266,7 @@ where
     }
 
     pub fn status(&self) -> MobileRuntimeStatus {
-        let state = self
-            .state
-            .read()
-            .expect("MobileCore state lock poisoned");
+        let state = self.state.read().expect("MobileCore state lock poisoned");
         self.status_with_state(&state)
     }
 

@@ -532,7 +532,7 @@ fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
 /// (local or remote) as the endpoint.
 #[derive(Clone, Default)]
 pub struct MemoryProtocolEndpoint {
-    protocols: Arc<RwLock<BTreeMap<String, Definition>>>,
+    protocols: Arc<RwLock<BTreeMap<(String, String), Definition>>>,
 }
 
 impl MemoryProtocolEndpoint {
@@ -540,7 +540,7 @@ impl MemoryProtocolEndpoint {
         self.protocols
             .read()
             .expect("MemoryProtocolEndpoint lock poisoned")
-            .get(&protocol_key(tenant, protocol))
+            .get(&(tenant.to_string(), protocol.to_string()))
             .cloned()
     }
 }
@@ -556,7 +556,7 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
                 .protocols
                 .read()
                 .map_err(AgentIdentityError::lock_poisoned)?
-                .get(&protocol_key(tenant, protocol))
+                .get(&(tenant.to_string(), protocol.to_string()))
                 .cloned())
         })
     }
@@ -570,14 +570,13 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
             self.protocols
                 .write()
                 .map_err(AgentIdentityError::lock_poisoned)?
-                .insert(protocol_key(tenant, &definition.protocol), definition);
+                .insert(
+                    (tenant.to_string(), definition.protocol.clone()),
+                    definition,
+                );
             Ok(())
         })
     }
-}
-
-fn protocol_key(tenant: &str, protocol: &str) -> String {
-    format!("{tenant}|{protocol}")
 }
 
 #[cfg(test)]

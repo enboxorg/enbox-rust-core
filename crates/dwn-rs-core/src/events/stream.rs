@@ -171,7 +171,10 @@ where
                             listener = ?listener.clone(),
                             "sending event to listener",
                         );
-                        if let Err(err) = listener.send((ns.clone(), evt.clone(), indexes.clone())).await {
+                        if let Err(err) = listener
+                            .send((ns.clone(), evt.clone(), indexes.clone()))
+                            .await
+                        {
                             // A disconnected listener (mailbox closed, actor stopped) must not
                             // bring down the EventStream actor and, by extension, the runtime
                             // hosting it. Log and move on; the listener will be cleaned up via
@@ -203,11 +206,7 @@ where
         let id = msg.id;
         let listener = msg.listener;
 
-        let close: Box<
-            dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventStreamError>> + Send>>
-                + Send
-                + Sync,
-        > = match _ctx.mailbox().address().try_upgrade() {
+        let close: SubscriptionCloseHandle = match _ctx.mailbox().address().try_upgrade() {
             Some(addr) => Box::new(make_close_task(ns.clone(), id.clone(), addr)),
             None => {
                 // The EventStream is already shutting down; the close handle is
@@ -267,14 +266,14 @@ pub struct SubscriptionID {
     pub id: String,
 }
 
-#[allow(clippy::type_complexity)]
+/// Async close handle for an event-stream subscription.
+pub type SubscriptionCloseHandle = Box<
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventStreamError>> + Send>> + Send + Sync,
+>;
+
 pub struct Subscription {
     pub subscription_id: SubscriptionID,
-    pub close: Box<
-        dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventStreamError>> + Send>>
-            + Send
-            + Sync,
-    >,
+    pub close: SubscriptionCloseHandle,
 }
 
 #[allow(dead_code)]

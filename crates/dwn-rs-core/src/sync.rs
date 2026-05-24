@@ -528,10 +528,7 @@ where
     }
 
     pub fn stop_sync(&self, tenant: &str, remote: Option<&str>) -> SyncRunStatus {
-        let mut state = self
-            .state
-            .write()
-            .expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
         state.live_links.retain(|link| {
             if let Some(remote) = remote {
                 !link.starts_with(&format!("{tenant}|{remote}|"))
@@ -543,10 +540,7 @@ where
     }
 
     pub fn sync_status(&self, query: SyncStatusQuery) -> SyncHealthSummary {
-        let state = self
-            .state
-            .read()
-            .expect("SyncEngine state lock poisoned");
+        let state = self.state.read().expect("SyncEngine state lock poisoned");
         let scope_filter = query.protocol.as_deref().map(|protocol| {
             SyncScope::Protocol {
                 protocol: protocol.to_string(),
@@ -627,10 +621,7 @@ where
     }
 
     pub fn clear_dead_letter(&self, id: &str) -> bool {
-        let mut state = self
-            .state
-            .write()
-            .expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
         let before = state.dead_letters.len();
         state.dead_letters.retain(|entry| entry.id != id);
         before != state.dead_letters.len()
@@ -894,10 +885,7 @@ where
             self.update_checkpoint(tenant, remote, &scope, SyncDirection::Pull, |checkpoint| {
                 checkpoint.last_error = Some(error.clone())
             });
-        let mut state = self
-            .state
-            .write()
-            .expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
         state
             .last_status
             .insert(format!("{}|{}", tenant, remote), SyncRunStatus::Repairing);
@@ -1177,10 +1165,7 @@ where
     }
 
     fn begin_operation(&self, operation_key: &str) -> bool {
-        let mut state = self
-            .state
-            .write()
-            .expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
         if state.running.contains(operation_key) {
             return false;
         }
@@ -1189,10 +1174,7 @@ where
     }
 
     fn end_operation(&self, operation_key: &str, status: SyncRunStatus) {
-        let mut state = self
-            .state
-            .write()
-            .expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
         state.running.remove(operation_key);
         if let Some((tenant, remote, _)) = split_operation_key(operation_key) {
             state
@@ -1210,10 +1192,7 @@ where
         update: impl FnOnce(&mut SyncCheckpoint),
     ) -> SyncCheckpoint {
         let key = checkpoint_key(tenant, remote, scope, direction);
-        let mut state = self
-            .state
-            .write()
-            .expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
         let checkpoint = state
             .checkpoints
             .entry(key.clone())
