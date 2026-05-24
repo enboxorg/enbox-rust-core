@@ -34,6 +34,7 @@ pub mod interfaces;
 pub mod local;
 pub mod permissions;
 mod ser;
+pub mod setup;
 pub mod state_index;
 pub mod stores;
 pub mod sync;

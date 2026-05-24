@@ -234,6 +234,11 @@ pub trait AgentKeyManager: Clone + Send + Sync + 'static {
         key_uri: &'a str,
     ) -> AgentIdentityFuture<'a, Option<JsonWebKey>>;
     fn public_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JsonWebKey>>;
+    fn derive_public_jwk<'a>(
+        &'a self,
+        key_uri: &'a str,
+        derivation_path: Vec<String>,
+    ) -> AgentIdentityFuture<'a, JsonWebKey>;
     fn delete_key<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, bool>;
 }
 
@@ -518,6 +523,48 @@ impl AgentKeyManager for MemoryKeyManager {
         })
     }
 
+    fn derive_public_jwk<'a>(
+        &'a self,
+        key_uri: &'a str,
+        derivation_path: Vec<String>,
+    ) -> AgentIdentityFuture<'a, JsonWebKey> {
+        Box::pin(async move {
+            let private_jwk = self
+                .keys
+                .read()
+                .unwrap()
+                .get(key_uri)
+                .cloned()
+                .ok_or_else(|| {
+                    AgentIdentityError::key_manager(format!("key {key_uri} not found"))
+                })?;
+            if private_jwk.crv != "X25519" {
+                return Err(AgentIdentityError::key_manager(
+                    "protocol encryption derivation requires an X25519 private key",
+                ));
+            }
+            let Some(private_key) = private_jwk.d.as_ref() else {
+                return Err(AgentIdentityError::key_manager(
+                    "private JWK is missing private key material",
+                ));
+            };
+            let mut key = fixed_32(
+                &URL_SAFE_NO_PAD
+                    .decode(private_key)
+                    .map_err(|err| AgentIdentityError::key_manager(err.to_string()))?,
+            )?;
+            for segment in derivation_path {
+                if segment.is_empty() {
+                    return Err(AgentIdentityError::key_manager(
+                        "derivation path segments must not be empty",
+                    ));
+                }
+                key = fixed_32(&hkdf_sha256(&key, segment.as_bytes(), 32)?)?;
+            }
+            Ok(x25519_private_jwk(key).public_jwk())
+        })
+    }
+
     fn delete_key<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, bool> {
         Box::pin(async move { Ok(self.keys.write().unwrap().remove(key_uri).is_some()) })
     }
@@ -680,6 +727,14 @@ fn hmac_sha512(key: &[u8], data: &[u8]) -> AgentIdentityResult<[u8; 64]> {
 
 fn hkdf_sha512(base_key: &[u8], info: &[u8], length: usize) -> AgentIdentityResult<Vec<u8>> {
     let hkdf = hkdf::Hkdf::<Sha512>::new(Some(&[]), base_key);
+    let mut out = vec![0u8; length];
+    hkdf.expand(info, &mut out)
+        .map_err(|err| AgentIdentityError::invalid_key_material(err.to_string()))?;
+    Ok(out)
+}
+
+fn hkdf_sha256(base_key: &[u8], info: &[u8], length: usize) -> AgentIdentityResult<Vec<u8>> {
+    let hkdf = hkdf::Hkdf::<Sha256>::new(Some(&[]), base_key);
     let mut out = vec![0u8; length];
     hkdf.expand(info, &mut out)
         .map_err(|err| AgentIdentityError::invalid_key_material(err.to_string()))?;
