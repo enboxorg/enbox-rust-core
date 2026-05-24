@@ -11,8 +11,7 @@ use dwn_rs_core::errors::{DataStoreError, MessageStoreError, StoreError};
 use dwn_rs_core::fields::MessageFields;
 use dwn_rs_core::filters::{compare_values, matches_filters, Filters};
 use dwn_rs_core::stores::{
-    EnboxDataStore, EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
-    EnboxMessageStore, KeyValues,
+    DataStore, DataStoreGetResult, DataStorePutResult, KeyValues, MessageQueryResult, MessageStore,
 };
 use dwn_rs_core::{Cursor, Descriptor, Message, MessageSort, Pagination, SortDirection, Value};
 
@@ -87,7 +86,7 @@ impl SqliteStore {
     }
 }
 
-impl EnboxMessageStore for SqliteStore {
+impl MessageStore for SqliteStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
         self.open_connection().map_err(MessageStoreError::from)
     }
@@ -168,7 +167,7 @@ impl EnboxMessageStore for SqliteStore {
         filters: Filters,
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
-    ) -> impl Future<Output = Result<EnboxMessageQueryResult, MessageStoreError>> + Send {
+    ) -> impl Future<Output = Result<MessageQueryResult, MessageStoreError>> + Send {
         let store = self.clone();
         let tenant = tenant.to_string();
         async move {
@@ -181,7 +180,7 @@ impl EnboxMessageStore for SqliteStore {
             sort_message_rows(&mut rows, sort);
 
             let (rows, cursor) = apply_pagination(rows, sort, pagination)?;
-            Ok(EnboxMessageQueryResult {
+            Ok(MessageQueryResult {
                 messages: rows.into_iter().map(|row| row.message).collect(),
                 cursor,
             })
@@ -244,7 +243,7 @@ impl EnboxMessageStore for SqliteStore {
     }
 }
 
-impl EnboxDataStore for SqliteStore {
+impl DataStore for SqliteStore {
     async fn open(&mut self) -> Result<(), DataStoreError> {
         self.open_connection().map_err(DataStoreError::from)
     }
@@ -259,7 +258,7 @@ impl EnboxDataStore for SqliteStore {
         record_id: &str,
         data_cid: &str,
         data_stream: T,
-    ) -> impl Future<Output = Result<EnboxDataStorePutResult, DataStoreError>> + Send {
+    ) -> impl Future<Output = Result<DataStorePutResult, DataStoreError>> + Send {
         let store = self.clone();
         let tenant = tenant.to_string();
         let record_id = record_id.to_string();
@@ -285,7 +284,7 @@ impl EnboxDataStore for SqliteStore {
                 })
                 .map_err(DataStoreError::from)?
             {
-                return Ok(EnboxDataStorePutResult { data_size });
+                return Ok(DataStorePutResult { data_size });
             }
 
             let bytes = collect_stream(data_stream).await?;
@@ -318,7 +317,7 @@ impl EnboxDataStore for SqliteStore {
                 })
                 .map_err(DataStoreError::from)?;
 
-            Ok(EnboxDataStorePutResult { data_size })
+            Ok(DataStorePutResult { data_size })
         }
     }
 
@@ -327,7 +326,7 @@ impl EnboxDataStore for SqliteStore {
         tenant: &str,
         record_id: &str,
         data_cid: &str,
-    ) -> impl Future<Output = Result<Option<EnboxDataStoreGetResult>, DataStoreError>> + Send {
+    ) -> impl Future<Output = Result<Option<DataStoreGetResult>, DataStoreError>> + Send {
         let store = self.clone();
         let tenant = tenant.to_string();
         let record_id = record_id.to_string();
@@ -352,7 +351,7 @@ impl EnboxDataStore for SqliteStore {
                 })
                 .map_err(DataStoreError::from)?;
 
-            Ok(result.map(|(data_size, data)| EnboxDataStoreGetResult {
+            Ok(result.map(|(data_size, data)| DataStoreGetResult {
                 data_size,
                 data_stream: Box::pin(stream::once(async move { Ok(Bytes::from(data)) })),
             }))
@@ -758,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn sqlite_store_migrates_schema_on_open() {
         let mut store = SqliteStore::in_memory();
-        EnboxMessageStore::open(&mut store).await.unwrap();
+        MessageStore::open(&mut store).await.unwrap();
 
         let tables = store
             .with_connection(|connection| {
@@ -784,7 +783,7 @@ mod tests {
     #[tokio::test]
     async fn message_store_roundtrips_inline_data_without_changing_message_cid() {
         let mut store = SqliteStore::in_memory();
-        EnboxMessageStore::open(&mut store).await.unwrap();
+        MessageStore::open(&mut store).await.unwrap();
         let message = message(
             "2025-01-01T00:00:00.000000Z",
             Some("https://example.com/protocol/notes"),
@@ -794,7 +793,7 @@ mod tests {
         cid_message.fields.encoded_data();
         let cid = cid_message.cid().unwrap().to_string();
 
-        EnboxMessageStore::put(
+        MessageStore::put(
             &store,
             "did:example:alice",
             message.clone(),
@@ -804,7 +803,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            EnboxMessageStore::get(&store, "did:example:alice", &cid)
+            MessageStore::get(&store, "did:example:alice", &cid)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -822,8 +821,8 @@ mod tests {
         let cid = cid_message.cid().unwrap().to_string();
 
         let mut store = SqliteStore::new(&path);
-        EnboxMessageStore::open(&mut store).await.unwrap();
-        EnboxMessageStore::put(
+        MessageStore::open(&mut store).await.unwrap();
+        MessageStore::put(
             &store,
             "did:example:alice",
             message.clone(),
@@ -831,24 +830,24 @@ mod tests {
         )
         .await
         .unwrap();
-        EnboxMessageStore::close(&mut store).await;
+        MessageStore::close(&mut store).await;
 
         let mut reopened = SqliteStore::new(&path);
-        EnboxMessageStore::open(&mut reopened).await.unwrap();
+        MessageStore::open(&mut reopened).await.unwrap();
         assert_eq!(
-            EnboxMessageStore::get(&reopened, "did:example:alice", &cid)
+            MessageStore::get(&reopened, "did:example:alice", &cid)
                 .await
                 .unwrap(),
             Some(message)
         );
-        EnboxMessageStore::close(&mut reopened).await;
+        MessageStore::close(&mut reopened).await;
         let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
     async fn message_store_filters_sorts_counts_and_paginates() {
         let mut store = SqliteStore::in_memory();
-        EnboxMessageStore::open(&mut store).await.unwrap();
+        MessageStore::open(&mut store).await.unwrap();
         let first = message(
             "2025-01-01T00:00:00.000000Z",
             Some("https://example.com/protocol/notes"),
@@ -866,7 +865,7 @@ mod tests {
         );
 
         for message in [&first, &second, &third] {
-            EnboxMessageStore::put(
+            MessageStore::put(
                 &store,
                 "did:example:alice",
                 message.clone(),
@@ -883,7 +882,7 @@ mod tests {
                 Value::String("did:example:carol".to_string()),
             ]),
         );
-        EnboxMessageStore::put(&store, "did:example:alice", third.clone(), third_indexes)
+        MessageStore::put(&store, "did:example:alice", third.clone(), third_indexes)
             .await
             .unwrap();
         let published = message(
@@ -896,7 +895,7 @@ mod tests {
             "datePublished".to_string(),
             Value::String("2025-01-01T00:00:03.000000Z".to_string()),
         );
-        EnboxMessageStore::put(
+        MessageStore::put(
             &store,
             "did:example:alice",
             published.clone(),
@@ -984,11 +983,11 @@ mod tests {
     #[tokio::test]
     async fn data_store_shares_content_addressed_blocks_and_refs() {
         let mut store = SqliteStore::in_memory();
-        EnboxDataStore::open(&mut store).await.unwrap();
+        DataStore::open(&mut store).await.unwrap();
         let bytes = Bytes::from_static(b"hello sqlite data");
         let data_cid = generate_dag_pb_cid_from_bytes(&bytes).to_string();
 
-        let put = EnboxDataStore::put(
+        let put = DataStore::put(
             &store,
             "did:example:alice",
             "record-1",
@@ -999,7 +998,7 @@ mod tests {
         .unwrap();
         assert_eq!(put.data_size, bytes.len());
 
-        let duplicate = EnboxDataStore::put(
+        let duplicate = DataStore::put(
             &store,
             "did:example:alice",
             "record-1",
@@ -1010,7 +1009,7 @@ mod tests {
         .unwrap();
         assert_eq!(duplicate.data_size, bytes.len());
 
-        let shared = EnboxDataStore::put(
+        let shared = DataStore::put(
             &store,
             "did:example:alice",
             "record-2",
@@ -1021,10 +1020,10 @@ mod tests {
         .unwrap();
         assert_eq!(shared.data_size, bytes.len());
 
-        EnboxDataStore::delete(&store, "did:example:alice", "record-1", &data_cid)
+        DataStore::delete(&store, "did:example:alice", "record-1", &data_cid)
             .await
             .unwrap();
-        let stored = EnboxDataStore::get(&store, "did:example:alice", "record-2", &data_cid)
+        let stored = DataStore::get(&store, "did:example:alice", "record-2", &data_cid)
             .await
             .unwrap()
             .unwrap();
@@ -1039,11 +1038,11 @@ mod tests {
             .unwrap();
         assert_eq!(read, bytes.to_vec());
 
-        EnboxDataStore::delete(&store, "did:example:alice", "record-2", &data_cid)
+        DataStore::delete(&store, "did:example:alice", "record-2", &data_cid)
             .await
             .unwrap();
         assert!(
-            EnboxDataStore::get(&store, "did:example:alice", "record-2", &data_cid)
+            DataStore::get(&store, "did:example:alice", "record-2", &data_cid)
                 .await
                 .unwrap()
                 .is_none()

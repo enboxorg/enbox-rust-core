@@ -17,7 +17,7 @@ use crate::{
 };
 use dwn_rs_core::{
     errors::{DataStoreError, StoreError},
-    stores::{DataStore, GetDataResults, PutDataResults},
+    stores::{GetDataResults, LegacyDataStore, PutDataResults},
 };
 
 use super::models::{CreateData, GetData};
@@ -26,7 +26,7 @@ const DATA_TABLE: &str = "data";
 const CHUNK_TABLE: &str = "data_chunks";
 const CHUNK_CAPACITY: usize = 512 * 1024;
 
-impl DataStore for SurrealDB {
+impl LegacyDataStore for SurrealDB {
     async fn open(&mut self) -> Result<(), DataStoreError> {
         let _ = chunks_graph_query(); // compile the chunks graph query on open
         self.open().await.map_err(DataStoreError::from)
@@ -294,7 +294,7 @@ mod test {
     use std::iter::repeat_with;
 
     use super::*;
-    use dwn_rs_core::stores::DataStore;
+    use dwn_rs_core::stores::LegacyDataStore;
 
     #[tokio::test]
     async fn test_open_close() {

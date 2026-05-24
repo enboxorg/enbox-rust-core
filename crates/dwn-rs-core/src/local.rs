@@ -13,10 +13,10 @@ use crate::errors::{EventLogError, ResumableTaskStoreError, StoreError};
 use crate::events::MessageEvent;
 use crate::filters::Filters;
 use crate::stores::{
-    EnboxEventLog, EnboxManagedResumableTask, EnboxResumableTaskStore, EventLogEntry,
-    EventLogReadOptions, EventLogReadResult, EventLogReplayBounds, EventLogSubscribeOptions,
-    EventLogTrimBound, EventSubscription, EventSubscriptionClose, KeyValues, ProgressGapInfo,
-    ProgressGapReason, ProgressToken, SubscriptionListener, SubscriptionMessage,
+    EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
+    EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
+    KeyValues, ManagedResumableTask, ProgressGapInfo, ProgressGapReason, ProgressToken,
+    ResumableTaskStore, SubscriptionListener, SubscriptionMessage,
 };
 use crate::{Descriptor, Value};
 
@@ -75,7 +75,7 @@ impl MemoryEventLog {
     }
 }
 
-impl EnboxEventLog for MemoryEventLog {
+impl EventLog for MemoryEventLog {
     fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send {
         let inner = self.inner.clone();
         async move {
@@ -340,7 +340,7 @@ struct StoredTask {
     retry_count: u64,
 }
 
-impl EnboxResumableTaskStore for MemoryResumableTaskStore {
+impl ResumableTaskStore for MemoryResumableTaskStore {
     async fn open(&mut self) -> Result<(), ResumableTaskStoreError> {
         Ok(())
     }
@@ -351,8 +351,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
         &self,
         task: T,
         timeout_in_seconds: u64,
-    ) -> impl Future<Output = Result<EnboxManagedResumableTask<T>, ResumableTaskStoreError>> + Send
-    {
+    ) -> impl Future<Output = Result<ManagedResumableTask<T>, ResumableTaskStoreError>> + Send {
         let tasks = self.tasks.clone();
         async move {
             let task_json = serde_json::to_value(&task).map_err(task_store_error)?;
@@ -374,7 +373,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
                 ));
             }
             tasks.insert(id.clone(), stored);
-            Ok(EnboxManagedResumableTask {
+            Ok(ManagedResumableTask {
                 id,
                 task,
                 timeout,
@@ -386,7 +385,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
     fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
         &self,
         count: u64,
-    ) -> impl Future<Output = Result<Vec<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
+    ) -> impl Future<Output = Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
     {
         let tasks = self.tasks.clone();
         async move {
@@ -412,7 +411,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
     fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
         &self,
         task_id: &str,
-    ) -> impl Future<Output = Result<Option<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
+    ) -> impl Future<Output = Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
     {
         let tasks = self.tasks.clone();
         let task_id = task_id.to_string();
@@ -591,11 +590,11 @@ fn subscription_close(
 
 use crate::filters::matching::matches_filters;
 
-fn enbox_task<T>(task: &StoredTask) -> Result<EnboxManagedResumableTask<T>, ResumableTaskStoreError>
+fn enbox_task<T>(task: &StoredTask) -> Result<ManagedResumableTask<T>, ResumableTaskStoreError>
 where
     T: DeserializeOwned + Serialize + Send + Sync + Debug,
 {
-    Ok(EnboxManagedResumableTask {
+    Ok(ManagedResumableTask {
         id: task.id.clone(),
         task: serde_json::from_value(task.task.clone()).map_err(task_store_error)?,
         timeout: task.timeout,

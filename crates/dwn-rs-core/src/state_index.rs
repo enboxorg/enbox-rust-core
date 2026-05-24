@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use k256::sha2::{Digest, Sha256};
 
 use crate::errors::{lock_error, StoreError};
-use crate::stores::{EnboxStateIndex, KeyValues, StateHash};
+use crate::stores::{KeyValues, StateHash, StateIndex};
 use crate::Value;
 
 const SMT_DEPTH: usize = 256;
@@ -34,7 +34,7 @@ struct Leaf {
     value_cid: String,
 }
 
-impl EnboxStateIndex for MemoryStateIndex {
+impl StateIndex for MemoryStateIndex {
     async fn open(&mut self) -> Result<(), StoreError> {
         Ok(())
     }
@@ -333,7 +333,6 @@ fn leaf_matches_prefix(key_hash: &StateHash, prefix: &[bool]) -> bool {
         .enumerate()
         .all(|(depth, bit)| get_bit(key_hash, depth) == *bit)
 }
-
 
 #[cfg(test)]
 mod tests {
