@@ -277,7 +277,7 @@ impl GeneralJws {
 
     pub fn verify_signatures<R>(&self, resolver: &R) -> Result<Vec<String>, JwsError>
     where
-        R: GeneralJwsPublicKeyResolver,
+        R: GeneralJwsPublicKeyResolver + ?Sized,
     {
         let mut signers = Vec::new();
 

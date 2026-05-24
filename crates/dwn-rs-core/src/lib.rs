@@ -28,6 +28,7 @@ pub mod encryption;
 pub mod errors;
 pub mod events;
 pub mod filters;
+pub mod handlers;
 pub mod interfaces;
 pub mod local;
 mod ser;

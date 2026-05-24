@@ -29,3 +29,12 @@ impl MessageFields for Authorization {
         self.owner_delegated_grant = authorization.owner_delegated_grant;
     }
 }
+
+impl Authorization {
+    pub fn is_empty(&self) -> bool {
+        self.signature == JWS::default()
+            && self.author_delegated_grant.is_none()
+            && self.owner_signature.is_none()
+            && self.owner_delegated_grant.is_none()
+    }
+}

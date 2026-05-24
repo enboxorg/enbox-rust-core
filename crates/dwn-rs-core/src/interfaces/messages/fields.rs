@@ -115,6 +115,7 @@ impl MessageFields for InitialWriteField {
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub struct WriteFields {
+    #[serde(default, skip_serializing_if = "Authorization::is_empty")]
     pub authorization: Authorization,
     #[serde(rename = "recordId")]
     pub record_id: Option<String>,
@@ -344,8 +345,25 @@ mod tests {
         let json =
             serde_json::from_str::<serde_json::Value>(&serde_json::to_string(&fields).unwrap())
                 .unwrap();
-        let expected = json!({"recordId":"record_id","authorization":{"signature":{}}});
+        let expected = json!({"recordId":"record_id"});
         assert_eq!(expected, json);
+    }
+
+    #[test]
+    fn test_fields_deserialization_without_authorization() {
+        let fields: Fields = serde_json::from_str(r#"{"recordId":"test"}"#).unwrap();
+
+        match fields {
+            Fields::Write(WriteFields {
+                record_id,
+                authorization,
+                ..
+            }) => {
+                assert_eq!(record_id, Some("test".to_string()));
+                assert!(authorization.is_empty());
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
