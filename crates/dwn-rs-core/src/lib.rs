@@ -24,6 +24,7 @@
 #![doc(issue_tracker_base_url = "https://github.com/enmand/dwn-rsissues/")]
 pub mod agent;
 pub mod auth;
+pub mod connect;
 pub mod dwn;
 pub mod encryption;
 pub mod errors;

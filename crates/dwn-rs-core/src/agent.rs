@@ -239,6 +239,11 @@ pub trait AgentKeyManager: Clone + Send + Sync + 'static {
         key_uri: &'a str,
         derivation_path: Vec<String>,
     ) -> AgentIdentityFuture<'a, JsonWebKey>;
+    fn derive_private_jwk<'a>(
+        &'a self,
+        key_uri: &'a str,
+        derivation_path: Vec<String>,
+    ) -> AgentIdentityFuture<'a, JsonWebKey>;
     fn delete_key<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, bool>;
 }
 
@@ -529,6 +534,19 @@ impl AgentKeyManager for MemoryKeyManager {
         derivation_path: Vec<String>,
     ) -> AgentIdentityFuture<'a, JsonWebKey> {
         Box::pin(async move {
+            Ok(self
+                .derive_private_jwk(key_uri, derivation_path)
+                .await?
+                .public_jwk())
+        })
+    }
+
+    fn derive_private_jwk<'a>(
+        &'a self,
+        key_uri: &'a str,
+        derivation_path: Vec<String>,
+    ) -> AgentIdentityFuture<'a, JsonWebKey> {
+        Box::pin(async move {
             let private_jwk = self
                 .keys
                 .read()
@@ -561,7 +579,7 @@ impl AgentKeyManager for MemoryKeyManager {
                 }
                 key = fixed_32(&hkdf_sha256(&key, segment.as_bytes(), 32)?)?;
             }
-            Ok(x25519_private_jwk(key).public_jwk())
+            Ok(x25519_private_jwk(key))
         })
     }
 
