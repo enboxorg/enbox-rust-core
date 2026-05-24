@@ -518,6 +518,8 @@ pub struct DeleteParameters {
     pub prune: Option<bool>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
+    #[serde(rename = "permissionGrantId")]
+    pub permission_grant_id: Option<String>,
 }
 
 impl MessageValidator for DeleteParameters {
@@ -548,6 +550,10 @@ impl MessageParameters for DeleteParameters {
 
     fn delegated_grant(&self) -> Option<Message<WriteDescriptor>> {
         self.delegated_grant.clone()
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
     }
 
     fn protocol_rule(&self) -> Option<String> {

@@ -31,6 +31,7 @@ pub mod filters;
 pub mod handlers;
 pub mod interfaces;
 pub mod local;
+pub mod permissions;
 mod ser;
 pub mod state_index;
 pub mod stores;

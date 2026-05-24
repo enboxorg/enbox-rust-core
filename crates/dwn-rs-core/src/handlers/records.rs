@@ -12,7 +12,7 @@ use chrono::SecondsFormat;
 use futures_util::{stream, TryStreamExt};
 use serde_json::{json, Value as JsonValue};
 
-use crate::auth::{GeneralJws, GeneralJwsPublicKeyResolver};
+use crate::auth::GeneralJwsPublicKeyResolver;
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::records::CountDescriptor;
 use crate::descriptors::{
@@ -27,6 +27,7 @@ use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, Can, Definition, RuleSet, Who,
 };
 use crate::interfaces::replies::Status;
+use crate::permissions::{self, AuthorizationContext};
 use crate::stores::{EnboxDataStore, EnboxMessageStore, EnboxStateIndex, KeyValues};
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
@@ -83,18 +84,6 @@ pub enum RecordsAuthorizationKind {
     Count,
     Delete { prune: bool },
     Subscribe,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AuthorizationValidationError {
-    BadRequest(String),
-    Unauthorized(String),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct SignatureValidation {
-    author: String,
-    payload: JsonValue,
 }
 
 impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
@@ -339,7 +328,7 @@ where
             Err(detail) => return DwnReply::bad_request(detail),
         };
 
-        let signature = match validate_authorization_signature(
+        let signature = match permissions::validate_authorization_signature(
             raw_message,
             self.public_key_resolver.as_deref(),
             true,
@@ -350,10 +339,10 @@ where
                     "AuthenticateJwsMissing: authorization signature is required",
                 )
             }
-            Err(AuthorizationValidationError::BadRequest(detail)) => {
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return DwnReply::bad_request(detail)
             }
-            Err(AuthorizationValidationError::Unauthorized(detail)) => {
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return DwnReply::unauthorized(detail)
             }
         };
@@ -370,7 +359,7 @@ where
         }
 
         if let Err(detail) = self
-            .authorize_records_write(tenant, &message, &signature.author)
+            .authorize_records_write(tenant, &message, &signature)
             .await
         {
             return DwnReply::unauthorized(detail);
@@ -459,6 +448,15 @@ where
             is_latest_base_state = true;
         }
 
+        if let Err(detail) = permissions::validate_permissions_record_schema(&message) {
+            return DwnReply::bad_request(detail);
+        }
+        if let Err(detail) =
+            permissions::pre_process_permissions_write(tenant, &message, &self.message_store).await
+        {
+            return DwnReply::bad_request(detail);
+        }
+
         let indexes = match records_write_indexes(&message, &signature.author, is_latest_base_state)
         {
             Ok(indexes) => indexes,
@@ -504,6 +502,18 @@ where
             if let Err(detail) = self.perform_records_squash(tenant, &message).await {
                 return store_error_reply(detail);
             }
+        }
+
+        if let Err(detail) = permissions::post_process_permissions_write(
+            tenant,
+            &message,
+            &self.message_store,
+            &self.data_store,
+            &self.state_index,
+        )
+        .await
+        {
+            return store_error_reply(detail);
         }
 
         if incoming_is_initial && !is_latest_base_state {
@@ -690,13 +700,33 @@ where
         &self,
         tenant: &str,
         message: &Message<Descriptor>,
-        author: &str,
+        auth: &AuthorizationContext,
     ) -> Result<(), String> {
-        if author == tenant {
+        if permissions::authorize_delegated_records_write(message, auth, &self.message_store)
+            .await?
+        {
             return Ok(());
         }
-        self.authorize_against_protocol(tenant, message, author, RecordsAuthorizationKind::Write)
-            .await
+        if auth.author == tenant {
+            return Ok(());
+        }
+        if permissions::authorize_records_write_with_grant_id(
+            tenant,
+            message,
+            auth,
+            &self.message_store,
+        )
+        .await?
+        {
+            return Ok(());
+        }
+        self.authorize_against_protocol(
+            tenant,
+            message,
+            &auth.author,
+            RecordsAuthorizationKind::Write,
+        )
+        .await
     }
 
     async fn authorize_against_protocol(
@@ -905,23 +935,19 @@ where
             Ok(descriptor) => descriptor.clone(),
             Err(detail) => return DwnReply::bad_request(detail),
         };
-        let signature = match validate_authorization_signature(
+        let signature = match permissions::validate_authorization_signature(
             raw_message,
             self.public_key_resolver.as_deref(),
             false,
         ) {
             Ok(signature) => signature,
-            Err(AuthorizationValidationError::BadRequest(detail)) => {
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return DwnReply::bad_request(detail)
             }
-            Err(AuthorizationValidationError::Unauthorized(detail)) => {
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return DwnReply::unauthorized(detail)
             }
         };
-        let author = signature
-            .as_ref()
-            .map(|signature| signature.author.as_str());
-
         let mut filter =
             records_filter_to_filter_map(&descriptor.filter, descriptor.date_sort.as_ref());
         filter.insert(
@@ -970,8 +996,14 @@ where
             let newest_write = fetch_newest_write(tenant, &record_id, &self.message_store)
                 .await
                 .unwrap_or_else(|_| initial_write.clone());
-            if let Err(detail) =
-                authorize_records_read(tenant, author, &newest_write, &self.message_store).await
+            if let Err(detail) = authorize_records_read(
+                tenant,
+                &message,
+                signature.as_ref(),
+                &newest_write,
+                &self.message_store,
+            )
+            .await
             {
                 return DwnReply::unauthorized(detail);
             }
@@ -984,8 +1016,14 @@ where
             );
         }
 
-        if let Err(detail) =
-            authorize_records_read(tenant, author, matched_message, &self.message_store).await
+        if let Err(detail) = authorize_records_read(
+            tenant,
+            &message,
+            signature.as_ref(),
+            matched_message,
+            &self.message_store,
+        )
+        .await
         {
             return DwnReply::unauthorized(detail);
         }
@@ -1069,22 +1107,22 @@ where
             Ok(descriptor) => descriptor.clone(),
             Err(detail) => return DwnReply::bad_request(detail),
         };
-        let signature = match validate_authorization_signature(
+        let signature = match permissions::validate_authorization_signature(
             raw_message,
             self.public_key_resolver.as_deref(),
             false,
         ) {
             Ok(signature) => signature,
-            Err(AuthorizationValidationError::BadRequest(detail)) => {
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return DwnReply::bad_request(detail)
             }
-            Err(AuthorizationValidationError::Unauthorized(detail)) => {
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return DwnReply::unauthorized(detail)
             }
         };
 
         let (filters, author) = match self
-            .query_filters(tenant, &descriptor, signature.as_ref())
+            .query_filters(tenant, &message, &descriptor, signature.as_ref())
             .await
         {
             Ok(result) => result,
@@ -1127,8 +1165,9 @@ where
     async fn query_filters(
         &self,
         tenant: &str,
+        message: &Message<Descriptor>,
         descriptor: &RecordsQueryDescriptor,
-        signature: Option<&SignatureValidation>,
+        signature: Option<&AuthorizationContext>,
     ) -> Result<(Filters, Option<String>), QueryAuthorizationResult> {
         if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
             return Ok((
@@ -1144,6 +1183,15 @@ where
                 "AuthenticateJwsMissing: authorization signature is required".to_string(),
             )
         })?;
+        let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
+            tenant,
+            message,
+            &descriptor.filter,
+            signature,
+            &self.message_store,
+        )
+        .await
+        .map_err(QueryAuthorizationResult::Unauthorized)?;
         if should_protocol_authorize(&signature.payload) {
             authorize_protocol_query_or_subscribe(
                 tenant,
@@ -1170,7 +1218,7 @@ where
                 &descriptor.filter,
                 descriptor.date_sort.as_ref(),
                 &signature.author,
-                should_protocol_authorize(&signature.payload),
+                should_protocol_authorize(&signature.payload) || grant_authorized,
             )),
             Some(signature.author.clone()),
         ))
@@ -1190,16 +1238,16 @@ where
             Ok(descriptor) => descriptor.clone(),
             Err(detail) => return DwnReply::bad_request(detail),
         };
-        let signature = match validate_authorization_signature(
+        let signature = match permissions::validate_authorization_signature(
             raw_message,
             self.public_key_resolver.as_deref(),
             false,
         ) {
             Ok(signature) => signature,
-            Err(AuthorizationValidationError::BadRequest(detail)) => {
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return DwnReply::bad_request(detail)
             }
-            Err(AuthorizationValidationError::Unauthorized(detail)) => {
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return DwnReply::unauthorized(detail)
             }
         };
@@ -1213,6 +1261,19 @@ where
                         "AuthenticateJwsMissing: authorization signature is required",
                     );
                 };
+                let grant_authorized =
+                    match permissions::authorize_records_query_or_subscribe_with_grant(
+                        tenant,
+                        &message,
+                        &descriptor.filter,
+                        signature,
+                        &self.message_store,
+                    )
+                    .await
+                    {
+                        Ok(grant_authorized) => grant_authorized,
+                        Err(detail) => return DwnReply::unauthorized(detail),
+                    };
                 if should_protocol_authorize(&signature.payload) {
                     if let Err(detail) = authorize_protocol_query_or_subscribe(
                         tenant,
@@ -1234,7 +1295,7 @@ where
                         &descriptor.filter,
                         None,
                         &signature.author,
-                        should_protocol_authorize(&signature.payload),
+                        should_protocol_authorize(&signature.payload) || grant_authorized,
                     ))
                 }
             };
@@ -1261,7 +1322,7 @@ where
             Ok(descriptor) => descriptor.clone(),
             Err(detail) => return DwnReply::bad_request(detail),
         };
-        let signature = match validate_authorization_signature(
+        let signature = match permissions::validate_authorization_signature(
             raw_message,
             self.public_key_resolver.as_deref(),
             true,
@@ -1272,10 +1333,10 @@ where
                     "AuthenticateJwsMissing: authorization signature is required",
                 )
             }
-            Err(AuthorizationValidationError::BadRequest(detail)) => {
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return DwnReply::bad_request(detail)
             }
-            Err(AuthorizationValidationError::Unauthorized(detail)) => {
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return DwnReply::unauthorized(detail)
             }
         };
@@ -1318,7 +1379,7 @@ where
             tenant,
             &message,
             &initial_write,
-            &signature.author,
+            &signature,
             &self.message_store,
         )
         .await
@@ -1427,16 +1488,16 @@ where
             );
         }
 
-        let signature = match validate_authorization_signature(
+        let signature = match permissions::validate_authorization_signature(
             raw_message,
             self.public_key_resolver.as_deref(),
             false,
         ) {
             Ok(signature) => signature,
-            Err(AuthorizationValidationError::BadRequest(detail)) => {
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return DwnReply::bad_request(detail)
             }
-            Err(AuthorizationValidationError::Unauthorized(detail)) => {
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return DwnReply::unauthorized(detail)
             }
         };
@@ -1452,6 +1513,19 @@ where
                         "AuthenticateJwsMissing: authorization signature is required",
                     );
                 };
+                let grant_authorized =
+                    match permissions::authorize_records_query_or_subscribe_with_grant(
+                        tenant,
+                        &message,
+                        &descriptor.filter,
+                        signature,
+                        &self.message_store,
+                    )
+                    .await
+                    {
+                        Ok(grant_authorized) => grant_authorized,
+                        Err(detail) => return DwnReply::unauthorized(detail),
+                    };
                 if should_protocol_authorize(&signature.payload) {
                     if let Err(detail) = authorize_protocol_query_or_subscribe(
                         tenant,
@@ -1476,7 +1550,7 @@ where
                         &descriptor.filter,
                         descriptor.date_sort.as_ref(),
                         &signature.author,
-                        should_protocol_authorize(&signature.payload),
+                        should_protocol_authorize(&signature.payload) || grant_authorized,
                     ))
                 }
             };
@@ -1607,143 +1681,9 @@ fn write_fields_mut(message: &mut Message<Descriptor>) -> Result<&mut WriteField
     }
 }
 
-fn validate_authorization_signature(
-    raw_message: &JsonValue,
-    public_key_resolver: Option<&(dyn GeneralJwsPublicKeyResolver + Send + Sync)>,
-    required: bool,
-) -> Result<Option<SignatureValidation>, AuthorizationValidationError> {
-    let Some(authorization) = raw_message.get("authorization") else {
-        return if required {
-            Err(AuthorizationValidationError::Unauthorized(
-                "AuthenticateJwsMissing: authorization signature is required".to_string(),
-            ))
-        } else {
-            Ok(None)
-        };
-    };
-    let signature = authorization.get("signature").ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "AuthenticateJwsMissing: authorization signature is required".to_string(),
-        )
-    })?;
-    let jws: GeneralJws = serde_json::from_value(signature.clone()).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!("AuthenticationInvalidSignature: {err}"))
-    })?;
-    if jws.signatures.len() != 1 {
-        return Err(AuthorizationValidationError::BadRequest(
-            "AuthenticationMoreThanOneSignatureNotSupported: expected exactly one signature"
-                .to_string(),
-        ));
-    }
-    let payload = decode_jws_payload(&jws)?;
-    validate_descriptor_cid(raw_message, &payload)?;
-    let unverified_author = signer_did_from_jws(&jws)?;
-    let author = public_key_resolver
-        .map(|resolver| {
-            jws.verify_signatures(resolver)
-                .map_err(|err| {
-                    AuthorizationValidationError::Unauthorized(format!("{}: {err}", err.code()))
-                })
-                .and_then(|signers| {
-                    signers.into_iter().next().ok_or_else(|| {
-                        AuthorizationValidationError::Unauthorized(
-                            "AuthenticateJwsMissing: no signer found".to_string(),
-                        )
-                    })
-                })
-        })
-        .transpose()?
-        .unwrap_or(unverified_author);
-    Ok(Some(SignatureValidation { author, payload }))
-}
-
-fn decode_jws_payload(jws: &GeneralJws) -> Result<JsonValue, AuthorizationValidationError> {
-    let payload = URL_SAFE_NO_PAD.decode(&jws.payload).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignaturePayload: {err}"
-        ))
-    })?;
-    serde_json::from_slice(&payload).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignaturePayload: {err}"
-        ))
-    })
-}
-
-fn validate_descriptor_cid(
-    raw_message: &JsonValue,
-    payload: &JsonValue,
-) -> Result<(), AuthorizationValidationError> {
-    let descriptor_cid = payload
-        .get("descriptorCid")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignaturePayload: descriptorCid is required".to_string(),
-            )
-        })?;
-    let descriptor = raw_message.get("descriptor").ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "AuthenticationInvalidSignaturePayload: descriptor is required".to_string(),
-        )
-    })?;
-    let expected = generate_cid_from_json(descriptor)
-        .map_err(|err| {
-            AuthorizationValidationError::BadRequest(format!(
-                "AuthenticationInvalidSignaturePayload: {err}"
-            ))
-        })?
-        .to_string();
-    if descriptor_cid != expected {
-        return Err(AuthorizationValidationError::BadRequest(format!(
-            "AuthenticateDescriptorCidMismatch: provided descriptorCid {descriptor_cid} does not match expected CID {expected}"
-        )));
-    }
-    Ok(())
-}
-
-fn signer_did_from_jws(jws: &GeneralJws) -> Result<String, AuthorizationValidationError> {
-    let protected = &jws
-        .signatures
-        .first()
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: signature is required".to_string(),
-            )
-        })?
-        .protected;
-    let protected = URL_SAFE_NO_PAD.decode(protected).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignatureProtectedHeader: {err}"
-        ))
-    })?;
-    let protected: JsonValue = serde_json::from_slice(&protected).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignatureProtectedHeader: {err}"
-        ))
-    })?;
-    let kid = protected
-        .get("kid")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: kid is required".to_string(),
-            )
-        })?;
-    kid.split('#')
-        .next()
-        .filter(|did| !did.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: kid is required".to_string(),
-            )
-        })
-}
-
 fn validate_records_write_integrity(
     message: &Message<Descriptor>,
-    signature: &SignatureValidation,
+    signature: &AuthorizationContext,
 ) -> Result<(), String> {
     let record_id = record_id(message).ok_or_else(|| {
         "RecordsWriteValidateIntegrityRecordIdMissing: recordId is required".to_string()
@@ -2314,7 +2254,8 @@ fn date_sort_to_message_sort(
 
 async fn authorize_records_read<MessageStore>(
     tenant: &str,
-    author: Option<&str>,
+    read_message: &Message<Descriptor>,
+    signature: Option<&AuthorizationContext>,
     matched_records_write: &Message<Descriptor>,
     message_store: &MessageStore,
 ) -> Result<(), String>
@@ -2322,19 +2263,32 @@ where
     MessageStore: EnboxMessageStore + Sync,
 {
     let descriptor = records_write_descriptor(matched_records_write)?;
-    if author == Some(tenant) || descriptor.published == Some(true) {
+    if signature.map(|signature| signature.author.as_str()) == Some(tenant)
+        || descriptor.published == Some(true)
+    {
         return Ok(());
     }
-    if let Some(author) = author {
-        if descriptor.recipient.as_deref() == Some(author)
-            || extract_author(matched_records_write).as_deref() == Some(author)
+    if let Some(signature) = signature {
+        if descriptor.recipient.as_deref() == Some(signature.author.as_str())
+            || extract_author(matched_records_write).as_deref() == Some(signature.author.as_str())
+        {
+            return Ok(());
+        }
+        if permissions::authorize_records_read_with_grant(
+            tenant,
+            read_message,
+            matched_records_write,
+            signature,
+            message_store,
+        )
+        .await?
         {
             return Ok(());
         }
         return authorize_against_protocol(
             tenant,
             matched_records_write,
-            author,
+            &signature.author,
             RecordsAuthorizationKind::Read,
             message_store,
         )
@@ -2347,20 +2301,31 @@ async fn authorize_records_delete<MessageStore>(
     tenant: &str,
     delete_message: &Message<Descriptor>,
     initial_write: &Message<Descriptor>,
-    author: &str,
+    signature: &AuthorizationContext,
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
     MessageStore: EnboxMessageStore + Sync,
 {
-    if author == tenant {
+    if permissions::authorize_records_delete_with_grant(
+        tenant,
+        delete_message,
+        initial_write,
+        signature,
+        message_store,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+    if signature.author == tenant {
         return Ok(());
     }
     let prune = records_delete_descriptor(delete_message)?.prune;
     authorize_against_protocol(
         tenant,
         initial_write,
-        author,
+        &signature.author,
         RecordsAuthorizationKind::Delete { prune },
         message_store,
     )
@@ -2901,10 +2866,7 @@ fn message_cid(message: &Message<Descriptor>) -> Result<String, String> {
 }
 
 fn extract_author(message: &Message<Descriptor>) -> Option<String> {
-    let raw_message = serde_json::to_value(message).ok()?;
-    let signature = raw_message.get("authorization")?.get("signature")?;
-    let jws: GeneralJws = serde_json::from_value(signature.clone()).ok()?;
-    signer_did_from_jws(&jws).ok()
+    permissions::message_author(message)
 }
 
 async fn delete_from_data_store_if_needed<DataStore>(
@@ -3108,7 +3070,8 @@ mod tests {
     use futures_util::{Stream, StreamExt};
 
     use crate::auth::{
-        GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
+        GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner,
+        StaticPublicKeyResolver,
     };
     use crate::descriptors::{ConfigureDescriptor, Protocols as ProtocolsDescriptor};
     use crate::errors::{DataStoreError, MessageStoreError, StoreError};
@@ -3117,6 +3080,7 @@ mod tests {
     use crate::stores::{
         EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
     };
+    use crate::MapValue;
 
     use super::*;
 
@@ -3490,6 +3454,237 @@ mod tests {
         assert_eq!(reply.status.code, 409);
     }
 
+    #[tokio::test]
+    async fn records_write_accepts_permission_grant_id_and_enforces_publication_condition() {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        let mut state_index = MemoryStateIndex::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        state_index.open().await.unwrap();
+        put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+
+        let handler = RecordsWriteHandler::with_public_key_resolver(
+            message_store.clone(),
+            data_store,
+            state_index,
+            test_resolver(),
+        );
+
+        let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"conditions":{"publication":"Required"}}"#);
+        let grant = signed_write_message(WriteSpec {
+            protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+            protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+            recipient: Some("did:example:bob".to_string()),
+            tags: Some(MapValue::from([(
+                "protocol".to_string(),
+                Value::String("http://example.com/notes".to_string()),
+            )])),
+            data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+            data_size: grant_data.len() as u64,
+            data_format: "application/json".to_string(),
+            ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+        });
+        let grant_id = grant["recordId"].as_str().unwrap().to_string();
+        assert_eq!(
+            handler
+                .handle_write("did:example:alice", &grant, Some(grant_data.clone()))
+                .await
+                .status
+                .code,
+            202
+        );
+        let unpublished_data = Bytes::from_static(b"unpublished note");
+        let unpublished = signed_write_message(WriteSpec {
+            author: "did:example:bob".to_string(),
+            signer: bob_signer(),
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path: Some("note".to_string()),
+            data_cid: generate_dag_pb_cid_from_bytes(&unpublished_data).to_string(),
+            data_size: unpublished_data.len() as u64,
+            permission_grant_id: Some(grant_id.clone()),
+            ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+        });
+        let reply = handler
+            .handle_write("did:example:alice", &unpublished, Some(unpublished_data))
+            .await;
+        assert_eq!(reply.status.code, 401);
+        assert!(reply
+            .status
+            .detail
+            .contains("RecordsGrantAuthorizationConditionPublicationRequired"));
+
+        let published_data = Bytes::from_static(b"published note");
+        let published = signed_write_message(WriteSpec {
+            author: "did:example:bob".to_string(),
+            signer: bob_signer(),
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path: Some("note".to_string()),
+            data_cid: generate_dag_pb_cid_from_bytes(&published_data).to_string(),
+            data_size: published_data.len() as u64,
+            published: Some(true),
+            permission_grant_id: Some(grant_id),
+            ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+        });
+        let reply = handler
+            .handle_write("did:example:alice", &published, Some(published_data))
+            .await;
+        assert_eq!(reply.status.code, 202);
+    }
+
+    #[tokio::test]
+    async fn records_write_accepts_embedded_author_delegated_grant() {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        let mut state_index = MemoryStateIndex::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        state_index.open().await.unwrap();
+        put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+
+        let handler = RecordsWriteHandler::with_public_key_resolver(
+            message_store.clone(),
+            data_store,
+            state_index,
+            test_resolver(),
+        );
+
+        let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#);
+        let grant = signed_write_message(WriteSpec {
+            protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+            protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+            recipient: Some("did:example:bob".to_string()),
+            tags: Some(MapValue::from([(
+                "protocol".to_string(),
+                Value::String("http://example.com/notes".to_string()),
+            )])),
+            data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+            data_size: grant_data.len() as u64,
+            data_format: "application/json".to_string(),
+            ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+        });
+        assert_eq!(
+            handler
+                .handle_write("did:example:alice", &grant, Some(grant_data.clone()))
+                .await
+                .status
+                .code,
+            202
+        );
+        let mut delegated_grant = grant.clone();
+        delegated_grant["encodedData"] = JsonValue::String(URL_SAFE_NO_PAD.encode(&grant_data));
+
+        let note_data = Bytes::from_static(b"delegated note");
+        let note = signed_write_message(WriteSpec {
+            author: "did:example:alice".to_string(),
+            signer: bob_signer(),
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path: Some("note".to_string()),
+            data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
+            data_size: note_data.len() as u64,
+            ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+        });
+        let note = with_author_delegated_grant(note, &delegated_grant, bob_signer());
+        let reply = handler
+            .handle_write("did:example:alice", &note, Some(note_data))
+            .await;
+        assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    }
+
+    #[tokio::test]
+    async fn permissions_revocation_cleans_grant_authorized_messages() {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        let mut state_index = MemoryStateIndex::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        state_index.open().await.unwrap();
+        put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+
+        let handler = RecordsWriteHandler::with_public_key_resolver(
+            message_store.clone(),
+            data_store.clone(),
+            state_index,
+            test_resolver(),
+        );
+
+        let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
+        let grant = signed_write_message(WriteSpec {
+            protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+            protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+            recipient: Some("did:example:bob".to_string()),
+            tags: Some(MapValue::from([(
+                "protocol".to_string(),
+                Value::String("http://example.com/notes".to_string()),
+            )])),
+            data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+            data_size: grant_data.len() as u64,
+            data_format: "application/json".to_string(),
+            ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+        });
+        let grant_id = grant["recordId"].as_str().unwrap().to_string();
+        assert_eq!(
+            handler
+                .handle_write("did:example:alice", &grant, Some(grant_data))
+                .await
+                .status
+                .code,
+            202
+        );
+
+        let note_data = Bytes::from_static(b"revoked note");
+        let note = signed_write_message(WriteSpec {
+            author: "did:example:bob".to_string(),
+            signer: bob_signer(),
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path: Some("note".to_string()),
+            data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
+            data_size: note_data.len() as u64,
+            permission_grant_id: Some(grant_id.clone()),
+            ..WriteSpec::new("2025-01-01T00:05:00.000000Z")
+        });
+        let note_record_id = note["recordId"].as_str().unwrap().to_string();
+        assert_eq!(
+            handler
+                .handle_write("did:example:alice", &note, Some(note_data))
+                .await
+                .status
+                .code,
+            202
+        );
+
+        let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
+        let revocation = signed_write_message(WriteSpec {
+            protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+            protocol_path: Some(permissions::PERMISSIONS_REVOCATION_PATH.to_string()),
+            parent_id: Some(grant_id.clone()),
+            parent_context_id: Some(grant_id.clone()),
+            tags: Some(MapValue::from([(
+                "protocol".to_string(),
+                Value::String("http://example.com/notes".to_string()),
+            )])),
+            data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
+            data_size: revoke_data.len() as u64,
+            data_format: "application/json".to_string(),
+            ..WriteSpec::new("2025-01-01T00:04:00.000000Z")
+        });
+        assert_eq!(
+            handler
+                .handle_write("did:example:alice", &revocation, Some(revoke_data))
+                .await
+                .status
+                .code,
+            202
+        );
+
+        assert!(
+            fetch_record_messages("did:example:alice", &note_record_id, &message_store)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn generic_records_descriptor_deserializes_by_method() {
         let count = json!({
@@ -3519,6 +3714,8 @@ mod tests {
 
     #[derive(Clone)]
     struct WriteSpec {
+        author: String,
+        signer: PrivateJwkSigner,
         timestamp: String,
         date_created: String,
         record_id: Option<String>,
@@ -3527,15 +3724,21 @@ mod tests {
         parent_context_id: Option<String>,
         protocol: Option<String>,
         protocol_path: Option<String>,
+        recipient: Option<String>,
+        tags: Option<MapValue>,
         data_cid: String,
         data_size: u64,
+        data_format: String,
         published: Option<bool>,
+        permission_grant_id: Option<String>,
         squash: Option<bool>,
     }
 
     impl WriteSpec {
         fn new(timestamp: &str) -> Self {
             Self {
+                author: "did:example:alice".to_string(),
+                signer: test_signer(),
                 timestamp: timestamp.to_string(),
                 date_created: timestamp.to_string(),
                 record_id: None,
@@ -3544,9 +3747,13 @@ mod tests {
                 parent_context_id: None,
                 protocol: None,
                 protocol_path: None,
+                recipient: None,
+                tags: None,
                 data_cid: generate_dag_pb_cid_from_bytes([]).to_string(),
                 data_size: 0,
+                data_format: "text/plain".to_string(),
                 published: None,
+                permission_grant_id: None,
                 squash: None,
             }
         }
@@ -3556,9 +3763,9 @@ mod tests {
         let descriptor = RecordsWriteDescriptor {
             protocol: spec.protocol,
             protocol_path: spec.protocol_path,
-            recipient: None,
+            recipient: spec.recipient,
             schema: None,
-            tags: None,
+            tags: spec.tags,
             parent_id: spec.parent_id.clone(),
             data_cid: spec.data_cid,
             data_size: spec.data_size,
@@ -3566,14 +3773,14 @@ mod tests {
             message_timestamp: parse_time(&spec.timestamp),
             published: spec.published,
             date_published: spec.published.map(|_| parse_time(&spec.timestamp)),
-            data_format: "text/plain".to_string(),
-            permission_grant_id: None,
+            data_format: spec.data_format,
+            permission_grant_id: spec.permission_grant_id.clone(),
             squash: spec.squash,
         };
         let record_id = spec
             .record_id
             .clone()
-            .unwrap_or_else(|| entry_id("did:example:alice", &descriptor).unwrap());
+            .unwrap_or_else(|| entry_id(&spec.author, &descriptor).unwrap());
         let context_id = spec.context_id.unwrap_or_else(|| {
             spec.parent_context_id
                 .filter(|context| !context.is_empty())
@@ -3581,20 +3788,42 @@ mod tests {
                 .unwrap_or_else(|| record_id.clone())
         });
         let descriptor_json = serde_json::to_value(&descriptor).unwrap();
-        let signature = signature_for_descriptor(
-            &descriptor_json,
-            json!({
-                "recordId": record_id,
-                "contextId": context_id,
-            }),
-            test_signer(),
+        let signature_payload = payload_with_permission_grant(
+            &record_id,
+            &context_id,
+            spec.permission_grant_id.as_deref(),
         );
+        let signature = signature_for_descriptor(&descriptor_json, signature_payload, spec.signer);
         json!({
             "descriptor": descriptor_json,
             "recordId": record_id,
             "contextId": context_id,
             "authorization": { "signature": signature }
         })
+    }
+
+    fn with_author_delegated_grant(
+        mut message: JsonValue,
+        grant: &JsonValue,
+        signer: PrivateJwkSigner,
+    ) -> JsonValue {
+        let grant_message: Message<Descriptor> = serde_json::from_value(grant.clone()).unwrap();
+        let grant_cid = message_cid(&grant_message).unwrap();
+        let descriptor_json = message["descriptor"].clone();
+        let signature = signature_for_descriptor(
+            &descriptor_json,
+            json!({
+                "recordId": message["recordId"].as_str().unwrap(),
+                "contextId": message["contextId"].as_str().unwrap(),
+                "delegatedGrantId": grant_cid,
+            }),
+            signer,
+        );
+        message["authorization"] = json!({
+            "signature": signature,
+            "authorDelegatedGrant": grant,
+        });
+        message
     }
 
     fn signed_delete_message(record_id: &str, prune: bool, timestamp: &str) -> JsonValue {
@@ -3699,6 +3928,50 @@ mod tests {
         message_store.put(tenant, message, indexes).await.unwrap();
     }
 
+    async fn put_notes_protocol_without_actions(tenant: &str, message_store: &TestMessageStore) {
+        let definition = Definition {
+            protocol: "http://example.com/notes".to_string(),
+            published: false,
+            uses: None,
+            types: BTreeMap::from([(
+                "note".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: None,
+                },
+            )]),
+            structure: BTreeMap::from([("note".to_string(), RuleSet::default())]),
+        };
+        let descriptor = ConfigureDescriptor {
+            message_timestamp: parse_time("2024-12-31T00:00:00.000000Z"),
+            definition,
+            permission_grant_id: None,
+        };
+        let message = Message {
+            descriptor: Descriptor::Protocols(Box::new(ProtocolsDescriptor::Configure(descriptor))),
+            fields: Fields::Write(WriteFields::default()),
+        };
+        let indexes = BTreeMap::from([
+            (
+                "interface".to_string(),
+                Value::String("Protocols".to_string()),
+            ),
+            ("method".to_string(), Value::String("Configure".to_string())),
+            (
+                "protocol".to_string(),
+                Value::String("http://example.com/notes".to_string()),
+            ),
+            ("published".to_string(), Value::Bool(false)),
+            ("isLatestBaseState".to_string(), Value::Bool(true)),
+            (
+                "messageTimestamp".to_string(),
+                Value::String("2024-12-31T00:00:00.000000Z".to_string()),
+            ),
+        ]);
+        message_store.put(tenant, message, indexes).await.unwrap();
+    }
+
     fn signature_for_descriptor(
         descriptor: &JsonValue,
         extra_payload: JsonValue,
@@ -3718,6 +3991,30 @@ mod tests {
         .unwrap()
     }
 
+    fn payload_with_permission_grant(
+        record_id: &str,
+        context_id: &str,
+        permission_grant_id: Option<&str>,
+    ) -> JsonValue {
+        let mut payload = serde_json::Map::from_iter([
+            (
+                "recordId".to_string(),
+                JsonValue::String(record_id.to_string()),
+            ),
+            (
+                "contextId".to_string(),
+                JsonValue::String(context_id.to_string()),
+            ),
+        ]);
+        if let Some(permission_grant_id) = permission_grant_id {
+            payload.insert(
+                "permissionGrantId".to_string(),
+                JsonValue::String(permission_grant_id.to_string()),
+            );
+        }
+        JsonValue::Object(payload)
+    }
+
     fn parse_time(value: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(value)
             .unwrap()
@@ -3725,8 +4022,17 @@ mod tests {
     }
 
     fn test_signer() -> PrivateJwkSigner {
+        signer_for("did:example:alice")
+    }
+
+    fn bob_signer() -> PrivateJwkSigner {
+        signer_for("did:example:bob")
+    }
+
+    fn signer_for(did: &str) -> PrivateJwkSigner {
+        let key_id = format!("{did}#key1");
         PrivateJwkSigner::new(
-            "did:example:alice#key1",
+            &key_id,
             "EdDSA",
             GeneralJwsPrivateJwk {
                 kty: "OKP".to_string(),
@@ -3734,24 +4040,34 @@ mod tests {
                 d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
                 x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
                 y: None,
-                kid: Some("did:example:alice#key1".to_string()),
+                kid: Some(key_id.clone()),
                 alg: Some("EdDSA".to_string()),
             },
         )
     }
 
     fn test_resolver() -> StaticPublicKeyResolver {
-        StaticPublicKeyResolver::new(BTreeMap::from([(
-            "did:example:alice#key1".to_string(),
-            GeneralJwsPublicJwk {
-                kty: "OKP".to_string(),
-                crv: "Ed25519".to_string(),
-                x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-                y: None,
-                kid: Some("did:example:alice#key1".to_string()),
-                alg: Some("EdDSA".to_string()),
-            },
-        )]))
+        StaticPublicKeyResolver::new(BTreeMap::from([
+            (
+                "did:example:alice#key1".to_string(),
+                test_public_jwk("did:example:alice#key1"),
+            ),
+            (
+                "did:example:bob#key1".to_string(),
+                test_public_jwk("did:example:bob#key1"),
+            ),
+        ]))
+    }
+
+    fn test_public_jwk(key_id: &str) -> GeneralJwsPublicJwk {
+        GeneralJwsPublicJwk {
+            kty: "OKP".to_string(),
+            crv: "Ed25519".to_string(),
+            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
+            y: None,
+            kid: Some(key_id.to_string()),
+            alg: Some("EdDSA".to_string()),
+        }
     }
 
     #[derive(Clone, Default)]

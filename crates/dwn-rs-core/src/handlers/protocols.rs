@@ -5,18 +5,16 @@ use std::ops::Bound;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
 use chrono::SecondsFormat;
 use serde_json::Value as JsonValue;
 
-use crate::auth::{GeneralJws, GeneralJwsPublicKeyResolver};
-use crate::cid::generate_cid_from_json;
+use crate::auth::GeneralJwsPublicKeyResolver;
 use crate::descriptors::{ConfigureDescriptor, Descriptor, Protocols};
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition, RuleSet};
 use crate::interfaces::replies::Status;
+use crate::permissions;
 use crate::stores::{EnboxMessageStore, EnboxStateIndex, KeyValues};
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
@@ -44,12 +42,6 @@ pub enum ProtocolDefinitionLookupError {
     Store(String),
     #[error("{0}")]
     InvalidMessage(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AuthorizationValidationError {
-    BadRequest(String),
-    Unauthorized(String),
 }
 
 impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateIndex> {
@@ -102,6 +94,10 @@ pub async fn fetch_protocol_definition<MessageStore>(
 where
     MessageStore: EnboxMessageStore + Sync,
 {
+    if protocol_uri == permissions::PERMISSIONS_PROTOCOL_URI {
+        return Ok(permissions::permissions_protocol_definition());
+    }
+
     let filters = protocol_definition_lookup_filters(protocol_uri, message_timestamp);
     let result = message_store
         .query(
@@ -164,23 +160,36 @@ where
             Err(detail) => return DwnReply::bad_request(detail),
         };
 
-        let author = match validate_authorization_signature(
+        let authorization = match permissions::validate_authorization_signature(
             raw_message,
             self.public_key_resolver.as_deref(),
+            true,
         ) {
-            Ok(Some(author)) if author == tenant => author,
-            Ok(Some(_)) | Ok(None) => {
+            Ok(Some(authorization)) => authorization,
+            Ok(None) => {
                 return DwnReply::unauthorized(
                     "ProtocolsConfigureAuthorizationFailed: message failed authorization",
                 )
             }
-            Err(AuthorizationValidationError::BadRequest(detail)) => {
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return DwnReply::bad_request(detail)
             }
-            Err(AuthorizationValidationError::Unauthorized(detail)) => {
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return DwnReply::unauthorized(detail)
             }
         };
+
+        if let Err(detail) = permissions::authorize_protocols_configure(
+            tenant,
+            &message,
+            &authorization,
+            &self.message_store,
+        )
+        .await
+        {
+            return DwnReply::unauthorized(detail);
+        }
+        let author = authorization.author.clone();
 
         if let Err(err) = protocol_types::validate_definition(&descriptor.definition) {
             return DwnReply::bad_request(err.to_string());
@@ -336,14 +345,29 @@ where
         };
 
         let include_private = if raw_message.get("authorization").is_some() {
-            match validate_authorization_signature(raw_message, self.public_key_resolver.as_deref())
-            {
-                Ok(Some(author)) => author == tenant,
+            match permissions::validate_authorization_signature(
+                raw_message,
+                self.public_key_resolver.as_deref(),
+                false,
+            ) {
+                Ok(Some(authorization)) => {
+                    match permissions::authorize_protocols_query(
+                        tenant,
+                        &message,
+                        &authorization,
+                        &self.message_store,
+                    )
+                    .await
+                    {
+                        Ok(include_private) => include_private,
+                        Err(detail) => return DwnReply::unauthorized(detail),
+                    }
+                }
                 Ok(None) => false,
-                Err(AuthorizationValidationError::BadRequest(detail)) => {
+                Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                     return DwnReply::bad_request(detail)
                 }
-                Err(AuthorizationValidationError::Unauthorized(detail)) => {
+                Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
             }
@@ -555,128 +579,8 @@ fn compare_configure_messages(
         .then_with(|| left_cid.cmp(right_cid))
 }
 
-fn validate_authorization_signature(
-    raw_message: &JsonValue,
-    public_key_resolver: Option<&(dyn GeneralJwsPublicKeyResolver + Send + Sync)>,
-) -> Result<Option<String>, AuthorizationValidationError> {
-    let authorization = raw_message.get("authorization").ok_or_else(|| {
-        AuthorizationValidationError::Unauthorized(
-            "AuthenticateJwsMissing: authorization signature is required".to_string(),
-        )
-    })?;
-    let signature = authorization.get("signature").ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "AuthenticateJwsMissing: authorization signature is required".to_string(),
-        )
-    })?;
-    let jws: GeneralJws = serde_json::from_value(signature.clone()).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!("AuthenticationInvalidSignature: {err}"))
-    })?;
-    if jws.signatures.len() != 1 {
-        return Err(AuthorizationValidationError::BadRequest(
-            "AuthenticationMoreThanOneSignatureNotSupported: expected exactly one signature"
-                .to_string(),
-        ));
-    }
-
-    let payload = URL_SAFE_NO_PAD.decode(&jws.payload).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignaturePayload: {err}"
-        ))
-    })?;
-    let payload: JsonValue = serde_json::from_slice(&payload).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignaturePayload: {err}"
-        ))
-    })?;
-    let descriptor_cid = payload
-        .get("descriptorCid")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignaturePayload: descriptorCid is required".to_string(),
-            )
-        })?;
-    let descriptor = raw_message.get("descriptor").ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "AuthenticationInvalidSignaturePayload: descriptor is required".to_string(),
-        )
-    })?;
-    let expected = generate_cid_from_json(descriptor)
-        .map_err(|err| {
-            AuthorizationValidationError::BadRequest(format!(
-                "AuthenticationInvalidSignaturePayload: {err}"
-            ))
-        })?
-        .to_string();
-    if descriptor_cid != expected {
-        return Err(AuthorizationValidationError::BadRequest(format!(
-            "AuthenticateDescriptorCidMismatch: provided descriptorCid {descriptor_cid} does not match expected CID {expected}"
-        )));
-    }
-    let _unverified_author = signer_did_from_jws(&jws)?;
-
-    public_key_resolver
-        .map(|resolver| {
-            jws.verify_signatures(resolver)
-                .map_err(|err| {
-                    AuthorizationValidationError::Unauthorized(format!("{}: {err}", err.code()))
-                })
-                .and_then(|signers| {
-                    signers.into_iter().next().ok_or_else(|| {
-                        AuthorizationValidationError::Unauthorized(
-                            "AuthenticateJwsMissing: no signer found".to_string(),
-                        )
-                    })
-                })
-        })
-        .transpose()
-}
-
 fn extract_author(message: &Message<Descriptor>) -> Option<String> {
-    let raw_message = serde_json::to_value(message).ok()?;
-    let signature = raw_message.get("authorization")?.get("signature")?;
-    let jws: GeneralJws = serde_json::from_value(signature.clone()).ok()?;
-    signer_did_from_jws(&jws).ok()
-}
-
-fn signer_did_from_jws(jws: &GeneralJws) -> Result<String, AuthorizationValidationError> {
-    let protected = &jws
-        .signatures
-        .first()
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: signature is required".to_string(),
-            )
-        })?
-        .protected;
-    let protected = URL_SAFE_NO_PAD.decode(protected).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignatureProtectedHeader: {err}"
-        ))
-    })?;
-    let protected: JsonValue = serde_json::from_slice(&protected).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignatureProtectedHeader: {err}"
-        ))
-    })?;
-    let kid = protected
-        .get("kid")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: kid is required".to_string(),
-            )
-        })?;
-    kid.split('#')
-        .next()
-        .filter(|did| !did.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: kid is required".to_string(),
-            )
-        })
+    permissions::message_author(message)
 }
 
 fn validate_refs_and_roles_recursively(
@@ -809,11 +713,17 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, RwLock};
 
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+
     use crate::auth::{
         GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner,
         StaticPublicKeyResolver,
     };
-    use crate::descriptors::{ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols};
+    use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
+    use crate::descriptors::{
+        ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
+    };
     use crate::dwn::{Dwn, MessageKind};
     use crate::fields::WriteFields;
     use crate::interfaces::messages::protocols::{
@@ -821,7 +731,7 @@ mod tests {
     };
     use crate::state_index::MemoryStateIndex;
     use crate::stores::{EnboxMessageQueryResult, EnboxMessageStore};
-    use crate::{Fields, Message, Pagination};
+    use crate::{Fields, MapValue, Message, Pagination, Value};
 
     use super::*;
 
@@ -1027,6 +937,59 @@ mod tests {
         assert_eq!(
             entries[0]["descriptor"]["definition"]["protocol"].as_str(),
             Some("http://example.com/public")
+        );
+    }
+
+    #[tokio::test]
+    async fn protocols_query_with_permission_grant_returns_private_configure() {
+        let mut message_store = TestMessageStore::default();
+        let mut state_index = MemoryStateIndex::default();
+        message_store.open().await.unwrap();
+        state_index.open().await.unwrap();
+        let configure_handler = ProtocolsConfigureHandler::with_public_key_resolver(
+            message_store.clone(),
+            state_index,
+            test_resolver(),
+        );
+        let query_handler = ProtocolsQueryHandler::with_public_key_resolver(
+            message_store.clone(),
+            test_resolver_with_bob(),
+        );
+
+        configure_handler
+            .handle_configure(
+                "did:example:alice",
+                &signed_configure_message(
+                    "http://example.com/private",
+                    false,
+                    "2025-01-01T00:00:00.000000Z",
+                ),
+            )
+            .await;
+        put_protocols_query_grant(
+            "did:example:alice",
+            &message_store,
+            "grant-protocols-query",
+            Some("http://example.com/private"),
+        )
+        .await;
+
+        let reply = query_handler
+            .handle_query(
+                "did:example:alice",
+                &signed_query_message_with_grant(
+                    Some("http://example.com/private"),
+                    test_signer_with_key_id("did:example:bob#key1"),
+                    "grant-protocols-query",
+                ),
+            )
+            .await;
+        assert_eq!(reply.status.code, 200);
+        let entries = reply.body["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0]["descriptor"]["definition"]["published"].as_bool(),
+            Some(false)
         );
     }
 
@@ -1434,6 +1397,27 @@ mod tests {
         })
     }
 
+    fn signed_query_message_with_grant(
+        protocol: Option<&str>,
+        signer: PrivateJwkSigner,
+        permission_grant_id: &str,
+    ) -> JsonValue {
+        let mut descriptor = query_descriptor(protocol);
+        descriptor.permission_grant_id = Some(permission_grant_id.to_string());
+        let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+        let payload = serde_json::json!({
+            "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
+            "permissionGrantId": permission_grant_id,
+        });
+        let signature =
+            GeneralJws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+                .unwrap();
+        serde_json::json!({
+            "descriptor": descriptor_json,
+            "authorization": { "signature": signature }
+        })
+    }
+
     fn unsigned_query_message(protocol: Option<&str>) -> JsonValue {
         serde_json::json!({ "descriptor": query_descriptor(protocol) })
     }
@@ -1447,6 +1431,98 @@ mod tests {
             filter: filter.map(|filter| serde_json::from_value(filter).unwrap()),
             permission_grant_id: None,
         }
+    }
+
+    async fn put_protocols_query_grant(
+        tenant: &str,
+        message_store: &TestMessageStore,
+        grant_id: &str,
+        protocol: Option<&str>,
+    ) {
+        let scope = match protocol {
+            Some(protocol) => serde_json::json!({
+                "interface": "Protocols",
+                "method": "Query",
+                "protocol": protocol,
+            }),
+            None => serde_json::json!({
+                "interface": "Protocols",
+                "method": "Query",
+            }),
+        };
+        let data = serde_json::to_vec(&serde_json::json!({
+            "dateExpires": "2025-02-01T00:00:00.000000Z",
+            "scope": scope,
+        }))
+        .unwrap();
+        let descriptor = RecordsWriteDescriptor {
+            protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+            protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+            recipient: Some("did:example:bob".to_string()),
+            schema: None,
+            tags: protocol.map(|protocol| {
+                MapValue::from([("protocol".to_string(), Value::String(protocol.to_string()))])
+            }),
+            parent_id: None,
+            data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_size: data.len() as u64,
+            date_created: chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00.000000Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            message_timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00.000000Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            published: None,
+            date_published: None,
+            data_format: "application/json".to_string(),
+            permission_grant_id: None,
+            squash: None,
+        };
+        let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+        let payload = serde_json::json!({
+            "recordId": grant_id,
+            "contextId": grant_id,
+            "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
+        });
+        let signature = GeneralJws::create(
+            serde_json::to_vec(&payload).unwrap().as_slice(),
+            &[test_signer()],
+        )
+        .unwrap();
+        let message: Message<Descriptor> = serde_json::from_value(serde_json::json!({
+            "descriptor": descriptor_json,
+            "recordId": grant_id,
+            "contextId": grant_id,
+            "authorization": { "signature": signature },
+            "encodedData": URL_SAFE_NO_PAD.encode(data),
+        }))
+        .unwrap();
+        let indexes = BTreeMap::from([
+            (
+                "interface".to_string(),
+                Value::String("Records".to_string()),
+            ),
+            ("method".to_string(), Value::String("Write".to_string())),
+            (
+                "protocol".to_string(),
+                Value::String(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+            ),
+            (
+                "protocolPath".to_string(),
+                Value::String(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+            ),
+            (
+                "recipient".to_string(),
+                Value::String("did:example:bob".to_string()),
+            ),
+            ("recordId".to_string(), Value::String(grant_id.to_string())),
+            ("isLatestBaseState".to_string(), Value::Bool(true)),
+            (
+                "messageTimestamp".to_string(),
+                Value::String("2025-01-01T00:00:00.000000Z".to_string()),
+            ),
+        ]);
+        message_store.put(tenant, message, indexes).await.unwrap();
     }
 
     fn configure_descriptor(

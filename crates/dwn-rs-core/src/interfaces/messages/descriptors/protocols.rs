@@ -43,6 +43,14 @@ impl MessageParameters for ConfigureParameters {
 
         Ok((descriptor, None))
     }
+
+    fn delegated_grant(&self) -> Option<Message<RecordsWriteDescriptor>> {
+        self.delegated_grant.clone()
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
+    }
 }
 
 #[descriptor(interface = PROTOCOLS, method = CONFIGURE, fields = crate::auth::Authorization, parameters = ConfigureParameters)]
@@ -85,6 +93,10 @@ impl MessageParameters for QueryParameters {
         };
 
         Ok((descriptor, None))
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
     }
 }
 
