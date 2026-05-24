@@ -58,9 +58,18 @@ pub struct DwnServerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistrationMethod {
+    /// The DWN endpoint did not advertise any registration requirement.
     NotRequired,
+    /// The DWN endpoint advertised `provider-auth-v0` and the agent provided
+    /// a registration token via [`TenantRegistrationClient`].
     ProviderAuthToken,
-    ProofOfWork,
+    /// The DWN endpoint advertised a registration requirement that this
+    /// crate does not yet implement (the inherited TypeScript implementation
+    /// computes a proof-of-work token; the Rust port is tracked as a
+    /// follow-up). [`TenantRegistrationClient::register_tenant`] is invoked
+    /// without a token; the server will reject the request unless it
+    /// accepts unauthenticated registration.
+    Anonymous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,7 +200,7 @@ where
                 records.push(TenantRegistrationRecord {
                     endpoint: endpoint.clone(),
                     did: did.clone(),
-                    method: RegistrationMethod::ProofOfWork,
+                    method: RegistrationMethod::Anonymous,
                 });
             }
         }

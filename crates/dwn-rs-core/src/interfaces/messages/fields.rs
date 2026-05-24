@@ -24,9 +24,16 @@ pub trait MessageFields: Default {
         // no-op
     }
 
-    fn set_authorization(&mut self, mut _authorization: Authorization) {
-        unimplemented!("set_authorization not implemented for this message fields type");
-    }
+    /// Override for descriptor field types that own an [`Authorization`].
+    ///
+    /// The default implementation is a no-op so that field types without a
+    /// signature (descriptors that intentionally do not carry authorization,
+    /// future descriptors that aren't yet wired up) can keep using the
+    /// trait without forcing every caller of [`Message::create`] into a
+    /// `match`. Field types that do carry authorization (e.g.
+    /// [`Authorization`], [`WriteFields`], [`InitialWriteField`]) override
+    /// this with the variant-specific assignment.
+    fn set_authorization(&mut self, _authorization: Authorization) {}
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]

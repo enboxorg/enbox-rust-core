@@ -6,20 +6,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::interfaces::messages::descriptors::{
+    CONFIGURE, COUNT, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, SUBSCRIBE, SYNC, WRITE,
+};
 use crate::interfaces::replies::Status;
-
-const MESSAGES: &str = "Messages";
-const PROTOCOLS: &str = "Protocols";
-const RECORDS: &str = "Records";
-
-const CONFIGURE: &str = "Configure";
-const COUNT: &str = "Count";
-const DELETE: &str = "Delete";
-const QUERY: &str = "Query";
-const READ: &str = "Read";
-const SUBSCRIBE: &str = "Subscribe";
-const SYNC: &str = "Sync";
-const WRITE: &str = "Write";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantGateResult {

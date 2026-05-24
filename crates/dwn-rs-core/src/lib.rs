@@ -1,27 +1,33 @@
-//! Decentralized Web Node core library.
+//! Native Rust core for Enbox Decentralized Web Nodes (DWN).
 //!
-//! This library provides core traits and implementations to interact with Decentralized
-//! Web Nodes (DWN) services. It is intended to be used by other libraries and applications
-//! that need to interact with DWN services.
+//! This crate provides the DWN message model, handlers, agent identity, sync,
+//! state index, and supporting traits used by Enbox apps that need to run a
+//! DWN without a JavaScript runtime. Mobile, desktop, and server consumers
+//! build on the same core.
 //!
-//! The library is designed to be used in a variety of environments, including WebAssembly
-//! and native applications. It is written in Rust and can be compiled to WebAssembly for
-//! use in web browsers. See the `dwn-rs-wasm` crate for more information on using this.
+//! The behavior source of truth is the TypeScript implementation in
+//! [`@enbox/dwn-sdk-js`](https://github.com/enboxorg/enbox); the Rust crates
+//! are kept in conformance via fixtures (see `docs/CONFORMANCE.md`).
 //!
-//! The primary features of this library are the core DWN types and traits, including:
-//! - [`messages::<D: Descriptor, F: Fields>`]
-//! - [`messages::Descriptor`]: A descriptor for a message.
-//! - [`messages::Fields`]: Additional fields that can be included in a message.
-//! - [`value::Value`]: A generic value type that can be used in messages.
-//! - [`value::MapValue`]: A map of values that can be used in messages.`
+//! # Entry points
 //!
-//! Additionally, there are strongly typed values for common DWN messages, including:
-//! - [`messages::records::RecordsRead`]: A message for reading records.
-//! - [`messages::records::RecordsQuery`]: A message for querying records.
-//! - [`messages::records::RecordsWrite`]: A message for writing records.
-//! - [`messages::records::RecordsSubscribe`]: A message for subscribing to records.
-//! - [`messages::records::RecordsDelete`]: A message for deleting records.
-#![doc(issue_tracker_base_url = "https://github.com/enmand/dwn-rsissues/")]
+//! - [`dwn::Dwn`] processes DWN messages and dispatches to method handlers.
+//! - [`interfaces::Message`] is the typed DWN message model.
+//! - [`stores`] defines the persistence traits a DWN engine requires.
+//! - [`agent`], [`connect`], [`setup`] cover identity, connect/delegate,
+//!   and tenant setup flows.
+//! - [`sync`] covers the native `MessagesSync` engine and dead-letter
+//!   bookkeeping.
+//!
+//! # Modules
+//!
+//! All modules under `crate::` are public. Top-level re-exports are limited
+//! to the most commonly used types ([`dwn`], [`interfaces`], [`filters`],
+//! [`value`], [`utils`]) to keep the prelude small. Other modules
+//! (`agent`, `auth`, `connect`, `desktop`, `encryption`, `errors`, `events`,
+//! `handlers`, `local`, `mobile`, `permissions`, `setup`, `state_index`,
+//! `stores`, `sync`) are accessed via their qualified paths.
+#![doc(issue_tracker_base_url = "https://github.com/enboxorg/enbox-rust-core/issues/")]
 pub mod agent;
 pub mod auth;
 pub mod connect;

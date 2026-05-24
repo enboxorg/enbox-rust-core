@@ -116,7 +116,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
     assert!(registration
         .records
         .iter()
-        .all(|record| record.method == RegistrationMethod::ProofOfWork));
+        .all(|record| record.method == RegistrationMethod::Anonymous));
 
     let pulled_remote_protocol = remote
         .protocol(&restored.portable_did.uri, &protocol.protocol)
