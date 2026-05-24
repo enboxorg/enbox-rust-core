@@ -5,16 +5,26 @@ use std::sync::{Arc, OnceLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use chrono::SecondsFormat;
 use futures_util::TryStreamExt;
 use k256::sha2::{Digest, Sha256};
 use serde_json::Value as JsonValue;
 
 use crate::auth::GeneralJwsPublicKeyResolver;
-use crate::descriptors::{Descriptor, Messages, MessagesSyncDescriptor, Records};
+use crate::cid::generate_cid_from_json;
+use crate::descriptors::{
+    Descriptor, Messages, MessagesSubscribeDescriptor, MessagesSyncDescriptor, Records,
+};
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
+use crate::errors::EventLogError;
+use crate::filters::message_filters::Messages as MessagesFilter;
+use crate::filters::{Filter, FilterKey, Filters};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions;
-use crate::stores::{EnboxDataStore, EnboxMessageStore, EnboxStateIndex, StateHash};
+use crate::stores::{
+    EnboxDataStore, EnboxEventLog, EnboxMessageStore, EnboxStateIndex, EventLogSubscribeOptions,
+    EventSubscription, StateHash, SubscriptionListener,
+};
 use crate::{Fields, Message};
 
 const MAX_SYNC_DEPTH: usize = 256;
@@ -23,11 +33,171 @@ const MAX_INLINE_DATA_SIZE: u64 = 30_000;
 static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 
 #[derive(Clone)]
+pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
+    message_store: MessageStore,
+    event_log: EventLog,
+    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+}
+
+pub struct SubscribeReply {
+    pub reply: DwnReply,
+    pub subscription: Option<EventSubscription>,
+}
+
+#[derive(Clone)]
 pub struct MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
     public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
+    pub fn new(message_store: MessageStore, event_log: EventLog) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        event_log: EventLog,
+        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+}
+
+impl<MessageStore, EventLog> MethodHandler for MessagesSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move {
+            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
+                .await
+                .reply
+        })
+    }
+}
+
+impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+{
+    pub async fn handle_subscribe(
+        &self,
+        tenant: &str,
+        raw_message: &JsonValue,
+        listener: SubscriptionListener,
+    ) -> SubscribeReply {
+        let message = match parse_message(raw_message, "MessagesSubscribeParseFailed") {
+            Ok(message) => message,
+            Err(detail) => return subscribe_reply(DwnReply::bad_request(detail), None),
+        };
+        let descriptor = match messages_subscribe_descriptor(&message) {
+            Ok(descriptor) => descriptor,
+            Err(detail) => return subscribe_reply(DwnReply::bad_request(detail), None),
+        };
+
+        let authorization = match permissions::validate_authorization_signature(
+            raw_message,
+            self.public_key_resolver.as_deref(),
+            true,
+        ) {
+            Ok(Some(authorization)) => authorization,
+            Ok(None) => {
+                return subscribe_reply(
+                    DwnReply::unauthorized(
+                        "MessagesSubscribeAuthorizationFailed: message failed authorization",
+                    ),
+                    None,
+                )
+            }
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
+                return subscribe_reply(DwnReply::bad_request(detail), None)
+            }
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
+                return subscribe_reply(DwnReply::unauthorized(detail), None)
+            }
+        };
+
+        if let Err(detail) = self
+            .authorize_messages_subscribe(tenant, &message, descriptor, &authorization)
+            .await
+        {
+            return subscribe_reply(DwnReply::unauthorized(detail), None);
+        }
+
+        let subscription_id = match generate_cid_from_json(raw_message) {
+            Ok(cid) => cid.to_string(),
+            Err(err) => {
+                return subscribe_reply(
+                    DwnReply::bad_request(format!("MessagesSubscribeCidFailed: {err}")),
+                    None,
+                )
+            }
+        };
+        let filters = messages_filters_to_filters(&descriptor.filters);
+        let subscription = match self
+            .event_log
+            .subscribe(
+                tenant,
+                &subscription_id,
+                listener,
+                Some(EventLogSubscribeOptions {
+                    cursor: descriptor.cursor.clone(),
+                    filters,
+                }),
+            )
+            .await
+        {
+            Ok(subscription) => subscription,
+            Err(err) => return subscribe_reply(event_log_error_reply(err), None),
+        };
+        let reply =
+            DwnReply::ok().with_body("subscriptionId", JsonValue::String(subscription.id.clone()));
+        subscribe_reply(reply, Some(subscription))
+    }
+
+    async fn authorize_messages_subscribe(
+        &self,
+        tenant: &str,
+        message: &Message<Descriptor>,
+        descriptor: &MessagesSubscribeDescriptor,
+        authorization: &permissions::AuthorizationContext,
+    ) -> Result<(), String> {
+        if authorization.author == tenant {
+            return Ok(());
+        }
+        let protocols = descriptor
+            .filters
+            .iter()
+            .filter_map(|filter| filter.protocol.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        permissions::authorize_messages_subscribe_or_sync(
+            tenant,
+            message,
+            &protocols,
+            authorization,
+            &self.message_store,
+        )
+        .await
+        .map_err(|detail| format!("MessagesSubscribeAuthorizationFailed: {detail}"))
+    }
 }
 
 impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
@@ -81,7 +251,7 @@ where
     StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
 {
     pub async fn handle_sync(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
-        let message = match parse_message(raw_message) {
+        let message = match parse_message(raw_message, "MessagesSyncParseFailed") {
             Ok(message) => message,
             Err(detail) => return DwnReply::bad_request(detail),
         };
@@ -397,9 +567,22 @@ where
     }
 }
 
-fn parse_message(raw_message: &JsonValue) -> Result<Message<Descriptor>, String> {
-    serde_json::from_value(raw_message.clone())
-        .map_err(|err| format!("MessagesSyncParseFailed: {err}"))
+fn parse_message(raw_message: &JsonValue, prefix: &str) -> Result<Message<Descriptor>, String> {
+    serde_json::from_value(raw_message.clone()).map_err(|err| format!("{prefix}: {err}"))
+}
+
+fn messages_subscribe_descriptor(
+    message: &Message<Descriptor>,
+) -> Result<&MessagesSubscribeDescriptor, String> {
+    match &message.descriptor {
+        Descriptor::Messages(messages) => match messages.as_ref() {
+            Messages::Subscribe(descriptor) => Ok(descriptor),
+            _ => Err(
+                "MessagesSubscribeParseFailed: expected MessagesSubscribe descriptor".to_string(),
+            ),
+        },
+        _ => Err("MessagesSubscribeParseFailed: expected MessagesSubscribe descriptor".to_string()),
+    }
 }
 
 fn messages_sync_descriptor(
@@ -411,6 +594,73 @@ fn messages_sync_descriptor(
             _ => Err("MessagesSyncParseFailed: expected MessagesSync descriptor".to_string()),
         },
         _ => Err("MessagesSyncParseFailed: expected MessagesSync descriptor".to_string()),
+    }
+}
+
+fn messages_filters_to_filters(filters: &[MessagesFilter]) -> Option<Filters> {
+    if filters.is_empty() {
+        return None;
+    }
+    Some(Filters::from(
+        filters
+            .iter()
+            .map(messages_filter_to_filter_map)
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn messages_filter_to_filter_map(
+    filter: &MessagesFilter,
+) -> BTreeMap<FilterKey, Filter<crate::Value>> {
+    let mut map = BTreeMap::new();
+    insert_messages_string_filter(&mut map, "interface", filter.interface.as_ref());
+    insert_messages_string_filter(&mut map, "method", filter.method.as_ref());
+    insert_messages_string_filter(&mut map, "protocol", filter.protocol.as_ref());
+    if let Some(message_timestamp) = filter.message_timestamp {
+        map.insert(
+            FilterKey::Index("messageTimestamp".to_string()),
+            Filter::Equal(crate::Value::String(
+                message_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
+            )),
+        );
+    }
+    map
+}
+
+fn insert_messages_string_filter(
+    map: &mut BTreeMap<FilterKey, Filter<crate::Value>>,
+    key: &str,
+    value: Option<&String>,
+) {
+    if let Some(value) = value {
+        map.insert(
+            FilterKey::Index(key.to_string()),
+            Filter::Equal(crate::Value::String(value.clone())),
+        );
+    }
+}
+
+fn subscribe_reply(reply: DwnReply, subscription: Option<EventSubscription>) -> SubscribeReply {
+    SubscribeReply {
+        reply,
+        subscription,
+    }
+}
+
+fn event_log_error_reply(error: EventLogError) -> DwnReply {
+    match error {
+        EventLogError::ProgressGap(gap_info) => {
+            let mut error = serde_json::to_value(&*gap_info)
+                .unwrap_or_else(|_| JsonValue::Object(serde_json::Map::new()));
+            if let Some(error) = error.as_object_mut() {
+                error.insert(
+                    "code".to_string(),
+                    JsonValue::String("ProgressGap".to_string()),
+                );
+            }
+            DwnReply::new(410, "Progress token gap").with_body("error", error)
+        }
+        error => store_error_reply(error.to_string()),
     }
 }
 
@@ -551,12 +801,17 @@ mod tests {
         StaticPublicKeyResolver,
     };
     use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
-    use crate::descriptors::{MessagesSyncDescriptor, RecordsWriteDescriptor};
+    use crate::descriptors::{
+        MessagesSubscribeDescriptor, MessagesSyncDescriptor, RecordsWriteDescriptor,
+    };
     use crate::errors::{DataStoreError, MessageStoreError};
+    use crate::events::MessageEvent;
     use crate::interfaces::messages::descriptors::messages::SyncAction;
+    use crate::local::MemoryEventLog;
     use crate::state_index::MemoryStateIndex;
     use crate::stores::{
         EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
+        SubscriptionMessage,
     };
     use crate::{MapValue, Value};
 
@@ -679,6 +934,144 @@ mod tests {
             .contains("MessagesGrantAuthorizationMismatchedProtocol"));
     }
 
+    #[tokio::test]
+    async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
+        let message_store = TestMessageStore::default();
+        let mut event_log = MemoryEventLog::default();
+        event_log.open().await.unwrap();
+        let (_, stored_message) = records_write_with_inline_data();
+        let first = event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: stored_message.clone(),
+                    initial_write: None,
+                },
+                event_indexes("http://example.com/notes"),
+                "first-cid",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: stored_message,
+                    initial_write: None,
+                },
+                event_indexes("http://example.com/notes"),
+                "second-cid",
+            )
+            .await
+            .unwrap();
+
+        let delivered = Arc::new(RwLock::new(Vec::new()));
+        let delivered_for_listener = delivered.clone();
+        let handler = MessagesSubscribeHandler::with_public_key_resolver(
+            message_store,
+            event_log,
+            test_resolver(),
+        );
+        let request = signed_subscribe_message(SubscribeSpec {
+            filters: vec![MessagesFilter {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            }],
+            cursor: Some(first),
+            ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+        });
+
+        let result = handler
+            .handle_subscribe(
+                "did:example:alice",
+                &request,
+                Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
+            )
+            .await;
+        assert_eq!(
+            result.reply.status.code, 200,
+            "{}",
+            result.reply.status.detail
+        );
+        assert_eq!(
+            result.reply.body["subscriptionId"],
+            result.subscription.as_ref().unwrap().id
+        );
+        let delivered = delivered.read().unwrap();
+        assert_eq!(delivered.len(), 2);
+        match &delivered[0] {
+            SubscriptionMessage::Event { cursor, .. } => {
+                assert_eq!(cursor.position, "2");
+                assert_eq!(cursor.message_cid, "second-cid");
+            }
+            other => panic!("expected event, got {other:?}"),
+        }
+        match &delivered[1] {
+            SubscriptionMessage::Eose { cursor } => {
+                assert_eq!(cursor.position, "2");
+                assert_eq!(cursor.message_cid, "second-cid");
+            }
+            other => panic!("expected eose, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn messages_subscribe_maps_progress_gap_to_410() {
+        let message_store = TestMessageStore::default();
+        let mut event_log = MemoryEventLog::new(1);
+        event_log.open().await.unwrap();
+        let (_, stored_message) = records_write_with_inline_data();
+        let mut old_cursor = event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: stored_message.clone(),
+                    initial_write: None,
+                },
+                event_indexes("http://example.com/notes"),
+                "first-cid",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        old_cursor.position = "0".to_string();
+        event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: stored_message,
+                    initial_write: None,
+                },
+                event_indexes("http://example.com/notes"),
+                "second-cid",
+            )
+            .await
+            .unwrap();
+
+        let handler = MessagesSubscribeHandler::with_public_key_resolver(
+            message_store,
+            event_log,
+            test_resolver(),
+        );
+        let request = signed_subscribe_message(SubscribeSpec {
+            filters: vec![MessagesFilter {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            }],
+            cursor: Some(old_cursor),
+            ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+        });
+
+        let result = handler
+            .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+            .await;
+        assert_eq!(result.reply.status.code, 410);
+        assert_eq!(result.reply.body["error"]["code"], "ProgressGap");
+        assert_eq!(result.reply.body["error"]["reason"], "token_too_old");
+        assert!(result.subscription.is_none());
+    }
+
     fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
         let data = Bytes::from_static(b"hello");
         let descriptor = RecordsWriteDescriptor {
@@ -711,6 +1104,17 @@ mod tests {
             "encodedData": URL_SAFE_NO_PAD.encode(data),
         });
         (cid, serde_json::from_value(stored_message).unwrap())
+    }
+
+    fn event_indexes(protocol: &str) -> MapValue {
+        MapValue::from([
+            (
+                "interface".to_string(),
+                Value::String("Records".to_string()),
+            ),
+            ("method".to_string(), Value::String("Write".to_string())),
+            ("protocol".to_string(), Value::String(protocol.to_string())),
+        ])
     }
 
     fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<Descriptor> {
@@ -768,6 +1172,62 @@ mod tests {
             "encodedData": URL_SAFE_NO_PAD.encode(data),
         }))
         .unwrap()
+    }
+
+    #[derive(Clone)]
+    struct SubscribeSpec {
+        timestamp: String,
+        filters: Vec<MessagesFilter>,
+        permission_grant_id: Option<String>,
+        cursor: Option<crate::stores::ProgressToken>,
+        signer: PrivateJwkSigner,
+    }
+
+    impl SubscribeSpec {
+        fn new(timestamp: &str) -> Self {
+            Self {
+                timestamp: timestamp.to_string(),
+                filters: Vec::new(),
+                permission_grant_id: None,
+                cursor: None,
+                signer: test_signer(),
+            }
+        }
+    }
+
+    fn signed_subscribe_message(spec: SubscribeSpec) -> JsonValue {
+        let descriptor = MessagesSubscribeDescriptor {
+            message_timestamp: parse_time(&spec.timestamp),
+            filters: spec.filters,
+            permission_grant_id: spec.permission_grant_id.clone(),
+            cursor: spec.cursor,
+        };
+        let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+        let mut payload = serde_json::Map::from_iter([(
+            "descriptorCid".to_string(),
+            JsonValue::String(
+                generate_cid_from_json(&descriptor_json)
+                    .unwrap()
+                    .to_string(),
+            ),
+        )]);
+        if let Some(permission_grant_id) = spec.permission_grant_id {
+            payload.insert(
+                "permissionGrantId".to_string(),
+                JsonValue::String(permission_grant_id),
+            );
+        }
+        let signature = GeneralJws::create(
+            serde_json::to_vec(&JsonValue::Object(payload))
+                .unwrap()
+                .as_slice(),
+            &[spec.signer],
+        )
+        .unwrap();
+        json!({
+            "descriptor": descriptor_json,
+            "authorization": { "signature": signature },
+        })
     }
 
     #[derive(Clone)]

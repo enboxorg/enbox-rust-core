@@ -1529,6 +1529,7 @@ mod tests {
                         ..Default::default()
                     }],
                     permission_grant_id: Some("grant-1".to_string()),
+                    cursor: None,
                 },
             ))),
             fields: Fields::Authorization(Authorization::default()),

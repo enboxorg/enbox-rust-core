@@ -119,6 +119,7 @@ pub struct SubscribeParameters {
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(rename = "permissionGrantId")]
     pub permission_grant_id: Option<String>,
+    pub cursor: Option<crate::stores::ProgressToken>,
 }
 
 impl MessageValidator for SubscribeParameters {}
@@ -136,6 +137,7 @@ impl MessageParameters for SubscribeParameters {
             message_timestamp: self.message_timestamp,
             filters,
             permission_grant_id: self.permission_grant_id.clone(),
+            cursor: self.cursor.clone(),
         };
 
         Ok((descriptor, None))
@@ -157,6 +159,8 @@ pub struct SubscribeDescriptor {
     pub filters: Vec<MessagesFilter>,
     #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
     pub permission_grant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<crate::stores::ProgressToken>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
@@ -310,6 +314,7 @@ mod test {
             message_timestamp,
             filters,
             permission_grant_id: None,
+            cursor: None,
         };
         let json = json!({
             "messageTimestamp": message_timestamp,

@@ -20,6 +20,7 @@ use crate::descriptors::{
     RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
+use crate::errors::EventLogError;
 use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
@@ -28,7 +29,10 @@ use crate::interfaces::messages::protocols::{
 };
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{EnboxDataStore, EnboxMessageStore, EnboxStateIndex, KeyValues};
+use crate::stores::{
+    EnboxDataStore, EnboxEventLog, EnboxMessageStore, EnboxStateIndex, EventLogSubscribeOptions,
+    EventSubscription, KeyValues, SubscriptionListener,
+};
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
 const RECORDS_INTERFACE: &str = "Records";
@@ -74,6 +78,18 @@ pub struct RecordsDeleteHandler<MessageStore, DataStore, StateIndex> {
 pub struct RecordsSubscribeHandler<MessageStore> {
     message_store: MessageStore,
     public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+}
+
+#[derive(Clone)]
+pub struct RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
+    message_store: MessageStore,
+    event_log: EventLog,
+    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+}
+
+pub struct RecordsSubscribeReply {
+    pub reply: DwnReply,
+    pub subscription: Option<EventSubscription>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +241,28 @@ impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
     }
 }
 
+impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
+    pub fn new(message_store: MessageStore, event_log: EventLog) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        event_log: EventLog,
+        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+}
+
 impl<MessageStore, DataStore, StateIndex> MethodHandler
     for RecordsWriteHandler<MessageStore, DataStore, StateIndex>
 where
@@ -304,6 +342,24 @@ where
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
         Box::pin(async move { self.handle_subscribe(request.tenant, request.message).await })
+    }
+}
+
+impl<MessageStore, EventLog> MethodHandler
+    for RecordsEventLogSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move {
+            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
+                .await
+                .reply
+        })
     }
 }
 
@@ -1588,6 +1644,191 @@ where
     }
 }
 
+impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+{
+    pub async fn handle_subscribe(
+        &self,
+        tenant: &str,
+        raw_message: &JsonValue,
+        listener: SubscriptionListener,
+    ) -> RecordsSubscribeReply {
+        let message = match parse_message(raw_message) {
+            Ok(message) => message,
+            Err(detail) => return records_subscribe_reply(DwnReply::bad_request(detail), None),
+        };
+        let descriptor = match records_subscribe_descriptor(&message) {
+            Ok(descriptor) => descriptor.clone(),
+            Err(detail) => return records_subscribe_reply(DwnReply::bad_request(detail), None),
+        };
+
+        let signature = match permissions::validate_authorization_signature(
+            raw_message,
+            self.public_key_resolver.as_deref(),
+            false,
+        ) {
+            Ok(signature) => signature,
+            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
+                return records_subscribe_reply(DwnReply::bad_request(detail), None)
+            }
+            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
+                return records_subscribe_reply(DwnReply::unauthorized(detail), None)
+            }
+        };
+
+        let (event_filters, query_filters, author) = match self
+            .records_subscribe_filters(tenant, &message, &descriptor, signature.as_ref())
+            .await
+        {
+            Ok(filters) => filters,
+            Err(reply) => return records_subscribe_reply(reply, None),
+        };
+
+        let subscription_id = match generate_cid_from_json(raw_message) {
+            Ok(cid) => cid.to_string(),
+            Err(err) => {
+                return records_subscribe_reply(
+                    DwnReply::bad_request(format!("RecordsSubscribeCidFailed: {err}")),
+                    None,
+                )
+            }
+        };
+
+        let subscription = match self
+            .event_log
+            .subscribe(
+                tenant,
+                &subscription_id,
+                listener,
+                Some(EventLogSubscribeOptions {
+                    cursor: descriptor.cursor.clone(),
+                    filters: Some(event_filters),
+                }),
+            )
+            .await
+        {
+            Ok(subscription) => subscription,
+            Err(err) => return records_subscribe_reply(event_log_error_reply(err), None),
+        };
+
+        if descriptor.cursor.is_some() {
+            let reply = DwnReply::ok()
+                .with_body("subscriptionId", JsonValue::String(subscription.id.clone()));
+            return records_subscribe_reply(reply, Some(subscription));
+        }
+
+        let result = match self
+            .message_store
+            .query(
+                tenant,
+                query_filters,
+                Some(date_sort_to_message_sort(
+                    descriptor.date_sort.as_ref(),
+                    false,
+                )),
+                descriptor.pagination.clone(),
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                let _ = (subscription.close)().await;
+                return records_subscribe_reply(store_error_reply(err.to_string()), None);
+            }
+        };
+        let entries = attach_initial_writes(
+            tenant,
+            result.messages,
+            &self.message_store,
+            author.as_deref(),
+        )
+        .await;
+        let reply = DwnReply::ok()
+            .with_body("subscriptionId", JsonValue::String(subscription.id.clone()))
+            .with_body("entries", JsonValue::Array(entries))
+            .with_body(
+                "cursor",
+                serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
+            );
+        records_subscribe_reply(reply, Some(subscription))
+    }
+
+    async fn records_subscribe_filters(
+        &self,
+        tenant: &str,
+        message: &Message<Descriptor>,
+        descriptor: &SubscribeDescriptor,
+        signature: Option<&AuthorizationContext>,
+    ) -> Result<(Filters, Filters, Option<String>), DwnReply> {
+        if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
+            return Ok((
+                Filters::from(published_records_event_filter(&descriptor.filter)),
+                Filters::from(published_records_filter(
+                    &descriptor.filter,
+                    descriptor.date_sort.as_ref(),
+                )),
+                None,
+            ));
+        }
+
+        let Some(signature) = signature else {
+            return Err(DwnReply::unauthorized(
+                "AuthenticateJwsMissing: authorization signature is required",
+            ));
+        };
+        let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
+            tenant,
+            message,
+            &descriptor.filter,
+            signature,
+            &self.message_store,
+        )
+        .await
+        .map_err(DwnReply::unauthorized)?;
+        if should_protocol_authorize(&signature.payload) {
+            authorize_protocol_query_or_subscribe(
+                tenant,
+                &descriptor.filter,
+                &signature.payload,
+                &signature.author,
+                &self.message_store,
+                RecordsAuthorizationKind::Subscribe,
+            )
+            .await
+            .map_err(DwnReply::unauthorized)?;
+        }
+        if signature.author == tenant {
+            Ok((
+                Filters::from(owner_records_event_filter(&descriptor.filter)),
+                Filters::from(owner_records_filter(
+                    &descriptor.filter,
+                    descriptor.date_sort.as_ref(),
+                )),
+                Some(signature.author.clone()),
+            ))
+        } else {
+            let protocol_authorized =
+                should_protocol_authorize(&signature.payload) || grant_authorized;
+            Ok((
+                Filters::from(non_owner_records_event_filters(
+                    &descriptor.filter,
+                    &signature.author,
+                    protocol_authorized,
+                )),
+                Filters::from(non_owner_records_filters(
+                    &descriptor.filter,
+                    descriptor.date_sort.as_ref(),
+                    &signature.author,
+                    protocol_authorized,
+                )),
+                Some(signature.author.clone()),
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum QueryAuthorizationResult {
     Unauthorized(String),
@@ -2137,11 +2378,33 @@ fn owner_records_filter(
     map
 }
 
+fn owner_records_event_filter(filter: &RecordsFilter) -> BTreeMap<FilterKey, Filter<Value>> {
+    let mut map = records_filter_to_filter_map(filter, None);
+    map.insert(
+        FilterKey::Index("interface".to_string()),
+        string_filter(RECORDS_INTERFACE),
+    );
+    map.insert(
+        FilterKey::Index("method".to_string()),
+        Filter::OneOf(vec![
+            Value::String(WRITE_METHOD.to_string()),
+            Value::String("Delete".to_string()),
+        ]),
+    );
+    map
+}
+
 fn published_records_filter(
     filter: &RecordsFilter,
     date_sort: Option<&crate::descriptors::records::DateSort>,
 ) -> BTreeMap<FilterKey, Filter<Value>> {
     let mut map = owner_records_filter(filter, date_sort);
+    map.insert(FilterKey::Index("published".to_string()), bool_filter(true));
+    map
+}
+
+fn published_records_event_filter(filter: &RecordsFilter) -> BTreeMap<FilterKey, Filter<Value>> {
+    let mut map = owner_records_event_filter(filter);
     map.insert(FilterKey::Index("published".to_string()), bool_filter(true));
     map
 }
@@ -2179,6 +2442,52 @@ fn non_owner_records_filters(
         }
         if should_build_recipient_filter(filter, author) {
             let mut map = owner_records_filter(filter, date_sort);
+            map.insert(
+                FilterKey::Index("recipient".to_string()),
+                string_filter(author),
+            );
+            map.insert(
+                FilterKey::Index("published".to_string()),
+                bool_filter(false),
+            );
+            filters.push(map);
+        }
+    }
+    filters
+}
+
+fn non_owner_records_event_filters(
+    filter: &RecordsFilter,
+    author: &str,
+    protocol_authorized: bool,
+) -> Vec<BTreeMap<FilterKey, Filter<Value>>> {
+    let mut filters = Vec::new();
+    if filter_includes_published_records(filter) {
+        filters.push(published_records_event_filter(filter));
+    }
+    if filter_includes_unpublished_records(filter) {
+        if should_build_author_filter(filter, author) {
+            let mut map = owner_records_event_filter(filter);
+            map.insert(
+                FilterKey::Index("author".to_string()),
+                string_filter(author),
+            );
+            map.insert(
+                FilterKey::Index("published".to_string()),
+                bool_filter(false),
+            );
+            filters.push(map);
+        }
+        if protocol_authorized {
+            let mut map = owner_records_event_filter(filter);
+            map.insert(
+                FilterKey::Index("published".to_string()),
+                bool_filter(false),
+            );
+            filters.push(map);
+        }
+        if should_build_recipient_filter(filter, author) {
+            let mut map = owner_records_event_filter(filter);
             map.insert(
                 FilterKey::Index("recipient".to_string()),
                 string_filter(author),
@@ -3047,6 +3356,33 @@ fn store_error_reply(detail: impl Into<String>) -> DwnReply {
     }
 }
 
+fn records_subscribe_reply(
+    reply: DwnReply,
+    subscription: Option<EventSubscription>,
+) -> RecordsSubscribeReply {
+    RecordsSubscribeReply {
+        reply,
+        subscription,
+    }
+}
+
+fn event_log_error_reply(error: EventLogError) -> DwnReply {
+    match error {
+        EventLogError::ProgressGap(gap_info) => {
+            let mut error = serde_json::to_value(&*gap_info)
+                .unwrap_or_else(|_| JsonValue::Object(serde_json::Map::new()));
+            if let Some(error) = error.as_object_mut() {
+                error.insert(
+                    "code".to_string(),
+                    JsonValue::String("ProgressGap".to_string()),
+                );
+            }
+            DwnReply::new(410, "Progress token gap").with_body("error", error)
+        }
+        error => store_error_reply(error.to_string()),
+    }
+}
+
 trait DescriptorMethod {
     fn interface(&self) -> &'static str;
     fn method(&self) -> &'static str;
@@ -3075,10 +3411,13 @@ mod tests {
     };
     use crate::descriptors::{ConfigureDescriptor, Protocols as ProtocolsDescriptor};
     use crate::errors::{DataStoreError, MessageStoreError, StoreError};
+    use crate::events::MessageEvent;
     use crate::interfaces::messages::protocols::{ActionWho, Type};
+    use crate::local::MemoryEventLog;
     use crate::state_index::MemoryStateIndex;
     use crate::stores::{
         EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
+        SubscriptionMessage,
     };
     use crate::MapValue;
 
@@ -3685,6 +4024,210 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
+        let mut message_store = TestMessageStore::default();
+        let mut event_log = MemoryEventLog::default();
+        message_store.open().await.unwrap();
+        event_log.open().await.unwrap();
+
+        let note = stored_note_message("2025-01-01T00:01:00.000000Z");
+        let first = event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: note.clone(),
+                    initial_write: None,
+                },
+                record_event_indexes("http://example.com/notes", "Write"),
+                "first-cid",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: note,
+                    initial_write: None,
+                },
+                record_event_indexes("http://example.com/notes", "Write"),
+                "second-cid",
+            )
+            .await
+            .unwrap();
+
+        let delivered = Arc::new(RwLock::new(Vec::new()));
+        let delivered_for_listener = delivered.clone();
+        let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+            message_store,
+            event_log,
+            test_resolver(),
+        );
+        let request = signed_records_subscribe_message(
+            RecordsFilter {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            },
+            Some(first),
+            "2025-01-01T00:10:00.000000Z",
+        );
+
+        let result = handler
+            .handle_subscribe(
+                "did:example:alice",
+                &request,
+                Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
+            )
+            .await;
+        assert_eq!(
+            result.reply.status.code, 200,
+            "{}",
+            result.reply.status.detail
+        );
+        assert!(!result.reply.body.contains_key("entries"));
+        assert_eq!(
+            result.reply.body["subscriptionId"],
+            result.subscription.as_ref().unwrap().id
+        );
+        let delivered = delivered.read().unwrap();
+        assert_eq!(delivered.len(), 2);
+        match &delivered[0] {
+            SubscriptionMessage::Event { cursor, .. } => {
+                assert_eq!(cursor.position, "2");
+                assert_eq!(cursor.message_cid, "second-cid");
+            }
+            other => panic!("expected event, got {other:?}"),
+        }
+        match &delivered[1] {
+            SubscriptionMessage::Eose { cursor } => {
+                assert_eq!(cursor.position, "2");
+                assert_eq!(cursor.message_cid, "second-cid");
+            }
+            other => panic!("expected eose, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn records_event_log_subscribe_maps_progress_gap_to_410() {
+        let message_store = TestMessageStore::default();
+        let mut event_log = MemoryEventLog::new(1);
+        event_log.open().await.unwrap();
+
+        let note = stored_note_message("2025-01-01T00:01:00.000000Z");
+        let mut old_cursor = event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: note.clone(),
+                    initial_write: None,
+                },
+                record_event_indexes("http://example.com/notes", "Write"),
+                "first-cid",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        old_cursor.position = "0".to_string();
+        event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: note,
+                    initial_write: None,
+                },
+                record_event_indexes("http://example.com/notes", "Write"),
+                "second-cid",
+            )
+            .await
+            .unwrap();
+
+        let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+            message_store,
+            event_log,
+            test_resolver(),
+        );
+        let request = signed_records_subscribe_message(
+            RecordsFilter {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            },
+            Some(old_cursor),
+            "2025-01-01T00:10:00.000000Z",
+        );
+
+        let result = handler
+            .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+            .await;
+        assert_eq!(result.reply.status.code, 410);
+        assert_eq!(result.reply.body["error"]["code"], "ProgressGap");
+        assert_eq!(result.reply.body["error"]["reason"], "token_too_old");
+        assert!(result.subscription.is_none());
+    }
+
+    #[tokio::test]
+    async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_subscription() {
+        let mut message_store = TestMessageStore::default();
+        let mut event_log = MemoryEventLog::default();
+        message_store.open().await.unwrap();
+        event_log.open().await.unwrap();
+
+        let note = stored_note_message("2025-01-01T00:01:00.000000Z");
+        let indexes = records_write_indexes(&note, "did:example:alice", true).unwrap();
+        message_store
+            .put("did:example:alice", note.clone(), indexes)
+            .await
+            .unwrap();
+
+        let delivered = Arc::new(RwLock::new(Vec::new()));
+        let delivered_for_listener = delivered.clone();
+        let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+            message_store,
+            event_log.clone(),
+            test_resolver(),
+        );
+        let request = signed_records_subscribe_message(
+            RecordsFilter {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            },
+            None,
+            "2025-01-01T00:10:00.000000Z",
+        );
+
+        let result = handler
+            .handle_subscribe(
+                "did:example:alice",
+                &request,
+                Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
+            )
+            .await;
+        assert_eq!(
+            result.reply.status.code, 200,
+            "{}",
+            result.reply.status.detail
+        );
+        assert_eq!(result.reply.body["entries"].as_array().unwrap().len(), 1);
+        assert!(result.subscription.is_some());
+
+        event_log
+            .emit(
+                "did:example:alice",
+                MessageEvent {
+                    message: note,
+                    initial_write: None,
+                },
+                record_event_indexes("http://example.com/notes", "Write"),
+                "live-cid",
+            )
+            .await
+            .unwrap();
+        let delivered = delivered.read().unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert!(matches!(delivered[0], SubscriptionMessage::Event { .. }));
+    }
+
     #[test]
     fn generic_records_descriptor_deserializes_by_method() {
         let count = json!({
@@ -3831,6 +4374,46 @@ mod tests {
             message_timestamp: parse_time(timestamp),
             record_id: record_id.to_string(),
             prune,
+        };
+        let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+        let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer());
+        json!({
+            "descriptor": descriptor_json,
+            "authorization": { "signature": signature }
+        })
+    }
+
+    fn stored_note_message(timestamp: &str) -> Message<Descriptor> {
+        serde_json::from_value(signed_write_message(WriteSpec {
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path: Some("note".to_string()),
+            ..WriteSpec::new(timestamp)
+        }))
+        .unwrap()
+    }
+
+    fn record_event_indexes(protocol: &str, method: &str) -> KeyValues {
+        KeyValues::from([
+            (
+                "interface".to_string(),
+                Value::String(RECORDS_INTERFACE.to_string()),
+            ),
+            ("method".to_string(), Value::String(method.to_string())),
+            ("protocol".to_string(), Value::String(protocol.to_string())),
+        ])
+    }
+
+    fn signed_records_subscribe_message(
+        filter: RecordsFilter,
+        cursor: Option<crate::stores::ProgressToken>,
+        timestamp: &str,
+    ) -> JsonValue {
+        let descriptor = SubscribeDescriptor {
+            message_timestamp: parse_time(timestamp),
+            filter,
+            date_sort: None,
+            pagination: None,
+            cursor,
         };
         let descriptor_json = serde_json::to_value(&descriptor).unwrap();
         let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer());
