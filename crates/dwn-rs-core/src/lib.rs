@@ -35,6 +35,7 @@ pub mod permissions;
 mod ser;
 pub mod state_index;
 pub mod stores;
+pub mod sync;
 pub mod value;
 
 pub use dwn::*;
