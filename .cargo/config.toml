@@ -1,4 +1,5 @@
 [alias]
 build-android-arm64 = "build -p dwn-rs-core --release --target aarch64-linux-android"
 build-ios-arm64 = "build -p dwn-rs-core --release --target aarch64-apple-ios"
+test-desktop = "test -p dwn-rs-core desktop"
 test-mobile = "test -p dwn-rs-core mobile"

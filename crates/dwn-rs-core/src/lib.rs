@@ -25,6 +25,7 @@
 pub mod agent;
 pub mod auth;
 pub mod connect;
+pub mod desktop;
 pub mod dwn;
 pub mod encryption;
 pub mod errors;
