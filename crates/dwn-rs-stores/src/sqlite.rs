@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use dwn_rs_core::errors::{DataStoreError, MessageStoreError, StoreError};
 use dwn_rs_core::fields::MessageFields;
-use dwn_rs_core::filters::{Filter, FilterKey, Filters, RangeFilter};
+use dwn_rs_core::filters::{compare_values, matches_filters, Filters};
 use dwn_rs_core::stores::{
     EnboxDataStore, EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
     EnboxMessageStore, KeyValues,
@@ -175,7 +175,7 @@ impl EnboxMessageStore for SqliteStore {
             let mut rows = store
                 .with_connection(|connection| load_message_rows(connection, &tenant))
                 .map_err(MessageStoreError::from)?;
-            rows.retain(|row| matches_filters(&row.indexes, filters.clone()));
+            rows.retain(|row| matches_filters(&row.indexes, Some(&filters)));
             let sort = sort.unwrap_or_default();
             retain_sortable_rows(&mut rows, sort);
             sort_message_rows(&mut rows, sort);
@@ -200,7 +200,7 @@ impl EnboxMessageStore for SqliteStore {
             let mut rows = store
                 .with_connection(|connection| load_message_rows(connection, &tenant))
                 .map_err(MessageStoreError::from)?;
-            rows.retain(|row| matches_filters(&row.indexes, filters.clone()));
+            rows.retain(|row| matches_filters(&row.indexes, Some(&filters)));
             retain_sortable_rows(&mut rows, sort.unwrap_or_default());
             Ok(rows.len() as u64)
         }
@@ -483,57 +483,6 @@ fn load_message_rows(connection: &Connection, tenant: &str) -> Result<Vec<Messag
     Ok(messages)
 }
 
-fn matches_filters(indexes: &KeyValues, filters: Filters) -> bool {
-    let mut has_filter_set = false;
-    for filter_set in filters {
-        has_filter_set = true;
-        if filter_set.into_iter().all(|(key, filter)| match key {
-            FilterKey::Index(index) => indexes
-                .get(&index)
-                .is_some_and(|value| matches_filter(value, &filter)),
-            FilterKey::Tag(_) => false,
-        }) {
-            return true;
-        }
-    }
-    !has_filter_set
-}
-
-fn matches_filter(value: &Value, filter: &Filter<Value>) -> bool {
-    if let Value::Array(values) = value {
-        return values.iter().any(|value| matches_filter(value, filter));
-    }
-
-    match filter {
-        Filter::Equal(expected) => value == expected,
-        Filter::OneOf(values) => values.iter().any(|expected| value == expected),
-        Filter::Prefix(prefix) => match (value_as_string(value), value_as_string(prefix)) {
-            (Some(value), Some(prefix)) => value == prefix || value.starts_with(&prefix),
-            _ => false,
-        },
-        Filter::Range(RangeFilter::Numeric(lower, upper))
-        | Filter::Range(RangeFilter::Criterion(lower, upper)) => {
-            matches_lower_bound(value, lower) && matches_upper_bound(value, upper)
-        }
-    }
-}
-
-fn matches_lower_bound(value: &Value, bound: &std::ops::Bound<Value>) -> bool {
-    match bound {
-        std::ops::Bound::Included(bound) => compare_values(value, bound) != Some(Ordering::Less),
-        std::ops::Bound::Excluded(bound) => compare_values(value, bound) == Some(Ordering::Greater),
-        std::ops::Bound::Unbounded => true,
-    }
-}
-
-fn matches_upper_bound(value: &Value, bound: &std::ops::Bound<Value>) -> bool {
-    match bound {
-        std::ops::Bound::Included(bound) => compare_values(value, bound) != Some(Ordering::Greater),
-        std::ops::Bound::Excluded(bound) => compare_values(value, bound) == Some(Ordering::Less),
-        std::ops::Bound::Unbounded => true,
-    }
-}
-
 fn retain_sortable_rows(rows: &mut Vec<MessageRow>, sort: MessageSort) {
     let (property, _) = sort_property(&sort);
     rows.retain(|row| row.indexes.contains_key(property));
@@ -604,7 +553,7 @@ fn cursor_start(rows: &[MessageRow], sort: MessageSort, cursor: &Cursor) -> usiz
             let Some(row_value) = row.indexes.get(property) else {
                 return false;
             };
-            let ordering = compare_values(row_value, cursor_value)
+            let ordering = compare_sort_values_inner(row_value, cursor_value)
                 .unwrap_or(Ordering::Equal)
                 .then_with(|| row.cid.cmp(&cursor_cid));
             match direction {
@@ -641,7 +590,9 @@ fn compare_sort_values(
     direction: SortDirection,
 ) -> Ordering {
     let order = match (left, right) {
-        (Some(left), Some(right)) => compare_values(left, right).unwrap_or(Ordering::Equal),
+        (Some(left), Some(right)) => {
+            compare_sort_values_inner(left, right).unwrap_or(Ordering::Equal)
+        }
         (Some(_), None) => Ordering::Greater,
         (None, Some(_)) => Ordering::Less,
         (None, None) => Ordering::Equal,
@@ -660,14 +611,16 @@ fn apply_direction(order: Ordering, direction: SortDirection) -> Ordering {
     }
 }
 
-fn compare_values(left: &Value, right: &Value) -> Option<Ordering> {
-    match (left, right) {
-        (Value::Number(left), Value::Number(right)) => Some(left.cmp(right)),
-        (Value::Float(left), Value::Float(right)) => left.partial_cmp(right),
-        (Value::Number(left), Value::Float(right)) => (*left as f64).partial_cmp(right),
-        (Value::Float(left), Value::Number(right)) => left.partial_cmp(&(*right as f64)),
-        _ => value_as_string(left)?.partial_cmp(&value_as_string(right)?),
+/// Sort-time comparison that falls back to string-coerced ordering when
+/// the two values are not naturally comparable. The shared filter engine
+/// in `dwn_rs_core::filters::compare_values` deliberately returns `None`
+/// in that case (range filters should not match across variants); SQLite
+/// sorting needs a total order, so we keep this softer comparator here.
+fn compare_sort_values_inner(left: &Value, right: &Value) -> Option<Ordering> {
+    if let Some(order) = compare_values(left, right) {
+        return Some(order);
     }
+    value_as_string(left)?.partial_cmp(&value_as_string(right)?)
 }
 
 fn value_as_string(value: &Value) -> Option<String> {

@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::ops::Bound;
 use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
@@ -12,7 +11,7 @@ use serde_json::Value as JsonValue;
 use crate::cid::generate_cid_from_json;
 use crate::errors::{EventLogError, ResumableTaskStoreError, StoreError};
 use crate::events::MessageEvent;
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
+use crate::filters::Filters;
 use crate::stores::{
     EnboxEventLog, EnboxManagedResumableTask, EnboxResumableTaskStore, EventLogEntry,
     EventLogReadOptions, EventLogReadResult, EventLogReplayBounds, EventLogSubscribeOptions,
@@ -590,89 +589,7 @@ fn subscription_close(
     })
 }
 
-fn matches_filters(indexes: &KeyValues, filters: Option<&Filters>) -> bool {
-    let Some(filters) = filters else {
-        return true;
-    };
-    let filter_sets = filters.clone().into_iter().collect::<Vec<_>>();
-    if filter_sets.is_empty() {
-        return true;
-    }
-    filter_sets.into_iter().any(|filter_set| {
-        filter_set.into_iter().all(|(key, filter)| {
-            indexes
-                .get(&filter_key(&key))
-                .is_some_and(|actual| matches_filter(actual, &filter))
-        })
-    })
-}
-
-fn filter_key(key: &FilterKey) -> String {
-    match key {
-        FilterKey::Index(key) | FilterKey::Tag(key) => key.clone(),
-    }
-}
-
-fn matches_filter(actual: &Value, filter: &Filter<Value>) -> bool {
-    match filter {
-        Filter::Equal(expected) => matches_equal(actual, expected),
-        Filter::OneOf(expected_values) => expected_values
-            .iter()
-            .any(|expected| matches_equal(actual, expected)),
-        Filter::Prefix(prefix) => match (actual, prefix) {
-            (Value::String(actual), Value::String(prefix)) => actual.starts_with(prefix),
-            _ => false,
-        },
-        Filter::Range(range) => matches_range(actual, range),
-    }
-}
-
-fn matches_equal(actual: &Value, expected: &Value) -> bool {
-    match actual {
-        Value::Array(values) => values.iter().any(|value| value == expected),
-        _ => actual == expected,
-    }
-}
-
-fn matches_range(actual: &Value, range: &RangeFilter<Value>) -> bool {
-    match range {
-        RangeFilter::Numeric(lower, upper) | RangeFilter::Criterion(lower, upper) => {
-            bound_matches(actual, lower, true) && bound_matches(actual, upper, false)
-        }
-    }
-}
-
-fn bound_matches(actual: &Value, bound: &Bound<Value>, lower: bool) -> bool {
-    match bound {
-        Bound::Unbounded => true,
-        Bound::Included(expected) => compare_values(actual, expected).is_some_and(|ordering| {
-            if lower {
-                ordering.is_ge()
-            } else {
-                ordering.is_le()
-            }
-        }),
-        Bound::Excluded(expected) => compare_values(actual, expected).is_some_and(|ordering| {
-            if lower {
-                ordering.is_gt()
-            } else {
-                ordering.is_lt()
-            }
-        }),
-    }
-}
-
-fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
-    match (left, right) {
-        (Value::Number(left), Value::Number(right)) => Some(left.cmp(right)),
-        (Value::Float(left), Value::Float(right)) => left.partial_cmp(right),
-        (Value::Number(left), Value::Float(right)) => (*left as f64).partial_cmp(right),
-        (Value::Float(left), Value::Number(right)) => left.partial_cmp(&(*right as f64)),
-        (Value::String(left), Value::String(right)) => Some(left.cmp(right)),
-        (Value::DateTime(left), Value::DateTime(right)) => Some(left.cmp(right)),
-        _ => None,
-    }
-}
+use crate::filters::matching::matches_filters;
 
 fn enbox_task<T>(task: &StoredTask) -> Result<EnboxManagedResumableTask<T>, ResumableTaskStoreError>
 where
