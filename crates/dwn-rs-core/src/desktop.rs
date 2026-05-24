@@ -503,6 +503,13 @@ where
     }
 }
 
+/// Scaffolding `DesktopLocalServer` that **does not actually start a server**.
+///
+/// `start` records the requested config in an in-memory status struct and
+/// returns it; no socket is bound, no DWN is spun up, and `stop` simply
+/// resets the status. Use this for unit tests and integration scaffolds;
+/// production paths must wire a real implementation backed by `enbox-dwn-server`
+/// or an embedded DWN engine.
 #[derive(Clone, Default)]
 pub struct MemoryDesktopLocalServer {
     status: Arc<RwLock<DesktopServerStatus>>,
@@ -549,6 +556,9 @@ impl DesktopLocalServer for MemoryDesktopLocalServer {
     }
 }
 
+/// In-memory `DesktopDiscoveryRegistry` for tests. Does **not** publish on
+/// mDNS/Bonjour or any network protocol; it just records adverts in a map.
+/// Production paths must wire a real `mdns-sd` (or equivalent) backend.
 #[derive(Clone, Default)]
 pub struct MemoryDesktopDiscoveryRegistry {
     adverts: Arc<RwLock<BTreeMap<String, DesktopNodeAdvert>>>,
@@ -599,6 +609,10 @@ impl DesktopDiscoveryRegistry for MemoryDesktopDiscoveryRegistry {
     }
 }
 
+/// In-memory `DesktopDeliveryQueue` for tests. Holds enqueued deliveries
+/// in a `BTreeMap`; no actual transport, no retries, no persistence.
+/// Production paths must persist to the chosen store and integrate with
+/// the underlying DWN's delivery semantics.
 #[derive(Clone, Default)]
 pub struct MemoryDesktopDeliveryQueue {
     inner: Arc<RwLock<DeliveryQueueInner>>,
@@ -672,6 +686,10 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
     }
 }
 
+/// Scaffolding `DesktopMessageProcessor` that echoes the request payload as
+/// the response. **Does not run a DWN.** Use only for connectivity tests
+/// against the desktop pipeline; real implementations must dispatch into
+/// a real `Dwn::process_message` (see `crate::dwn::Dwn`).
 #[derive(Clone, Default)]
 pub struct EchoDesktopMessageProcessor;
 

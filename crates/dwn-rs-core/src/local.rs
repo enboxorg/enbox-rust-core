@@ -25,6 +25,9 @@ const DEFAULT_MAX_EVENTS_PER_TENANT: usize = 10_000;
 const GRABBED_TASK_TIMEOUT_SECONDS: u64 = 60;
 
 #[derive(Clone)]
+/// In-memory `EventLog` for development, tests, and the `MobileCore` /
+/// `DesktopLocalNode` reference flows. Process-local; not durable. Wire a
+/// real backend (SQLite, SurrealDB, etc.) for production deployments.
 pub struct MemoryEventLog {
     inner: Arc<RwLock<EventLogInner>>,
     epoch: String,
@@ -323,6 +326,9 @@ impl EnboxEventLog for MemoryEventLog {
 }
 
 #[derive(Debug, Clone, Default)]
+/// In-memory `ResumableTaskStore` for development and tests. Tasks are
+/// lost on restart. Wire a durable backend (SQLite or equivalent) for
+/// production.
 pub struct MemoryResumableTaskStore {
     tasks: Arc<RwLock<BTreeMap<String, StoredTask>>>,
 }

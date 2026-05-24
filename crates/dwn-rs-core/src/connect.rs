@@ -488,6 +488,9 @@ impl DelegateSessionCache {
     }
 }
 
+/// In-memory `KeyDeliveryStore` for development and tests. Process-local;
+/// records are lost on restart. Production deployments should back this with
+/// the chosen DWN message store.
 #[derive(Clone, Default)]
 pub struct MemoryKeyDeliveryStore {
     records: Arc<RwLock<BTreeMap<String, ContextKeyDeliveryRecord>>>,

@@ -526,6 +526,10 @@ fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
     rule_set.encryption.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
 }
 
+/// In-memory `ProtocolEndpoint` for development, tests, and the wallet
+/// recovery reference flow. Holds protocol definitions per `(tenant,
+/// protocol)`. **Not durable.** Production setups will use a real DWN
+/// (local or remote) as the endpoint.
 #[derive(Clone, Default)]
 pub struct MemoryProtocolEndpoint {
     protocols: Arc<RwLock<BTreeMap<String, Definition>>>,

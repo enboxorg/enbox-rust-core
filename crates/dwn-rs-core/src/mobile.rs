@@ -309,6 +309,10 @@ where
     }
 }
 
+/// Scaffolding `MobileBiometricVault` for tests. **No actual biometric
+/// prompt** — `unlock` flips a boolean. Production deployments must wire
+/// a real iOS Keychain (LAContext / Secure Enclave) or Android Keystore
+/// (BiometricPrompt) implementation.
 #[derive(Clone, Default)]
 pub struct MemoryBiometricVault {
     unlocked: Arc<RwLock<bool>>,
@@ -337,6 +341,9 @@ impl MobileBiometricVault for MemoryBiometricVault {
     }
 }
 
+/// In-memory `MobileSecureStorage` for tests. **Plaintext.** Production
+/// deployments must back this with iOS Keychain (App Group) or Android
+/// EncryptedSharedPreferences / Keystore-backed storage.
 #[derive(Clone, Default)]
 pub struct MemoryMobileSecureStorage {
     values: Arc<RwLock<BTreeMap<String, Vec<u8>>>>,
@@ -375,6 +382,9 @@ impl MobileSecureStorage for MemoryMobileSecureStorage {
     }
 }
 
+/// Scaffolding `MobileMessageProcessor` that echoes the request payload.
+/// **Does not run a DWN.** Use only for plumbing tests; real builds should
+/// dispatch into `Dwn::process_message`.
 #[derive(Clone, Default)]
 pub struct EchoMobileMessageProcessor;
 

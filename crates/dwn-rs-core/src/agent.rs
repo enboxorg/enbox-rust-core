@@ -483,6 +483,13 @@ impl DidProvider for DeterministicDidJwkProvider {
     }
 }
 
+/// In-memory `SecretStore` for development, tests, and reference flows.
+///
+/// **Not a vault.** Values are held in a `BTreeMap<String, Vec<u8>>` with
+/// no encryption at rest, no process isolation, and no platform-keychain
+/// fallback. Production deployments should swap this out for a backend
+/// that integrates with the OS keychain / Secure Enclave / TPM (e.g. an
+/// `enbox-mobile` vault on iOS, `enbox-desktop` on macOS Keychain).
 #[derive(Clone, Default)]
 pub struct MemorySecretStore {
     values: Arc<RwLock<BTreeMap<String, Vec<u8>>>>,
@@ -522,6 +529,13 @@ impl SecretStore for MemorySecretStore {
     }
 }
 
+/// In-memory `AgentKeyManager` for development, tests, and reference flows.
+///
+/// **Holds private JWKs in plaintext.** No platform keychain, no Secure
+/// Enclave / Keystore-backed signing, no encryption at rest. Production
+/// deployments should swap this out for a backend that delegates signing
+/// to the host (iOS Keychain + Secure Enclave, Android Keystore, macOS
+/// Keychain, OS-managed HSM).
 #[derive(Clone, Default)]
 pub struct MemoryKeyManager {
     keys: Arc<RwLock<BTreeMap<String, JsonWebKey>>>,
@@ -636,6 +650,11 @@ impl AgentKeyManager for MemoryKeyManager {
     }
 }
 
+/// In-memory `DidResolverCache` for development and tests.
+///
+/// Process-local; not durable across runs and not shared across processes.
+/// Production deployments should back the cache with a SQLite/SurrealDB
+/// store and respect TTLs from the resolver itself.
 #[derive(Clone, Default)]
 pub struct MemoryDidResolverCache {
     dids: Arc<RwLock<BTreeMap<String, PortableDid>>>,

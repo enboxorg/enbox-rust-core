@@ -13,6 +13,9 @@ const SMT_DEPTH: usize = 256;
 static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
+/// In-memory Sparse Merkle Tree `StateIndex` used by reference flows and
+/// tests. Process-local; data is lost on restart. Production deployments
+/// should pair `MessagesSync` with a durable state index (SQLite, etc.).
 pub struct MemoryStateIndex {
     tenants: Arc<RwLock<BTreeMap<String, TenantState>>>,
 }
