@@ -22,6 +22,7 @@
 //! - [`messages::records::RecordsSubscribe`]: A message for subscribing to records.
 //! - [`messages::records::RecordsDelete`]: A message for deleting records.
 #![doc(issue_tracker_base_url = "https://github.com/enmand/dwn-rsissues/")]
+pub mod agent;
 pub mod auth;
 pub mod dwn;
 pub mod encryption;
