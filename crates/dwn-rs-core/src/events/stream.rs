@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt::Debug, future::Future, pin::Pin};
 
 use futures_util::future;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tracing::{debug, info, instrument, trace, Instrument};
+use tracing::{debug, info, instrument, trace, warn, Instrument};
 use xtra::{prelude::MessageChannel, Actor, Handler};
 
 use crate::{
@@ -155,10 +155,17 @@ where
                             listener = ?listener.clone(),
                             "sending event to listener",
                         );
-                        listener
-                            .send((ns.clone(), evt.clone(), indexes.clone()))
-                            .await
-                            .expect("Failed to send message");
+                        if let Err(err) = listener.send((ns.clone(), evt.clone(), indexes.clone())).await {
+                            // A disconnected listener (mailbox closed, actor stopped) must not
+                            // bring down the EventStream actor and, by extension, the runtime
+                            // hosting it. Log and move on; the listener will be cleaned up via
+                            // an explicit `Close` or `Shutdown`.
+                            warn!(
+                                ns = %ns,
+                                error = %err,
+                                "failed to deliver event to listener; dropping",
+                            );
+                        }
                     }
                 }),
         )
@@ -179,11 +186,28 @@ where
         let ns = msg.ns;
         let id = msg.id;
         let listener = msg.listener;
-        let addr = _ctx.mailbox().address().try_upgrade().unwrap();
+
+        let close: Box<
+            dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventStreamError>> + Send>>
+                + Send
+                + Sync,
+        > = match _ctx.mailbox().address().try_upgrade() {
+            Some(addr) => Box::new(make_close_task(ns.clone(), id.clone(), addr)),
+            None => {
+                // The EventStream is already shutting down; the close handle is
+                // structurally a no-op.
+                warn!(
+                    ns = %ns,
+                    id = %id,
+                    "EventStream shutting down at subscription time; close handle is a no-op",
+                );
+                Box::new(|| Box::pin(async { Ok(()) }))
+            }
+        };
 
         let sub = Subscription {
             subscription_id: SubscriptionID { id: id.clone() },
-            close: Box::new(make_close_task(ns.clone(), id.clone(), addr)),
+            close,
         };
 
         self.listeners.insert((ns, id), listener);
@@ -257,7 +281,14 @@ where
 
         let fut = async move {
             trace!("closing event subscription task");
-            addr.clone().send(close).await.unwrap();
+            if let Err(err) = addr.clone().send(close).await {
+                // The EventStream actor has already stopped — there is nothing to
+                // close on its end. Treat that as a successful close.
+                warn!(
+                    error = %err,
+                    "EventStream gone before subscription close arrived; treating as closed",
+                );
+            }
             Ok(())
         };
 
