@@ -4,7 +4,9 @@ use crate::descriptors::{MessageDescriptor, ValidationError};
 use crate::encryption::{DerivationScheme, Encryption};
 use crate::fields::WriteFields;
 use crate::filters::message_filters::Records as RecordsFilter;
-use crate::interfaces::messages::descriptors::{DELETE, QUERY, READ, RECORDS, SUBSCRIBE, WRITE};
+use crate::interfaces::messages::descriptors::{
+    COUNT, DELETE, QUERY, READ, RECORDS, SUBSCRIBE, WRITE,
+};
 use crate::{normalize_url, MapValue, Message, Pagination};
 
 use dwn_rs_message_derive::descriptor;
@@ -21,6 +23,8 @@ pub struct ReadParameters {
     pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(rename = "permissionGrantId")]
     pub permission_grant_id: Option<String>,
+    #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
+    pub date_sort: Option<DateSort>,
     #[serde(rename = "protocolRole")]
     pub protocol_role: Option<String>,
     #[serde(rename = "delegatedGrant")]
@@ -44,6 +48,7 @@ impl MessageParameters for ReadParameters {
             message_timestamp: self.message_timestamp.unwrap_or_else(chrono::Utc::now),
             filter: self.filters.clone(),
             permission_grant_id: self.permission_grant_id.clone(),
+            date_sort: self.date_sort.clone(),
         };
 
         Ok((descriptor, None))
@@ -74,6 +79,59 @@ pub struct ReadDescriptor {
     pub filter: RecordsFilter,
     #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
     pub permission_grant_id: Option<String>,
+    #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
+    pub date_sort: Option<DateSort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
+pub struct CountParameters {
+    #[serde(rename = "messageTimestamp")]
+    pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub filter: RecordsFilter,
+    #[serde(rename = "protocolRole")]
+    pub protocol_role: Option<String>,
+    #[serde(rename = "delegatedGrant")]
+    pub delegated_grant: Option<Message<WriteDescriptor>>,
+}
+
+impl MessageValidator for CountParameters {
+    fn validate(&self) -> Result<(), super::ValidationError> {
+        Ok(())
+    }
+}
+
+impl MessageParameters for CountParameters {
+    type Descriptor = CountDescriptor;
+    type Fields = Authorization;
+
+    async fn build(
+        &self,
+    ) -> Result<(Self::Descriptor, Option<Self::Fields>), super::ValidationError> {
+        let descriptor = CountDescriptor {
+            message_timestamp: self.message_timestamp.unwrap_or_else(chrono::Utc::now),
+            filter: self.filter.clone(),
+        };
+
+        Ok((descriptor, None))
+    }
+
+    fn delegated_grant(&self) -> Option<Message<WriteDescriptor>> {
+        self.delegated_grant.clone()
+    }
+
+    fn protocol_rule(&self) -> Option<String> {
+        self.protocol_role.clone()
+    }
+}
+
+#[descriptor(interface = RECORDS, method = COUNT, fields = crate::auth::Authorization, parameters = CountParameters)]
+pub struct CountDescriptor {
+    #[serde(
+        rename = "messageTimestamp",
+        serialize_with = "crate::ser::serialize_datetime"
+    )]
+    pub message_timestamp: chrono::DateTime<chrono::Utc>,
+    pub filter: RecordsFilter,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -165,6 +223,10 @@ pub enum DateSort {
     PublishedAscending,
     #[serde(rename = "publishedDescending")]
     PublishedDescending,
+    #[serde(rename = "updatedAscending")]
+    UpdatedAscending,
+    #[serde(rename = "updatedDescending")]
+    UpdatedDescending,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -387,6 +449,12 @@ pub struct SubscribeParameters {
     pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(rename = "protocolRole")]
     pub protocol_role: Option<String>,
+    #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
+    pub date_sort: Option<DateSort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<Pagination>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<crate::stores::ProgressToken>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
 }
@@ -405,6 +473,9 @@ impl MessageParameters for SubscribeParameters {
         let descriptor = SubscribeDescriptor {
             message_timestamp: self.message_timestamp.unwrap_or_else(chrono::Utc::now),
             filter: self.filters.clone(),
+            date_sort: self.date_sort.clone(),
+            pagination: self.pagination.clone(),
+            cursor: self.cursor.clone(),
         };
 
         Ok((descriptor, None))
@@ -427,6 +498,12 @@ pub struct SubscribeDescriptor {
     )]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     pub filter: RecordsFilter,
+    #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
+    pub date_sort: Option<DateSort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<Pagination>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<crate::stores::ProgressToken>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -519,6 +596,7 @@ mod test {
             message_timestamp,
             filter: RecordsFilter::default(),
             permission_grant_id: None,
+            date_sort: None,
         };
 
         let ser = serde_json::to_string(&rd).unwrap();
@@ -559,6 +637,35 @@ mod test {
 
         assert_eq!(qd, de);
         assert_eq!(build_qd, de);
+    }
+
+    #[tokio::test]
+    async fn test_count_descriptor() {
+        let message_timestamp = DateTime::from_str(
+            Utc::now()
+                .to_rfc3339_opts(SecondsFormat::Micros, true)
+                .as_str(),
+        )
+        .unwrap();
+
+        let cp = CountParameters {
+            message_timestamp: Some(message_timestamp),
+            filter: RecordsFilter::default(),
+            ..Default::default()
+        };
+
+        let cd = CountDescriptor {
+            message_timestamp,
+            filter: Default::default(),
+        };
+
+        let (build_cd, _) = cp.build().await.unwrap();
+
+        let ser = serde_json::to_string(&cd).unwrap();
+        let de: CountDescriptor = serde_json::from_str(&ser).unwrap();
+
+        assert_eq!(cd, de);
+        assert_eq!(build_cd, de);
     }
 
     #[tokio::test]
@@ -678,6 +785,9 @@ mod test {
         let sd = SubscribeDescriptor {
             message_timestamp,
             filter: Default::default(),
+            date_sort: None,
+            pagination: None,
+            cursor: None,
         };
 
         let ser = serde_json::to_string(&sd).unwrap();

@@ -12,8 +12,9 @@ pub use messages::{
 };
 pub use protocols::{ConfigureDescriptor, QueryDescriptor as ProtocolQueryDescriptor};
 pub use records::{
-    DeleteDescriptor, QueryDescriptor as RecordsQueryDescriptor, ReadDescriptor,
-    SubscribeDescriptor, WriteDescriptor as RecordsWriteDescriptor,
+    CountDescriptor as RecordsCountDescriptor, DeleteDescriptor,
+    QueryDescriptor as RecordsQueryDescriptor, ReadDescriptor, SubscribeDescriptor,
+    WriteDescriptor as RecordsWriteDescriptor,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -30,6 +31,7 @@ pub const WRITE: &str = "Write";
 pub const DELETE: &str = "Delete";
 pub const SUBSCRIBE: &str = "Subscribe";
 pub const CONFIGURE: &str = "Configure";
+pub const COUNT: &str = "Count";
 
 /// ValidationError represents an error that occurs during validation of a message descriptor.
 #[derive(Serialize, Deserialize, Error, Debug)]

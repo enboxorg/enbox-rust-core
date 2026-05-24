@@ -274,6 +274,7 @@ mod test {
             message_timestamp: now,
             filter: crate::filters::Records::default(),
             permission_grant_id: None,
+            date_sort: None,
         }))));
         let fields = Fields::Authorization(Authorization {
             ..Default::default()

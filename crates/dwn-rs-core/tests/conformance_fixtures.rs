@@ -14,8 +14,9 @@ use dwn_rs_core::cid::{
 };
 use dwn_rs_core::descriptors::{
     ConfigureDescriptor, DeleteDescriptor, MessagesQueryDescriptor, MessagesReadDescriptor,
-    MessagesSubscribeDescriptor, ProtocolQueryDescriptor, ReadDescriptor, RecordsQueryDescriptor,
-    RecordsWriteDescriptor, SubscribeDescriptor as RecordsSubscribeDescriptor,
+    MessagesSubscribeDescriptor, ProtocolQueryDescriptor, ReadDescriptor, RecordsCountDescriptor,
+    RecordsQueryDescriptor, RecordsWriteDescriptor,
+    SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
 use dwn_rs_core::dwn::{
     current_handler_kinds, Dwn, DwnReply, MessageKind, MethodHandler, MethodHandlerRequest,
@@ -2328,6 +2329,7 @@ fn assert_supported_descriptor_roundtrip(case: &FixtureCase) {
 
     let roundtrip = match (interface, method) {
         ("Records", "Read") => roundtrip_descriptor::<ReadDescriptor>(descriptor),
+        ("Records", "Count") => roundtrip_descriptor::<RecordsCountDescriptor>(descriptor),
         ("Records", "Query") => roundtrip_descriptor::<RecordsQueryDescriptor>(descriptor),
         ("Records", "Write") => roundtrip_descriptor::<RecordsWriteDescriptor>(descriptor),
         ("Records", "Delete") => roundtrip_descriptor::<DeleteDescriptor>(descriptor),
