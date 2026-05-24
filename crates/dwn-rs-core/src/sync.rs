@@ -59,7 +59,7 @@ impl Display for SyncError {
 impl Error for SyncError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum SyncDirection {
     Pull,
     Push,
@@ -77,7 +77,7 @@ impl SyncDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum SyncMode {
     Poll,
     Live,
@@ -206,7 +206,7 @@ pub struct SyncStatusQuery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum SyncRunStatus {
     Completed,
     Partial,
@@ -284,7 +284,7 @@ impl SyncOnceResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum DeadLetterCategory {
     PullApply,
     PushApply,

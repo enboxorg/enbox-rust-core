@@ -48,7 +48,6 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         &remote,
         &original.key_manager,
         &original.portable_did,
-        vec![identity.clone()],
         vec![protocol.clone()],
     )
     .await

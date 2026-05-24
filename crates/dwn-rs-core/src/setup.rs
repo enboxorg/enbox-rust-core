@@ -4,8 +4,7 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use crate::agent::{
-    AgentIdentityError, AgentIdentityResult, AgentKeyManager, JsonWebKey, PortableDid,
-    PortableIdentity, SecretStore,
+    AgentIdentityError, AgentIdentityResult, AgentKeyManager, JsonWebKey, PortableDid, SecretStore,
 };
 use crate::interfaces::messages::protocols::{Definition, PathEncryption, RuleSet};
 use chrono::Utc;
@@ -284,7 +283,6 @@ pub struct ProtocolInstallResult {
 #[serde(rename_all = "snake_case")]
 pub enum RestoreFlowStep {
     AgentDidSync,
-    RecoveredIdentities,
     ProtocolInstall,
     ProtocolPush,
 }
@@ -360,12 +358,19 @@ where
     install_protocol_if_needed(endpoint, key_manager, tenant_did, definition).await
 }
 
+/// Replay protocol installs/pushes for a recovered agent.
+///
+/// This intentionally does **not** restore portable identities. The
+/// TypeScript wallet recovery flow re-imports `PortableIdentity` records
+/// into the connected agent's identity store; the Rust port does not yet
+/// model that store. Until it does, callers are expected to manage
+/// identity restoration outside this function (see
+/// `tests/wallet_recovery.rs::IdentityTenantStore` for the current pattern).
 pub async fn run_restore_flow<L, R, K>(
     local: &L,
     remote: &R,
     key_manager: &K,
     agent_did: &PortableDid,
-    recovered_identities: Vec<PortableIdentity>,
     protocol_definitions: Vec<Definition>,
 ) -> AgentIdentityResult<RestoreFlowResult>
 where
@@ -375,8 +380,6 @@ where
 {
     let mut result = RestoreFlowResult::default();
     result.steps.push(RestoreFlowStep::AgentDidSync);
-    let _recovered_identity_count = recovered_identities.len();
-    result.steps.push(RestoreFlowStep::RecoveredIdentities);
     result.steps.push(RestoreFlowStep::ProtocolInstall);
     for definition in protocol_definitions.clone() {
         result
@@ -674,7 +677,6 @@ mod tests {
             &remote,
             &key_manager,
             &agent_did,
-            Vec::new(),
             vec![definition.clone()],
         )
         .await
@@ -684,7 +686,6 @@ mod tests {
             result.steps,
             vec![
                 RestoreFlowStep::AgentDidSync,
-                RestoreFlowStep::RecoveredIdentities,
                 RestoreFlowStep::ProtocolInstall,
                 RestoreFlowStep::ProtocolPush,
             ]
