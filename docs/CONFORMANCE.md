@@ -39,7 +39,7 @@ Each case contains current TypeScript outputs and a Rust migration status:
 
 Rust CI runs `crates/dwn-rs-core/tests/conformance_fixtures.rs` as part of `cargo test --workspace`. This runner discovers suites from `fixtures/manifest.json`, computes JSON CIDs with `dwn_rs_core::cid::generate_cid_from_json`, and does not require Bun, Node, or the TypeScript workspace.
 
-Optional TypeScript runners are available under `tools/conformance/`:
+Optional TypeScript runners are available under `tools/conformance/`. CI also runs them against a pinned Enbox commit from `.enbox-version` (see the `typescript-conformance` job in `.github/workflows/tests.yaml`).
 
 ```bash
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-cid.test.ts

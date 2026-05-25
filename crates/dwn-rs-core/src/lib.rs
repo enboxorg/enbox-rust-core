@@ -53,6 +53,8 @@ pub mod state_index;
 pub mod storage_controller;
 pub mod stores;
 pub mod sync;
+pub mod sync_endpoint;
+pub mod sync_ledger;
 pub mod value;
 
 pub use dwn::*;

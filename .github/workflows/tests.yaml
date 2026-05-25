@@ -30,3 +30,36 @@ jobs:
 
       - name: Build test targets
         run: cargo test --workspace --no-run
+
+  typescript-conformance:
+    name: TypeScript conformance (pinned Enbox)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Enbox pin
+        id: pin
+        run: echo "sha=$(grep -v '^#' .enbox-version | grep -v '^$' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: enboxorg/enbox
+          ref: ${{ steps.pin.outputs.sha }}
+          path: enbox
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Enbox workspace dependencies
+        working-directory: enbox
+        run: bun install --frozen-lockfile
+
+      - name: Run TypeScript conformance tests
+        env:
+          ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
+        run: |
+          bun test tools/conformance/typescript-cid.test.ts \
+            tools/conformance/typescript-jws.test.ts \
+            tools/conformance/typescript-jwe.test.ts \
+            tools/conformance/typescript-state-index.test.ts \
+            tools/conformance/typescript-messages-sync.test.ts

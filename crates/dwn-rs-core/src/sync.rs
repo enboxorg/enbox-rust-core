@@ -15,6 +15,7 @@ use ulid::Ulid;
 use crate::dwn::DwnReply;
 use crate::events::MessageEvent;
 use crate::stores::{ProgressToken, SubscriptionMessage};
+use crate::sync_ledger::{MemorySyncLedger, SyncLedger};
 use crate::Descriptor;
 
 pub type SyncResult<T> = Result<T, SyncError>;
@@ -406,10 +407,11 @@ pub trait SyncEndpoint: Clone + Send + Sync + 'static {
 }
 
 #[derive(Clone)]
-pub struct NativeSyncEngine<Local, Remote> {
+pub struct NativeSyncEngine<Local, Remote, L = MemorySyncLedger> {
     local: Local,
     remote: Remote,
     state: Arc<RwLock<SyncEngineState>>,
+    ledger: L,
     diff_depth: u8,
 }
 
@@ -424,16 +426,32 @@ struct SyncEngineState {
     last_status: BTreeMap<String, SyncRunStatus>,
 }
 
-impl<Local, Remote> NativeSyncEngine<Local, Remote>
+impl<Local, Remote, L> NativeSyncEngine<Local, Remote, L>
 where
     Local: SyncEndpoint,
     Remote: SyncEndpoint,
+    L: SyncLedger,
 {
-    pub fn new(local: Local, remote: Remote) -> Self {
+    pub fn new(local: Local, remote: Remote) -> Self
+    where
+        L: Default,
+    {
+        Self::with_ledger(local, remote, L::default())
+    }
+
+    pub fn with_ledger(local: Local, remote: Remote, ledger: L) -> Self {
+        let mut engine_state = SyncEngineState::default();
+        if let Ok(snapshot) = ledger.load() {
+            engine_state.checkpoints = snapshot.checkpoints;
+            engine_state.dead_letters = snapshot.dead_letters;
+            engine_state.echo_cache = snapshot.echo_cache;
+            engine_state.last_status = snapshot.last_status;
+        }
         Self {
             local,
             remote,
-            state: Arc::new(RwLock::new(SyncEngineState::default())),
+            state: Arc::new(RwLock::new(engine_state)),
+            ledger,
             diff_depth: 16,
         }
     }
@@ -621,10 +639,12 @@ where
     }
 
     pub fn clear_dead_letter(&self, id: &str) -> bool {
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
-        let before = state.dead_letters.len();
-        state.dead_letters.retain(|entry| entry.id != id);
-        before != state.dead_letters.len()
+        let removed = self.ledger.remove_dead_letter(id).unwrap_or(false);
+        if removed {
+            let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+            state.dead_letters.retain(|entry| entry.id != id);
+        }
+        removed
     }
 
     pub async fn retry_dead_letter(&self, id: &str) -> SyncOnceResult {
@@ -886,9 +906,13 @@ where
                 checkpoint.last_error = Some(error.clone())
             });
         let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+        let status_key = format!("{tenant}|{remote}");
         state
             .last_status
-            .insert(format!("{}|{}", tenant, remote), SyncRunStatus::Repairing);
+            .insert(status_key.clone(), SyncRunStatus::Repairing);
+        let _ = self
+            .ledger
+            .set_last_status(&status_key, SyncRunStatus::Repairing);
         drop(state);
         let mut result = SyncOnceResult::new(SyncRunStatus::Repairing);
         result.error = Some(error);
@@ -1177,9 +1201,9 @@ where
         let mut state = self.state.write().expect("SyncEngine state lock poisoned");
         state.running.remove(operation_key);
         if let Some((tenant, remote, _)) = split_operation_key(operation_key) {
-            state
-                .last_status
-                .insert(format!("{tenant}|{remote}"), status);
+            let status_key = format!("{tenant}|{remote}");
+            state.last_status.insert(status_key.clone(), status.clone());
+            let _ = self.ledger.set_last_status(&status_key, status);
         }
     }
 
@@ -1217,7 +1241,9 @@ where
             });
         update(checkpoint);
         checkpoint.updated_at = Utc::now();
-        checkpoint.clone()
+        let checkpoint = checkpoint.clone();
+        let _ = self.ledger.upsert_checkpoint(&checkpoint);
+        checkpoint
     }
 
     fn record_dead_letter(
@@ -1230,53 +1256,56 @@ where
         error: SyncError,
     ) {
         let message_cid = entry.as_ref().map(|entry| entry.message_cid.clone());
+        let dead_letter = DeadLetterEntry {
+            id: Ulid::new().to_string(),
+            tenant: tenant.to_string(),
+            remote: remote.to_string(),
+            scope_id: scope.id(),
+            message_cid,
+            entry,
+            category,
+            error,
+            attempts: 1,
+            last_attempt_at: Utc::now(),
+        };
         self.state
             .write()
-            .unwrap()
+            .expect("SyncEngine state lock poisoned")
             .dead_letters
-            .push(DeadLetterEntry {
-                id: Ulid::new().to_string(),
-                tenant: tenant.to_string(),
-                remote: remote.to_string(),
-                scope_id: scope.id(),
-                message_cid,
-                entry,
-                category,
-                error,
-                attempts: 1,
-                last_attempt_at: Utc::now(),
-            });
+            .push(dead_letter.clone());
+        let _ = self.ledger.insert_dead_letter(&dead_letter);
     }
 
     fn update_dead_letter_failure(&self, id: &str, error: SyncError) {
-        if let Some(entry) = self
-            .state
-            .write()
-            .unwrap()
-            .dead_letters
-            .iter_mut()
-            .find(|entry| entry.id == id)
-        {
-            entry.error = error;
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+        if let Some(entry) = state.dead_letters.iter_mut().find(|entry| entry.id == id) {
+            entry.error = error.clone();
             entry.attempts += 1;
             entry.last_attempt_at = Utc::now();
+            let _ = self.ledger.update_dead_letter(entry);
         }
     }
 
     fn remember_echo(&self, tenant: &str, remote: &str, message_cid: &str) {
+        let key = echo_key(tenant, remote, message_cid);
+        let now = Utc::now();
         self.state
             .write()
-            .unwrap()
+            .expect("SyncEngine state lock poisoned")
             .echo_cache
-            .insert(echo_key(tenant, remote, message_cid), Utc::now());
+            .insert(key.clone(), now);
+        let _ = self.ledger.remember_echo(&key, now);
     }
 
     fn should_suppress_echo(&self, tenant: &str, remote: &str, message_cid: &str) -> bool {
-        self.state
-            .read()
-            .unwrap()
-            .echo_cache
-            .contains_key(&echo_key(tenant, remote, message_cid))
+        let key = echo_key(tenant, remote, message_cid);
+        self.ledger.contains_echo(&key).unwrap_or_else(|_| {
+            self.state
+                .read()
+                .expect("SyncEngine state lock poisoned")
+                .echo_cache
+                .contains_key(&key)
+        })
     }
 
     fn validate_pull_cursor(
