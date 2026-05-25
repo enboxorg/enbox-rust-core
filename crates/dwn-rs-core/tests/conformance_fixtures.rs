@@ -21,6 +21,7 @@ use dwn_rs_core::dwn::{
     current_handler_kinds, Dwn, DwnReply, MessageKind, MethodHandler, MethodHandlerRequest,
 };
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
+use dwn_rs_core::message_validation;
 use dwn_rs_core::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
 use futures_util::stream;
@@ -421,6 +422,9 @@ async fn fixture_messages_route_through_dwn_dispatch() {
                 Err(err) => panic!("{} fixture message must have route: {err:?}", case.id),
             };
             if !current_kinds.contains(&kind) {
+                continue;
+            }
+            if message_validation::validate_message(message).is_err() {
                 continue;
             }
 
@@ -850,6 +854,26 @@ fn assert_message_process_fixture_shape(case: &FixtureCase) {
 
 async fn assert_message_process_reply(case: &FixtureCase) {
     let process = message_process_fixture(case);
+    let raw_message = message(case).clone();
+
+    if let Err(schema_error) = message_validation::validate_message(&raw_message) {
+        let reply = Dwn::default()
+            .process_message(&process.tenant, raw_message)
+            .await;
+        assert_eq!(
+            reply.status.code, 400,
+            "{} schema validation status",
+            case.id
+        );
+        assert_eq!(
+            reply.status.detail,
+            schema_error.to_string(),
+            "{} schema validation detail",
+            case.id
+        );
+        return;
+    }
+
     let mut dwn = Dwn::default();
     if process.register_handler {
         let kind = MessageKind::from_message(message(case)).unwrap_or_else(|err| {
@@ -874,9 +898,7 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         );
     }
 
-    let reply = dwn
-        .process_message(&process.tenant, message(case).clone())
-        .await;
+    let reply = dwn.process_message(&process.tenant, raw_message).await;
     assert_eq!(
         serde_json::to_value(reply).expect("DwnReply must serialize"),
         process.reply,

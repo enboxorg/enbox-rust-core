@@ -31,6 +31,7 @@
 pub mod agent;
 pub mod auth;
 pub mod connect;
+pub mod core_protocol;
 pub mod desktop;
 pub mod dwn;
 pub mod encryption;
@@ -40,6 +41,7 @@ pub mod filters;
 pub mod handlers;
 pub mod interfaces;
 pub mod local;
+pub mod message_validation;
 pub mod mobile;
 pub mod native_dwn;
 pub mod permissions;

@@ -9,6 +9,7 @@ use chrono::SecondsFormat;
 use serde_json::Value as JsonValue;
 
 use crate::auth::JwsPublicKeyResolver;
+use crate::core_protocol::CoreProtocolRegistry;
 use crate::descriptors::{ConfigureDescriptor, Descriptor, Protocols};
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
@@ -94,8 +95,9 @@ pub async fn fetch_protocol_definition<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    if protocol_uri == permissions::PERMISSIONS_PROTOCOL_URI {
-        return Ok(permissions::permissions_protocol_definition());
+    if let Some(definition) = CoreProtocolRegistry::with_permissions().get_definition(protocol_uri)
+    {
+        return Ok(definition);
     }
 
     let filters = protocol_definition_lookup_filters(protocol_uri, message_timestamp);

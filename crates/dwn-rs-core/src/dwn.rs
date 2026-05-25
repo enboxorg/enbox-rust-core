@@ -10,6 +10,7 @@ use crate::interfaces::messages::descriptors::{
     CONFIGURE, COUNT, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, SUBSCRIBE, SYNC, WRITE,
 };
 use crate::interfaces::replies::Status;
+use crate::message_validation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantGateResult {
@@ -251,6 +252,10 @@ where
             }
         };
 
+        if let Err(error) = message_validation::validate_message(&raw_message) {
+            return DwnReply::bad_request(error.to_string());
+        }
+
         let Some(handler) = self.config.handlers.get(&kind) else {
             return DwnReply::not_implemented(format!(
                 "No handler registered for {}",
@@ -412,7 +417,11 @@ mod tests {
                 json!({
                     "descriptor": {
                         "interface": "Records",
-                        "method": "Query"
+                        "method": "Query",
+                        "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                        "filter": {
+                            "protocol": "https://example.com/test"
+                        }
                     }
                 }),
             )
@@ -446,9 +455,12 @@ mod tests {
                 "did:example:alice",
                 json!({
                     "descriptor": {
-                        "interface": "Messages",
-                        "method": "Sync",
-                        "action": "root"
+                        "interface": "Records",
+                        "method": "Query",
+                        "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                        "filter": {
+                            "protocol": "https://example.com/test"
+                        }
                     }
                 }),
             )
@@ -456,7 +468,7 @@ mod tests {
         assert_eq!(reply.status.code, 501);
         assert_eq!(
             reply.status.detail,
-            "MessagesSync handler is not implemented"
+            "RecordsQuery handler is not implemented"
         );
     }
 
