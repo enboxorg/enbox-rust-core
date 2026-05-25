@@ -78,22 +78,34 @@ pub enum NativeDwnOpenError {
     ResumableTaskStore(#[from] ResumableTaskStoreError),
 }
 
-/// Open every store in `stores`. Mirrors the `Dwn.open()` lifecycle from TypeScript.
+/// Open every store in `stores` and resume pending resumable tasks.
 pub async fn open_native_stores<MS, DS, SI, EL, RTS>(
     mut stores: NativeDwnStores<MS, DS, SI, EL, RTS>,
 ) -> Result<NativeDwnStores<MS, DS, SI, EL, RTS>, NativeDwnOpenError>
 where
-    MS: MessageStoreTrait,
-    DS: DataStoreTrait,
-    SI: StateIndexTrait,
+    MS: MessageStoreTrait + Clone + Send + Sync + 'static,
+    DS: DataStoreTrait + Clone + Send + Sync + 'static,
+    SI: StateIndexTrait + Clone + Send + Sync + 'static,
     EL: EventLogTrait,
-    RTS: ResumableTaskStoreTrait,
+    RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
 {
     stores.message_store.open().await?;
     stores.data_store.open().await?;
     stores.state_index.open().await?;
     stores.event_log.open().await?;
     stores.resumable_task_store.open().await?;
+
+    let storage_controller = crate::storage_controller::StorageController::new(
+        stores.message_store.clone(),
+        stores.data_store.clone(),
+        stores.state_index.clone(),
+    );
+    let task_manager = crate::resumable_task_manager::ResumableTaskManager::new(
+        stores.resumable_task_store.clone(),
+        storage_controller,
+    );
+    task_manager.resume_tasks_and_wait_for_completion().await?;
+
     Ok(stores)
 }
 
