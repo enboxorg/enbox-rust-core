@@ -552,7 +552,15 @@ where
         }
 
         if descriptor.squash == Some(true) {
-            if let Err(detail) = self.perform_records_squash(tenant, &message).await {
+            if let Err(detail) = perform_records_squash(
+                &self.message_store,
+                &self.data_store,
+                &self.state_index,
+                tenant,
+                &message,
+            )
+            .await
+            {
                 return store_error_reply(detail);
             }
         }
@@ -908,70 +916,69 @@ where
         }
         Ok(())
     }
+}
 
-    async fn perform_records_squash(
-        &self,
-        tenant: &str,
-        message: &Message<Descriptor>,
-    ) -> Result<(), String> {
-        let descriptor = records_write_descriptor(message)?;
-        let (Some(protocol), Some(protocol_path)) =
-            (&descriptor.protocol, &descriptor.protocol_path)
-        else {
-            return Ok(());
-        };
-        let record_id = record_id(message)
-            .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
-        let mut filter = filter_map([
-            ("interface", string_filter(RECORDS_INTERFACE)),
-            ("protocol", string_filter(protocol)),
-            ("protocolPath", string_filter(protocol_path)),
-        ]);
-        if let Some(parent_context) =
-            context_id(message).and_then(|context| parent_context_id(&context))
-        {
-            if !parent_context.is_empty() {
-                filter.insert(
-                    FilterKey::Index("contextId".to_string()),
-                    Filter::Prefix(Value::String(parent_context)),
-                );
-            }
+pub(crate) async fn perform_records_squash<MessageStore, DataStore, StateIndex>(
+    message_store: &MessageStore,
+    data_store: &DataStore,
+    state_index: &StateIndex,
+    tenant: &str,
+    message: &Message<Descriptor>,
+) -> Result<(), String>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+{
+    let descriptor = records_write_descriptor(message)?;
+    let (Some(protocol), Some(protocol_path)) = (&descriptor.protocol, &descriptor.protocol_path)
+    else {
+        return Ok(());
+    };
+    let record_id = record_id(message)
+        .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
+    let mut filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("protocol", string_filter(protocol)),
+        ("protocolPath", string_filter(protocol_path)),
+    ]);
+    if let Some(parent_context) =
+        context_id(message).and_then(|context| parent_context_id(&context))
+    {
+        if !parent_context.is_empty() {
+            filter.insert(
+                FilterKey::Index("contextId".to_string()),
+                Filter::Prefix(Value::String(parent_context)),
+            );
         }
-        let sibling_messages = self
-            .message_store
-            .query(tenant, Filters::from(filter), None, None)
-            .await
-            .map_err(|err| err.to_string())?
-            .messages;
-        let mut by_record_id = BTreeMap::<String, Vec<Message<Descriptor>>>::new();
-        for sibling in sibling_messages {
-            if let Some(sibling_record_id) = message_record_id(&sibling) {
-                by_record_id
-                    .entry(sibling_record_id)
-                    .or_default()
-                    .push(sibling);
-            }
-        }
-        for (sibling_record_id, messages) in by_record_id {
-            if sibling_record_id == record_id {
-                continue;
-            }
-            let Some(newest) = newest_message(&messages) else {
-                continue;
-            };
-            if message_timestamp(&newest)? < descriptor.message_timestamp {
-                purge_record_messages(
-                    tenant,
-                    &messages,
-                    &self.message_store,
-                    &self.data_store,
-                    &self.state_index,
-                )
-                .await?;
-            }
-        }
-        Ok(())
     }
+    let sibling_messages = message_store
+        .query(tenant, Filters::from(filter), None, None)
+        .await
+        .map_err(|err| err.to_string())?
+        .messages;
+    let mut by_record_id = BTreeMap::<String, Vec<Message<Descriptor>>>::new();
+    for sibling in sibling_messages {
+        if let Some(sibling_record_id) = message_record_id(&sibling) {
+            by_record_id
+                .entry(sibling_record_id)
+                .or_default()
+                .push(sibling);
+        }
+    }
+    for (sibling_record_id, messages) in by_record_id {
+        if sibling_record_id == record_id {
+            continue;
+        }
+        let Some(newest) = newest_message(&messages) else {
+            continue;
+        };
+        if message_timestamp(&newest)? < descriptor.message_timestamp {
+            purge_record_messages(tenant, &messages, message_store, data_store, state_index)
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore>
@@ -1440,86 +1447,162 @@ where
             return DwnReply::unauthorized(detail);
         }
 
-        if let Err(detail) = self
-            .perform_records_delete(tenant, &message, &existing_messages, &initial_write)
-            .await
+        if let Err(detail) = perform_records_delete(
+            &self.message_store,
+            &self.data_store,
+            &self.state_index,
+            tenant,
+            &message,
+            &existing_messages,
+            &initial_write,
+        )
+        .await
         {
             return store_error_reply(detail);
         }
         accepted_reply()
     }
+}
 
-    async fn perform_records_delete(
-        &self,
-        tenant: &str,
-        message: &Message<Descriptor>,
-        existing_messages: &[Message<Descriptor>],
-        initial_write: &Message<Descriptor>,
-    ) -> Result<(), String> {
-        let author = extract_author(message)
-            .ok_or_else(|| "RecordsDeleteMissingAuthor: author is required".to_string())?;
-        let indexes = records_delete_indexes(message, initial_write, &author)?;
-        self.message_store
-            .put(tenant, message.clone(), indexes.clone())
-            .await
-            .map_err(|err| err.to_string())?;
-        let cid = message_cid(message)?;
-        self.state_index
-            .insert(tenant, &cid, indexes)
-            .await
-            .map_err(|err| err.to_string())?;
+pub(crate) async fn perform_records_delete<MessageStore, DataStore, StateIndex>(
+    message_store: &MessageStore,
+    data_store: &DataStore,
+    state_index: &StateIndex,
+    tenant: &str,
+    message: &Message<Descriptor>,
+    existing_messages: &[Message<Descriptor>],
+    initial_write: &Message<Descriptor>,
+) -> Result<(), String>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+{
+    let author = extract_author(message)
+        .ok_or_else(|| "RecordsDeleteMissingAuthor: author is required".to_string())?;
+    let indexes = records_delete_indexes(message, initial_write, &author)?;
+    message_store
+        .put(tenant, message.clone(), indexes.clone())
+        .await
+        .map_err(|err| err.to_string())?;
+    let cid = message_cid(message)?;
+    state_index
+        .insert(tenant, &cid, indexes)
+        .await
+        .map_err(|err| err.to_string())?;
 
-        let descriptor = records_delete_descriptor(message)?;
-        if descriptor.prune {
-            purge_record_descendants(
-                tenant,
-                &descriptor.record_id,
-                &self.message_store,
-                &self.data_store,
-                &self.state_index,
-            )
-            .await?;
-        }
+    let descriptor = records_delete_descriptor(message)?;
+    if descriptor.prune {
+        purge_record_descendants(
+            tenant,
+            &descriptor.record_id,
+            message_store,
+            data_store,
+            state_index,
+        )
+        .await?;
+    }
 
-        for existing in existing_messages {
-            if compare_messages(existing, message) == Ordering::Less {
-                delete_from_data_store_if_needed(tenant, existing, message, &self.data_store)
-                    .await?;
-                let old_cid = message_cid(existing)?;
-                self.message_store
-                    .delete(tenant, &old_cid)
+    for existing in existing_messages {
+        if compare_messages(existing, message) == Ordering::Less {
+            delete_from_data_store_if_needed(tenant, existing, message, data_store).await?;
+            let old_cid = message_cid(existing)?;
+            message_store
+                .delete(tenant, &old_cid)
+                .await
+                .map_err(|err| err.to_string())?;
+            state_index
+                .delete(tenant, std::slice::from_ref(&old_cid))
+                .await
+                .map_err(|err| err.to_string())?;
+            if records_write_descriptor(existing).is_ok()
+                && record_id(existing) == Some(descriptor.record_id.clone())
+                && is_initial_write(
+                    existing,
+                    extract_author(existing).as_deref().unwrap_or_default(),
+                )
+                .unwrap_or(false)
+            {
+                let mut initial = existing.clone();
+                set_encoded_data(&mut initial, None)?;
+                let author = extract_author(&initial).unwrap_or_default();
+                let indexes = records_write_indexes(&initial, &author, false)?;
+                message_store
+                    .put(tenant, initial.clone(), indexes.clone())
                     .await
                     .map_err(|err| err.to_string())?;
-                self.state_index
-                    .delete(tenant, std::slice::from_ref(&old_cid))
+                let new_cid = message_cid(&initial)?;
+                state_index
+                    .insert(tenant, &new_cid, indexes)
                     .await
                     .map_err(|err| err.to_string())?;
-                if records_write_descriptor(existing).is_ok()
-                    && record_id(existing) == Some(descriptor.record_id.clone())
-                    && is_initial_write(
-                        existing,
-                        extract_author(existing).as_deref().unwrap_or_default(),
-                    )
-                    .unwrap_or(false)
-                {
-                    let mut initial = existing.clone();
-                    set_encoded_data(&mut initial, None)?;
-                    let author = extract_author(&initial).unwrap_or_default();
-                    let indexes = records_write_indexes(&initial, &author, false)?;
-                    self.message_store
-                        .put(tenant, initial.clone(), indexes.clone())
-                        .await
-                        .map_err(|err| err.to_string())?;
-                    let new_cid = message_cid(&initial)?;
-                    self.state_index
-                        .insert(tenant, &new_cid, indexes)
-                        .await
-                        .map_err(|err| err.to_string())?;
-                }
             }
         }
-        Ok(())
     }
+    Ok(())
+}
+
+pub(crate) async fn resume_records_delete_from_task<MessageStore, DataStore, StateIndex>(
+    message_store: &MessageStore,
+    data_store: &DataStore,
+    state_index: &StateIndex,
+    tenant: &str,
+    raw_message: &JsonValue,
+) -> Result<(), String>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+{
+    let message = parse_message(raw_message)?;
+    let descriptor = records_delete_descriptor(&message)?;
+    let existing_messages =
+        fetch_record_messages(tenant, &descriptor.record_id, message_store).await?;
+    let Some(newest_existing) = newest_message(&existing_messages) else {
+        return Ok(());
+    };
+    if !can_perform_delete_against_record(&message, &newest_existing) {
+        return Ok(());
+    }
+    let initial_write = find_initial_write(
+        &existing_messages,
+        extract_author(&newest_existing)
+            .as_deref()
+            .unwrap_or_default(),
+    )
+    .or_else(|| {
+        existing_messages
+            .iter()
+            .find(|message| records_write_descriptor(message).is_ok())
+            .cloned()
+    })
+    .ok_or_else(|| "RecordsDeleteAuthorizationFailed: initial write not found".to_string())?;
+    perform_records_delete(
+        message_store,
+        data_store,
+        state_index,
+        tenant,
+        &message,
+        &existing_messages,
+        &initial_write,
+    )
+    .await
+}
+
+pub(crate) async fn resume_records_squash_from_task<MessageStore, DataStore, StateIndex>(
+    message_store: &MessageStore,
+    data_store: &DataStore,
+    state_index: &StateIndex,
+    tenant: &str,
+    raw_message: &JsonValue,
+) -> Result<(), String>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+{
+    let message = parse_message(raw_message)?;
+    perform_records_squash(message_store, data_store, state_index, tenant, &message).await
 }
 
 impl<MessageStore> RecordsSubscribeHandler<MessageStore>
