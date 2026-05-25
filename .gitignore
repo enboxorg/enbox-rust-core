@@ -10,3 +10,4 @@ RESOLVERCACHE/
 crates/dwn-rs-wasm/node_modules
 crates/dwn-rs-wasm/coverage
 .direnv
+crates/enbox-ffi/generated/
