@@ -34,13 +34,18 @@ jobs:
   typescript-conformance:
     name: TypeScript conformance (pinned Enbox)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
       - name: Read Enbox pin
         id: pin
-        run: echo "sha=$(grep -v '^#' .enbox-version | grep -v '^$' | head -1)" >> "$GITHUB_OUTPUT"
+        run: |
+          sha="$(grep -v '^#' .enbox-version | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')"
+          if [ "${#sha}" -ne 40 ]; then
+            echo "Expected a 40-character commit SHA in .enbox-version, got: ${sha}" >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -53,6 +58,10 @@ jobs:
       - name: Install Enbox workspace dependencies
         working-directory: enbox
         run: bun install --frozen-lockfile
+
+      - name: Build Enbox DWN SDK for conformance adapters
+        working-directory: enbox
+        run: bun run build --filter=@enbox/dwn-sdk-js
 
       - name: Run TypeScript conformance tests
         env:
