@@ -14,17 +14,18 @@ This repository was cloned from [`enmand/dwn-rs`](https://github.com/enmand/dwn-
 
 ## Current State
 
-This repository is early in the Enbox migration. The inherited `dwn-rs` code is useful reference material, and the active Rust workspace now builds natively with the pinned Rust toolchain.
+The active Rust workspace builds and tests natively with the pinned Rust toolchain. Handler logic, protocol authorization, conformance fixtures, and agent/sync modules are largely implemented.
 
-Active workspace members are listed in [`Cargo.toml`](Cargo.toml). The inherited WASM bridge is excluded from the active workspace while the native core takes shape.
+A runnable local node is available via [`SqliteNativeDwn`](crates/dwn-rs-stores/src/native_node.rs) and the [`in_memory_dwn`](crates/dwn-rs-stores/examples/in_memory_dwn.rs) example. Call `build_native_dwn_with_resolver` or `SqliteNativeDwn::open_in_memory` to get a `Dwn` with all 11 real method handlers registered (including `MessagesRead`).
 
-Known inherited gaps:
+Remaining gaps for production mobile/desktop nodes:
 
-- DWN message processing is not implemented end-to-end.
-- Current Enbox handlers are missing, including Enbox `MessagesSync`.
-- Enbox `StateIndex` / Sparse Merkle Tree sync state is missing.
-- Current Enbox protocol directives and permission behavior need to be ported.
-- The WASM bridge still references the old `@tbd54566975/dwn-sdk-js` package and remains legacy-only.
+- Durable SQLite `StateIndex`, `EventLog`, and `ResumableTaskStore` (#80)
+- `StorageController` / `ResumableTaskManager` wiring (#81)
+- JSON Schema validation at the `process_message` boundary (#82)
+- Native bindings (`enbox-ffi`) and remote sync transport (#86–#88)
+
+The inherited WASM bridge (`dwn-rs-wasm`) remains excluded from the active workspace.
 
 ## Roadmap
 
