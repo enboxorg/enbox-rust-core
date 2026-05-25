@@ -59,4 +59,10 @@ bytes = { version = "1.8.0", features = ["serde"] }
 
 [dev-dependencies]
 rand = "0.8.5"
+tokio = { version = "1.39.2", features = ["macros", "rt"] }
 tokio-util = "0.7.12"
+
+[[example]]
+name = "in_memory_dwn"
+path = "examples/in_memory_dwn.rs"
+required-features = ["sqlite"]

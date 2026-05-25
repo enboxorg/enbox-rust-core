@@ -41,6 +41,7 @@ pub mod handlers;
 pub mod interfaces;
 pub mod local;
 pub mod mobile;
+pub mod native_dwn;
 pub mod permissions;
 mod ser;
 pub mod setup;
@@ -54,6 +55,10 @@ pub use errors::lock_error;
 pub use events::*;
 pub use filters::*;
 pub use interfaces::*;
+pub use native_dwn::{
+    build_native_dwn, build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig,
+    NativeDwnOpenError, NativeDwnStores,
+};
 pub use value::*;
 
 pub mod utils;
