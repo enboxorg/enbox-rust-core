@@ -2,28 +2,23 @@
 
 use dwn_rs_core::auth::StaticPublicKeyResolver;
 use dwn_rs_core::dwn::Dwn;
-use dwn_rs_core::local::{MemoryEventLog, MemoryResumableTaskStore};
 use dwn_rs_core::native_dwn::{
     build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig, NativeDwnOpenError,
     NativeDwnStores,
 };
-use dwn_rs_core::state_index::MemoryStateIndex;
 
+use crate::sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
 use crate::SqliteStore;
 
-/// SQLite-backed native DWN using in-memory auxiliary stores for StateIndex,
-/// EventLog, and resumable tasks.
-///
-/// Durable SQLite persistence for those auxiliary stores is tracked in
-/// <https://github.com/enboxorg/enbox-rust-core/issues/80>.
+/// SQLite-backed native DWN with durable auxiliary stores.
 pub struct SqliteNativeDwn {
     store: SqliteStore,
     dwn: Dwn<
         SqliteStore,
         SqliteStore,
-        MemoryStateIndex,
-        MemoryEventLog,
-        MemoryResumableTaskStore,
+        SqliteStateIndex,
+        SqliteEventLog,
+        SqliteResumableTaskStore,
         (),
         dwn_rs_core::AllowAllTenantGate,
     >,
@@ -43,12 +38,15 @@ impl SqliteNativeDwn {
         public_key_resolver: StaticPublicKeyResolver,
     ) -> Result<Self, NativeDwnOpenError> {
         let store = SqliteStore::new(path);
+        let state_index = SqliteStateIndex::new(&store);
+        let event_log = SqliteEventLog::new(&store);
+        let resumable_task_store = SqliteResumableTaskStore::new(&store);
         let stores = open_native_stores(NativeDwnStores {
             message_store: store.clone(),
             data_store: store.clone(),
-            state_index: MemoryStateIndex::default(),
-            event_log: MemoryEventLog::default(),
-            resumable_task_store: MemoryResumableTaskStore::default(),
+            state_index,
+            event_log,
+            resumable_task_store,
         })
         .await?;
 
@@ -68,9 +66,9 @@ impl SqliteNativeDwn {
     ) -> &Dwn<
         SqliteStore,
         SqliteStore,
-        MemoryStateIndex,
-        MemoryEventLog,
-        MemoryResumableTaskStore,
+        SqliteStateIndex,
+        SqliteEventLog,
+        SqliteResumableTaskStore,
         (),
         dwn_rs_core::AllowAllTenantGate,
     > {
