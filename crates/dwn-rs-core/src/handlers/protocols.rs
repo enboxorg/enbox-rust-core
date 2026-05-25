@@ -8,14 +8,14 @@ use std::sync::Arc;
 use chrono::SecondsFormat;
 use serde_json::Value as JsonValue;
 
-use crate::auth::GeneralJwsPublicKeyResolver;
+use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::{ConfigureDescriptor, Descriptor, Protocols};
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition, RuleSet};
 use crate::interfaces::replies::Status;
 use crate::permissions;
-use crate::stores::{EnboxMessageStore, EnboxStateIndex, KeyValues};
+use crate::stores::KeyValues;
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
 const PROTOCOLS_INTERFACE: &str = "Protocols";
@@ -25,13 +25,13 @@ const CONFIGURE_METHOD: &str = "Configure";
 pub struct ProtocolsConfigureHandler<MessageStore, StateIndex> {
     message_store: MessageStore,
     state_index: StateIndex,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct ProtocolsQueryHandler<MessageStore> {
     message_store: MessageStore,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
@@ -56,7 +56,7 @@ impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateInde
     pub fn with_public_key_resolver(
         message_store: MessageStore,
         state_index: StateIndex,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -76,7 +76,7 @@ impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
 
     pub fn with_public_key_resolver(
         message_store: MessageStore,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -92,7 +92,7 @@ pub async fn fetch_protocol_definition<MessageStore>(
     message_timestamp: Option<&str>,
 ) -> Result<Definition, ProtocolDefinitionLookupError>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     if protocol_uri == permissions::PERMISSIONS_PROTOCOL_URI {
         return Ok(permissions::permissions_protocol_definition());
@@ -122,8 +122,8 @@ where
 
 impl<MessageStore, StateIndex> MethodHandler for ProtocolsConfigureHandler<MessageStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -135,7 +135,7 @@ where
 
 impl<MessageStore> MethodHandler for ProtocolsQueryHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -147,8 +147,8 @@ where
 
 impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     async fn handle_configure(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message) {
@@ -332,7 +332,7 @@ where
 
 impl<MessageStore> ProtocolsQueryHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     async fn handle_query(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message) {
@@ -717,8 +717,7 @@ mod tests {
     use base64::Engine as _;
 
     use crate::auth::{
-        GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner,
-        StaticPublicKeyResolver,
+        Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
     };
     use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
     use crate::descriptors::{
@@ -730,7 +729,7 @@ mod tests {
         self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, Type, Who,
     };
     use crate::state_index::MemoryStateIndex;
-    use crate::stores::{EnboxMessageQueryResult, EnboxMessageStore};
+    use crate::stores::{MessageQueryResult, MessageStore, StateIndex};
     use crate::{Fields, MapValue, Message, Pagination, Value};
 
     use super::*;
@@ -1213,7 +1212,7 @@ mod tests {
         indexes: KeyValues,
     }
 
-    impl EnboxMessageStore for TestMessageStore {
+    impl MessageStore for TestMessageStore {
         async fn open(&mut self) -> Result<(), crate::errors::MessageStoreError> {
             Ok(())
         }
@@ -1266,7 +1265,7 @@ mod tests {
             filters: Filters,
             sort: Option<MessageSort>,
             pagination: Option<Pagination>,
-        ) -> impl Future<Output = Result<EnboxMessageQueryResult, crate::errors::MessageStoreError>> + Send
+        ) -> impl Future<Output = Result<MessageQueryResult, crate::errors::MessageStoreError>> + Send
         {
             let rows = self.rows.clone();
             let tenant = tenant.to_string();
@@ -1298,7 +1297,7 @@ mod tests {
                 if let Some(limit) = pagination.and_then(|pagination| pagination.limit) {
                     rows.truncate(limit as usize);
                 }
-                Ok(EnboxMessageQueryResult {
+                Ok(MessageQueryResult {
                     messages: rows.into_iter().map(|row| row.message).collect(),
                     cursor: None,
                 })
@@ -1374,7 +1373,7 @@ mod tests {
             "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
         });
         let signature =
-            GeneralJws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+            Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
                 .unwrap();
         serde_json::json!({
             "descriptor": descriptor_json,
@@ -1389,7 +1388,7 @@ mod tests {
             "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
         });
         let signature =
-            GeneralJws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+            Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
                 .unwrap();
         serde_json::json!({
             "descriptor": descriptor_json,
@@ -1410,7 +1409,7 @@ mod tests {
             "permissionGrantId": permission_grant_id,
         });
         let signature =
-            GeneralJws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+            Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
                 .unwrap();
         serde_json::json!({
             "descriptor": descriptor_json,
@@ -1484,7 +1483,7 @@ mod tests {
             "contextId": grant_id,
             "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
         });
-        let signature = GeneralJws::create(
+        let signature = Jws::create_general(
             serde_json::to_vec(&payload).unwrap().as_slice(),
             &[test_signer()],
         )
@@ -1667,7 +1666,7 @@ mod tests {
         PrivateJwkSigner::new(
             key_id,
             "EdDSA",
-            GeneralJwsPrivateJwk {
+            JwsPrivateJwk {
                 kty: "OKP".to_string(),
                 crv: "Ed25519".to_string(),
                 d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
@@ -1699,8 +1698,8 @@ mod tests {
         ]))
     }
 
-    fn test_public_jwk(key_id: &str) -> GeneralJwsPublicJwk {
-        GeneralJwsPublicJwk {
+    fn test_public_jwk(key_id: &str) -> JwsPublicJwk {
+        JwsPublicJwk {
             kty: "OKP".to_string(),
             crv: "Ed25519".to_string(),
             x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),

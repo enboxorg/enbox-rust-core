@@ -4,8 +4,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use k256::sha2::{Digest, Sha256};
 
-use crate::errors::StoreError;
-use crate::stores::{EnboxStateIndex, KeyValues, StateHash};
+use crate::errors::{lock_error, StoreError};
+use crate::stores::{KeyValues, StateHash, StateIndex};
 use crate::Value;
 
 const SMT_DEPTH: usize = 256;
@@ -13,6 +13,9 @@ const SMT_DEPTH: usize = 256;
 static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
+/// In-memory Sparse Merkle Tree `StateIndex` used by reference flows and
+/// tests. Process-local; data is lost on restart. Production deployments
+/// should pair `MessagesSync` with a durable state index (SQLite, etc.).
 pub struct MemoryStateIndex {
     tenants: Arc<RwLock<BTreeMap<String, TenantState>>>,
 }
@@ -31,7 +34,7 @@ struct Leaf {
     value_cid: String,
 }
 
-impl EnboxStateIndex for MemoryStateIndex {
+impl StateIndex for MemoryStateIndex {
     async fn open(&mut self) -> Result<(), StoreError> {
         Ok(())
     }
@@ -329,10 +332,6 @@ fn leaf_matches_prefix(key_hash: &StateHash, prefix: &[bool]) -> bool {
         .iter()
         .enumerate()
         .all(|(depth, bit)| get_bit(key_hash, depth) == *bit)
-}
-
-fn lock_error<T>(_: T) -> StoreError {
-    StoreError::InternalException("StateIndex lock poisoned".to_string())
 }
 
 #[cfg(test)]

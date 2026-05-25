@@ -17,7 +17,7 @@ use crate::{
 };
 use dwn_rs_core::{
     errors::{ResumableTaskStoreError, StoreError},
-    stores::{ManagedResumableTask, ResumableTaskStore},
+    stores::{LegacyManagedResumableTask, LegacyResumableTaskStore},
 };
 
 use ulid::Ulid;
@@ -26,7 +26,7 @@ const RESUMABLE_TASKS_DB: &str = "tasks";
 const RESUMABLE_TASKS_TABLE: &str = "resumable_tasks";
 const TASK_TIMEOUT: u64 = 60;
 
-impl ResumableTaskStore for SurrealDB {
+impl LegacyResumableTaskStore for SurrealDB {
     async fn open(&mut self) -> Result<(), ResumableTaskStoreError> {
         self.db = self.db.clone();
 
@@ -49,7 +49,7 @@ impl ResumableTaskStore for SurrealDB {
         &self,
         task: T,
         timeout: u64,
-    ) -> Result<ManagedResumableTask<T>, ResumableTaskStoreError> {
+    ) -> Result<LegacyManagedResumableTask<T>, ResumableTaskStoreError> {
         let id = self.gen.lock().await.generate()?;
 
         let timeout_expr = timeout_expr(timeout);
@@ -66,7 +66,7 @@ impl ResumableTaskStore for SurrealDB {
             .map_err(SurrealDBError::from)
             .map_err(StoreError::from)?
         {
-            Some(task) => Ok(ManagedResumableTask {
+            Some(task) => Ok(LegacyManagedResumableTask {
                 id,
                 task: task.task,
                 timeout,
@@ -85,7 +85,7 @@ impl ResumableTaskStore for SurrealDB {
     async fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
         &self,
         count: u64,
-    ) -> Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError> {
+    ) -> Result<Vec<LegacyManagedResumableTask<T>>, ResumableTaskStoreError> {
         // select * from resumable_tasks where timeout < time::now() limit count
         // we can't use the update statement with a where, because we have a limit
         // so we need to do a select first, then update in a transaction
@@ -150,17 +150,18 @@ impl ResumableTaskStore for SurrealDB {
             .map_err(SurrealDBError::from)
             .map_err(StoreError::from)?;
 
-        let managed_tasks: Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError> = tasks
-            .into_iter()
-            .map(|task| {
-                Ok(ManagedResumableTask {
-                    id: Ulid::from_string(&task.id.key().to_string())?,
-                    task: task.task,
-                    timeout: task.timeout.timestamp() as u64,
-                    retry_count: 0,
+        let managed_tasks: Result<Vec<LegacyManagedResumableTask<T>>, ResumableTaskStoreError> =
+            tasks
+                .into_iter()
+                .map(|task| {
+                    Ok(LegacyManagedResumableTask {
+                        id: Ulid::from_string(&task.id.key().to_string())?,
+                        task: task.task,
+                        timeout: task.timeout.timestamp() as u64,
+                        retry_count: 0,
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
         managed_tasks
     }
@@ -168,7 +169,7 @@ impl ResumableTaskStore for SurrealDB {
     async fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
         &self,
         task_id: &str,
-    ) -> Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError> {
+    ) -> Result<Option<LegacyManagedResumableTask<T>>, ResumableTaskStoreError> {
         let id: RecordId = (RESUMABLE_TASKS_TABLE, task_id.to_string()).into();
 
         match self
@@ -180,7 +181,7 @@ impl ResumableTaskStore for SurrealDB {
         {
             Some(task) => {
                 tracing::trace!(task = ?task, "Read task");
-                Ok(Some(ManagedResumableTask {
+                Ok(Some(LegacyManagedResumableTask {
                     id: Ulid::from_string(&task.id.key().to_string())?,
                     task: task.task,
                     timeout: task.timeout.timestamp() as u64,

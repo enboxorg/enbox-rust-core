@@ -4,7 +4,7 @@ pub mod protocols;
 
 use std::collections::TryReserveError;
 
-use crate::auth::{jws, JWS};
+use crate::auth::{jws, Jws};
 use crate::cid::generate_cid_from_serialized;
 use crate::fields::MessageFields;
 use crate::{auth::Authorization, interfaces::messages::descriptors::MessageParameters};
@@ -39,7 +39,7 @@ impl Message<RecordsWriteDescriptor> {
 
         let payload = jws::AttestationPayload { descriptor_cid };
 
-        let signature = jws::JWS::create(payload, Some(signers))
+        let signature = jws::Jws::create(payload, Some(signers))
             .await
             .map_err(|e| ValidationError {
                 message: e.to_string(),
@@ -135,7 +135,7 @@ where
         delegated_grant_id: Option<Cid>,
         permission_grant_id: Option<String>,
         protocol_role: Option<String>,
-    ) -> Result<JWS, ValidationError> {
+    ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
         let payload = jws::Payload {
@@ -145,7 +145,7 @@ where
             protocol_role,
         };
 
-        let signature = jws::JWS::create(payload, Some(vec![signer]))
+        let signature = jws::Jws::create(payload, Some(vec![signer]))
             .await
             .map_err(|e| ValidationError {
                 message: e.to_string(),
@@ -182,8 +182,8 @@ where
 // This is a custom deserializer for the Message struct. It is necessary because the Message
 // struct has a generic type parameter that is not known at compile time. This deserializer
 // is the generalized version, which can deserialize any descriptor type. Individual
-// Descriptors types implement their own deserializers via. the `MessageDescriptor` trait
-// derivation.
+// Descriptor types still implement their own typed deserializers via the
+// `#[descriptor]` macro.
 impl<'de> Deserialize<'de> for Message<Descriptor> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -202,6 +202,23 @@ impl<'de> Deserialize<'de> for Message<Descriptor> {
             descriptor: temp_message.descriptor,
             fields: temp_message.other,
         })
+    }
+}
+
+impl<D> Message<D>
+where
+    D: MessageDescriptor + DeserializeOwned,
+    Message<D>: DeserializeOwned,
+{
+    /// Deserialize a typed `Message<D>` from a `serde_json::Value`.
+    ///
+    /// Wraps `serde_json::from_value` in a method on `Message`. Useful when
+    /// the JSON value comes from an FFI boundary or a fixture file and the
+    /// caller wants the strongly-typed descriptor variant rather than the
+    /// untyped [`Descriptor`] union. Use [`Message::deserialize`] (via
+    /// `serde_json::from_str`) when reading from a string slice.
+    pub fn from_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(value)
     }
 }
 
@@ -313,5 +330,22 @@ mod test {
         let expected = Message::new(descriptor, fields).unwrap();
 
         assert_eq!(message, expected);
+    }
+
+    #[test]
+    fn typed_message_from_value_round_trips() {
+        let descriptor = TestDescriptor {
+            data: "round-trip".to_string(),
+        };
+        let fields = TestFields {
+            field1: "value".to_string(),
+            field2: 7,
+        };
+        let original = Message::new(descriptor, fields).unwrap();
+
+        let value = serde_json::to_value(&original).unwrap();
+        let recovered = Message::<TestDescriptor>::from_value(value).unwrap();
+
+        assert_eq!(recovered, original);
     }
 }

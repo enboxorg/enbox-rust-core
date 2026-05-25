@@ -58,6 +58,13 @@ impl AgentIdentityError {
     fn vault(detail: impl Into<String>) -> Self {
         Self::new("AgentIdentityVaultError", detail)
     }
+
+    pub(crate) fn lock_poisoned<E: Display>(err: E) -> Self {
+        Self::new(
+            "AgentIdentityLockPoisoned",
+            format!("agent identity store lock poisoned: {err}"),
+        )
+    }
 }
 
 impl Display for AgentIdentityError {
@@ -447,7 +454,7 @@ impl DidProvider for DeterministicDidJwkProvider {
             };
             self.dids
                 .write()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .insert(did_uri, portable_did.clone());
             Ok(portable_did)
         })
@@ -458,17 +465,31 @@ impl DidProvider for DeterministicDidJwkProvider {
             validate_agent_did_key_requirements(&portable_did)?;
             self.dids
                 .write()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .insert(portable_did.uri.clone(), portable_did.clone());
             Ok(portable_did)
         })
     }
 
     fn export_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, Option<PortableDid>> {
-        Box::pin(async move { Ok(self.dids.read().unwrap().get(did_uri).cloned()) })
+        Box::pin(async move {
+            Ok(self
+                .dids
+                .read()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .get(did_uri)
+                .cloned())
+        })
     }
 }
 
+/// In-memory `SecretStore` for development, tests, and reference flows.
+///
+/// **Not a vault.** Values are held in a `BTreeMap<String, Vec<u8>>` with
+/// no encryption at rest, no process isolation, and no platform-keychain
+/// fallback. Production deployments should swap this out for a backend
+/// that integrates with the OS keychain / Secure Enclave / TPM (e.g. an
+/// `enbox-mobile` vault on iOS, `enbox-desktop` on macOS Keychain).
 #[derive(Clone, Default)]
 pub struct MemorySecretStore {
     values: Arc<RwLock<BTreeMap<String, Vec<u8>>>>,
@@ -476,21 +497,45 @@ pub struct MemorySecretStore {
 
 impl SecretStore for MemorySecretStore {
     fn get<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, Option<Vec<u8>>> {
-        Box::pin(async move { Ok(self.values.read().unwrap().get(key).cloned()) })
+        Box::pin(async move {
+            Ok(self
+                .values
+                .read()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .get(key)
+                .cloned())
+        })
     }
 
     fn put<'a>(&'a self, key: &'a str, value: Vec<u8>) -> AgentIdentityFuture<'a, ()> {
         Box::pin(async move {
-            self.values.write().unwrap().insert(key.to_string(), value);
+            self.values
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .insert(key.to_string(), value);
             Ok(())
         })
     }
 
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool> {
-        Box::pin(async move { Ok(self.values.write().unwrap().remove(key).is_some()) })
+        Box::pin(async move {
+            Ok(self
+                .values
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .remove(key)
+                .is_some())
+        })
     }
 }
 
+/// In-memory `AgentKeyManager` for development, tests, and reference flows.
+///
+/// **Holds private JWKs in plaintext.** No platform keychain, no Secure
+/// Enclave / Keystore-backed signing, no encryption at rest. Production
+/// deployments should swap this out for a backend that delegates signing
+/// to the host (iOS Keychain + Secure Enclave, Android Keystore, macOS
+/// Keychain, OS-managed HSM).
 #[derive(Clone, Default)]
 pub struct MemoryKeyManager {
     keys: Arc<RwLock<BTreeMap<String, JsonWebKey>>>,
@@ -505,7 +550,10 @@ impl AgentKeyManager for MemoryKeyManager {
                 ));
             }
             let key_uri = key_uri_for_jwk(&jwk)?;
-            self.keys.write().unwrap().insert(key_uri.clone(), jwk);
+            self.keys
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .insert(key_uri.clone(), jwk);
             Ok(key_uri)
         })
     }
@@ -514,7 +562,14 @@ impl AgentKeyManager for MemoryKeyManager {
         &'a self,
         key_uri: &'a str,
     ) -> AgentIdentityFuture<'a, Option<JsonWebKey>> {
-        Box::pin(async move { Ok(self.keys.read().unwrap().get(key_uri).cloned()) })
+        Box::pin(async move {
+            Ok(self
+                .keys
+                .read()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .get(key_uri)
+                .cloned())
+        })
     }
 
     fn public_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JsonWebKey>> {
@@ -522,7 +577,7 @@ impl AgentKeyManager for MemoryKeyManager {
             Ok(self
                 .keys
                 .read()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .get(key_uri)
                 .map(JsonWebKey::public_jwk))
         })
@@ -550,7 +605,7 @@ impl AgentKeyManager for MemoryKeyManager {
             let private_jwk = self
                 .keys
                 .read()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .get(key_uri)
                 .cloned()
                 .ok_or_else(|| {
@@ -584,10 +639,22 @@ impl AgentKeyManager for MemoryKeyManager {
     }
 
     fn delete_key<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, bool> {
-        Box::pin(async move { Ok(self.keys.write().unwrap().remove(key_uri).is_some()) })
+        Box::pin(async move {
+            Ok(self
+                .keys
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .remove(key_uri)
+                .is_some())
+        })
     }
 }
 
+/// In-memory `DidResolverCache` for development and tests.
+///
+/// Process-local; not durable across runs and not shared across processes.
+/// Production deployments should back the cache with a SQLite/SurrealDB
+/// store and respect TTLs from the resolver itself.
 #[derive(Clone, Default)]
 pub struct MemoryDidResolverCache {
     dids: Arc<RwLock<BTreeMap<String, PortableDid>>>,
@@ -595,21 +662,35 @@ pub struct MemoryDidResolverCache {
 
 impl DidResolverCache for MemoryDidResolverCache {
     fn get_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, Option<PortableDid>> {
-        Box::pin(async move { Ok(self.dids.read().unwrap().get(did_uri).cloned()) })
+        Box::pin(async move {
+            Ok(self
+                .dids
+                .read()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .get(did_uri)
+                .cloned())
+        })
     }
 
     fn put_did<'a>(&'a self, portable_did: PortableDid) -> AgentIdentityFuture<'a, ()> {
         Box::pin(async move {
             self.dids
                 .write()
-                .unwrap()
+                .map_err(AgentIdentityError::lock_poisoned)?
                 .insert(portable_did.uri.clone(), portable_did);
             Ok(())
         })
     }
 
     fn delete_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, bool> {
-        Box::pin(async move { Ok(self.dids.write().unwrap().remove(did_uri).is_some()) })
+        Box::pin(async move {
+            Ok(self
+                .dids
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .remove(did_uri)
+                .is_some())
+        })
     }
 }
 

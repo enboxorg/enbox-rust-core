@@ -6,8 +6,7 @@ use base64::Engine as _;
 use bytes::Bytes;
 use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
 use dwn_rs_core::auth::{
-    GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner,
-    StaticPublicKeyResolver,
+    Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -23,7 +22,7 @@ use dwn_rs_core::dwn::{
 };
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
 use dwn_rs_core::state_index::MemoryStateIndex;
-use dwn_rs_core::stores::EnboxStateIndex;
+use dwn_rs_core::stores::StateIndex;
 use futures_util::stream;
 use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
@@ -106,7 +105,7 @@ struct FixtureCase {
     expected_signers: Option<Vec<String>>,
     iv: Option<FixtureData>,
     jwe: Option<FixtureJwe>,
-    jws: Option<GeneralJws>,
+    jws: Option<Jws>,
     key_agreement_algorithm: Option<String>,
     payload: Option<FixtureJwsPayload>,
     plaintext: Option<FixtureData>,
@@ -212,8 +211,8 @@ enum FixtureData {
 struct FixtureJwsKey {
     kid: String,
     algorithm: String,
-    public_jwk: GeneralJwsPublicJwk,
-    private_jwk: Option<GeneralJwsPrivateJwk>,
+    public_jwk: JwsPublicJwk,
+    private_jwk: Option<JwsPrivateJwk>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -513,7 +512,7 @@ fn fixture_general_jws_matches_typescript() {
         {
             if check_payload {
                 assert_eq!(
-                    URL_SAFE_NO_PAD.encode(jws_payload_bytes(case)),
+                    Some(URL_SAFE_NO_PAD.encode(jws_payload_bytes(case))),
                     jws(case).payload,
                     "{}",
                     case.id
@@ -2786,7 +2785,7 @@ fn fixture_value_base64url(case: &FixtureCase, data: &Option<FixtureData>, label
 }
 
 fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
-    let actual = GeneralJws::create(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
+    let actual = Jws::create_general(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
         .unwrap_or_else(|err| panic!("{} General JWS signing failed: {}", case.id, err));
 
     assert_eq!(actual, *jws(case), "{}", case.id);
@@ -2908,7 +2907,7 @@ fn fixture_jws_key<'a>(
         .unwrap_or_else(|| panic!("{} references missing signer {}", case.id, signer_id))
 }
 
-fn jws(case: &FixtureCase) -> &GeneralJws {
+fn jws(case: &FixtureCase) -> &Jws {
     case.jws
         .as_ref()
         .unwrap_or_else(|| panic!("{} must include a JWS", case.id))

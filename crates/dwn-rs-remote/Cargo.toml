@@ -6,7 +6,7 @@ license = "Apache-2.0"
 description = "Remote SDK components for dwn-rs"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 reqwest = { version = "0.12.8", features = [

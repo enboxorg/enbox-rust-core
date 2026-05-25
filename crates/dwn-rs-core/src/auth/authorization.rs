@@ -2,18 +2,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::{descriptors::records::WriteDescriptor, fields::MessageFields, Message};
 
-use super::jws::JWS;
+use super::jws::Jws;
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub struct Authorization {
-    pub signature: JWS,
+    pub signature: Jws,
     #[serde(
         rename = "authorDelegatedGrant",
         skip_serializing_if = "Option::is_none"
     )]
     pub author_delegated_grant: Option<Box<Message<WriteDescriptor>>>,
     #[serde(rename = "ownerSignature", skip_serializing_if = "Option::is_none")]
-    pub owner_signature: Option<JWS>,
+    pub owner_signature: Option<Jws>,
     #[serde(
         rename = "ownerDelegatedGrant",
         skip_serializing_if = "Option::is_none"
@@ -32,7 +32,7 @@ impl MessageFields for Authorization {
 
 impl Authorization {
     pub fn is_empty(&self) -> bool {
-        self.signature == JWS::default()
+        self.signature == Jws::default()
             && self.author_delegated_grant.is_none()
             && self.owner_signature.is_none()
             && self.owner_delegated_grant.is_none()

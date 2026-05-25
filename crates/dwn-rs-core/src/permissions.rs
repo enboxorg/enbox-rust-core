@@ -6,7 +6,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::auth::{GeneralJws, GeneralJwsPublicKeyResolver};
+use crate::auth::{Jws, JwsError, JwsPublicKeyResolver};
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Records, RecordsWriteDescriptor,
@@ -17,7 +17,6 @@ use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Size, Type, Who,
 };
-use crate::stores::{EnboxDataStore, EnboxMessageStore, EnboxStateIndex};
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
 pub const PERMISSIONS_PROTOCOL_URI: &str = "https://identity.foundation/dwn/permissions";
@@ -227,7 +226,7 @@ pub fn permissions_protocol_definition() -> Definition {
 
 pub fn validate_authorization_signature(
     raw_message: &JsonValue,
-    public_key_resolver: Option<&(dyn GeneralJwsPublicKeyResolver + Send + Sync)>,
+    public_key_resolver: Option<&(dyn JwsPublicKeyResolver + Send + Sync)>,
     required: bool,
 ) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
     validate_authorization_signature_inner(raw_message, public_key_resolver, required, true)
@@ -235,7 +234,7 @@ pub fn validate_authorization_signature(
 
 fn validate_authorization_signature_inner(
     raw_message: &JsonValue,
-    public_key_resolver: Option<&(dyn GeneralJwsPublicKeyResolver + Send + Sync)>,
+    public_key_resolver: Option<&(dyn JwsPublicKeyResolver + Send + Sync)>,
     required: bool,
     validate_delegated_grant: bool,
 ) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
@@ -253,10 +252,11 @@ fn validate_authorization_signature_inner(
             "AuthenticateJwsMissing: authorization signature is required".to_string(),
         )
     })?;
-    let jws: GeneralJws = serde_json::from_value(signature.clone()).map_err(|err| {
+    let jws: Jws = serde_json::from_value(signature.clone()).map_err(|err| {
         AuthorizationValidationError::BadRequest(format!("AuthenticationInvalidSignature: {err}"))
     })?;
-    if jws.signatures.len() != 1 {
+    let signature_count = jws.signatures.as_ref().map(Vec::len).unwrap_or(0);
+    if signature_count != 1 {
         return Err(AuthorizationValidationError::BadRequest(
             "AuthenticationMoreThanOneSignatureNotSupported: expected exactly one signature"
                 .to_string(),
@@ -303,7 +303,7 @@ fn validate_authorization_signature_inner(
 fn validate_embedded_author_delegated_grant(
     authorization: &JsonValue,
     payload: &JsonValue,
-    public_key_resolver: Option<&(dyn GeneralJwsPublicKeyResolver + Send + Sync)>,
+    public_key_resolver: Option<&(dyn JwsPublicKeyResolver + Send + Sync)>,
 ) -> Result<Option<PermissionGrant>, AuthorizationValidationError> {
     let Some(grant_value) = authorization.get("authorDelegatedGrant") else {
         if payload.get("delegatedGrantId").is_some() {
@@ -349,8 +349,14 @@ fn validate_embedded_author_delegated_grant(
         .map_err(AuthorizationValidationError::BadRequest)
 }
 
-fn decode_jws_payload(jws: &GeneralJws) -> Result<JsonValue, AuthorizationValidationError> {
-    let payload = URL_SAFE_NO_PAD.decode(&jws.payload).map_err(|err| {
+fn decode_jws_payload(jws: &Jws) -> Result<JsonValue, AuthorizationValidationError> {
+    let payload = jws.payload.as_deref().ok_or_else(|| {
+        AuthorizationValidationError::BadRequest(format!(
+            "AuthenticationInvalidSignaturePayload: {}",
+            JwsError::MissingPayload
+        ))
+    })?;
+    let payload = URL_SAFE_NO_PAD.decode(payload).map_err(|err| {
         AuthorizationValidationError::BadRequest(format!(
             "AuthenticationInvalidSignaturePayload: {err}"
         ))
@@ -394,16 +400,20 @@ fn validate_descriptor_cid(
     Ok(())
 }
 
-fn signer_did_from_jws(jws: &GeneralJws) -> Result<String, AuthorizationValidationError> {
-    let protected = &jws
-        .signatures
+fn signer_did_from_jws(jws: &Jws) -> Result<String, AuthorizationValidationError> {
+    let signatures = jws.signatures.as_deref().ok_or_else(|| {
+        AuthorizationValidationError::BadRequest(
+            "AuthenticationInvalidSignatureProtectedHeader: signature is required".to_string(),
+        )
+    })?;
+    let protected = signatures
         .first()
+        .and_then(|sig| sig.protected.as_deref())
         .ok_or_else(|| {
             AuthorizationValidationError::BadRequest(
                 "AuthenticationInvalidSignatureProtectedHeader: signature is required".to_string(),
             )
-        })?
-        .protected;
+        })?;
     let protected = URL_SAFE_NO_PAD.decode(protected).map_err(|err| {
         AuthorizationValidationError::BadRequest(format!(
             "AuthenticationInvalidSignatureProtectedHeader: {err}"
@@ -444,7 +454,7 @@ pub fn message_author(message: &Message<Descriptor>) -> Option<String> {
 pub fn message_signer(message: &Message<Descriptor>) -> Option<String> {
     let authorization = authorization_from_message(message)?;
     let signature = authorization.get("signature")?;
-    let jws: GeneralJws = serde_json::from_value(signature.clone()).ok()?;
+    let jws: Jws = serde_json::from_value(signature.clone()).ok()?;
     signer_did_from_jws(&jws).ok()
 }
 
@@ -492,7 +502,7 @@ pub async fn pre_process_permissions_write<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(message)?;
     if descriptor.protocol.as_deref() != Some(PERMISSIONS_PROTOCOL_URI)
@@ -527,9 +537,9 @@ pub async fn post_process_permissions_write<MessageStore, DataStore, StateIndex>
     state_index: &StateIndex,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
-    DataStore: EnboxDataStore + Sync,
-    StateIndex: EnboxStateIndex + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
+    DataStore: crate::stores::DataStore + Sync,
+    StateIndex: crate::stores::StateIndex + Sync,
 {
     let descriptor = records_write_descriptor(message)?;
     if descriptor.protocol.as_deref() != Some(PERMISSIONS_PROTOCOL_URI)
@@ -593,7 +603,7 @@ pub async fn fetch_grant<MessageStore>(
     permission_grant_id: &str,
 ) -> Result<PermissionGrant, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let result = message_store
         .query(
@@ -624,7 +634,7 @@ pub async fn authorize_delegated_records_write<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<bool, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let Some(permission_grant) = auth.author_delegated_grant.as_ref() else {
         return Ok(false);
@@ -647,7 +657,7 @@ pub async fn authorize_records_write_with_grant_id<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<bool, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let Some(permission_grant_id) = auth.permission_grant_id() else {
         return Ok(false);
@@ -672,7 +682,7 @@ pub async fn authorize_records_read_with_grant<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<bool, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let grant = if let Some(grant) = auth.author_delegated_grant.as_ref() {
         Some((grant.clone(), auth.author.as_str(), auth.signer.as_str()))
@@ -708,7 +718,7 @@ pub async fn authorize_records_query_or_subscribe_with_grant<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<bool, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let grant = if let Some(grant) = auth.author_delegated_grant.as_ref() {
         Some((grant.clone(), auth.author.as_str(), auth.signer.as_str()))
@@ -750,7 +760,7 @@ pub async fn authorize_records_delete_with_grant<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<bool, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let grant = if let Some(grant) = auth.author_delegated_grant.as_ref() {
         Some((grant.clone(), auth.author.as_str(), auth.signer.as_str()))
@@ -793,7 +803,7 @@ pub async fn authorize_protocols_configure<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     if let Some(permission_grant) = auth.author_delegated_grant.as_ref() {
         authorize_protocols_configure_with_grant(
@@ -831,7 +841,7 @@ pub async fn authorize_protocols_query<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<bool, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     if auth.author == tenant {
         return Ok(true);
@@ -870,7 +880,7 @@ pub async fn authorize_messages_read<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let Some(permission_grant_id) = auth.permission_grant_id() else {
         return Err("GrantAuthorizationGrantMissing: permissionGrantId is required".to_string());
@@ -901,7 +911,7 @@ pub async fn authorize_messages_subscribe_or_sync<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let Some(permission_grant_id) = auth.permission_grant_id() else {
         return Err("GrantAuthorizationGrantMissing: permissionGrantId is required".to_string());
@@ -940,7 +950,7 @@ async fn authorize_records_write_with_grant<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     perform_base_validation(
         records_write_message,
@@ -962,7 +972,7 @@ async fn authorize_protocols_configure_with_grant<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     perform_base_validation(
         protocols_configure_message,
@@ -993,7 +1003,7 @@ async fn perform_base_validation<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     if expected_grantee != permission_grant.grantee {
         return Err(format!(
@@ -1060,7 +1070,7 @@ async fn verify_grant_not_revoked<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let result = message_store
         .query(
@@ -1134,7 +1144,7 @@ async fn verify_messages_protocol_scope<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let Some(scoped_protocol) = scope.protocol.as_deref() else {
         return Ok(());
@@ -1185,7 +1195,7 @@ async fn get_scope_from_permission_record<MessageStore>(
     incoming_message: &Message<Descriptor>,
 ) -> Result<PermissionScope, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(incoming_message)?;
     if descriptor.protocol.as_deref() != Some(PERMISSIONS_PROTOCOL_URI) {
@@ -1355,7 +1365,7 @@ async fn fetch_newest_write<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<Message<Descriptor>, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let result = message_store
         .query(
@@ -1500,7 +1510,7 @@ mod tests {
     use crate::descriptors::{Messages, MessagesSubscribeDescriptor};
     use crate::errors::MessageStoreError;
     use crate::filters::message_filters::Messages as MessagesFilter;
-    use crate::stores::EnboxMessageQueryResult;
+    use crate::stores::{MessageQueryResult, MessageStore};
 
     #[tokio::test]
     async fn messages_read_grant_authorizes_messages_subscribe() {
@@ -1555,7 +1565,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct NoopMessageStore;
 
-    impl EnboxMessageStore for NoopMessageStore {
+    impl MessageStore for NoopMessageStore {
         async fn open(&mut self) -> Result<(), MessageStoreError> {
             Ok(())
         }
@@ -1585,8 +1595,8 @@ mod tests {
             _filters: Filters,
             _sort: Option<MessageSort>,
             _pagination: Option<Pagination>,
-        ) -> Result<EnboxMessageQueryResult, MessageStoreError> {
-            Ok(EnboxMessageQueryResult {
+        ) -> Result<MessageQueryResult, MessageStoreError> {
+            Ok(MessageQueryResult {
                 messages: Vec::new(),
                 cursor: None,
             })

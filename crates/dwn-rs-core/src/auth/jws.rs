@@ -33,6 +33,14 @@ pub enum JwsError {
     MissingKid,
     #[error("JWS protected header is missing required 'alg' property")]
     MissingAlg,
+    #[error("JWS is missing the required 'payload' property")]
+    MissingPayload,
+    #[error("JWS is missing the required 'signatures' property")]
+    MissingSignatures,
+    #[error("JWS signature is missing the required 'protected' property")]
+    MissingProtected,
+    #[error("JWS signature is missing the required 'signature' property")]
+    MissingSignature,
     #[error("public key for kid '{0}' not found")]
     PublicKeyNotFound(String),
     #[error("Signature verification failed")]
@@ -57,22 +65,41 @@ impl JwsError {
             Self::ParseError(_)
             | Self::SignError(_)
             | Self::Base64UrlError(_)
+            | Self::MissingPayload
+            | Self::MissingSignatures
+            | Self::MissingProtected
+            | Self::MissingSignature
             | Self::InvalidKey(_) => "JwsError",
         }
     }
 }
 
+/// Wire-format JSON Web Signature (general or flattened serialization).
+///
+/// Fields are optional so a degenerate `{}` value can still be deserialized
+/// (e.g. when an `Authorization` is present but unsigned). Methods that
+/// require a populated `payload` / `signatures` will return
+/// [`JwsError::MissingPayload`] / [`JwsError::MissingSignatures`].
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub struct JWS {
+pub struct Jws {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signatures: Option<Vec<SignatureEntry>>,
+    pub signatures: Option<Vec<JwsSignature>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub header: Option<MapValue>,
-    #[serde(flatten)] // TODO: remove?
+    #[serde(flatten)]
     pub extra: MapValue,
 }
+
+/// Deprecated alias for [`Jws`] retained during the rename.
+#[deprecated(since = "0.2.0", note = "use `Jws` instead")]
+pub type JWS = Jws;
+
+/// Deprecated alias for [`Jws`] retained during the rename. Historically
+/// this referred to a parallel struct that has been collapsed into [`Jws`].
+#[deprecated(since = "0.2.0", note = "use `Jws` instead")]
+pub type GeneralJws = Jws;
 
 #[derive(Serialize)]
 pub struct Payload {
@@ -111,7 +138,8 @@ impl JwsPayload for AttestationPayload {
     }
 }
 
-impl JWS {
+impl Jws {
+    /// Asynchronously sign `payload` with the supplied [`ssi_jws::JwsSigner`]s.
     pub async fn create<S, P>(payload: P, signers: Option<Vec<S>>) -> Result<Self, JwsError>
     where
         S: JwsSigner,
@@ -135,17 +163,17 @@ impl JWS {
     async fn generate_signatures<S, P>(
         signers: Vec<S>,
         payload: P,
-    ) -> Result<Vec<SignatureEntry>, JwsError>
+    ) -> Result<Vec<JwsSignature>, JwsError>
     where
         S: JwsSigner,
         P: JwsPayload + Clone + Copy,
     {
         stream::iter(signers)
             .then(|signer| async move {
-                let result: Result<SignatureEntry, JwsError> = async {
+                let result: Result<JwsSignature, JwsError> = async {
                     let signature = signer.sign_into_decoded(payload).await?;
 
-                    Ok(SignatureEntry {
+                    Ok(JwsSignature {
                         protected: Some(signature.header().encode()),
                         signature: Some(signature.signature.encode()),
                         extra: MapValue::default(),
@@ -158,94 +186,17 @@ impl JWS {
             .try_collect()
             .await
     }
-}
 
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub struct SignatureEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protected: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
-    #[serde(flatten)] // TODO: remove?
-    pub extra: MapValue,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub struct GeneralJws {
-    pub payload: String,
-    pub signatures: Vec<GeneralJwsSignature>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
-pub struct GeneralJwsSignature {
-    pub protected: String,
-    pub signature: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct GeneralJwsPublicJwk {
-    pub kty: String,
-    pub crv: String,
-    pub x: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alg: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct GeneralJwsPrivateJwk {
-    pub kty: String,
-    pub crv: String,
-    pub d: String,
-    pub x: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alg: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PrivateJwkSigner {
-    key_id: String,
-    algorithm: String,
-    private_jwk: GeneralJwsPrivateJwk,
-}
-
-pub trait GeneralJwsSigner {
-    fn key_id(&self) -> &str;
-    fn algorithm(&self) -> &str;
-    fn sign(&self, content: &[u8]) -> Result<Vec<u8>, JwsError>;
-}
-
-pub trait GeneralJwsPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<GeneralJwsPublicJwk>;
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct StaticPublicKeyResolver {
-    public_keys: BTreeMap<String, GeneralJwsPublicJwk>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct GeneralJwsProtectedHeader {
-    kid: Option<String>,
-    alg: Option<String>,
-}
-
-impl GeneralJws {
-    pub fn create<S>(payload: &[u8], signers: &[S]) -> Result<Self, JwsError>
+    /// Synchronously sign `payload` using the local [`JwkSigner`] trait.
+    pub fn create_general<S>(payload: &[u8], signers: &[S]) -> Result<Self, JwsError>
     where
-        S: GeneralJwsSigner,
+        S: JwkSigner,
     {
-        let payload = base64url.encode(payload);
+        let encoded_payload = base64url.encode(payload);
         let mut jws = Self {
-            payload,
-            signatures: Vec::new(),
+            payload: Some(encoded_payload),
+            signatures: Some(Vec::new()),
+            ..Default::default()
         };
 
         for signer in signers {
@@ -255,34 +206,53 @@ impl GeneralJws {
         Ok(jws)
     }
 
+    /// Append a signature to an existing JWS.
     pub fn add_signature<S>(&mut self, signer: &S) -> Result<(), JwsError>
     where
-        S: GeneralJwsSigner,
+        S: JwkSigner,
     {
-        let protected_header = GeneralJwsProtectedHeader {
+        let payload = self.payload.as_deref().ok_or(JwsError::MissingPayload)?;
+        let protected_header = JwsProtectedHeader {
             kid: Some(signer.key_id().to_string()),
             alg: Some(signer.algorithm().to_string()),
         };
         let protected = base64url.encode(serde_json::to_string(&protected_header)?.as_bytes());
-        let signing_input = format!("{}.{}", protected, self.payload);
+        let signing_input = format!("{}.{}", protected, payload);
         let signature = base64url.encode(signer.sign(signing_input.as_bytes())?);
 
-        self.signatures.push(GeneralJwsSignature {
-            protected,
-            signature,
-        });
+        self.signatures
+            .get_or_insert_with(Vec::new)
+            .push(JwsSignature {
+                protected: Some(protected),
+                signature: Some(signature),
+                extra: MapValue::default(),
+            });
 
         Ok(())
     }
 
+    /// Verify the signatures on this JWS, returning the DIDs of the signers.
     pub fn verify_signatures<R>(&self, resolver: &R) -> Result<Vec<String>, JwsError>
     where
-        R: GeneralJwsPublicKeyResolver + ?Sized,
+        R: JwsPublicKeyResolver + ?Sized,
     {
+        let payload = self.payload.as_deref().ok_or(JwsError::MissingPayload)?;
+        let signatures = self
+            .signatures
+            .as_deref()
+            .ok_or(JwsError::MissingSignatures)?;
         let mut signers = Vec::new();
 
-        for signature in &self.signatures {
-            let protected_header = signature.protected_header()?;
+        for signature in signatures {
+            let protected_b64 = signature
+                .protected
+                .as_deref()
+                .ok_or(JwsError::MissingProtected)?;
+            let signature_b64 = signature
+                .signature
+                .as_deref()
+                .ok_or(JwsError::MissingSignature)?;
+            let protected_header = decode_protected_header(protected_b64)?;
             let kid = protected_header
                 .kid
                 .as_deref()
@@ -295,7 +265,7 @@ impl GeneralJws {
             let public_jwk = resolver
                 .resolve_public_jwk(kid)
                 .ok_or_else(|| JwsError::PublicKeyNotFound(kid.to_string()))?;
-            if verify_general_jws_signature(&self.payload, signature, &public_jwk)? {
+            if verify_jws_signature(payload, protected_b64, signature_b64, &public_jwk)? {
                 signers.push(extract_did(kid).to_string());
             } else {
                 return Err(JwsError::InvalidSignature);
@@ -306,18 +276,99 @@ impl GeneralJws {
     }
 }
 
-impl GeneralJwsSignature {
-    fn protected_header(&self) -> Result<GeneralJwsProtectedHeader, JwsError> {
-        let protected = decode_base64url(&self.protected, "protected header")?;
-        Ok(serde_json::from_slice(&protected)?)
-    }
+/// One signature entry inside a [`Jws`] (general or flattened serialization).
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+pub struct JwsSignature {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(flatten)]
+    pub extra: MapValue,
+}
+
+/// Deprecated alias for [`JwsSignature`].
+#[deprecated(since = "0.2.0", note = "use `JwsSignature` instead")]
+pub type SignatureEntry = JwsSignature;
+
+/// Deprecated alias for [`JwsSignature`].
+#[deprecated(since = "0.2.0", note = "use `JwsSignature` instead")]
+pub type GeneralJwsSignature = JwsSignature;
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct JwsPublicJwk {
+    pub kty: String,
+    pub crv: String,
+    pub x: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+}
+
+#[deprecated(since = "0.2.0", note = "use `JwsPublicJwk` instead")]
+pub type GeneralJwsPublicJwk = JwsPublicJwk;
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct JwsPrivateJwk {
+    pub kty: String,
+    pub crv: String,
+    pub d: String,
+    pub x: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alg: Option<String>,
+}
+
+#[deprecated(since = "0.2.0", note = "use `JwsPrivateJwk` instead")]
+pub type GeneralJwsPrivateJwk = JwsPrivateJwk;
+
+#[derive(Debug, Clone)]
+pub struct PrivateJwkSigner {
+    key_id: String,
+    algorithm: String,
+    private_jwk: JwsPrivateJwk,
+}
+
+/// Local synchronous signer abstraction backed by a private JWK.
+pub trait JwkSigner {
+    fn key_id(&self) -> &str;
+    fn algorithm(&self) -> &str;
+    fn sign(&self, content: &[u8]) -> Result<Vec<u8>, JwsError>;
+}
+
+#[deprecated(since = "0.2.0", note = "use `JwkSigner` instead")]
+pub use JwkSigner as GeneralJwsSigner;
+
+/// Resolves a `kid` to a public JWK (used for signature verification).
+pub trait JwsPublicKeyResolver {
+    fn resolve_public_jwk(&self, kid: &str) -> Option<JwsPublicJwk>;
+}
+
+#[deprecated(since = "0.2.0", note = "use `JwsPublicKeyResolver` instead")]
+pub use JwsPublicKeyResolver as GeneralJwsPublicKeyResolver;
+
+#[derive(Debug, Default, Clone)]
+pub struct StaticPublicKeyResolver {
+    public_keys: BTreeMap<String, JwsPublicJwk>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct JwsProtectedHeader {
+    kid: Option<String>,
+    alg: Option<String>,
 }
 
 impl PrivateJwkSigner {
     pub fn new(
         key_id: impl Into<String>,
         algorithm: impl Into<String>,
-        private_jwk: GeneralJwsPrivateJwk,
+        private_jwk: JwsPrivateJwk,
     ) -> Self {
         Self {
             key_id: key_id.into(),
@@ -327,7 +378,7 @@ impl PrivateJwkSigner {
     }
 }
 
-impl GeneralJwsSigner for PrivateJwkSigner {
+impl JwkSigner for PrivateJwkSigner {
     fn key_id(&self) -> &str {
         &self.key_id
     }
@@ -337,29 +388,34 @@ impl GeneralJwsSigner for PrivateJwkSigner {
     }
 
     fn sign(&self, content: &[u8]) -> Result<Vec<u8>, JwsError> {
-        sign_general_jws_content(&self.algorithm, &self.private_jwk, content)
+        sign_jws_content(&self.algorithm, &self.private_jwk, content)
     }
 }
 
 impl StaticPublicKeyResolver {
-    pub fn new(public_keys: BTreeMap<String, GeneralJwsPublicJwk>) -> Self {
+    pub fn new(public_keys: BTreeMap<String, JwsPublicJwk>) -> Self {
         Self { public_keys }
     }
 
-    pub fn insert(&mut self, kid: impl Into<String>, public_jwk: GeneralJwsPublicJwk) {
+    pub fn insert(&mut self, kid: impl Into<String>, public_jwk: JwsPublicJwk) {
         self.public_keys.insert(kid.into(), public_jwk);
     }
 }
 
-impl GeneralJwsPublicKeyResolver for StaticPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<GeneralJwsPublicJwk> {
+impl JwsPublicKeyResolver for StaticPublicKeyResolver {
+    fn resolve_public_jwk(&self, kid: &str) -> Option<JwsPublicJwk> {
         self.public_keys.get(kid).cloned()
     }
 }
 
-fn sign_general_jws_content(
+fn decode_protected_header(protected: &str) -> Result<JwsProtectedHeader, JwsError> {
+    let bytes = decode_base64url(protected, "protected header")?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn sign_jws_content(
     algorithm: &str,
-    private_jwk: &GeneralJwsPrivateJwk,
+    private_jwk: &JwsPrivateJwk,
     content: &[u8],
 ) -> Result<Vec<u8>, JwsError> {
     match (algorithm, private_jwk.crv.as_str()) {
@@ -379,13 +435,14 @@ fn sign_general_jws_content(
     }
 }
 
-fn verify_general_jws_signature(
+fn verify_jws_signature(
     base64url_payload: &str,
-    signature: &GeneralJwsSignature,
-    public_jwk: &GeneralJwsPublicJwk,
+    protected_b64: &str,
+    signature_b64: &str,
+    public_jwk: &JwsPublicJwk,
 ) -> Result<bool, JwsError> {
-    let signing_input = format!("{}.{}", signature.protected, base64url_payload);
-    let signature_bytes = decode_base64url(&signature.signature, "signature")?;
+    let signing_input = format!("{}.{}", protected_b64, base64url_payload);
+    let signature_bytes = decode_base64url(signature_b64, "signature")?;
 
     match public_jwk.crv.as_str() {
         "Ed25519" => {
@@ -413,7 +470,7 @@ fn verify_general_jws_signature(
     }
 }
 
-fn ed25519_signing_key(jwk: &GeneralJwsPrivateJwk) -> Result<Ed25519SigningKey, JwsError> {
+fn ed25519_signing_key(jwk: &JwsPrivateJwk) -> Result<Ed25519SigningKey, JwsError> {
     let private_key = decode_base64url(&jwk.d, "Ed25519 private key")?;
     Ok(Ed25519SigningKey::from_bytes(&fixed_32_bytes(
         private_key,
@@ -421,34 +478,34 @@ fn ed25519_signing_key(jwk: &GeneralJwsPrivateJwk) -> Result<Ed25519SigningKey, 
     )?))
 }
 
-fn ed25519_verifying_key(jwk: &GeneralJwsPublicJwk) -> Result<Ed25519VerifyingKey, JwsError> {
+fn ed25519_verifying_key(jwk: &JwsPublicJwk) -> Result<Ed25519VerifyingKey, JwsError> {
     let public_key = decode_base64url(&jwk.x, "Ed25519 public key")?;
     Ed25519VerifyingKey::from_bytes(&fixed_32_bytes(public_key, "Ed25519 public key")?)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn secp256k1_signing_key(jwk: &GeneralJwsPrivateJwk) -> Result<Secp256k1SigningKey, JwsError> {
+fn secp256k1_signing_key(jwk: &JwsPrivateJwk) -> Result<Secp256k1SigningKey, JwsError> {
     let private_key = decode_base64url(&jwk.d, "secp256k1 private key")?;
     Secp256k1SigningKey::from_slice(&private_key)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn secp256k1_verifying_key(jwk: &GeneralJwsPublicJwk) -> Result<Secp256k1VerifyingKey, JwsError> {
+fn secp256k1_verifying_key(jwk: &JwsPublicJwk) -> Result<Secp256k1VerifyingKey, JwsError> {
     Secp256k1VerifyingKey::from_sec1_bytes(&ec_public_key_sec1(jwk)?)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn p256_signing_key(jwk: &GeneralJwsPrivateJwk) -> Result<P256SigningKey, JwsError> {
+fn p256_signing_key(jwk: &JwsPrivateJwk) -> Result<P256SigningKey, JwsError> {
     let private_key = decode_base64url(&jwk.d, "P-256 private key")?;
     P256SigningKey::from_slice(&private_key).map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn p256_verifying_key(jwk: &GeneralJwsPublicJwk) -> Result<P256VerifyingKey, JwsError> {
+fn p256_verifying_key(jwk: &JwsPublicJwk) -> Result<P256VerifyingKey, JwsError> {
     P256VerifyingKey::from_sec1_bytes(&ec_public_key_sec1(jwk)?)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn ec_public_key_sec1(jwk: &GeneralJwsPublicJwk) -> Result<Vec<u8>, JwsError> {
+fn ec_public_key_sec1(jwk: &JwsPublicJwk) -> Result<Vec<u8>, JwsError> {
     let x = fixed_32_bytes(
         decode_base64url(&jwk.x, "EC public key x")?,
         "EC public key x",
@@ -518,7 +575,7 @@ mod tests {
     #[tokio::test]
     async fn test_jws_create() {
         let jwk = JWK::generate_secp256k1();
-        let jws = JWS::create(b"hello world".to_vec(), Some(vec![jwk]))
+        let jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
             .await
             .expect("could not create JWS");
 

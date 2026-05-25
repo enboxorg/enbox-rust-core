@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::ops::Bound;
 use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
@@ -12,12 +11,12 @@ use serde_json::Value as JsonValue;
 use crate::cid::generate_cid_from_json;
 use crate::errors::{EventLogError, ResumableTaskStoreError, StoreError};
 use crate::events::MessageEvent;
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
+use crate::filters::Filters;
 use crate::stores::{
-    EnboxEventLog, EnboxManagedResumableTask, EnboxResumableTaskStore, EventLogEntry,
-    EventLogReadOptions, EventLogReadResult, EventLogReplayBounds, EventLogSubscribeOptions,
-    EventLogTrimBound, EventSubscription, EventSubscriptionClose, KeyValues, ProgressGapInfo,
-    ProgressGapReason, ProgressToken, SubscriptionListener, SubscriptionMessage,
+    EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
+    EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
+    KeyValues, ManagedResumableTask, ProgressGapInfo, ProgressGapReason, ProgressToken,
+    ResumableTaskStore, SubscriptionListener, SubscriptionMessage,
 };
 use crate::{Descriptor, Value};
 
@@ -25,6 +24,9 @@ const DEFAULT_MAX_EVENTS_PER_TENANT: usize = 10_000;
 const GRABBED_TASK_TIMEOUT_SECONDS: u64 = 60;
 
 #[derive(Clone)]
+/// In-memory `EventLog` for development, tests, and the `MobileCore` /
+/// `DesktopLocalNode` reference flows. Process-local; not durable. Wire a
+/// real backend (SQLite, SurrealDB, etc.) for production deployments.
 pub struct MemoryEventLog {
     inner: Arc<RwLock<EventLogInner>>,
     epoch: String,
@@ -73,7 +75,7 @@ impl MemoryEventLog {
     }
 }
 
-impl EnboxEventLog for MemoryEventLog {
+impl EventLog for MemoryEventLog {
     fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send {
         let inner = self.inner.clone();
         async move {
@@ -323,6 +325,9 @@ impl EnboxEventLog for MemoryEventLog {
 }
 
 #[derive(Debug, Clone, Default)]
+/// In-memory `ResumableTaskStore` for development and tests. Tasks are
+/// lost on restart. Wire a durable backend (SQLite or equivalent) for
+/// production.
 pub struct MemoryResumableTaskStore {
     tasks: Arc<RwLock<BTreeMap<String, StoredTask>>>,
 }
@@ -335,7 +340,7 @@ struct StoredTask {
     retry_count: u64,
 }
 
-impl EnboxResumableTaskStore for MemoryResumableTaskStore {
+impl ResumableTaskStore for MemoryResumableTaskStore {
     async fn open(&mut self) -> Result<(), ResumableTaskStoreError> {
         Ok(())
     }
@@ -346,8 +351,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
         &self,
         task: T,
         timeout_in_seconds: u64,
-    ) -> impl Future<Output = Result<EnboxManagedResumableTask<T>, ResumableTaskStoreError>> + Send
-    {
+    ) -> impl Future<Output = Result<ManagedResumableTask<T>, ResumableTaskStoreError>> + Send {
         let tasks = self.tasks.clone();
         async move {
             let task_json = serde_json::to_value(&task).map_err(task_store_error)?;
@@ -369,7 +373,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
                 ));
             }
             tasks.insert(id.clone(), stored);
-            Ok(EnboxManagedResumableTask {
+            Ok(ManagedResumableTask {
                 id,
                 task,
                 timeout,
@@ -381,7 +385,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
     fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
         &self,
         count: u64,
-    ) -> impl Future<Output = Result<Vec<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
+    ) -> impl Future<Output = Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
     {
         let tasks = self.tasks.clone();
         async move {
@@ -407,7 +411,7 @@ impl EnboxResumableTaskStore for MemoryResumableTaskStore {
     fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
         &self,
         task_id: &str,
-    ) -> impl Future<Output = Result<Option<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
+    ) -> impl Future<Output = Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send
     {
         let tasks = self.tasks.clone();
         let task_id = task_id.to_string();
@@ -584,95 +588,13 @@ fn subscription_close(
     })
 }
 
-fn matches_filters(indexes: &KeyValues, filters: Option<&Filters>) -> bool {
-    let Some(filters) = filters else {
-        return true;
-    };
-    let filter_sets = filters.clone().into_iter().collect::<Vec<_>>();
-    if filter_sets.is_empty() {
-        return true;
-    }
-    filter_sets.into_iter().any(|filter_set| {
-        filter_set.into_iter().all(|(key, filter)| {
-            indexes
-                .get(&filter_key(&key))
-                .is_some_and(|actual| matches_filter(actual, &filter))
-        })
-    })
-}
+use crate::filters::matching::matches_filters;
 
-fn filter_key(key: &FilterKey) -> String {
-    match key {
-        FilterKey::Index(key) | FilterKey::Tag(key) => key.clone(),
-    }
-}
-
-fn matches_filter(actual: &Value, filter: &Filter<Value>) -> bool {
-    match filter {
-        Filter::Equal(expected) => matches_equal(actual, expected),
-        Filter::OneOf(expected_values) => expected_values
-            .iter()
-            .any(|expected| matches_equal(actual, expected)),
-        Filter::Prefix(prefix) => match (actual, prefix) {
-            (Value::String(actual), Value::String(prefix)) => actual.starts_with(prefix),
-            _ => false,
-        },
-        Filter::Range(range) => matches_range(actual, range),
-    }
-}
-
-fn matches_equal(actual: &Value, expected: &Value) -> bool {
-    match actual {
-        Value::Array(values) => values.iter().any(|value| value == expected),
-        _ => actual == expected,
-    }
-}
-
-fn matches_range(actual: &Value, range: &RangeFilter<Value>) -> bool {
-    match range {
-        RangeFilter::Numeric(lower, upper) | RangeFilter::Criterion(lower, upper) => {
-            bound_matches(actual, lower, true) && bound_matches(actual, upper, false)
-        }
-    }
-}
-
-fn bound_matches(actual: &Value, bound: &Bound<Value>, lower: bool) -> bool {
-    match bound {
-        Bound::Unbounded => true,
-        Bound::Included(expected) => compare_values(actual, expected).is_some_and(|ordering| {
-            if lower {
-                ordering.is_ge()
-            } else {
-                ordering.is_le()
-            }
-        }),
-        Bound::Excluded(expected) => compare_values(actual, expected).is_some_and(|ordering| {
-            if lower {
-                ordering.is_gt()
-            } else {
-                ordering.is_lt()
-            }
-        }),
-    }
-}
-
-fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
-    match (left, right) {
-        (Value::Number(left), Value::Number(right)) => Some(left.cmp(right)),
-        (Value::Float(left), Value::Float(right)) => left.partial_cmp(right),
-        (Value::Number(left), Value::Float(right)) => (*left as f64).partial_cmp(right),
-        (Value::Float(left), Value::Number(right)) => left.partial_cmp(&(*right as f64)),
-        (Value::String(left), Value::String(right)) => Some(left.cmp(right)),
-        (Value::DateTime(left), Value::DateTime(right)) => Some(left.cmp(right)),
-        _ => None,
-    }
-}
-
-fn enbox_task<T>(task: &StoredTask) -> Result<EnboxManagedResumableTask<T>, ResumableTaskStoreError>
+fn enbox_task<T>(task: &StoredTask) -> Result<ManagedResumableTask<T>, ResumableTaskStoreError>
 where
     T: DeserializeOwned + Serialize + Send + Sync + Debug,
 {
-    Ok(EnboxManagedResumableTask {
+    Ok(ManagedResumableTask {
         id: task.id.clone(),
         task: serde_json::from_value(task.task.clone()).map_err(task_store_error)?,
         timeout: task.timeout,

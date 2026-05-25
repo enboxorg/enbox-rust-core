@@ -9,10 +9,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use dwn_rs_core::errors::{DataStoreError, MessageStoreError, StoreError};
 use dwn_rs_core::fields::MessageFields;
-use dwn_rs_core::filters::{Filter, FilterKey, Filters, RangeFilter};
+use dwn_rs_core::filters::{compare_values, matches_filters, Filters};
 use dwn_rs_core::stores::{
-    EnboxDataStore, EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
-    EnboxMessageStore, KeyValues,
+    DataStore, DataStoreGetResult, DataStorePutResult, KeyValues, MessageQueryResult, MessageStore,
 };
 use dwn_rs_core::{Cursor, Descriptor, Message, MessageSort, Pagination, SortDirection, Value};
 
@@ -87,7 +86,7 @@ impl SqliteStore {
     }
 }
 
-impl EnboxMessageStore for SqliteStore {
+impl MessageStore for SqliteStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
         self.open_connection().map_err(MessageStoreError::from)
     }
@@ -168,20 +167,20 @@ impl EnboxMessageStore for SqliteStore {
         filters: Filters,
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
-    ) -> impl Future<Output = Result<EnboxMessageQueryResult, MessageStoreError>> + Send {
+    ) -> impl Future<Output = Result<MessageQueryResult, MessageStoreError>> + Send {
         let store = self.clone();
         let tenant = tenant.to_string();
         async move {
             let mut rows = store
                 .with_connection(|connection| load_message_rows(connection, &tenant))
                 .map_err(MessageStoreError::from)?;
-            rows.retain(|row| matches_filters(&row.indexes, filters.clone()));
+            rows.retain(|row| matches_filters(&row.indexes, Some(&filters)));
             let sort = sort.unwrap_or_default();
             retain_sortable_rows(&mut rows, sort);
             sort_message_rows(&mut rows, sort);
 
             let (rows, cursor) = apply_pagination(rows, sort, pagination)?;
-            Ok(EnboxMessageQueryResult {
+            Ok(MessageQueryResult {
                 messages: rows.into_iter().map(|row| row.message).collect(),
                 cursor,
             })
@@ -200,7 +199,7 @@ impl EnboxMessageStore for SqliteStore {
             let mut rows = store
                 .with_connection(|connection| load_message_rows(connection, &tenant))
                 .map_err(MessageStoreError::from)?;
-            rows.retain(|row| matches_filters(&row.indexes, filters.clone()));
+            rows.retain(|row| matches_filters(&row.indexes, Some(&filters)));
             retain_sortable_rows(&mut rows, sort.unwrap_or_default());
             Ok(rows.len() as u64)
         }
@@ -244,7 +243,7 @@ impl EnboxMessageStore for SqliteStore {
     }
 }
 
-impl EnboxDataStore for SqliteStore {
+impl DataStore for SqliteStore {
     async fn open(&mut self) -> Result<(), DataStoreError> {
         self.open_connection().map_err(DataStoreError::from)
     }
@@ -259,7 +258,7 @@ impl EnboxDataStore for SqliteStore {
         record_id: &str,
         data_cid: &str,
         data_stream: T,
-    ) -> impl Future<Output = Result<EnboxDataStorePutResult, DataStoreError>> + Send {
+    ) -> impl Future<Output = Result<DataStorePutResult, DataStoreError>> + Send {
         let store = self.clone();
         let tenant = tenant.to_string();
         let record_id = record_id.to_string();
@@ -285,7 +284,7 @@ impl EnboxDataStore for SqliteStore {
                 })
                 .map_err(DataStoreError::from)?
             {
-                return Ok(EnboxDataStorePutResult { data_size });
+                return Ok(DataStorePutResult { data_size });
             }
 
             let bytes = collect_stream(data_stream).await?;
@@ -318,7 +317,7 @@ impl EnboxDataStore for SqliteStore {
                 })
                 .map_err(DataStoreError::from)?;
 
-            Ok(EnboxDataStorePutResult { data_size })
+            Ok(DataStorePutResult { data_size })
         }
     }
 
@@ -327,7 +326,7 @@ impl EnboxDataStore for SqliteStore {
         tenant: &str,
         record_id: &str,
         data_cid: &str,
-    ) -> impl Future<Output = Result<Option<EnboxDataStoreGetResult>, DataStoreError>> + Send {
+    ) -> impl Future<Output = Result<Option<DataStoreGetResult>, DataStoreError>> + Send {
         let store = self.clone();
         let tenant = tenant.to_string();
         let record_id = record_id.to_string();
@@ -352,7 +351,7 @@ impl EnboxDataStore for SqliteStore {
                 })
                 .map_err(DataStoreError::from)?;
 
-            Ok(result.map(|(data_size, data)| EnboxDataStoreGetResult {
+            Ok(result.map(|(data_size, data)| DataStoreGetResult {
                 data_size,
                 data_stream: Box::pin(stream::once(async move { Ok(Bytes::from(data)) })),
             }))
@@ -483,57 +482,6 @@ fn load_message_rows(connection: &Connection, tenant: &str) -> Result<Vec<Messag
     Ok(messages)
 }
 
-fn matches_filters(indexes: &KeyValues, filters: Filters) -> bool {
-    let mut has_filter_set = false;
-    for filter_set in filters {
-        has_filter_set = true;
-        if filter_set.into_iter().all(|(key, filter)| match key {
-            FilterKey::Index(index) => indexes
-                .get(&index)
-                .is_some_and(|value| matches_filter(value, &filter)),
-            FilterKey::Tag(_) => false,
-        }) {
-            return true;
-        }
-    }
-    !has_filter_set
-}
-
-fn matches_filter(value: &Value, filter: &Filter<Value>) -> bool {
-    if let Value::Array(values) = value {
-        return values.iter().any(|value| matches_filter(value, filter));
-    }
-
-    match filter {
-        Filter::Equal(expected) => value == expected,
-        Filter::OneOf(values) => values.iter().any(|expected| value == expected),
-        Filter::Prefix(prefix) => match (value_as_string(value), value_as_string(prefix)) {
-            (Some(value), Some(prefix)) => value == prefix || value.starts_with(&prefix),
-            _ => false,
-        },
-        Filter::Range(RangeFilter::Numeric(lower, upper))
-        | Filter::Range(RangeFilter::Criterion(lower, upper)) => {
-            matches_lower_bound(value, lower) && matches_upper_bound(value, upper)
-        }
-    }
-}
-
-fn matches_lower_bound(value: &Value, bound: &std::ops::Bound<Value>) -> bool {
-    match bound {
-        std::ops::Bound::Included(bound) => compare_values(value, bound) != Some(Ordering::Less),
-        std::ops::Bound::Excluded(bound) => compare_values(value, bound) == Some(Ordering::Greater),
-        std::ops::Bound::Unbounded => true,
-    }
-}
-
-fn matches_upper_bound(value: &Value, bound: &std::ops::Bound<Value>) -> bool {
-    match bound {
-        std::ops::Bound::Included(bound) => compare_values(value, bound) != Some(Ordering::Greater),
-        std::ops::Bound::Excluded(bound) => compare_values(value, bound) == Some(Ordering::Less),
-        std::ops::Bound::Unbounded => true,
-    }
-}
-
 fn retain_sortable_rows(rows: &mut Vec<MessageRow>, sort: MessageSort) {
     let (property, _) = sort_property(&sort);
     rows.retain(|row| row.indexes.contains_key(property));
@@ -604,7 +552,7 @@ fn cursor_start(rows: &[MessageRow], sort: MessageSort, cursor: &Cursor) -> usiz
             let Some(row_value) = row.indexes.get(property) else {
                 return false;
             };
-            let ordering = compare_values(row_value, cursor_value)
+            let ordering = compare_sort_values_inner(row_value, cursor_value)
                 .unwrap_or(Ordering::Equal)
                 .then_with(|| row.cid.cmp(&cursor_cid));
             match direction {
@@ -641,7 +589,9 @@ fn compare_sort_values(
     direction: SortDirection,
 ) -> Ordering {
     let order = match (left, right) {
-        (Some(left), Some(right)) => compare_values(left, right).unwrap_or(Ordering::Equal),
+        (Some(left), Some(right)) => {
+            compare_sort_values_inner(left, right).unwrap_or(Ordering::Equal)
+        }
         (Some(_), None) => Ordering::Greater,
         (None, Some(_)) => Ordering::Less,
         (None, None) => Ordering::Equal,
@@ -660,14 +610,16 @@ fn apply_direction(order: Ordering, direction: SortDirection) -> Ordering {
     }
 }
 
-fn compare_values(left: &Value, right: &Value) -> Option<Ordering> {
-    match (left, right) {
-        (Value::Number(left), Value::Number(right)) => Some(left.cmp(right)),
-        (Value::Float(left), Value::Float(right)) => left.partial_cmp(right),
-        (Value::Number(left), Value::Float(right)) => (*left as f64).partial_cmp(right),
-        (Value::Float(left), Value::Number(right)) => left.partial_cmp(&(*right as f64)),
-        _ => value_as_string(left)?.partial_cmp(&value_as_string(right)?),
+/// Sort-time comparison that falls back to string-coerced ordering when
+/// the two values are not naturally comparable. The shared filter engine
+/// in `dwn_rs_core::filters::compare_values` deliberately returns `None`
+/// in that case (range filters should not match across variants); SQLite
+/// sorting needs a total order, so we keep this softer comparator here.
+fn compare_sort_values_inner(left: &Value, right: &Value) -> Option<Ordering> {
+    if let Some(order) = compare_values(left, right) {
+        return Some(order);
     }
+    value_as_string(left)?.partial_cmp(&value_as_string(right)?)
 }
 
 fn value_as_string(value: &Value) -> Option<String> {
@@ -805,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn sqlite_store_migrates_schema_on_open() {
         let mut store = SqliteStore::in_memory();
-        EnboxMessageStore::open(&mut store).await.unwrap();
+        MessageStore::open(&mut store).await.unwrap();
 
         let tables = store
             .with_connection(|connection| {
@@ -831,7 +783,7 @@ mod tests {
     #[tokio::test]
     async fn message_store_roundtrips_inline_data_without_changing_message_cid() {
         let mut store = SqliteStore::in_memory();
-        EnboxMessageStore::open(&mut store).await.unwrap();
+        MessageStore::open(&mut store).await.unwrap();
         let message = message(
             "2025-01-01T00:00:00.000000Z",
             Some("https://example.com/protocol/notes"),
@@ -841,7 +793,7 @@ mod tests {
         cid_message.fields.encoded_data();
         let cid = cid_message.cid().unwrap().to_string();
 
-        EnboxMessageStore::put(
+        MessageStore::put(
             &store,
             "did:example:alice",
             message.clone(),
@@ -851,7 +803,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            EnboxMessageStore::get(&store, "did:example:alice", &cid)
+            MessageStore::get(&store, "did:example:alice", &cid)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -869,8 +821,8 @@ mod tests {
         let cid = cid_message.cid().unwrap().to_string();
 
         let mut store = SqliteStore::new(&path);
-        EnboxMessageStore::open(&mut store).await.unwrap();
-        EnboxMessageStore::put(
+        MessageStore::open(&mut store).await.unwrap();
+        MessageStore::put(
             &store,
             "did:example:alice",
             message.clone(),
@@ -878,24 +830,24 @@ mod tests {
         )
         .await
         .unwrap();
-        EnboxMessageStore::close(&mut store).await;
+        MessageStore::close(&mut store).await;
 
         let mut reopened = SqliteStore::new(&path);
-        EnboxMessageStore::open(&mut reopened).await.unwrap();
+        MessageStore::open(&mut reopened).await.unwrap();
         assert_eq!(
-            EnboxMessageStore::get(&reopened, "did:example:alice", &cid)
+            MessageStore::get(&reopened, "did:example:alice", &cid)
                 .await
                 .unwrap(),
             Some(message)
         );
-        EnboxMessageStore::close(&mut reopened).await;
+        MessageStore::close(&mut reopened).await;
         let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
     async fn message_store_filters_sorts_counts_and_paginates() {
         let mut store = SqliteStore::in_memory();
-        EnboxMessageStore::open(&mut store).await.unwrap();
+        MessageStore::open(&mut store).await.unwrap();
         let first = message(
             "2025-01-01T00:00:00.000000Z",
             Some("https://example.com/protocol/notes"),
@@ -913,7 +865,7 @@ mod tests {
         );
 
         for message in [&first, &second, &third] {
-            EnboxMessageStore::put(
+            MessageStore::put(
                 &store,
                 "did:example:alice",
                 message.clone(),
@@ -930,7 +882,7 @@ mod tests {
                 Value::String("did:example:carol".to_string()),
             ]),
         );
-        EnboxMessageStore::put(&store, "did:example:alice", third.clone(), third_indexes)
+        MessageStore::put(&store, "did:example:alice", third.clone(), third_indexes)
             .await
             .unwrap();
         let published = message(
@@ -943,7 +895,7 @@ mod tests {
             "datePublished".to_string(),
             Value::String("2025-01-01T00:00:03.000000Z".to_string()),
         );
-        EnboxMessageStore::put(
+        MessageStore::put(
             &store,
             "did:example:alice",
             published.clone(),
@@ -1031,11 +983,11 @@ mod tests {
     #[tokio::test]
     async fn data_store_shares_content_addressed_blocks_and_refs() {
         let mut store = SqliteStore::in_memory();
-        EnboxDataStore::open(&mut store).await.unwrap();
+        DataStore::open(&mut store).await.unwrap();
         let bytes = Bytes::from_static(b"hello sqlite data");
         let data_cid = generate_dag_pb_cid_from_bytes(&bytes).to_string();
 
-        let put = EnboxDataStore::put(
+        let put = DataStore::put(
             &store,
             "did:example:alice",
             "record-1",
@@ -1046,7 +998,7 @@ mod tests {
         .unwrap();
         assert_eq!(put.data_size, bytes.len());
 
-        let duplicate = EnboxDataStore::put(
+        let duplicate = DataStore::put(
             &store,
             "did:example:alice",
             "record-1",
@@ -1057,7 +1009,7 @@ mod tests {
         .unwrap();
         assert_eq!(duplicate.data_size, bytes.len());
 
-        let shared = EnboxDataStore::put(
+        let shared = DataStore::put(
             &store,
             "did:example:alice",
             "record-2",
@@ -1068,10 +1020,10 @@ mod tests {
         .unwrap();
         assert_eq!(shared.data_size, bytes.len());
 
-        EnboxDataStore::delete(&store, "did:example:alice", "record-1", &data_cid)
+        DataStore::delete(&store, "did:example:alice", "record-1", &data_cid)
             .await
             .unwrap();
-        let stored = EnboxDataStore::get(&store, "did:example:alice", "record-2", &data_cid)
+        let stored = DataStore::get(&store, "did:example:alice", "record-2", &data_cid)
             .await
             .unwrap()
             .unwrap();
@@ -1086,11 +1038,11 @@ mod tests {
             .unwrap();
         assert_eq!(read, bytes.to_vec());
 
-        EnboxDataStore::delete(&store, "did:example:alice", "record-2", &data_cid)
+        DataStore::delete(&store, "did:example:alice", "record-2", &data_cid)
             .await
             .unwrap();
         assert!(
-            EnboxDataStore::get(&store, "did:example:alice", "record-2", &data_cid)
+            DataStore::get(&store, "did:example:alice", "record-2", &data_cid)
                 .await
                 .unwrap()
                 .is_none()

@@ -12,7 +12,7 @@ use dwn_rs_core::{
     fields::MessageFields,
     filters::{Filters, MessageSort, Pagination, Query, QueryReturn},
     interfaces::Message,
-    stores::MessageStore,
+    stores::LegacyMessageStore,
     value::MapValue,
 };
 
@@ -23,7 +23,7 @@ use super::{
 
 const MESSAGES_TABLE: &str = "messages";
 
-impl MessageStore for SurrealDB {
+impl LegacyMessageStore for SurrealDB {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
         self.open().await.map_err(MessageStoreError::from)
     }

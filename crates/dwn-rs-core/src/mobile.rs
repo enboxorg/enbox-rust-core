@@ -38,6 +38,13 @@ impl MobileError {
     fn locked() -> Self {
         Self::new("MobileVaultLocked", "mobile vault is locked")
     }
+
+    pub(crate) fn lock_poisoned<E: Display>(err: E) -> Self {
+        Self::new(
+            "MobileLockPoisoned",
+            format!("mobile runtime lock poisoned: {err}"),
+        )
+    }
 }
 
 impl Display for MobileError {
@@ -169,11 +176,12 @@ struct BackgroundTaskGuard {
 
 impl Drop for BackgroundTaskGuard {
     fn drop(&mut self) {
-        self.state
-            .write()
-            .unwrap()
-            .active_background_tasks
-            .remove(&self.task_id);
+        if let Ok(mut state) = self.state.write() {
+            state.active_background_tasks.remove(&self.task_id);
+        }
+        // If the lock is poisoned during drop, leave the task id in the set.
+        // The runtime is already in a degraded state and we'd rather not
+        // panic during unwinding.
     }
 }
 
@@ -195,7 +203,7 @@ where
     }
 
     pub fn initialize(&self, request: MobileInitializeRequest) -> MobileRuntimeStatus {
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().expect("MobileCore state lock poisoned");
         state.initialized = true;
         state.device_id = Some(request.device_id);
         state.app_group = request.app_group;
@@ -248,7 +256,7 @@ where
     fn track_background_task(&self, task_id: String) -> BackgroundTaskGuard {
         self.state
             .write()
-            .unwrap()
+            .expect("MobileCore state lock poisoned")
             .active_background_tasks
             .insert(task_id.clone());
         BackgroundTaskGuard {
@@ -258,7 +266,7 @@ where
     }
 
     pub fn status(&self) -> MobileRuntimeStatus {
-        let state = self.state.read().unwrap();
+        let state = self.state.read().expect("MobileCore state lock poisoned");
         self.status_with_state(&state)
     }
 
@@ -275,7 +283,12 @@ where
     }
 
     fn ensure_initialized(&self) -> MobileResult<()> {
-        if !self.state.read().unwrap().initialized {
+        if !self
+            .state
+            .read()
+            .map_err(MobileError::lock_poisoned)?
+            .initialized
+        {
             return Err(MobileError::not_initialized());
         }
         Ok(())
@@ -290,6 +303,10 @@ where
     }
 }
 
+/// Scaffolding `MobileBiometricVault` for tests. **No actual biometric
+/// prompt** — `unlock` flips a boolean. Production deployments must wire
+/// a real iOS Keychain (LAContext / Secure Enclave) or Android Keystore
+/// (BiometricPrompt) implementation.
 #[derive(Clone, Default)]
 pub struct MemoryBiometricVault {
     unlocked: Arc<RwLock<bool>>,
@@ -298,23 +315,29 @@ pub struct MemoryBiometricVault {
 impl MobileBiometricVault for MemoryBiometricVault {
     fn unlock<'a>(&'a self, _reason: &'a str) -> MobileFuture<'a, ()> {
         Box::pin(async move {
-            *self.unlocked.write().unwrap() = true;
+            *self.unlocked.write().map_err(MobileError::lock_poisoned)? = true;
             Ok(())
         })
     }
 
     fn lock<'a>(&'a self) -> MobileFuture<'a, ()> {
         Box::pin(async move {
-            *self.unlocked.write().unwrap() = false;
+            *self.unlocked.write().map_err(MobileError::lock_poisoned)? = false;
             Ok(())
         })
     }
 
     fn is_unlocked(&self) -> bool {
-        *self.unlocked.read().unwrap()
+        *self
+            .unlocked
+            .read()
+            .expect("MemoryBiometricVault lock poisoned")
     }
 }
 
+/// In-memory `MobileSecureStorage` for tests. **Plaintext.** Production
+/// deployments must back this with iOS Keychain (App Group) or Android
+/// EncryptedSharedPreferences / Keystore-backed storage.
 #[derive(Clone, Default)]
 pub struct MemoryMobileSecureStorage {
     values: Arc<RwLock<BTreeMap<String, Vec<u8>>>>,
@@ -322,24 +345,40 @@ pub struct MemoryMobileSecureStorage {
 
 impl MobileSecureStorage for MemoryMobileSecureStorage {
     fn get<'a>(&'a self, key: &'a str) -> MobileFuture<'a, Option<Vec<u8>>> {
-        Box::pin(async move { Ok(self.values.read().unwrap().get(key).cloned()) })
+        Box::pin(async move {
+            Ok(self
+                .values
+                .read()
+                .map_err(MobileError::lock_poisoned)?
+                .get(key)
+                .cloned())
+        })
     }
 
     fn put<'a>(&'a self, key: &'a str, value: Vec<u8>) -> MobileFuture<'a, ()> {
         Box::pin(async move {
-            self.values.write().unwrap().insert(key.to_string(), value);
+            self.values
+                .write()
+                .map_err(MobileError::lock_poisoned)?
+                .insert(key.to_string(), value);
             Ok(())
         })
     }
 
     fn delete<'a>(&'a self, key: &'a str) -> MobileFuture<'a, ()> {
         Box::pin(async move {
-            self.values.write().unwrap().remove(key);
+            self.values
+                .write()
+                .map_err(MobileError::lock_poisoned)?
+                .remove(key);
             Ok(())
         })
     }
 }
 
+/// Scaffolding `MobileMessageProcessor` that echoes the request payload.
+/// **Does not run a DWN.** Use only for plumbing tests; real builds should
+/// dispatch into `Dwn::process_message`.
 #[derive(Clone, Default)]
 pub struct EchoMobileMessageProcessor;
 

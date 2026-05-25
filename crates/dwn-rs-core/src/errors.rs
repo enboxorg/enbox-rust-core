@@ -5,6 +5,27 @@ use ulid::MonotonicError;
 
 use crate::{stores::ProgressGapInfo, FilterError, QueryError};
 
+/// Convert a `PoisonError` (or any `RwLock`/`Mutex` lock failure) into a
+/// [`StoreError::InternalException`].
+///
+/// Usage:
+///
+/// ```ignore
+/// let guard = state.read().map_err(crate::lock_error)?;
+/// ```
+///
+/// `RwLock`/`Mutex` poisoning is a programmer-visible signal that an
+/// earlier critical section panicked. Inside the in-memory store
+/// scaffolds that live alongside the trait definitions, the only safe
+/// recovery is to bail out of the operation rather than `unwrap()` and
+/// re-panic into the runtime.
+pub fn lock_error<T>(err: T) -> StoreError
+where
+    T: std::fmt::Display,
+{
+    StoreError::InternalException(format!("lock poisoned: {err}"))
+}
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("error operating store: {0}")]

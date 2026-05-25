@@ -5,7 +5,7 @@ use crate::{SurrealDB, SurrealDBError, SurrealQuery};
 use dwn_rs_core::{
     errors::{EventLogError, StoreError},
     filters::{Cursor, Filters, MessageWatermark, Pagination, Query, QueryReturn},
-    stores::EventLog,
+    stores::LegacyEventLog,
     value::MapValue,
 };
 
@@ -13,7 +13,7 @@ use super::models::{CreateEvent, GetEvent};
 
 const EVENTS_TABLE: &str = "events";
 
-impl EventLog for SurrealDB {
+impl LegacyEventLog for SurrealDB {
     async fn open(&mut self) -> Result<(), EventLogError> {
         self.open().await.map_err(EventLogError::from)
     }

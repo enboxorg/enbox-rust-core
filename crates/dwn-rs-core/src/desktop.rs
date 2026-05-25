@@ -49,6 +49,13 @@ impl DesktopError {
             format!("desktop local server must bind to a loopback host, got {host}"),
         )
     }
+
+    pub(crate) fn lock_poisoned<E: Display>(err: E) -> Self {
+        Self::new(
+            "DesktopLockPoisoned",
+            format!("desktop runtime lock poisoned: {err}"),
+        )
+    }
 }
 
 impl Display for DesktopError {
@@ -354,7 +361,12 @@ where
     }
 
     pub async fn start(&self, request: DesktopStartRequest) -> DesktopResult<DesktopRuntimeStatus> {
-        if self.state.read().unwrap().running {
+        if self
+            .state
+            .read()
+            .map_err(DesktopError::lock_poisoned)?
+            .running
+        {
             return Err(DesktopError::already_running());
         }
 
@@ -375,7 +387,7 @@ where
         }
 
         {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().map_err(DesktopError::lock_poisoned)?;
             state.running = true;
             state.mode = Some(mode);
             state.advert = Some(advert);
@@ -391,7 +403,7 @@ where
             self.discovery.remove(&node_id).await?;
         }
         {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().map_err(DesktopError::lock_poisoned)?;
             state.running = false;
             state.mode = None;
             state.advert = None;
@@ -444,7 +456,10 @@ where
     }
 
     pub fn status(&self) -> DesktopRuntimeStatus {
-        let state = self.state.read().unwrap();
+        let state = self
+            .state
+            .read()
+            .expect("DesktopLocalNode state lock poisoned");
         DesktopRuntimeStatus {
             running: state.running,
             mode: state.mode,
@@ -476,13 +491,25 @@ where
     }
 
     fn ensure_running(&self) -> DesktopResult<()> {
-        if !self.state.read().unwrap().running {
+        if !self
+            .state
+            .read()
+            .map_err(DesktopError::lock_poisoned)?
+            .running
+        {
             return Err(DesktopError::not_running());
         }
         Ok(())
     }
 }
 
+/// Scaffolding `DesktopLocalServer` that **does not actually start a server**.
+///
+/// `start` records the requested config in an in-memory status struct and
+/// returns it; no socket is bound, no DWN is spun up, and `stop` simply
+/// resets the status. Use this for unit tests and integration scaffolds;
+/// production paths must wire a real implementation backed by `enbox-dwn-server`
+/// or an embedded DWN engine.
 #[derive(Clone, Default)]
 pub struct MemoryDesktopLocalServer {
     status: Arc<RwLock<DesktopServerStatus>>,
@@ -508,23 +535,30 @@ impl DesktopLocalServer for MemoryDesktopLocalServer {
                 port: Some(config.port),
                 websocket_enabled: config.websocket_enabled,
             };
-            *self.status.write().unwrap() = status.clone();
+            *self.status.write().map_err(DesktopError::lock_poisoned)? = status.clone();
             Ok(status)
         })
     }
 
     fn stop<'a>(&'a self) -> DesktopFuture<'a, ()> {
         Box::pin(async move {
-            *self.status.write().unwrap() = DesktopServerStatus::default();
+            *self.status.write().map_err(DesktopError::lock_poisoned)? =
+                DesktopServerStatus::default();
             Ok(())
         })
     }
 
     fn status(&self) -> DesktopServerStatus {
-        self.status.read().unwrap().clone()
+        self.status
+            .read()
+            .expect("MemoryDesktopLocalServer status lock poisoned")
+            .clone()
     }
 }
 
+/// In-memory `DesktopDiscoveryRegistry` for tests. Does **not** publish on
+/// mDNS/Bonjour or any network protocol; it just records adverts in a map.
+/// Production paths must wire a real `mdns-sd` (or equivalent) backend.
 #[derive(Clone, Default)]
 pub struct MemoryDesktopDiscoveryRegistry {
     adverts: Arc<RwLock<BTreeMap<String, DesktopNodeAdvert>>>,
@@ -535,7 +569,7 @@ impl DesktopDiscoveryRegistry for MemoryDesktopDiscoveryRegistry {
         Box::pin(async move {
             self.adverts
                 .write()
-                .unwrap()
+                .map_err(DesktopError::lock_poisoned)?
                 .insert(advert.node_id.clone(), advert);
             Ok(())
         })
@@ -543,20 +577,42 @@ impl DesktopDiscoveryRegistry for MemoryDesktopDiscoveryRegistry {
 
     fn remove<'a>(&'a self, node_id: &'a str) -> DesktopFuture<'a, ()> {
         Box::pin(async move {
-            self.adverts.write().unwrap().remove(node_id);
+            self.adverts
+                .write()
+                .map_err(DesktopError::lock_poisoned)?
+                .remove(node_id);
             Ok(())
         })
     }
 
     fn resolve<'a>(&'a self, node_id: &'a str) -> DesktopFuture<'a, Option<DesktopNodeAdvert>> {
-        Box::pin(async move { Ok(self.adverts.read().unwrap().get(node_id).cloned()) })
+        Box::pin(async move {
+            Ok(self
+                .adverts
+                .read()
+                .map_err(DesktopError::lock_poisoned)?
+                .get(node_id)
+                .cloned())
+        })
     }
 
     fn list<'a>(&'a self) -> DesktopFuture<'a, Vec<DesktopNodeAdvert>> {
-        Box::pin(async move { Ok(self.adverts.read().unwrap().values().cloned().collect()) })
+        Box::pin(async move {
+            Ok(self
+                .adverts
+                .read()
+                .map_err(DesktopError::lock_poisoned)?
+                .values()
+                .cloned()
+                .collect())
+        })
     }
 }
 
+/// In-memory `DesktopDeliveryQueue` for tests. Holds enqueued deliveries
+/// in a `BTreeMap`; no actual transport, no retries, no persistence.
+/// Production paths must persist to the chosen store and integrate with
+/// the underlying DWN's delivery semantics.
 #[derive(Clone, Default)]
 pub struct MemoryDesktopDeliveryQueue {
     inner: Arc<RwLock<DeliveryQueueInner>>,
@@ -574,7 +630,7 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
         delivery: DesktopQueuedDelivery,
     ) -> DesktopFuture<'a, DesktopDeliveryReceipt> {
         Box::pin(async move {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().map_err(DesktopError::lock_poisoned)?;
             if let Some(dedup_key) = &delivery.request.dedup_key {
                 if let Some(delivery_id) = inner.dedup_keys.get(dedup_key) {
                     return Ok(DesktopDeliveryReceipt {
@@ -604,7 +660,7 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
             Ok(self
                 .inner
                 .read()
-                .unwrap()
+                .map_err(DesktopError::lock_poisoned)?
                 .deliveries
                 .values()
                 .filter(|delivery| {
@@ -619,7 +675,7 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
 
     fn ack<'a>(&'a self, delivery_id: &'a str) -> DesktopFuture<'a, ()> {
         Box::pin(async move {
-            let mut inner = self.inner.write().unwrap();
+            let mut inner = self.inner.write().map_err(DesktopError::lock_poisoned)?;
             if let Some(delivery) = inner.deliveries.remove(delivery_id) {
                 if let Some(dedup_key) = delivery.request.dedup_key {
                     inner.dedup_keys.remove(&dedup_key);
@@ -630,6 +686,10 @@ impl DesktopDeliveryQueue for MemoryDesktopDeliveryQueue {
     }
 }
 
+/// Scaffolding `DesktopMessageProcessor` that echoes the request payload as
+/// the response. **Does not run a DWN.** Use only for connectivity tests
+/// against the desktop pipeline; real implementations must dispatch into
+/// a real `Dwn::process_message` (see `crate::dwn::Dwn`).
 #[derive(Clone, Default)]
 pub struct EchoDesktopMessageProcessor;
 

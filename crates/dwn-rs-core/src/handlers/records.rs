@@ -12,7 +12,7 @@ use chrono::SecondsFormat;
 use futures_util::{stream, TryStreamExt};
 use serde_json::{json, Value as JsonValue};
 
-use crate::auth::GeneralJwsPublicKeyResolver;
+use crate::auth::JwsPublicKeyResolver;
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::records::CountDescriptor;
 use crate::descriptors::{
@@ -29,10 +29,7 @@ use crate::interfaces::messages::protocols::{
 };
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{
-    EnboxDataStore, EnboxEventLog, EnboxMessageStore, EnboxStateIndex, EventLogSubscribeOptions,
-    EventSubscription, KeyValues, SubscriptionListener,
-};
+use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
 const RECORDS_INTERFACE: &str = "Records";
@@ -44,26 +41,26 @@ pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct RecordsReadHandler<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct RecordsQueryHandler<MessageStore> {
     message_store: MessageStore,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct RecordsCountHandler<MessageStore> {
     message_store: MessageStore,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(Clone)]
@@ -71,20 +68,20 @@ pub struct RecordsDeleteHandler<MessageStore, DataStore, StateIndex> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct RecordsSubscribeHandler<MessageStore> {
     message_store: MessageStore,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
     message_store: MessageStore,
     event_log: EventLog,
-    public_key_resolver: Option<Arc<dyn GeneralJwsPublicKeyResolver + Send + Sync>>,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
 pub struct RecordsSubscribeReply {
@@ -120,7 +117,7 @@ impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, Data
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -143,7 +140,7 @@ impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore> {
     pub fn with_public_key_resolver(
         message_store: MessageStore,
         data_store: DataStore,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -163,7 +160,7 @@ impl<MessageStore> RecordsQueryHandler<MessageStore> {
 
     pub fn with_public_key_resolver(
         message_store: MessageStore,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -182,7 +179,7 @@ impl<MessageStore> RecordsCountHandler<MessageStore> {
 
     pub fn with_public_key_resolver(
         message_store: MessageStore,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -211,7 +208,7 @@ impl<MessageStore, DataStore, StateIndex>
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -232,7 +229,7 @@ impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
 
     pub fn with_public_key_resolver(
         message_store: MessageStore,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -253,7 +250,7 @@ impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, Event
     pub fn with_public_key_resolver(
         message_store: MessageStore,
         event_log: EventLog,
-        public_key_resolver: impl GeneralJwsPublicKeyResolver + Send + Sync + 'static,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
     ) -> Self {
         Self {
             message_store,
@@ -266,9 +263,9 @@ impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, Event
 impl<MessageStore, DataStore, StateIndex> MethodHandler
     for RecordsWriteHandler<MessageStore, DataStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -283,8 +280,8 @@ where
 
 impl<MessageStore, DataStore> MethodHandler for RecordsReadHandler<MessageStore, DataStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -296,7 +293,7 @@ where
 
 impl<MessageStore> MethodHandler for RecordsQueryHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -308,7 +305,7 @@ where
 
 impl<MessageStore> MethodHandler for RecordsCountHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -321,9 +318,9 @@ where
 impl<MessageStore, DataStore, StateIndex> MethodHandler
     for RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -335,7 +332,7 @@ where
 
 impl<MessageStore> MethodHandler for RecordsSubscribeHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -348,8 +345,8 @@ where
 impl<MessageStore, EventLog> MethodHandler
     for RecordsEventLogSubscribeHandler<MessageStore, EventLog>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -365,9 +362,9 @@ where
 
 impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     pub async fn handle_write(
         &self,
@@ -979,8 +976,8 @@ where
 
 impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
 {
     pub async fn handle_read(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message) {
@@ -1152,7 +1149,7 @@ where
 
 impl<MessageStore> RecordsQueryHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     pub async fn handle_query(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message) {
@@ -1283,7 +1280,7 @@ where
 
 impl<MessageStore> RecordsCountHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     pub async fn handle_count(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message) {
@@ -1365,9 +1362,9 @@ where
 
 impl<MessageStore, DataStore, StateIndex> RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    DataStore: EnboxDataStore + Clone + Send + Sync + 'static,
-    StateIndex: EnboxStateIndex + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     pub async fn handle_delete(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message) {
@@ -1527,7 +1524,7 @@ where
 
 impl<MessageStore> RecordsSubscribeHandler<MessageStore>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     pub async fn handle_subscribe(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
         let message = match parse_message(raw_message) {
@@ -1540,7 +1537,7 @@ where
         };
         if descriptor.cursor.is_some() {
             return DwnReply::not_implemented(
-                "RecordsSubscribe cursor replay requires EnboxEventLog integration",
+                "RecordsSubscribe cursor replay requires EventLog integration",
             );
         }
 
@@ -1646,8 +1643,8 @@ where
 
 impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog>
 where
-    MessageStore: EnboxMessageStore + Clone + Send + Sync + 'static,
-    EventLog: EnboxEventLog + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     pub async fn handle_subscribe(
         &self,
@@ -2569,7 +2566,7 @@ async fn authorize_records_read<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(matched_records_write)?;
     if signature.map(|signature| signature.author.as_str()) == Some(tenant)
@@ -2614,7 +2611,7 @@ async fn authorize_records_delete<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     if permissions::authorize_records_delete_with_grant(
         tenant,
@@ -2650,7 +2647,7 @@ async fn authorize_protocol_query_or_subscribe<MessageStore>(
     kind: RecordsAuthorizationKind,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let protocol = filter.protocol.as_deref().ok_or_else(|| {
         "ProtocolAuthorizationMissingProtocol: role-authorized query must include protocol"
@@ -2693,7 +2690,7 @@ async fn authorize_against_protocol<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(message)?;
     let protocol = descriptor.protocol.as_deref().ok_or_else(|| {
@@ -2743,7 +2740,7 @@ async fn authorize_actions<MessageStore>(
     definition: Option<&Definition>,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     for action in &rule_set.actions {
         match action {
@@ -2845,7 +2842,7 @@ async fn matching_role_record_exists<MessageStore>(
     definition: Option<&Definition>,
 ) -> Result<bool, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let mut protocol = record_chain
         .last()
@@ -2905,7 +2902,7 @@ async fn actions_for_message_kind<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<Vec<Can>, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     match kind {
         RecordsAuthorizationKind::Write => {
@@ -2964,7 +2961,7 @@ async fn governing_timestamp<MessageStore>(
     author: &str,
 ) -> Result<String, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     if is_initial_write(message, author)? {
         return Ok(message_timestamp(message)?.to_rfc3339_opts(SecondsFormat::Micros, true));
@@ -2985,7 +2982,7 @@ async fn construct_record_chain<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<Vec<Message<Descriptor>>, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let mut chain = Vec::new();
     let mut current = Some(message.clone());
@@ -3008,7 +3005,7 @@ async fn attach_initial_writes<MessageStore>(
     author_hint: Option<&str>,
 ) -> Vec<JsonValue>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let mut entries = Vec::new();
     for message in messages {
@@ -3043,7 +3040,7 @@ async fn fetch_record_messages<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<Vec<Message<Descriptor>>, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
@@ -3062,7 +3059,7 @@ async fn fetch_newest_write<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<Message<Descriptor>, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
@@ -3091,7 +3088,7 @@ async fn fetch_initial_write_message<MessageStore>(
     message_store: &MessageStore,
 ) -> Result<Option<Message<Descriptor>>, String>
 where
-    MessageStore: EnboxMessageStore + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
 {
     let filter = filter_map([("entryId", string_filter(record_id))]);
     message_store
@@ -3114,7 +3111,7 @@ async fn existing_initial_lacks_data<DataStore>(
     data_cid: &str,
 ) -> bool
 where
-    DataStore: EnboxDataStore + Sync,
+    DataStore: crate::stores::DataStore + Sync,
 {
     let Some(message) = newest_existing.as_ref() else {
         return false;
@@ -3185,7 +3182,7 @@ async fn delete_from_data_store_if_needed<DataStore>(
     data_store: &DataStore,
 ) -> Result<(), String>
 where
-    DataStore: EnboxDataStore + Sync,
+    DataStore: crate::stores::DataStore + Sync,
 {
     let Ok(descriptor) = records_write_descriptor(message) else {
         return Ok(());
@@ -3216,9 +3213,9 @@ async fn purge_record_descendants<MessageStore, DataStore, StateIndex>(
     state_index: &StateIndex,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
-    DataStore: EnboxDataStore + Sync,
-    StateIndex: EnboxStateIndex + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
+    DataStore: crate::stores::DataStore + Sync,
+    StateIndex: crate::stores::StateIndex + Sync,
 {
     let filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
@@ -3259,9 +3256,9 @@ async fn purge_record_messages<MessageStore, DataStore, StateIndex>(
     state_index: &StateIndex,
 ) -> Result<(), String>
 where
-    MessageStore: EnboxMessageStore + Sync,
-    DataStore: EnboxDataStore + Sync,
-    StateIndex: EnboxStateIndex + Sync,
+    MessageStore: crate::stores::MessageStore + Sync,
+    DataStore: crate::stores::DataStore + Sync,
+    StateIndex: crate::stores::StateIndex + Sync,
 {
     if let Some(newest_write) = newest_message(
         &record_messages
@@ -3406,8 +3403,7 @@ mod tests {
     use futures_util::{Stream, StreamExt};
 
     use crate::auth::{
-        GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, PrivateJwkSigner,
-        StaticPublicKeyResolver,
+        Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
     };
     use crate::descriptors::{ConfigureDescriptor, Protocols as ProtocolsDescriptor};
     use crate::errors::{DataStoreError, MessageStoreError, StoreError};
@@ -3416,8 +3412,8 @@ mod tests {
     use crate::local::MemoryEventLog;
     use crate::state_index::MemoryStateIndex;
     use crate::stores::{
-        EnboxDataStoreGetResult, EnboxDataStorePutResult, EnboxMessageQueryResult,
-        SubscriptionMessage,
+        DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult,
+        MessageStore, StateIndex, SubscriptionMessage,
     };
     use crate::MapValue;
 
@@ -4559,13 +4555,13 @@ mod tests {
         descriptor: &JsonValue,
         extra_payload: JsonValue,
         signer: PrivateJwkSigner,
-    ) -> GeneralJws {
+    ) -> Jws {
         let mut payload = extra_payload.as_object().cloned().unwrap_or_default();
         payload.insert(
             "descriptorCid".to_string(),
             JsonValue::String(generate_cid_from_json(descriptor).unwrap().to_string()),
         );
-        GeneralJws::create(
+        Jws::create_general(
             serde_json::to_vec(&JsonValue::Object(payload))
                 .unwrap()
                 .as_slice(),
@@ -4617,7 +4613,7 @@ mod tests {
         PrivateJwkSigner::new(
             &key_id,
             "EdDSA",
-            GeneralJwsPrivateJwk {
+            JwsPrivateJwk {
                 kty: "OKP".to_string(),
                 crv: "Ed25519".to_string(),
                 d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
@@ -4642,8 +4638,8 @@ mod tests {
         ]))
     }
 
-    fn test_public_jwk(key_id: &str) -> GeneralJwsPublicJwk {
-        GeneralJwsPublicJwk {
+    fn test_public_jwk(key_id: &str) -> JwsPublicJwk {
+        JwsPublicJwk {
             kty: "OKP".to_string(),
             crv: "Ed25519".to_string(),
             x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
@@ -4666,7 +4662,7 @@ mod tests {
         indexes: KeyValues,
     }
 
-    impl EnboxMessageStore for TestMessageStore {
+    impl MessageStore for TestMessageStore {
         async fn open(&mut self) -> Result<(), MessageStoreError> {
             Ok(())
         }
@@ -4721,8 +4717,7 @@ mod tests {
             filters: Filters,
             sort: Option<MessageSort>,
             pagination: Option<Pagination>,
-        ) -> impl Future<Output = Result<EnboxMessageQueryResult, MessageStoreError>> + Send
-        {
+        ) -> impl Future<Output = Result<MessageQueryResult, MessageStoreError>> + Send {
             let rows = self.rows.clone();
             let tenant = tenant.to_string();
             async move {
@@ -4754,7 +4749,7 @@ mod tests {
                 if let Some(limit) = pagination.and_then(|pagination| pagination.limit) {
                     rows.truncate(limit as usize);
                 }
-                Ok(EnboxMessageQueryResult {
+                Ok(MessageQueryResult {
                     messages: rows.into_iter().map(|row| row.message).collect(),
                     cursor: None,
                 })
@@ -4807,7 +4802,7 @@ mod tests {
         values: TestDataValues,
     }
 
-    impl EnboxDataStore for TestDataStore {
+    impl DataStore for TestDataStore {
         async fn open(&mut self) -> Result<(), DataStoreError> {
             Ok(())
         }
@@ -4820,7 +4815,7 @@ mod tests {
             record_id: &str,
             data_cid: &str,
             mut data_stream: T,
-        ) -> impl Future<Output = Result<EnboxDataStorePutResult, DataStoreError>> + Send {
+        ) -> impl Future<Output = Result<DataStorePutResult, DataStoreError>> + Send {
             let values = self.values.clone();
             let key = (
                 tenant.to_string(),
@@ -4835,7 +4830,7 @@ mod tests {
                 let bytes = Bytes::from(bytes);
                 let data_size = bytes.len();
                 values.write().unwrap().insert(key, bytes);
-                Ok(EnboxDataStorePutResult { data_size })
+                Ok(DataStorePutResult { data_size })
             }
         }
 
@@ -4844,7 +4839,7 @@ mod tests {
             tenant: &str,
             record_id: &str,
             data_cid: &str,
-        ) -> impl Future<Output = Result<Option<EnboxDataStoreGetResult>, DataStoreError>> + Send
+        ) -> impl Future<Output = Result<Option<DataStoreGetResult>, DataStoreError>> + Send
         {
             let values = self.values.clone();
             let key = (
@@ -4855,7 +4850,7 @@ mod tests {
             async move {
                 Ok(values.read().unwrap().get(&key).cloned().map(|bytes| {
                     let data_size = bytes.len();
-                    EnboxDataStoreGetResult {
+                    DataStoreGetResult {
                         data_size,
                         data_stream: Box::pin(stream::iter(vec![Ok(bytes)])),
                     }

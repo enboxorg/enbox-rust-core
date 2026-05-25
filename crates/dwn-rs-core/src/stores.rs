@@ -17,7 +17,10 @@ use crate::{
 };
 use crate::{Descriptor, MapValue, Message, MessageSort, Pagination};
 
-pub trait MessageStore: Default {
+/// Legacy `MessageStore` trait inherited from upstream `dwn-rs`. Only the
+/// SurrealDB backend (`crates/dwn-rs-stores/src/surrealdb/*`) implements it.
+/// New code should target [`MessageStore`] (formerly `EnboxMessageStore`).
+pub trait LegacyMessageStore: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()>;
@@ -57,7 +60,9 @@ pub trait MessageStore: Default {
     fn clear(&self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 }
 
-pub trait DataStore: Default {
+/// Legacy `DataStore` trait inherited from upstream `dwn-rs`. See
+/// [`LegacyMessageStore`].
+pub trait LegacyDataStore: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -98,7 +103,9 @@ pub struct GetDataResults {
     pub data: Pin<Box<dyn Stream<Item = u8>>>,
 }
 
-pub trait EventLog: Default {
+/// Legacy `EventLog` trait inherited from upstream `dwn-rs`. See
+/// [`LegacyMessageStore`].
+pub trait LegacyEventLog: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()>;
@@ -134,7 +141,7 @@ pub trait EventLog: Default {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
+pub struct LegacyManagedResumableTask<T: Serialize + Sync + Send + Debug> {
     pub id: Ulid,
     pub task: T,
     pub timeout: u64,
@@ -142,7 +149,7 @@ pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct EnboxManagedResumableTask<T: Serialize + Sync + Send + Debug> {
+pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
     pub id: String,
     pub task: T,
     pub timeout: u64,
@@ -150,7 +157,9 @@ pub struct EnboxManagedResumableTask<T: Serialize + Sync + Send + Debug> {
     pub retry_count: u64,
 }
 
-pub trait ResumableTaskStore: Default {
+/// Legacy `ResumableTaskStore` trait inherited from upstream `dwn-rs`. See
+/// [`LegacyMessageStore`].
+pub trait LegacyResumableTaskStore: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -159,17 +168,18 @@ pub trait ResumableTaskStore: Default {
         &self,
         task: T,
         timeout: u64,
-    ) -> impl Future<Output = Result<ManagedResumableTask<T>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<LegacyManagedResumableTask<T>, ResumableTaskStoreError>> + Send;
 
     fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
         &self,
         count: u64,
-    ) -> impl Future<Output = Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<LegacyManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
 
     fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
         &self,
         task_id: &str,
-    ) -> impl Future<Output = Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<LegacyManagedResumableTask<T>>, ResumableTaskStoreError>>
+           + Send;
 
     fn extend(
         &self,
@@ -195,18 +205,18 @@ pub type KeyValues = MapValue;
 pub type StateHash = [u8; 32];
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
-pub struct EnboxMessageQueryResult {
+pub struct MessageQueryResult {
     pub messages: Vec<Message<Descriptor>>,
     pub cursor: Option<Cursor>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct EnboxDataStorePutResult {
+pub struct DataStorePutResult {
     #[serde(rename = "dataSize")]
     pub data_size: usize,
 }
 
-pub struct EnboxDataStoreGetResult {
+pub struct DataStoreGetResult {
     pub data_size: usize,
     pub data_stream: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
 }
@@ -300,9 +310,9 @@ pub enum EventLogTrimBound {
     Timestamp(String),
 }
 
-/// Enbox-native message store contract matching the current TypeScript
+/// Native message store contract matching the current TypeScript
 /// `MessageStore` dependency used by `DwnConfig`.
-pub trait EnboxMessageStore: Default {
+pub trait MessageStore: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -327,7 +337,7 @@ pub trait EnboxMessageStore: Default {
         filters: Filters,
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
-    ) -> impl Future<Output = Result<EnboxMessageQueryResult, MessageStoreError>> + Send;
+    ) -> impl Future<Output = Result<MessageQueryResult, MessageStoreError>> + Send;
 
     fn count(
         &self,
@@ -345,8 +355,8 @@ pub trait EnboxMessageStore: Default {
     fn clear(&self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 }
 
-/// Enbox-native content-addressed data store contract.
-pub trait EnboxDataStore: Default {
+/// Native content-addressed data store contract.
+pub trait DataStore: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -357,14 +367,14 @@ pub trait EnboxDataStore: Default {
         record_id: &str,
         data_cid: &str,
         data_stream: T,
-    ) -> impl Future<Output = Result<EnboxDataStorePutResult, DataStoreError>> + Send;
+    ) -> impl Future<Output = Result<DataStorePutResult, DataStoreError>> + Send;
 
     fn get(
         &self,
         tenant: &str,
         record_id: &str,
         data_cid: &str,
-    ) -> impl Future<Output = Result<Option<EnboxDataStoreGetResult>, DataStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<DataStoreGetResult>, DataStoreError>> + Send;
 
     fn delete(
         &self,
@@ -376,8 +386,8 @@ pub trait EnboxDataStore: Default {
     fn clear(&self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
 }
 
-/// Enbox-native StateIndex contract for global and protocol-scoped SMT sync.
-pub trait EnboxStateIndex: Default {
+/// Native StateIndex contract for global and protocol-scoped SMT sync.
+pub trait StateIndex: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -432,8 +442,8 @@ pub trait EnboxStateIndex: Default {
     ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
 }
 
-/// Enbox-native persistent event log contract with progress tokens and replay.
-pub trait EnboxEventLog: Default {
+/// Native persistent event log contract with progress tokens and replay.
+pub trait EventLog: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -472,8 +482,8 @@ pub trait EnboxEventLog: Default {
     ) -> impl Future<Output = Result<(), EventLogError>> + Send;
 }
 
-/// Enbox-native resumable task store contract.
-pub trait EnboxResumableTaskStore: Default {
+/// Native resumable task store contract.
+pub trait ResumableTaskStore: Default {
     fn open(&mut self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -482,17 +492,17 @@ pub trait EnboxResumableTaskStore: Default {
         &self,
         task: T,
         timeout_in_seconds: u64,
-    ) -> impl Future<Output = Result<EnboxManagedResumableTask<T>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<ManagedResumableTask<T>, ResumableTaskStoreError>> + Send;
 
     fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
         &self,
         count: u64,
-    ) -> impl Future<Output = Result<Vec<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
 
     fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
         &self,
         task_id: &str,
-    ) -> impl Future<Output = Result<Option<EnboxManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
 
     fn extend(
         &self,

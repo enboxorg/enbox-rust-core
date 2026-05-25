@@ -3,6 +3,12 @@ pub mod jws;
 
 pub use authorization::Authorization;
 pub use jws::{
+    JwkSigner, Jws, JwsError, JwsPrivateJwk, JwsPublicJwk, JwsPublicKeyResolver, JwsSignature,
+    PrivateJwkSigner, StaticPublicKeyResolver,
+};
+
+#[allow(deprecated)]
+pub use jws::{
     GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, GeneralJwsPublicKeyResolver,
-    GeneralJwsSignature, JwsError, PrivateJwkSigner, StaticPublicKeyResolver, JWS,
-}; // TODO: JWS -> Jws
+    GeneralJwsSignature, GeneralJwsSigner, SignatureEntry, JWS,
+};

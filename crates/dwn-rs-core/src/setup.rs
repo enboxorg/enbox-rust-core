@@ -4,8 +4,7 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use crate::agent::{
-    AgentIdentityError, AgentIdentityResult, AgentKeyManager, JsonWebKey, PortableDid,
-    PortableIdentity, SecretStore,
+    AgentIdentityError, AgentIdentityResult, AgentKeyManager, JsonWebKey, PortableDid, SecretStore,
 };
 use crate::interfaces::messages::protocols::{Definition, PathEncryption, RuleSet};
 use chrono::Utc;
@@ -58,9 +57,18 @@ pub struct DwnServerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistrationMethod {
+    /// The DWN endpoint did not advertise any registration requirement.
     NotRequired,
+    /// The DWN endpoint advertised `provider-auth-v0` and the agent provided
+    /// a registration token via [`TenantRegistrationClient`].
     ProviderAuthToken,
-    ProofOfWork,
+    /// The DWN endpoint advertised a registration requirement that this
+    /// crate does not yet implement (the inherited TypeScript implementation
+    /// computes a proof-of-work token; the Rust port is tracked as a
+    /// follow-up). [`TenantRegistrationClient::register_tenant`] is invoked
+    /// without a token; the server will reject the request unless it
+    /// accepts unauthenticated registration.
+    Anonymous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,7 +199,7 @@ where
                 records.push(TenantRegistrationRecord {
                     endpoint: endpoint.clone(),
                     did: did.clone(),
-                    method: RegistrationMethod::ProofOfWork,
+                    method: RegistrationMethod::Anonymous,
                 });
             }
         }
@@ -275,7 +283,6 @@ pub struct ProtocolInstallResult {
 #[serde(rename_all = "snake_case")]
 pub enum RestoreFlowStep {
     AgentDidSync,
-    RecoveredIdentities,
     ProtocolInstall,
     ProtocolPush,
 }
@@ -351,12 +358,19 @@ where
     install_protocol_if_needed(endpoint, key_manager, tenant_did, definition).await
 }
 
+/// Replay protocol installs/pushes for a recovered agent.
+///
+/// This intentionally does **not** restore portable identities. The
+/// TypeScript wallet recovery flow re-imports `PortableIdentity` records
+/// into the connected agent's identity store; the Rust port does not yet
+/// model that store. Until it does, callers are expected to manage
+/// identity restoration outside this function (see
+/// `tests/wallet_recovery.rs::IdentityTenantStore` for the current pattern).
 pub async fn run_restore_flow<L, R, K>(
     local: &L,
     remote: &R,
     key_manager: &K,
     agent_did: &PortableDid,
-    recovered_identities: Vec<PortableIdentity>,
     protocol_definitions: Vec<Definition>,
 ) -> AgentIdentityResult<RestoreFlowResult>
 where
@@ -366,8 +380,6 @@ where
 {
     let mut result = RestoreFlowResult::default();
     result.steps.push(RestoreFlowStep::AgentDidSync);
-    let _recovered_identity_count = recovered_identities.len();
-    result.steps.push(RestoreFlowStep::RecoveredIdentities);
     result.steps.push(RestoreFlowStep::ProtocolInstall);
     for definition in protocol_definitions.clone() {
         result
@@ -514,17 +526,21 @@ fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
     rule_set.encryption.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
 }
 
+/// In-memory `ProtocolEndpoint` for development, tests, and the wallet
+/// recovery reference flow. Holds protocol definitions per `(tenant,
+/// protocol)`. **Not durable.** Production setups will use a real DWN
+/// (local or remote) as the endpoint.
 #[derive(Clone, Default)]
 pub struct MemoryProtocolEndpoint {
-    protocols: Arc<RwLock<BTreeMap<String, Definition>>>,
+    protocols: Arc<RwLock<BTreeMap<(String, String), Definition>>>,
 }
 
 impl MemoryProtocolEndpoint {
     pub fn protocol(&self, tenant: &str, protocol: &str) -> Option<Definition> {
         self.protocols
             .read()
-            .unwrap()
-            .get(&protocol_key(tenant, protocol))
+            .expect("MemoryProtocolEndpoint lock poisoned")
+            .get(&(tenant.to_string(), protocol.to_string()))
             .cloned()
     }
 }
@@ -539,8 +555,8 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
             Ok(self
                 .protocols
                 .read()
-                .unwrap()
-                .get(&protocol_key(tenant, protocol))
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .get(&(tenant.to_string(), protocol.to_string()))
                 .cloned())
         })
     }
@@ -553,15 +569,14 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
         Box::pin(async move {
             self.protocols
                 .write()
-                .unwrap()
-                .insert(protocol_key(tenant, &definition.protocol), definition);
+                .map_err(AgentIdentityError::lock_poisoned)?
+                .insert(
+                    (tenant.to_string(), definition.protocol.clone()),
+                    definition,
+                );
             Ok(())
         })
     }
-}
-
-fn protocol_key(tenant: &str, protocol: &str) -> String {
-    format!("{tenant}|{protocol}")
 }
 
 #[cfg(test)]
@@ -665,7 +680,6 @@ mod tests {
             &remote,
             &key_manager,
             &agent_did,
-            Vec::new(),
             vec![definition.clone()],
         )
         .await
@@ -675,7 +689,6 @@ mod tests {
             result.steps,
             vec![
                 RestoreFlowStep::AgentDidSync,
-                RestoreFlowStep::RecoveredIdentities,
                 RestoreFlowStep::ProtocolInstall,
                 RestoreFlowStep::ProtocolPush,
             ]
