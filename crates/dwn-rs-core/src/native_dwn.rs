@@ -3,7 +3,7 @@
 //! This mirrors TypeScript `Dwn.create()` handler registration while leaving
 //! store selection to the caller (in-memory scaffolds, SQLite, etc.).
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::{JwsPublicKeyResolver, UniversalResolver};
 use crate::descriptors::{
     CONFIGURE, COUNT, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, SUBSCRIBE, SYNC, WRITE,
 };
@@ -168,7 +168,8 @@ where
         handlers: crate::dwn::default_method_handlers(),
     });
 
-    register_native_handlers_with_resolver(&mut dwn, stores, public_key_resolver);
+    let universal_resolver = UniversalResolver::with_fallback(public_key_resolver);
+    register_native_handlers_with_resolver(&mut dwn, stores, universal_resolver);
     dwn
 }
 

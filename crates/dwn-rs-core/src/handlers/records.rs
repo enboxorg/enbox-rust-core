@@ -14,6 +14,7 @@ use serde_json::{json, Value as JsonValue};
 
 use crate::auth::JwsPublicKeyResolver;
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
+use crate::core_protocol::{CoreProtocolRegistry, CoreProtocolStores};
 use crate::descriptors::records::CountDescriptor;
 use crate::descriptors::{
     DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,
@@ -41,6 +42,7 @@ pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
+    core_protocol_registry: CoreProtocolRegistry,
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
@@ -109,6 +111,7 @@ impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, Data
             message_store,
             data_store,
             state_index,
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             public_key_resolver: None,
         }
     }
@@ -123,6 +126,7 @@ impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, Data
             message_store,
             data_store,
             state_index,
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
@@ -501,13 +505,15 @@ where
             is_latest_base_state = true;
         }
 
-        if let Err(detail) = permissions::validate_permissions_record_schema(&message) {
-            return DwnReply::bad_request(detail);
+        if let Err(detail) = self.core_protocol_registry.validate_record(&message, None) {
+            return core_protocol_error_reply(&self.core_protocol_registry, detail);
         }
-        if let Err(detail) =
-            permissions::pre_process_permissions_write(tenant, &message, &self.message_store).await
+        if let Err(detail) = self
+            .core_protocol_registry
+            .pre_process_write(tenant, &message, &self.message_store)
+            .await
         {
-            return DwnReply::bad_request(detail);
+            return core_protocol_error_reply(&self.core_protocol_registry, detail);
         }
 
         let indexes = match records_write_indexes(&message, &signature.author, is_latest_base_state)
@@ -565,14 +571,18 @@ where
             }
         }
 
-        if let Err(detail) = permissions::post_process_permissions_write(
-            tenant,
-            &message,
-            &self.message_store,
-            &self.data_store,
-            &self.state_index,
-        )
-        .await
+        if let Err(detail) = self
+            .core_protocol_registry
+            .post_process_write(
+                tenant,
+                &message,
+                CoreProtocolStores {
+                    message_store: &self.message_store,
+                    data_store: &self.data_store,
+                    state_index: &self.state_index,
+                },
+            )
+            .await
         {
             return store_error_reply(detail);
         }
@@ -3416,6 +3426,14 @@ fn filter_map<const N: usize>(
 
 fn accepted_reply() -> DwnReply {
     DwnReply::new(202, "Accepted")
+}
+
+fn core_protocol_error_reply(registry: &CoreProtocolRegistry, detail: String) -> DwnReply {
+    if registry.map_error_to_status_code(&detail) == Some(401) {
+        DwnReply::unauthorized(detail)
+    } else {
+        DwnReply::bad_request(detail)
+    }
 }
 
 fn conflict_reply() -> DwnReply {
