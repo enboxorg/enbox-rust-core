@@ -30,7 +30,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
-use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -52,6 +51,9 @@ const MESSAGES_SYNC_REPLIES_ASSERTION: &str = "messages-sync.replies";
 const MESSAGE_PROCESS_ASSERTION: &str = "message.process";
 const PROTOCOL_AUTHORIZATION_CORPUS_ASSERTION: &str = "protocol.authorization-corpus";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
+
+mod conformance_helpers;
+use conformance_helpers::read_fixture;
 
 const JWE_ERROR_DECRYPT_FAILED: &str = "JweDecryptFailed";
 const MAX_INLINE_DATA_SIZE: usize = 30_000;
@@ -773,10 +775,7 @@ fn read_json<T>(path: &Path) -> T
 where
     T: serde::de::DeserializeOwned,
 {
-    let contents = fs::read_to_string(path)
-        .unwrap_or_else(|err| panic!("failed to read {}: {}", path.display(), err));
-    serde_json::from_str(&contents)
-        .unwrap_or_else(|err| panic!("failed to parse {}: {}", path.display(), err))
+    read_fixture(path)
 }
 
 fn fixtures_root() -> PathBuf {
