@@ -866,7 +866,8 @@ async fn assert_message_process_reply(case: &FixtureCase) {
             case.id
         );
         assert_eq!(
-            reply.status.detail, schema_error.to_string(),
+            reply.status.detail,
+            schema_error.to_string(),
             "{} schema validation detail",
             case.id
         );
@@ -897,9 +898,7 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         );
     }
 
-    let reply = dwn
-        .process_message(&process.tenant, raw_message)
-        .await;
+    let reply = dwn.process_message(&process.tenant, raw_message).await;
     assert_eq!(
         serde_json::to_value(reply).expect("DwnReply must serialize"),
         process.reply,

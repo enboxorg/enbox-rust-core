@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 
 use crate::interfaces::messages::protocols::Definition;
 use crate::permissions::{
-    permissions_protocol_definition, post_process_permissions_write,
-    pre_process_permissions_write, validate_permissions_record_schema, PERMISSIONS_PROTOCOL_URI,
+    permissions_protocol_definition, post_process_permissions_write, pre_process_permissions_write,
+    validate_permissions_record_schema, PERMISSIONS_PROTOCOL_URI,
 };
 use crate::{Descriptor, Message};
 

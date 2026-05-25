@@ -215,23 +215,39 @@ fn validators() -> &'static HashMap<String, Validator> {
 
 fn schema_id_for_kind(kind: &MessageKind) -> Option<&'static str> {
     match (kind.interface.as_str(), kind.method.as_str()) {
-        ("Messages", "Read") => Some("https://identity.foundation/dwn/json-schemas/messages-read.json"),
+        ("Messages", "Read") => {
+            Some("https://identity.foundation/dwn/json-schemas/messages-read.json")
+        }
         ("Messages", "Subscribe") => {
             Some("https://identity.foundation/dwn/json-schemas/messages-subscribe.json")
         }
-        ("Messages", "Sync") => Some("https://identity.foundation/dwn/json-schemas/messages-sync.json"),
+        ("Messages", "Sync") => {
+            Some("https://identity.foundation/dwn/json-schemas/messages-sync.json")
+        }
         ("Protocols", "Configure") => {
             Some("https://identity.foundation/dwn/json-schemas/protocols-configure.json")
         }
-        ("Protocols", "Query") => Some("https://identity.foundation/dwn/json-schemas/protocols-query.json"),
-        ("Records", "Count") => Some("https://identity.foundation/dwn/json-schemas/records-count.json"),
-        ("Records", "Delete") => Some("https://identity.foundation/dwn/json-schemas/records-delete.json"),
-        ("Records", "Query") => Some("https://identity.foundation/dwn/json-schemas/records-query.json"),
-        ("Records", "Read") => Some("https://identity.foundation/dwn/json-schemas/records-read.json"),
+        ("Protocols", "Query") => {
+            Some("https://identity.foundation/dwn/json-schemas/protocols-query.json")
+        }
+        ("Records", "Count") => {
+            Some("https://identity.foundation/dwn/json-schemas/records-count.json")
+        }
+        ("Records", "Delete") => {
+            Some("https://identity.foundation/dwn/json-schemas/records-delete.json")
+        }
+        ("Records", "Query") => {
+            Some("https://identity.foundation/dwn/json-schemas/records-query.json")
+        }
+        ("Records", "Read") => {
+            Some("https://identity.foundation/dwn/json-schemas/records-read.json")
+        }
         ("Records", "Subscribe") => {
             Some("https://identity.foundation/dwn/json-schemas/records-subscribe.json")
         }
-        ("Records", "Write") => Some("https://identity.foundation/dwn/json-schemas/records-write.json"),
+        ("Records", "Write") => {
+            Some("https://identity.foundation/dwn/json-schemas/records-write.json")
+        }
         _ => None,
     }
 }
