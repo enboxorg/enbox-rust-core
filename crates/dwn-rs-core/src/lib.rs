@@ -33,6 +33,7 @@ pub mod auth;
 pub mod connect;
 pub mod core_protocol;
 pub mod desktop;
+pub mod desktop_server;
 pub mod dwn;
 pub mod encryption;
 pub mod errors;

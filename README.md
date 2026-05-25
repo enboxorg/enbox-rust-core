@@ -14,16 +14,33 @@ This repository was cloned from [`enmand/dwn-rs`](https://github.com/enmand/dwn-
 
 ## Current State
 
-The active Rust workspace builds and tests natively with the pinned Rust toolchain. Handler logic, protocol authorization, conformance fixtures, and agent/sync modules are largely implemented.
+The active Rust workspace builds and tests natively with the pinned Rust toolchain (`rust-toolchain.toml`).
 
-A runnable local node is available via [`SqliteNativeDwn`](crates/dwn-rs-stores/src/native_node.rs) and the [`in_memory_dwn`](crates/dwn-rs-stores/examples/in_memory_dwn.rs) example. Call `build_native_dwn_with_resolver` or `SqliteNativeDwn::open_in_memory` to get a `Dwn` with all 11 real method handlers registered (including `MessagesRead`).
+### Runnable local DWN (M7)
 
-Remaining gaps for production mobile/desktop nodes:
+A production-shaped local node is available today:
 
-- Durable SQLite `StateIndex`, `EventLog`, and `ResumableTaskStore` (#80)
-- `StorageController` / `ResumableTaskManager` wiring (#81)
-- JSON Schema validation at the `process_message` boundary (#82)
-- Native bindings (`enbox-ffi`) and remote sync transport (#86–#88)
+- [`SqliteNativeDwn`](crates/dwn-rs-stores/src/native_node.rs) — SQLite-backed node with durable `StateIndex`, `EventLog`, and `ResumableTaskStore`
+- [`build_native_dwn_with_resolver`](crates/dwn-rs-core/src/native_dwn.rs) — registers all 11 real Enbox method handlers
+- [`in_memory_dwn`](crates/dwn-rs-stores/examples/in_memory_dwn.rs) — end-to-end example (ProtocolsConfigure + MessagesRead)
+
+Core protocol wiring matches TypeScript `Dwn.create()`:
+
+- JSON Schema validation at the `process_message` boundary
+- `CoreProtocolRegistry` with permissions lifecycle hooks
+- `UniversalResolver` (`did:jwk:` + static fallback) for JWS verification
+- `StorageController` + `ResumableTaskManager` resume pending delete/squash tasks on open
+
+### Mobile bindings
+
+[`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) with in-memory open, lock/unlock boundary, typed errors, and JSON `process_message`. Run `./crates/enbox-ffi/generate-bindings.sh` to emit Swift/Kotlin scaffolding.
+
+### Remaining gaps
+
+- Desktop loopback HTTP/WebSocket server (#89) — trait scaffolding exists in `desktop.rs`; no real socket yet
+- Remote sync HTTP/WebSocket transport (#86) and durable sync ledger (#87)
+- CI TypeScript conformance runner against a pinned Enbox checkout (#76)
+- Handler module splits (#68, #93)
 
 The inherited WASM bridge (`dwn-rs-wasm`) remains excluded from the active workspace.
 
@@ -34,6 +51,7 @@ The active crate audit and target crate graph are tracked in [`docs/MIGRATION_PL
 The native mobile/desktop binding strategy is tracked in [`docs/BINDINGS.md`](docs/BINDINGS.md).
 The mobile background sync entry points are tracked in [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md).
 The TypeScript local DWN migration guide is tracked in [`docs/MIGRATION_GUIDE.md`](docs/MIGRATION_GUIDE.md).
+Conformance fixture contract is in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
 
 ## Repository Policy
 
@@ -52,6 +70,7 @@ The supported Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain
 cargo +1.89.0 fmt --all -- --check
 cargo +1.89.0 clippy --workspace --all-targets
 cargo +1.89.0 test --workspace
+cargo +1.89.0 run -p dwn-rs-stores --example in_memory_dwn
 ```
 
 ## License

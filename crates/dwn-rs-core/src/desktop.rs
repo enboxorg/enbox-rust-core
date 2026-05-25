@@ -709,7 +709,7 @@ impl DesktopMessageProcessor for EchoDesktopMessageProcessor {
     }
 }
 
-fn endpoint_url(scheme: &str, host: &str, port: u16) -> String {
+pub(crate) fn endpoint_url(scheme: &str, host: &str, port: u16) -> String {
     let display_host = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]")
     } else {
@@ -718,7 +718,7 @@ fn endpoint_url(scheme: &str, host: &str, port: u16) -> String {
     format!("{scheme}://{display_host}:{port}")
 }
 
-fn is_loopback_host(host: &str) -> bool {
+pub(crate) fn is_loopback_host(host: &str) -> bool {
     let normalized = host
         .trim_start_matches('[')
         .trim_end_matches(']')

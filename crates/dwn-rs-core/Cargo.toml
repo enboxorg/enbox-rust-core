@@ -30,7 +30,9 @@ serde = { version = "1.0.183", features = ["derive"] }
 serde_ipld_dagcbor = "0.6.0"
 serde_repr = "0.1.17"
 serde_with = "3.4.0"
-tokio = { version = "1.39.2", features = ["io-util", "rt", "macros"] }
+tokio = { version = "1.39.2", features = ["io-util", "rt", "rt-multi-thread", "net", "macros", "sync"] }
+axum = { version = "0.8.8", default-features = false, features = ["json", "http1", "tokio"] }
+tower = { version = "0.5.2", default-features = false }
 derive_more = { version = "1.0", features = ["display", "from", "try_into"] }
 ssi-dids-core = "0.1.0"
 base64 = "0.22.1"
@@ -71,3 +73,4 @@ sha2 = "0.10.8"
 
 [dev-dependencies]
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
