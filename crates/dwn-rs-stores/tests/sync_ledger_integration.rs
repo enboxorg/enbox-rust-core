@@ -45,7 +45,8 @@ mod mock_endpoint {
             _tenant: &'a str,
             _scope: &'a dwn_rs_core::sync::SyncScope,
             _depth: u8,
-        ) -> Pin<Box<dyn Future<Output = SyncResult<BTreeMap<String, String>>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = SyncResult<BTreeMap<String, String>>> + Send + 'a>>
+        {
             Box::pin(async move { Ok(BTreeMap::new()) })
         }
 
