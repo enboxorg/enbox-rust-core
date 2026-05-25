@@ -21,6 +21,61 @@ pub struct SqliteStore {
     connection: Arc<Mutex<Option<Connection>>>,
 }
 
+/// Shared SQLite connection handle used by auxiliary store backends.
+#[derive(Debug, Clone)]
+pub struct SqliteConnection {
+    path: Arc<PathBuf>,
+    connection: Arc<Mutex<Option<Connection>>>,
+}
+
+impl SqliteConnection {
+    pub(crate) fn from_store(store: &SqliteStore) -> Self {
+        Self {
+            path: store.path.clone(),
+            connection: store.connection.clone(),
+        }
+    }
+
+    pub fn open(&self) -> Result<(), StoreError> {
+        let mut connection = self.lock_connection()?;
+        if connection.is_some() {
+            return Ok(());
+        }
+
+        let db = Connection::open(self.path.as_path()).map_err(sqlite_store_error)?;
+        migrate(&db)?;
+        *connection = Some(db);
+        Ok(())
+    }
+
+    pub fn close(&self) {
+        if let Ok(mut connection) = self.connection.lock() {
+            *connection = None;
+        }
+    }
+
+    pub(crate) fn with_connection<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let connection = self.lock_connection()?;
+        let connection = connection.as_ref().ok_or(StoreError::NoInitError)?;
+        f(connection)
+    }
+
+    fn lock_connection(&self) -> Result<MutexGuard<'_, Option<Connection>>, StoreError> {
+        self.connection.lock().map_err(|_| {
+            StoreError::InternalException("SQLite connection lock poisoned".to_string())
+        })
+    }
+}
+
+impl SqliteStore {
+    pub(crate) fn shared_connection(&self) -> SqliteConnection {
+        SqliteConnection::from_store(self)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MessageRow {
     cid: String,
@@ -448,6 +503,40 @@ fn migrate(connection: &Connection) -> Result<(), StoreError> {
                 data_size INTEGER NOT NULL,
                 PRIMARY KEY (tenant, record_id, data_cid),
                 FOREIGN KEY (data_cid) REFERENCES data_blocks(data_cid)
+            );
+
+            CREATE TABLE IF NOT EXISTS state_index_entries (
+                tenant TEXT NOT NULL,
+                message_cid TEXT NOT NULL,
+                protocol TEXT,
+                indexes_json TEXT NOT NULL,
+                PRIMARY KEY (tenant, message_cid)
+            );
+
+            CREATE TABLE IF NOT EXISTS event_log_meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                epoch TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS event_log_tenant_seq (
+                tenant TEXT PRIMARY KEY,
+                next_seq INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS event_log_events (
+                tenant TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
+                indexes_json TEXT NOT NULL,
+                message_cid TEXT NOT NULL,
+                PRIMARY KEY (tenant, seq)
+            );
+
+            CREATE TABLE IF NOT EXISTS resumable_tasks (
+                id TEXT PRIMARY KEY,
+                task_json TEXT NOT NULL,
+                timeout_ms INTEGER NOT NULL,
+                retry_count INTEGER NOT NULL
             );",
         )
         .map_err(sqlite_store_error)
@@ -727,7 +816,7 @@ async fn collect_stream<T: Stream<Item = Bytes> + Send + Unpin>(
     Ok(bytes)
 }
 
-fn sqlite_store_error(error: rusqlite::Error) -> StoreError {
+pub(crate) fn sqlite_store_error(error: rusqlite::Error) -> StoreError {
     StoreError::InternalException(error.to_string())
 }
 
@@ -735,7 +824,7 @@ fn message_json_error(error: serde_json::Error) -> MessageStoreError {
     MessageStoreError::StoreError(json_store_error(error))
 }
 
-fn json_store_error(error: serde_json::Error) -> StoreError {
+pub(crate) fn json_store_error(error: serde_json::Error) -> StoreError {
     StoreError::InternalException(error.to_string())
 }
 

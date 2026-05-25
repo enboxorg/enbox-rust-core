@@ -73,6 +73,42 @@ impl MemoryEventLog {
             ..Self::default()
         }
     }
+
+    /// Creates an event log with a stable epoch for durable backends.
+    pub fn with_epoch(epoch: impl Into<String>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(EventLogInner::default())),
+            epoch: epoch.into(),
+            max_events_per_tenant: DEFAULT_MAX_EVENTS_PER_TENANT,
+        }
+    }
+
+    pub fn epoch(&self) -> &str {
+        &self.epoch
+    }
+
+    /// Restores persisted events for a tenant without notifying subscribers.
+    pub fn restore_tenant(
+        &self,
+        tenant: &str,
+        next_seq: u64,
+        events: Vec<(u64, MessageEvent<Descriptor>, KeyValues, String)>,
+    ) -> Result<(), EventLogError> {
+        let mut inner = self.inner.write().map_err(event_lock_error)?;
+        let log = inner.tenant_logs.entry(tenant.to_string()).or_default();
+        for (seq, event, indexes, message_cid) in events {
+            log.insert(
+                seq,
+                StoredEvent {
+                    event,
+                    indexes,
+                    message_cid,
+                },
+            );
+        }
+        inner.tenant_seqs.insert(tenant.to_string(), next_seq);
+        Ok(())
+    }
 }
 
 impl EventLog for MemoryEventLog {
@@ -330,6 +366,29 @@ impl EventLog for MemoryEventLog {
 /// production.
 pub struct MemoryResumableTaskStore {
     tasks: Arc<RwLock<BTreeMap<String, StoredTask>>>,
+}
+
+impl MemoryResumableTaskStore {
+    /// Restores a persisted task without re-registering (for durable backends).
+    pub fn restore(
+        &self,
+        id: String,
+        task: JsonValue,
+        timeout: u64,
+        retry_count: u64,
+    ) -> Result<(), ResumableTaskStoreError> {
+        let mut tasks = self.tasks.write().map_err(task_lock_error)?;
+        tasks.insert(
+            id.clone(),
+            StoredTask {
+                id,
+                task,
+                timeout,
+                retry_count,
+            },
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
