@@ -38,8 +38,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(DesktopProcessMessageResult {
                 status_code: reply.status.code as u16,
                 status_detail: reply.status.detail,
-                body: serde_json::to_value(&reply.body)
-                    .unwrap_or_else(|err| serde_json::json!({ "serializationError": err.to_string() })),
+                body: serde_json::to_value(&reply.body).unwrap_or_else(
+                    |err| serde_json::json!({ "serializationError": err.to_string() }),
+                ),
                 data: request.data,
             })
         }

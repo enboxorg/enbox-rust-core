@@ -20,11 +20,11 @@ use dwn_rs_core::descriptors::{
 use dwn_rs_core::dwn::{
     current_handler_kinds, Dwn, DwnReply, MessageKind, MethodHandler, MethodHandlerRequest,
 };
-use dwn_rs_stores::SqliteNativeDwn;
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
 use dwn_rs_core::message_validation;
 use dwn_rs_core::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
+use dwn_rs_stores::SqliteNativeDwn;
 use futures_util::stream;
 use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
@@ -860,7 +860,10 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         .unwrap_or_else(|err| panic!("{} failed to open SqliteNativeDwn: {err}", case.id));
 
     if let Err(schema_error) = message_validation::validate_message(&raw_message) {
-        let reply = node.dwn().process_message(&process.tenant, raw_message).await;
+        let reply = node
+            .dwn()
+            .process_message(&process.tenant, raw_message)
+            .await;
         assert_eq!(
             reply.status.code, 400,
             "{} schema validation status",
@@ -898,7 +901,10 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         );
     }
 
-    let reply = node.dwn().process_message(&process.tenant, raw_message).await;
+    let reply = node
+        .dwn()
+        .process_message(&process.tenant, raw_message)
+        .await;
     assert_eq!(
         serde_json::to_value(reply).expect("DwnReply must serialize"),
         process.reply,

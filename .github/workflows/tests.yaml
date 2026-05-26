@@ -105,6 +105,14 @@ jobs:
         working-directory: enbox
         run: bun install --frozen-lockfile
 
+      - name: Build Enbox packages for dwn-sdk-js tests
+        working-directory: enbox
+        run: |
+          bun run build --filter=@enbox/common
+          bun run build --filter=@enbox/crypto
+          bun run build --filter=@enbox/dids
+          bun run build --filter=@enbox/dwn-sdk-js
+
       - name: Run dwn-sdk-js Node test suite
         working-directory: enbox
         run: bun run --filter @enbox/dwn-sdk-js test:node
