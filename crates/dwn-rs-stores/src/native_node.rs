@@ -75,6 +75,20 @@ impl SqliteNativeDwn {
         &self.dwn
     }
 
+    pub fn dwn_mut(
+        &mut self,
+    ) -> &mut Dwn<
+        SqliteStore,
+        SqliteStore,
+        SqliteStateIndex,
+        SqliteEventLog,
+        SqliteResumableTaskStore,
+        (),
+        dwn_rs_core::AllowAllTenantGate,
+    > {
+        &mut self.dwn
+    }
+
     pub fn store(&self) -> &SqliteStore {
         &self.store
     }

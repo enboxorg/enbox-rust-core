@@ -3,7 +3,7 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "97b04684b9088dbdc97b71706c2aaeb0a518ef75",
+    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
     "functions": [
       "MessagesSyncHandler.handle",
       "MessagesSyncHandler.handleDiff",

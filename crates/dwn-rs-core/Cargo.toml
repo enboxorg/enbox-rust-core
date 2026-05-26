@@ -75,3 +75,4 @@ reqwest = { version = "0.12.28", default-features = false, features = ["json", "
 [dev-dependencies]
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+dwn-rs-stores = { path = "../dwn-rs-stores", features = ["sqlite"] }

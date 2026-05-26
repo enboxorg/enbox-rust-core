@@ -45,6 +45,9 @@ Optional TypeScript runners are available under `tools/conformance/`. CI also ru
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-cid.test.ts
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-jws.test.ts tools/conformance/typescript-jwe.test.ts
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-state-index.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-descriptor-roundtrip.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-message-process.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-protocol-authorization.test.ts
 ```
 
 If `ENBOX_TS_ROOT` is not set, the runners look for a sibling `../enbox` checkout. They import the current TypeScript implementations and verify the manifest assertions where a TypeScript adapter exists.

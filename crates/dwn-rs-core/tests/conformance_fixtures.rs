@@ -24,6 +24,7 @@ use dwn_rs_core::interfaces::messages::protocols as protocol_types;
 use dwn_rs_core::message_validation;
 use dwn_rs_core::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
+use dwn_rs_stores::SqliteNativeDwn;
 use futures_util::stream;
 use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
@@ -854,9 +855,13 @@ fn assert_message_process_fixture_shape(case: &FixtureCase) {
 async fn assert_message_process_reply(case: &FixtureCase) {
     let process = message_process_fixture(case);
     let raw_message = message(case).clone();
+    let mut node = SqliteNativeDwn::open_in_memory(conformance_process_resolver())
+        .await
+        .unwrap_or_else(|err| panic!("{} failed to open SqliteNativeDwn: {err}", case.id));
 
     if let Err(schema_error) = message_validation::validate_message(&raw_message) {
-        let reply = Dwn::default()
+        let reply = node
+            .dwn()
             .process_message(&process.tenant, raw_message)
             .await;
         assert_eq!(
@@ -873,7 +878,6 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         return;
     }
 
-    let mut dwn = Dwn::default();
     if process.register_handler {
         let kind = MessageKind::from_message(message(case)).unwrap_or_else(|err| {
             panic!(
@@ -889,7 +893,7 @@ async fn assert_message_process_reply(case: &FixtureCase) {
                 case.id
             );
         }
-        dwn.register_handler(
+        node.dwn_mut().register_handler(
             kind,
             FixtureReplyHandler {
                 reply: process_reply(case),
@@ -897,13 +901,20 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         );
     }
 
-    let reply = dwn.process_message(&process.tenant, raw_message).await;
+    let reply = node
+        .dwn()
+        .process_message(&process.tenant, raw_message)
+        .await;
     assert_eq!(
         serde_json::to_value(reply).expect("DwnReply must serialize"),
         process.reply,
         "{} process reply",
         case.id
     );
+}
+
+fn conformance_process_resolver() -> StaticPublicKeyResolver {
+    StaticPublicKeyResolver::new(BTreeMap::new())
 }
 
 fn assert_handler_coverage(

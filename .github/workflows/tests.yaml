@@ -28,8 +28,17 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets
 
-      - name: Build test targets
-        run: cargo test --workspace --no-run
+      - name: Run workspace tests
+        run: cargo test --workspace
+
+  fixture-provenance:
+    name: Fixture provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify fixture source.commit matches .enbox-version
+        run: tools/conformance/check-fixture-provenance.sh
 
   typescript-conformance:
     name: TypeScript conformance (pinned Enbox)
@@ -66,9 +75,93 @@ jobs:
       - name: Run TypeScript conformance tests
         env:
           ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
+        run: bun test tools/conformance/typescript-*.test.ts
+
+  dwn-sdk-js-reference:
+    name: dwn-sdk-js reference gate (pinned Enbox)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Enbox pin
+        id: pin
         run: |
-          bun test tools/conformance/typescript-cid.test.ts \
-            tools/conformance/typescript-jws.test.ts \
-            tools/conformance/typescript-jwe.test.ts \
-            tools/conformance/typescript-state-index.test.ts \
-            tools/conformance/typescript-messages-sync.test.ts
+          sha="$(grep -v '^#' .enbox-version | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')"
+          if [ "${#sha}" -ne 40 ]; then
+            echo "Expected a 40-character commit SHA in .enbox-version, got: ${sha}" >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: enboxorg/enbox
+          ref: ${{ steps.pin.outputs.sha }}
+          path: enbox
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Enbox workspace dependencies
+        working-directory: enbox
+        run: bun install --frozen-lockfile
+
+      - name: Build Enbox packages for dwn-sdk-js tests
+        working-directory: enbox
+        run: |
+          bun run build --filter=@enbox/common
+          bun run build --filter=@enbox/crypto
+          bun run build --filter=@enbox/dids
+          bun run build --filter=@enbox/dwn-sdk-js
+
+      - name: Run dwn-sdk-js Node test suite
+        working-directory: enbox
+        run: bun run --filter @enbox/dwn-sdk-js test:node
+
+  loopback-interop:
+    name: Loopback RPC interop (Rust server, TS client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - name: Read Enbox pin
+        id: pin
+        run: |
+          sha="$(grep -v '^#' .enbox-version | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')"
+          if [ "${#sha}" -ne 40 ]; then
+            echo "Expected a 40-character commit SHA in .enbox-version, got: ${sha}" >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: enboxorg/enbox
+          ref: ${{ steps.pin.outputs.sha }}
+          path: enbox
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Enbox workspace dependencies
+        working-directory: enbox
+        run: bun install --frozen-lockfile
+
+      - name: Build Enbox packages for HTTP client interop
+        working-directory: enbox
+        run: |
+          bun run build --filter=@enbox/common
+          bun run build --filter=@enbox/crypto
+          bun run build --filter=@enbox/dids
+          bun run build --filter=@enbox/dwn-sdk-js
+          bun run build --filter=@enbox/dwn-clients
+
+      - name: Run loopback interop tests
+        env:
+          ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
+        run: bun test tools/interop/loopback-interop.test.ts tools/interop/testsuite-injection.test.ts
