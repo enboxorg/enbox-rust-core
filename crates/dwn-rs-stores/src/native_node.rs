@@ -15,7 +15,7 @@ use dwn_rs_core::sync::{
     NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
     SyncRunStatus,
 };
-use dwn_rs_core::sync_endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, JwsSyncAuthorizer};
+use dwn_rs_core::sync_endpoint::{DirectSyncEndpoint, HttpSyncEndpoint};
 
 use crate::sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
 use crate::sqlite_sync_ledger::SqliteSyncLedger;
