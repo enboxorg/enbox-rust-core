@@ -85,6 +85,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | No Rust-backed `TestSuite.runInjectableDependentTests` | Scaffold in `tools/interop/testsuite-injection.test.ts`; wire via `enbox-ffi` / WASM | planned |
 | `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | Expand `loopback-interop` harness incrementally | started |
+| `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `sync_status` + crate README | done |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |
 
 ## Local commands

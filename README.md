@@ -52,7 +52,7 @@ See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the full matrix. CI run
 
 ### Mobile bindings
 
-[`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) with in-memory open, lock/unlock boundary, typed errors, and JSON `process_message`. Durable SQLite open and `sync_once` are tracked in [#113](https://github.com/enboxorg/enbox-rust-core/issues/113).
+[`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) with durable SQLite open, lock/unlock, JSON `process_message`, HTTP `sync_once`, and sync status. See the [FFI README](crates/enbox-ffi/README.md).
 
 ### Active work (M8 → M4)
 

@@ -15,7 +15,7 @@ use dwn_rs_core::sync::{
     NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
     SyncRunStatus,
 };
-use dwn_rs_core::sync_endpoint::DirectSyncEndpoint;
+use dwn_rs_core::sync_endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, JwsSyncAuthorizer};
 
 use crate::sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
 use crate::sqlite_sync_ledger::SqliteSyncLedger;
@@ -147,6 +147,34 @@ impl SqliteNativeDwn {
         Ok(())
     }
 
+    /// Run one sync cycle against a remote `@enbox/dwn-server` over HTTP JSON-RPC.
+    pub async fn sync_once_with_http<A>(
+        &self,
+        remote_url: impl AsRef<str>,
+        authorizer: A,
+        request: SyncOnceRequest,
+    ) -> SyncOnceResult
+    where
+        A: dwn_rs_core::sync_endpoint::SyncRequestAuthorizer,
+    {
+        let local = DirectSyncEndpoint::from_arc(
+            Arc::clone(&self.dwn),
+            self.store.clone(),
+            self.store.clone(),
+            self.state_index.clone(),
+        );
+        let remote = match HttpSyncEndpoint::new(remote_url.as_ref(), authorizer) {
+            Ok(remote) => remote,
+            Err(error) => return failed_sync_once(error),
+        };
+        let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
+            .with_diff_depth(2);
+        if let Err(result) = self.register_sync_identities_on_engine(&engine) {
+            return result;
+        }
+        engine.sync_once(request).await
+    }
+
     /// Run one sync cycle against another in-process [`SqliteNativeDwn`] peer.
     pub async fn sync_once_with_peer(
         &self,
@@ -167,21 +195,30 @@ impl SqliteNativeDwn {
         );
         let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
             .with_diff_depth(2);
+        if let Err(result) = self.register_sync_identities_on_engine(&engine) {
+            return result;
+        }
+        engine.sync_once(request).await
+    }
 
+    fn register_sync_identities_on_engine<Local, Remote>(
+        &self,
+        engine: &NativeSyncEngine<Local, Remote, SqliteSyncLedger>,
+    ) -> Result<(), SyncOnceResult>
+    where
+        Local: dwn_rs_core::sync::SyncEndpoint,
+        Remote: dwn_rs_core::sync::SyncEndpoint,
+    {
         let identities = match self.sync_identities.read() {
             Ok(identities) => identities,
-            Err(err) => {
-                return failed_sync_once(SyncError::lock_poisoned(err));
-            }
+            Err(err) => return Err(failed_sync_once(SyncError::lock_poisoned(err))),
         };
         for options in identities.values() {
             if let Err(error) = engine.register_identity(options.clone()) {
-                return failed_sync_once(error);
+                return Err(failed_sync_once(error));
             }
         }
-        drop(identities);
-
-        engine.sync_once(request).await
+        Ok(())
     }
 }
 
