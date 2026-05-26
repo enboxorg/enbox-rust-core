@@ -10,10 +10,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::{
-        ws::WebSocketUpgrade,
-        FromRequest, State,
-    },
+    extract::{ws::WebSocketUpgrade, FromRequest, State},
     http::{HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -29,8 +26,8 @@ use crate::desktop::{
     DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult, DesktopServerConfig,
     DesktopServerStatus, LOCAL_DWN_SERVER_NAME,
 };
-use crate::dwn::{Dwn, TenantGate};
 use crate::desktop_ws;
+use crate::dwn::{Dwn, TenantGate};
 
 pub const PROCESS_MESSAGE_METHOD: &str = "dwn.processMessage";
 pub use crate::desktop_ws::SharedDesktopSubscribeProcessor;
@@ -409,10 +406,7 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
 
-async fn root_get(
-    State(state): State<AppState>,
-    req: Request<axum::body::Body>,
-) -> Response {
+async fn root_get(State(state): State<AppState>, req: Request<axum::body::Body>) -> Response {
     if state.websocket_enabled && is_websocket_upgrade(req.headers()) {
         match WebSocketUpgrade::from_request(req, &()).await {
             Ok(ws) => {

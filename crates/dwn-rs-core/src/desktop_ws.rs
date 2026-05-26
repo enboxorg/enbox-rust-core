@@ -11,9 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use tokio::sync::mpsc;
 
-use crate::desktop::{
-    DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult,
-};
+use crate::desktop::{DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult};
 use crate::desktop_server::{SharedDesktopMessageProcessor, PROCESS_MESSAGE_METHOD};
 use crate::handlers::records::RecordsSubscribeReply;
 use crate::stores::{ProgressToken, SubscriptionMessage};
@@ -25,8 +23,7 @@ pub const RPC_PING_METHOD: &str = "rpc.ping";
 
 const DEFAULT_MAX_IN_FLIGHT: usize = 32;
 
-type SharedSubscriptionListener =
-    Arc<dyn Fn(SubscriptionMessage) + Send + Sync + 'static>;
+type SharedSubscriptionListener = Arc<dyn Fn(SubscriptionMessage) + Send + Sync + 'static>;
 
 #[derive(Clone)]
 pub struct SharedDesktopSubscribeProcessor {
@@ -34,9 +31,9 @@ pub struct SharedDesktopSubscribeProcessor {
         dyn Fn(
                 DesktopProcessMessageRequest,
                 SharedSubscriptionListener,
-            ) -> Pin<
-                Box<dyn Future<Output = DesktopResult<RecordsSubscribeReply>> + Send>,
-            > + Send
+            )
+                -> Pin<Box<dyn Future<Output = DesktopResult<RecordsSubscribeReply>> + Send>>
+            + Send
             + Sync,
     >,
 }
@@ -51,9 +48,7 @@ impl SharedDesktopSubscribeProcessor {
         Fut: Future<Output = DesktopResult<RecordsSubscribeReply>> + Send + 'static,
     {
         Self {
-            inner: Arc::new(move |request, listener| {
-                Box::pin(handler(request, listener))
-            }),
+            inner: Arc::new(move |request, listener| Box::pin(handler(request, listener))),
         }
     }
 
@@ -90,14 +85,8 @@ pub async fn handle_websocket(
         let Ok(Message::Text(text)) = message else {
             break;
         };
-        if let Some(response) = handle_json_rpc(
-            &text,
-            &processor,
-            subscribe.as_ref(),
-            &connection,
-            &tx,
-        )
-        .await
+        if let Some(response) =
+            handle_json_rpc(&text, &processor, subscribe.as_ref(), &connection, &tx).await
         {
             let _ = tx.send(response);
         }
@@ -117,12 +106,10 @@ async fn handle_json_rpc(
     let request: JsonRpcRequest = match serde_json::from_str(payload) {
         Ok(request) => request,
         Err(err) => {
-            return Some(serde_json::to_string(&json_rpc_error(
-                JsonValue::Null,
-                -32600,
-                err.to_string(),
-            ))
-            .unwrap_or_default());
+            return Some(
+                serde_json::to_string(&json_rpc_error(JsonValue::Null, -32600, err.to_string()))
+                    .unwrap_or_default(),
+            );
         }
     };
 
@@ -144,13 +131,9 @@ async fn handle_json_rpc(
                 .unwrap_or_default()
             })
         }
-        SUBSCRIBE_CLOSE_METHOD => {
-            Some(handle_close(&request, connection).await)
-        }
+        SUBSCRIBE_CLOSE_METHOD => Some(handle_close(&request, connection).await),
         SUBSCRIBE_PROCESS_MESSAGE_METHOD | PROCESS_MESSAGE_METHOD => {
-            Some(
-                handle_process_message(&request, processor, subscribe, connection, tx).await,
-            )
+            Some(handle_process_message(&request, processor, subscribe, connection, tx).await)
         }
         other => Some(
             serde_json::to_string(&json_rpc_error(
@@ -202,7 +185,12 @@ async fn handle_process_message(
             ))
             .unwrap_or_default();
         };
-        if connection.lock().unwrap().subscriptions.contains_key(&subscription_id) {
+        if connection
+            .lock()
+            .unwrap()
+            .subscriptions
+            .contains_key(&subscription_id)
+        {
             return serde_json::to_string(&json_rpc_error(
                 request_id,
                 -32602,
@@ -242,10 +230,7 @@ async fn handle_process_message(
                 }
                 let mut reply_json = dwn_reply_json(&subscribe_reply.reply);
                 if let Some(object) = reply_json.as_object_mut() {
-                    object.insert(
-                        "subscription".to_string(),
-                        json!({ "id": subscription_id }),
-                    );
+                    object.insert("subscription".to_string(), json!({ "id": subscription_id }));
                 }
                 serde_json::to_string(&json_rpc_success(
                     request_id,
@@ -271,8 +256,11 @@ async fn handle_process_message(
         match result {
             Ok(reply) => {
                 let reply_json = desktop_reply_json(&reply);
-                serde_json::to_string(&json_rpc_success(request_id, json!({ "reply": reply_json })))
-                    .unwrap_or_default()
+                serde_json::to_string(&json_rpc_success(
+                    request_id,
+                    json!({ "reply": reply_json }),
+                ))
+                .unwrap_or_default()
             }
             Err(error) => serde_json::to_string(&json_rpc_error(
                 request_id,
@@ -432,8 +420,7 @@ impl FlowController {
     }
 
     fn send_message(&self, message: SubscriptionMessage, cursor: ProgressToken) {
-        let subscription =
-            serde_json::to_value(message).unwrap_or(JsonValue::Null);
+        let subscription = serde_json::to_value(message).unwrap_or(JsonValue::Null);
         let response = json_rpc_success(
             self.subscription_id.clone(),
             json!({ "subscription": subscription }),

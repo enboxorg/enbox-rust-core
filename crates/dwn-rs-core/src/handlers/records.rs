@@ -107,7 +107,11 @@ pub enum RecordsAuthorizationKind {
 impl<MessageStore, DataStore, StateIndex, EventLog>
     RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
 {
-    pub fn new(message_store: MessageStore, data_store: DataStore, state_index: StateIndex) -> Self {
+    pub fn new(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+    ) -> Self {
         Self {
             message_store,
             data_store,
@@ -635,10 +639,7 @@ where
                 message: message.clone(),
                 initial_write,
             };
-            if let Err(err) = event_log
-                .emit(tenant, event, indexes, &incoming_cid)
-                .await
-            {
+            if let Err(err) = event_log.emit(tenant, event, indexes, &incoming_cid).await {
                 return event_log_error_reply(err);
             }
         }

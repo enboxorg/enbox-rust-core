@@ -58,8 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let node = node_for_subscribe.clone();
         async move {
             let node = node.lock().await;
-            let listener: SubscriptionListener =
-                Box::new(move |message| listener(message));
+            let listener: SubscriptionListener = Box::new(move |message| listener(message));
             let reply = node
                 .subscribe_records(&request.tenant, request.message, listener)
                 .await;

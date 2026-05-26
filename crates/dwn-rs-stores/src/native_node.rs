@@ -5,9 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use dwn_rs_core::auth::StaticPublicKeyResolver;
 use dwn_rs_core::dwn::Dwn;
-use dwn_rs_core::handlers::records::{
-    RecordsEventLogSubscribeHandler, RecordsSubscribeReply,
-};
+use dwn_rs_core::handlers::records::{RecordsEventLogSubscribeHandler, RecordsSubscribeReply};
 use dwn_rs_core::native_dwn::{
     build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig, NativeDwnOpenError,
     NativeDwnStores,
