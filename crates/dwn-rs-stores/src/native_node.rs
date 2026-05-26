@@ -1,27 +1,41 @@
 //! Convenience entry point for a SQLite-backed native DWN node.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+
 use dwn_rs_core::auth::StaticPublicKeyResolver;
 use dwn_rs_core::dwn::Dwn;
 use dwn_rs_core::native_dwn::{
     build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig, NativeDwnOpenError,
     NativeDwnStores,
 };
+use dwn_rs_core::sync::{
+    NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
+    SyncRunStatus,
+};
+use dwn_rs_core::sync_endpoint::DirectSyncEndpoint;
 
 use crate::sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
+use crate::sqlite_sync_ledger::SqliteSyncLedger;
 use crate::SqliteStore;
+
+type NativeDwn = Dwn<
+    SqliteStore,
+    SqliteStore,
+    SqliteStateIndex,
+    SqliteEventLog,
+    SqliteResumableTaskStore,
+    (),
+    dwn_rs_core::AllowAllTenantGate,
+>;
 
 /// SQLite-backed native DWN with durable auxiliary stores.
 pub struct SqliteNativeDwn {
     store: SqliteStore,
-    dwn: Dwn<
-        SqliteStore,
-        SqliteStore,
-        SqliteStateIndex,
-        SqliteEventLog,
-        SqliteResumableTaskStore,
-        (),
-        dwn_rs_core::AllowAllTenantGate,
-    >,
+    state_index: SqliteStateIndex,
+    sync_ledger: SqliteSyncLedger,
+    dwn: Arc<NativeDwn>,
+    sync_identities: Arc<RwLock<BTreeMap<String, SyncIdentityOptions>>>,
 }
 
 impl SqliteNativeDwn {
@@ -41,52 +55,39 @@ impl SqliteNativeDwn {
         let state_index = SqliteStateIndex::new(&store);
         let event_log = SqliteEventLog::new(&store);
         let resumable_task_store = SqliteResumableTaskStore::new(&store);
+        let sync_ledger = SqliteSyncLedger::new(&store);
         let stores = open_native_stores(NativeDwnStores {
             message_store: store.clone(),
             data_store: store.clone(),
-            state_index,
+            state_index: state_index.clone(),
             event_log,
             resumable_task_store,
         })
         .await?;
 
-        let dwn = build_native_dwn_with_resolver(
+        let dwn = Arc::new(build_native_dwn_with_resolver(
             NativeDwnConfig {
                 stores,
                 tenant_gate: dwn_rs_core::AllowAllTenantGate,
             },
             public_key_resolver,
-        );
+        ));
 
-        Ok(Self { store, dwn })
+        Ok(Self {
+            store,
+            state_index,
+            sync_ledger,
+            dwn,
+            sync_identities: Arc::new(RwLock::new(BTreeMap::new())),
+        })
     }
 
-    pub fn dwn(
-        &self,
-    ) -> &Dwn<
-        SqliteStore,
-        SqliteStore,
-        SqliteStateIndex,
-        SqliteEventLog,
-        SqliteResumableTaskStore,
-        (),
-        dwn_rs_core::AllowAllTenantGate,
-    > {
+    pub fn dwn(&self) -> &NativeDwn {
         &self.dwn
     }
 
-    pub fn dwn_mut(
-        &mut self,
-    ) -> &mut Dwn<
-        SqliteStore,
-        SqliteStore,
-        SqliteStateIndex,
-        SqliteEventLog,
-        SqliteResumableTaskStore,
-        (),
-        dwn_rs_core::AllowAllTenantGate,
-    > {
-        &mut self.dwn
+    pub fn dwn_mut(&mut self) -> &mut NativeDwn {
+        Arc::get_mut(&mut self.dwn).expect("DWN is shared; cannot borrow mutably")
     }
 
     pub async fn process_message_with_data(
@@ -102,5 +103,76 @@ impl SqliteNativeDwn {
 
     pub fn store(&self) -> &SqliteStore {
         &self.store
+    }
+
+    pub fn sync_ledger(&self) -> &SqliteSyncLedger {
+        &self.sync_ledger
+    }
+
+    /// Register a tenant DID and protocol scope for sync runs on this node.
+    pub fn register_sync_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
+        dwn_rs_core::sync::validate_identity_options(&options)?;
+        let mut identities = self
+            .sync_identities
+            .write()
+            .map_err(SyncError::lock_poisoned)?;
+        if identities.contains_key(&options.did) {
+            return Err(SyncError::permanent(
+                "SyncIdentityAlreadyRegistered",
+                format!("Identity with DID {} is already registered", options.did),
+            ));
+        }
+        identities.insert(options.did.clone(), options);
+        Ok(())
+    }
+
+    /// Run one sync cycle against another in-process [`SqliteNativeDwn`] peer.
+    pub async fn sync_once_with_peer(
+        &self,
+        peer: &SqliteNativeDwn,
+        request: SyncOnceRequest,
+    ) -> SyncOnceResult {
+        let local = DirectSyncEndpoint::from_arc(
+            Arc::clone(&self.dwn),
+            self.store.clone(),
+            self.store.clone(),
+            self.state_index.clone(),
+        );
+        let remote = DirectSyncEndpoint::from_arc(
+            Arc::clone(&peer.dwn),
+            peer.store.clone(),
+            peer.store.clone(),
+            peer.state_index.clone(),
+        );
+        let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
+            .with_diff_depth(2);
+
+        let identities = match self.sync_identities.read() {
+            Ok(identities) => identities,
+            Err(err) => {
+                return failed_sync_once(SyncError::lock_poisoned(err));
+            }
+        };
+        for options in identities.values() {
+            if let Err(error) = engine.register_identity(options.clone()) {
+                return failed_sync_once(error);
+            }
+        }
+        drop(identities);
+
+        engine.sync_once(request).await
+    }
+}
+
+fn failed_sync_once(error: SyncError) -> SyncOnceResult {
+    SyncOnceResult {
+        status: SyncRunStatus::Failed,
+        checkpoints: Vec::new(),
+        records_pulled: 0,
+        records_pushed: 0,
+        bytes_downloaded: 0,
+        bytes_uploaded: 0,
+        next_recommended_delay_ms: None,
+        error: Some(error),
     }
 }

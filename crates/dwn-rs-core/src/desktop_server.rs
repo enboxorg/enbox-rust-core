@@ -26,6 +26,7 @@ use crate::desktop::{
     DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult, DesktopServerConfig,
     DesktopServerStatus, LOCAL_DWN_SERVER_NAME,
 };
+use crate::dwn::{Dwn, TenantGate};
 
 pub const PROCESS_MESSAGE_METHOD: &str = "dwn.processMessage";
 
@@ -136,6 +137,68 @@ pub trait DwnProcessMessage: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
         let _ = data;
         self.process_message(tenant, message)
+    }
+}
+
+impl<MS, DS, SI, EL, RTS, DR, Gate> DwnProcessMessage for Dwn<MS, DS, SI, EL, RTS, DR, Gate>
+where
+    MS: Send + Sync + 'static,
+    DS: Send + Sync + 'static,
+    SI: Send + Sync + 'static,
+    EL: Send + Sync + 'static,
+    RTS: Send + Sync + 'static,
+    DR: Send + Sync + 'static,
+    Gate: TenantGate + Send + Sync + 'static,
+{
+    fn process_message(
+        &self,
+        tenant: &str,
+        message: JsonValue,
+    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        let tenant = tenant.to_string();
+        Box::pin(async move { self.process_message(&tenant, message).await })
+    }
+
+    fn process_message_with_data(
+        &self,
+        tenant: &str,
+        message: JsonValue,
+        data: Option<bytes::Bytes>,
+    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        let tenant = tenant.to_string();
+        Box::pin(async move { self.process_message_with_data(&tenant, message, data).await })
+    }
+}
+
+impl<MS, DS, SI, EL, RTS, DR, Gate> DwnProcessMessage for Arc<Dwn<MS, DS, SI, EL, RTS, DR, Gate>>
+where
+    MS: Send + Sync + 'static,
+    DS: Send + Sync + 'static,
+    SI: Send + Sync + 'static,
+    EL: Send + Sync + 'static,
+    RTS: Send + Sync + 'static,
+    DR: Send + Sync + 'static,
+    Gate: TenantGate + Send + Sync + 'static,
+{
+    fn process_message(
+        &self,
+        tenant: &str,
+        message: JsonValue,
+    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        let tenant = tenant.to_string();
+        let dwn = Arc::clone(self);
+        Box::pin(async move { dwn.process_message(&tenant, message).await })
+    }
+
+    fn process_message_with_data(
+        &self,
+        tenant: &str,
+        message: JsonValue,
+        data: Option<bytes::Bytes>,
+    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        let tenant = tenant.to_string();
+        let dwn = Arc::clone(self);
+        Box::pin(async move { dwn.process_message_with_data(&tenant, message, data).await })
     }
 }
 
