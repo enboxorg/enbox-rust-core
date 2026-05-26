@@ -44,6 +44,8 @@ This repository validates DWN behavior through **three independent layers**. The
 | `message.process` | yes (`SqliteNativeDwn`) | `typescript-message-process.test.ts` | handlers/*.spec.ts | partial (RPC smoke) | partial |
 | `protocol.authorization-corpus` | yes | `typescript-protocol-authorization.test.ts` | features/permissions specs | — | partial |
 
+**Loopback interop (layer 4)** now covers unsigned `RecordsQuery`, signed `ProtocolsConfigure`, signed `RecordsWrite` + `RecordsRead` round-trip (`tools/interop/loopback-interop.test.ts`).
+
 **Partial** means the shared fixture corpus exercises a slice of the behavior; the dwn-sdk-js native suite covers the full handler/feature/scenario surface.
 
 ## dwn-sdk-js native categories (Enbox `@enbox/dwn-sdk-js`)
@@ -76,6 +78,8 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | Gap | Mitigation | Status |
 |-----|------------|--------|
 | Fixture echo `message.process` replies vs real handler bodies | Rust uses `SqliteNativeDwn` dispatch; fixture handlers still stub replies for parity | in progress |
+| Filter engine DateTime/Cid index coercion | Fixed RFC3339 range + CID string equality in `filters/matching.rs` | done |
+| HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
 | No Rust-backed `TestSuite.runInjectableDependentTests` | Scaffold in `tools/interop/testsuite-injection.test.ts`; wire via `enbox-ffi` / WASM | planned |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | Expand `loopback-interop` harness incrementally | started |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |

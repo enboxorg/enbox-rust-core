@@ -16,13 +16,14 @@ This repository was cloned from [`enmand/dwn-rs`](https://github.com/enmand/dwn-
 
 The active Rust workspace builds and tests natively with the pinned Rust toolchain (`rust-toolchain.toml`).
 
-### Runnable local DWN (M7)
+### Runnable local DWN (M7 — complete)
 
 A production-shaped local node is available today:
 
 - [`SqliteNativeDwn`](crates/dwn-rs-stores/src/native_node.rs) — SQLite-backed node with durable `StateIndex`, `EventLog`, and `ResumableTaskStore`
 - [`build_native_dwn_with_resolver`](crates/dwn-rs-core/src/native_dwn.rs) — registers all 11 real Enbox method handlers
 - [`in_memory_dwn`](crates/dwn-rs-stores/examples/in_memory_dwn.rs) — end-to-end example (ProtocolsConfigure + MessagesRead)
+- [`loopback_interop_server`](crates/dwn-rs-stores/examples/loopback_interop_server.rs) — HTTP JSON-RPC server for TypeScript client interop
 
 Core protocol wiring matches TypeScript `Dwn.create()`:
 
@@ -31,27 +32,49 @@ Core protocol wiring matches TypeScript `Dwn.create()`:
 - `UniversalResolver` (`did:jwk:` + static fallback) for JWS verification
 - `StorageController` + `ResumableTaskManager` resume pending delete/squash tasks on open
 
+### Test coverage (three layers + interop)
+
+See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the full matrix. CI runs:
+
+| Job | What it validates |
+|-----|-------------------|
+| `rust-tests` | `cargo test --workspace` including shared JSON fixtures |
+| `typescript-conformance` | Shared fixtures via TS adapters at pinned Enbox |
+| `dwn-sdk-js-reference` | Full `@enbox/dwn-sdk-js test:node` at pinned Enbox |
+| `loopback-interop` | TS HTTP client against Rust loopback server |
+| `fixture-provenance` | Fixture `source.commit` matches `.enbox-version` |
+
+### Sync and transport (modules shipped, integration in progress)
+
+- `NativeSyncEngine`, `DirectSyncEndpoint`, and `HttpSyncEndpoint` in `dwn-rs-core`
+- Durable `SqliteSyncLedger` in `dwn-rs-stores`
+- End-to-end sync on `SqliteNativeDwn` and FFI entry points — tracked in M4 epic [#103](https://github.com/enboxorg/enbox-rust-core/issues/103)
+
 ### Mobile bindings
 
-[`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) with in-memory open, lock/unlock boundary, typed errors, and JSON `process_message`. Run `./crates/enbox-ffi/generate-bindings.sh` to emit Swift/Kotlin scaffolding.
+[`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) with in-memory open, lock/unlock boundary, typed errors, and JSON `process_message`. Durable SQLite open and `sync_once` are tracked in [#113](https://github.com/enboxorg/enbox-rust-core/issues/113).
 
-### Remaining gaps
+### Active work (M8 → M4)
 
-- Desktop loopback HTTP/WebSocket server (#89) — trait scaffolding exists in `desktop.rs`; no real socket yet
-- Remote sync HTTP/WebSocket transport (#86) and durable sync ledger (#87)
-- CI TypeScript conformance runner against a pinned Enbox checkout (#76)
-- Handler module splits (#68, #93)
+| Milestone | Epic | Focus |
+|-----------|------|-------|
+| **M8** | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) | Prove handler behavior matches TypeScript (loopback interop, real fixture replies) |
+| **M4** | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) | Wire sync engine, WebSocket subscriptions, FFI sync |
+
+Tech-debt handler splits: [#68](https://github.com/enboxorg/enbox-rust-core/issues/68), [#93](https://github.com/enboxorg/enbox-rust-core/issues/93).
 
 The inherited WASM bridge (`dwn-rs-wasm`) remains excluded from the active workspace.
 
 ## Roadmap
 
 The migration plan is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md) and mirrored into GitHub milestones/issues.
-The active crate audit and target crate graph are tracked in [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md).
-The native mobile/desktop binding strategy is tracked in [`docs/BINDINGS.md`](docs/BINDINGS.md).
-The mobile background sync entry points are tracked in [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md).
-The TypeScript local DWN migration guide is tracked in [`docs/MIGRATION_GUIDE.md`](docs/MIGRATION_GUIDE.md).
-Conformance fixture contract is in [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
+
+- **M7** — Runnable local node (complete)
+- **M8** — Behavioral parity and cross-runtime validation (in progress)
+- **M4** — Sync and subscriptions (next major milestone)
+- **M5 / M6** — Agent wallet integration and production bindings (deferred until M8 + M4)
+
+See also [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md), [`docs/BINDINGS.md`](docs/BINDINGS.md), [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md), [`docs/MIGRATION_GUIDE.md`](docs/MIGRATION_GUIDE.md), and [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
 
 ## Repository Policy
 
@@ -71,6 +94,13 @@ cargo +1.89.0 fmt --all -- --check
 cargo +1.89.0 clippy --workspace --all-targets
 cargo +1.89.0 test --workspace
 cargo +1.89.0 run -p dwn-rs-stores --example in_memory_dwn
+```
+
+Optional interop (requires sibling Enbox checkout):
+
+```bash
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/interop/loopback-interop.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-*.test.ts
 ```
 
 ## License

@@ -37,7 +37,10 @@ For conformance fixture changes, also run the relevant optional TypeScript runne
 
 ```bash
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-*.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/interop/loopback-interop.test.ts
 ```
+
+See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the CI job matrix.
 
 ## Branch Policy
 
