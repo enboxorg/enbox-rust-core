@@ -12,7 +12,7 @@ cargo +1.89.0 clippy --workspace --all-targets
 cargo +1.89.0 test --workspace
 ```
 
-CI runs the same format and lint checks, then builds all workspace test targets with `cargo test --workspace --no-run`. Run the full test command locally when changing Rust behavior.
+CI runs the same format, lint, and test checks as local development, including `cargo test --workspace`. Run the full test command locally when changing Rust behavior.
 
 ## Repository Policy
 
@@ -36,7 +36,7 @@ cargo +1.89.0 test --workspace
 For conformance fixture changes, also run the relevant optional TypeScript runner when `ENBOX_TS_ROOT` is available:
 
 ```bash
-ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-cid.test.ts tools/conformance/typescript-jws.test.ts tools/conformance/typescript-jwe.test.ts
+ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-*.test.ts
 ```
 
 ## Branch Policy
