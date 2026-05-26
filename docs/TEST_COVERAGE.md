@@ -40,6 +40,7 @@ This repository validates DWN behavior through **three independent layers**. The
 | `jwe.decrypt` | yes | `typescript-jwe.test.ts` | utils/encryption specs | — | covered |
 | `state-index.operations` | yes | `typescript-state-index.test.ts` | store/state-index specs | — | covered |
 | `messages-sync.replies` | yes | `typescript-messages-sync.test.ts` | handlers/messages-sync specs | — | covered |
+| `native-sync.engine` | yes (`native_dwn_sync_integration.rs`) | — | — | — | covered |
 | `descriptor.roundtrip` | yes | `typescript-descriptor-roundtrip.test.ts` | handler descriptor specs | — | covered |
 | `message.process` | yes (`SqliteNativeDwn`) | `typescript-message-process.test.ts` | handlers/*.spec.ts | partial (RPC smoke) | partial |
 | `protocol.authorization-corpus` | yes | `typescript-protocol-authorization.test.ts` | features/permissions specs | — | partial |
@@ -81,6 +82,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | Filter engine DateTime/Cid index coercion | Fixed RFC3339 range + CID string equality in `filters/matching.rs` | done |
 | HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
 | No Rust-backed `TestSuite.runInjectableDependentTests` | Scaffold in `tools/interop/testsuite-injection.test.ts`; wire via `enbox-ffi` / WASM | planned |
+| `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | Expand `loopback-interop` harness incrementally | started |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |
 

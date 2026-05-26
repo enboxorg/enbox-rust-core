@@ -50,7 +50,7 @@ impl SyncError {
         Self::transient("ProgressGap", detail)
     }
 
-    pub(crate) fn lock_poisoned<E: Display>(err: E) -> Self {
+    pub fn lock_poisoned<E: Display>(err: E) -> Self {
         Self::transient(
             "SyncLockPoisoned",
             format!("sync engine lock poisoned: {err}"),
@@ -1342,7 +1342,7 @@ where
     }
 }
 
-fn validate_identity_options(options: &SyncIdentityOptions) -> SyncResult<()> {
+pub fn validate_identity_options(options: &SyncIdentityOptions) -> SyncResult<()> {
     if options.did.is_empty() {
         return Err(SyncError::permanent(
             "SyncIdentityInvalid",

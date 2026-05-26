@@ -162,9 +162,22 @@ where
         let applier = self.applier.clone();
         let tenant = tenant.to_string();
         Box::pin(async move {
-            let reply = applier
-                .process_message(&tenant, entry.message.clone())
-                .await;
+            let reply = if let Some(encoded_data) = entry.encoded_data.as_deref() {
+                let data = URL_SAFE_NO_PAD
+                    .decode(encoded_data)
+                    .map_err(|err| SyncError::permanent("SyncApplyInvalidData", err.to_string()))?;
+                applier
+                    .process_message_with_data(
+                        &tenant,
+                        entry.message.clone(),
+                        Some(bytes::Bytes::from(data)),
+                    )
+                    .await
+            } else {
+                applier
+                    .process_message(&tenant, entry.message.clone())
+                    .await
+            };
             if is_sync_apply_success(reply.status.code, &entry.message) {
                 Ok(())
             } else {
