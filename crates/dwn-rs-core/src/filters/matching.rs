@@ -72,9 +72,22 @@ pub fn matches_filter(actual: &Value, filter: &Filter<Value>) -> bool {
 }
 
 fn matches_equal(actual: &Value, expected: &Value) -> bool {
+    if values_equal_flexibly(actual, expected) {
+        return true;
+    }
     match actual {
-        Value::Array(values) => values.iter().any(|value| value == expected),
-        _ => actual == expected,
+        Value::Array(values) => values
+            .iter()
+            .any(|value| values_equal_flexibly(value, expected)),
+        _ => false,
+    }
+}
+
+fn values_equal_flexibly(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Cid(left), Value::String(right)) => left.to_string() == *right,
+        (Value::String(left), Value::Cid(right)) => left == &right.to_string(),
+        _ => left == right,
     }
 }
 
@@ -109,7 +122,12 @@ fn bound_matches(actual: &Value, bound: &Bound<Value>, lower: bool) -> bool {
 /// Compare two index values, returning `None` when they are not naturally
 /// comparable (e.g. number vs string). Mixed numeric variants
 /// (`Value::Number` and `Value::Float`) are coerced to `f64`.
+/// RFC3339 strings compare against [`Value::DateTime`] for range filters.
 pub fn compare_values(left: &Value, right: &Value) -> Option<Ordering> {
+    if let (Some(left_dt), Some(right_dt)) = (datetime_value(left), datetime_value(right)) {
+        return Some(left_dt.cmp(&right_dt));
+    }
+
     match (left, right) {
         (Value::Number(left), Value::Number(right)) => Some(left.cmp(right)),
         (Value::Float(left), Value::Float(right)) => left.partial_cmp(right),
@@ -119,6 +137,16 @@ pub fn compare_values(left: &Value, right: &Value) -> Option<Ordering> {
         (Value::DateTime(left), Value::DateTime(right)) => Some(left.cmp(right)),
         (Value::Cid(left), Value::Cid(right)) => Some(left.to_string().cmp(&right.to_string())),
         (Value::Bool(left), Value::Bool(right)) => Some(left.cmp(right)),
+        _ => None,
+    }
+}
+
+fn datetime_value(value: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    match value {
+        Value::DateTime(dt) => Some(*dt),
+        Value::String(text) => chrono::DateTime::parse_from_rfc3339(text)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc)),
         _ => None,
     }
 }
@@ -258,6 +286,44 @@ mod tests {
             filter_set(vec![("k", Filter::Equal(Value::Number(1)))]),
             filter_set(vec![("k", Filter::Equal(Value::Number(2)))]),
         ]
+        .into();
+        assert!(matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn range_matches_datetime_index_against_string_bound() {
+        let idx = indexes(&[(
+            "messageTimestamp",
+            Value::DateTime(
+                chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00.000000Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            ),
+        )]);
+        let filters: Filters = vec![filter_set(vec![(
+            "messageTimestamp",
+            Filter::Range(RangeFilter::Numeric(
+                Bound::Unbounded,
+                Bound::Included(Value::String("2025-01-01T00:00:01.000000Z".into())),
+            )),
+        )])]
+        .into();
+        assert!(matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn equal_matches_cid_index_against_string_filter() {
+        let cid = ipld_core::cid::Cid::try_from(
+            "bafyreidmtnzmsdtwxaal7qt25kostlrfguhdjxt3zpze7ijowotz3gn6tu",
+        )
+        .expect("cid");
+        let idx = indexes(&[("recordId", Value::Cid(cid))]);
+        let filters: Filters = vec![filter_set(vec![(
+            "recordId",
+            Filter::Equal(Value::String(
+                "bafyreidmtnzmsdtwxaal7qt25kostlrfguhdjxt3zpze7ijowotz3gn6tu".into(),
+            )),
+        )])]
         .into();
         assert!(matches_filters(&idx, Some(&filters)));
     }
