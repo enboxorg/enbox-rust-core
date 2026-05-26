@@ -31,9 +31,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let node = node_for_processor.clone();
         async move {
             let node = node.lock().await;
+            let data = request.data.clone();
             let reply = node
                 .dwn()
-                .process_message(&request.tenant, request.message)
+                .process_message_with_data(
+                    &request.tenant,
+                    request.message,
+                    data.clone().map(bytes::Bytes::from),
+                )
                 .await;
             Ok(DesktopProcessMessageResult {
                 status_code: reply.status.code as u16,
@@ -41,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 body: serde_json::to_value(&reply.body).unwrap_or_else(
                     |err| serde_json::json!({ "serializationError": err.to_string() }),
                 ),
-                data: request.data,
+                data,
             })
         }
     });

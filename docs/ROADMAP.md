@@ -2,6 +2,22 @@
 
 This roadmap tracks the migration from the inherited `dwn-rs` codebase to a native Enbox Rust core.
 
+## Status Overview
+
+| Milestone | Status | Epic |
+|-----------|--------|------|
+| M0 — Provenance and build baseline | Complete | — |
+| M1 — Enbox conformance fixtures | Complete | — |
+| M2 — Native storage and StateIndex | Complete | — |
+| M3 — DWN engine parity (modules) | Complete | Handler modules ported; behavioral proof in M8 |
+| M7 — Working local node | Complete | [#92](https://github.com/enboxorg/enbox-rust-core/issues/92) |
+| **M8 — Behavioral parity** | **In progress** | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) |
+| **M4 — Sync and subscriptions** | **Next** | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) |
+| M5 — Agent, auth, and wallet core | Modules shipped; E2E deferred | — |
+| M6 — Native bindings and integration | Skeleton shipped; production FFI in M4/M6 | — |
+
+Test coverage dashboard: [`docs/TEST_COVERAGE.md`](TEST_COVERAGE.md).
+
 ## Milestone 0: Provenance And Build Baseline
 
 Goal: preserve history, document origin, and make the inherited workspace buildable enough to support incremental work.

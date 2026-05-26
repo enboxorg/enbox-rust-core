@@ -276,7 +276,7 @@ where
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
         Box::pin(async move {
-            self.handle_write(request.tenant, request.message, None)
+            self.handle_write(request.tenant, request.message, request.data.clone())
                 .await
         })
     }
