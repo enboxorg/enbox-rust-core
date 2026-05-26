@@ -1,0 +1,453 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
+    "functions": [
+      "RecordsWrite.create",
+      "RecordsQuery.create",
+      "Message.getCid"
+    ]
+  },
+  "seedSets": {
+    "tagged-published-records": [
+      {
+        "id": "post-string-tag",
+        "messageCid": "bafyreifhe5vp4r7mqtcbm4czn3aztflo4pbmk2kq7b77v26fcgfkbydcoq",
+        "indexes": {
+          "interface": "Records",
+          "method": "Write",
+          "published": true,
+          "isLatestBaseState": true,
+          "squash": false,
+          "author": "did:example:alice",
+          "recordId": "bafyreih6zrjmxh5gimyqnqs4mdqd73axpstr7zabtcxji7zcqlxq75olwm",
+          "entryId": "did:example:alice/bafyreih6zrjmxh5gimyqnqs4mdqd73axpstr7zabtcxji7zcqlxq75olwm",
+          "schema": "http://example.com/post",
+          "dateCreated": "2026-05-26T20:15:15.224515Z",
+          "messageTimestamp": "2026-05-26T20:15:15.224515Z",
+          "contextId": "bafyreih6zrjmxh5gimyqnqs4mdqd73axpstr7zabtcxji7zcqlxq75olwm",
+          "tag.stringTag": "string-value"
+        },
+        "message": {
+          "recordId": "bafyreih6zrjmxh5gimyqnqs4mdqd73axpstr7zabtcxji7zcqlxq75olwm",
+          "descriptor": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "http://test-protocol.xyz",
+            "protocolPath": "testRecord",
+            "schema": "http://example.com/post",
+            "tags": {
+              "stringTag": "string-value"
+            },
+            "dataCid": "bafkreiboesnxknhf2aqs6iejpmia3pzptgt47spxacxqudftkm7n644mlu",
+            "dataSize": 32,
+            "dateCreated": "2026-05-26T20:15:15.224515Z",
+            "messageTimestamp": "2026-05-26T20:15:15.224515Z",
+            "published": true,
+            "datePublished": "2026-05-26T20:15:15.224515Z",
+            "dataFormat": "application/json"
+          },
+          "contextId": "bafyreih6zrjmxh5gimyqnqs4mdqd73axpstr7zabtcxji7zcqlxq75olwm",
+          "authorization": {
+            "signature": {
+              "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWloNnpyam14aDVnaW15cW5xczRtZHFkNzNheHBzdHI3emFidGN4amk3emNxbHhxNzVvbHdtIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlmNTNsMnF0em5tdnphZjRsamVtcmNqNGxwbXNtYTJid2lpYWliYm0zbGRicnR1YXdpMnY0IiwiY29udGV4dElkIjoiYmFmeXJlaWg2enJqbXhoNWdpbXlxbnFzNG1kcWQ3M2F4cHN0cjd6YWJ0Y3hqaTd6Y3FseHE3NW9sd20ifQ",
+              "signatures": [
+                {
+                  "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                  "signature": "I6l-JoeD2Q3d3icmgXAkaHb_qbnI4lsIKgJN4LFXXImwi8bO_oJe4d_QLxwg0MDzNsQA8M4EuhhCtnlSoCc3Bw"
+                }
+              ]
+            }
+          }
+        },
+        "encodedData": "A1nTWRjhv7v37m3w5Iz0ZqOMS1xSkOyXJ4p7R3cHXe0"
+      },
+      {
+        "id": "post-number-tag",
+        "messageCid": "bafyreie7gw63udfhdn4gviyhbhz5phz3hxpw7ravhsv7xc5gwjzbrgxllm",
+        "indexes": {
+          "interface": "Records",
+          "method": "Write",
+          "published": true,
+          "isLatestBaseState": true,
+          "squash": false,
+          "author": "did:example:alice",
+          "recordId": "bafyreiggx4glf3pxzjejjfjj247ojyx4rb66l76yeb65otivbh5jy3qmh4",
+          "entryId": "did:example:alice/bafyreiggx4glf3pxzjejjfjj247ojyx4rb66l76yeb65otivbh5jy3qmh4",
+          "schema": "http://example.com/post",
+          "dateCreated": "2026-05-26T20:15:15.228515Z",
+          "messageTimestamp": "2026-05-26T20:15:15.228515Z",
+          "contextId": "bafyreiggx4glf3pxzjejjfjj247ojyx4rb66l76yeb65otivbh5jy3qmh4",
+          "tag.numberTag": 54566975
+        },
+        "message": {
+          "recordId": "bafyreiggx4glf3pxzjejjfjj247ojyx4rb66l76yeb65otivbh5jy3qmh4",
+          "descriptor": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "http://test-protocol.xyz",
+            "protocolPath": "testRecord",
+            "schema": "http://example.com/post",
+            "tags": {
+              "numberTag": 54566975
+            },
+            "dataCid": "bafkreigecfcistael4ptu5stvmyvaiux2wctqw7vtmumt7j4ompsd7wp44",
+            "dataSize": 32,
+            "dateCreated": "2026-05-26T20:15:15.228515Z",
+            "messageTimestamp": "2026-05-26T20:15:15.228515Z",
+            "published": true,
+            "datePublished": "2026-05-26T20:15:15.228515Z",
+            "dataFormat": "application/json"
+          },
+          "contextId": "bafyreiggx4glf3pxzjejjfjj247ojyx4rb66l76yeb65otivbh5jy3qmh4",
+          "authorization": {
+            "signature": {
+              "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWlnZ3g0Z2xmM3B4emplampmamoyNDdvanl4NHJiNjZsNzZ5ZWI2NW90aXZiaDVqeTNxbWg0IiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlhZnZlY3V4YW8zZ3l4eHJtaGQ0aTc0eGVsYXVuY3AycnQyN3JxZ2phenl1d3RqZ2o2a25xIiwiY29udGV4dElkIjoiYmFmeXJlaWdneDRnbGYzcHh6amVqamZqajI0N29qeXg0cmI2Nmw3NnllYjY1b3RpdmJoNWp5M3FtaDQifQ",
+              "signatures": [
+                {
+                  "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                  "signature": "WEail8HPJBuf3l1EqIhOaLQOR4ZOVorQMTgdxNIhpor-rNDbXN2y0jU6cQ6g4yvsBb9IbYIJc6GDsj89DlCTAw"
+                }
+              ]
+            }
+          }
+        },
+        "encodedData": "BMmQqBFATJPSjTSRBZypu0dkFItvrpGfIrrTqYmrxpk"
+      },
+      {
+        "id": "post-boolean-tag-true",
+        "messageCid": "bafyreibfd2a7gusin4qqh34i3hgxuruialoamuh6b32e5inxn5zquj2ch4",
+        "indexes": {
+          "interface": "Records",
+          "method": "Write",
+          "published": true,
+          "isLatestBaseState": true,
+          "squash": false,
+          "author": "did:example:alice",
+          "recordId": "bafyreib4zm6luoxetwkg6dp47ffp2ytw4mxx2mhdl6e4mgswmcpfagvczm",
+          "entryId": "did:example:alice/bafyreib4zm6luoxetwkg6dp47ffp2ytw4mxx2mhdl6e4mgswmcpfagvczm",
+          "schema": "http://example.com/post",
+          "dateCreated": "2026-05-26T20:15:15.229515Z",
+          "messageTimestamp": "2026-05-26T20:15:15.229515Z",
+          "contextId": "bafyreib4zm6luoxetwkg6dp47ffp2ytw4mxx2mhdl6e4mgswmcpfagvczm",
+          "tag.booleanTag": true
+        },
+        "message": {
+          "recordId": "bafyreib4zm6luoxetwkg6dp47ffp2ytw4mxx2mhdl6e4mgswmcpfagvczm",
+          "descriptor": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "http://test-protocol.xyz",
+            "protocolPath": "testRecord",
+            "schema": "http://example.com/post",
+            "tags": {
+              "booleanTag": true
+            },
+            "dataCid": "bafkreicp242kj6p774vs34hgov2j4jyp4g5oj5lfpn4vpdp5lbhd72ngwe",
+            "dataSize": 32,
+            "dateCreated": "2026-05-26T20:15:15.229515Z",
+            "messageTimestamp": "2026-05-26T20:15:15.229515Z",
+            "published": true,
+            "datePublished": "2026-05-26T20:15:15.229515Z",
+            "dataFormat": "application/json"
+          },
+          "contextId": "bafyreib4zm6luoxetwkg6dp47ffp2ytw4mxx2mhdl6e4mgswmcpfagvczm",
+          "authorization": {
+            "signature": {
+              "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWliNHptNmx1b3hldHdrZzZkcDQ3ZmZwMnl0dzRteHgybWhkbDZlNG1nc3dtY3BmYWd2Y3ptIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWllM3VxenRjc2Z6c2dlbGY3eW10a3A1enRpa3diYmw0Yzd5cnJqZGFnN2U3NXFpdG9ydHg0IiwiY29udGV4dElkIjoiYmFmeXJlaWI0em02bHVveGV0d2tnNmRwNDdmZnAyeXR3NG14eDJtaGRsNmU0bWdzd21jcGZhZ3Zjem0ifQ",
+              "signatures": [
+                {
+                  "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                  "signature": "7tgaVGpE-SCBBUFgTsT5IC9o5af-Tv5UXX5wvaP84is-2a4eFG-Idxko7611trNUT5E4ZvW7L3nuzzraV316Aw"
+                }
+              ]
+            }
+          }
+        },
+        "encodedData": "7HIFFh0y7RJfh1HCEX6VfP7KEe8TGicfYXYC1rR8I4I"
+      },
+      {
+        "id": "post-boolean-tag-false",
+        "messageCid": "bafyreifhqyyp4zvz66ab6hve3uysesz3q6whxicjizg3t4n2bbfxocx2bu",
+        "indexes": {
+          "interface": "Records",
+          "method": "Write",
+          "published": true,
+          "isLatestBaseState": true,
+          "squash": false,
+          "author": "did:example:alice",
+          "recordId": "bafyreicoru2pkhlzihy7ntyhtadatpb6gercvubsgfzk2yztmdcxkxjdcq",
+          "entryId": "did:example:alice/bafyreicoru2pkhlzihy7ntyhtadatpb6gercvubsgfzk2yztmdcxkxjdcq",
+          "schema": "http://example.com/post",
+          "dateCreated": "2026-05-26T20:15:15.229515Z",
+          "messageTimestamp": "2026-05-26T20:15:15.229515Z",
+          "contextId": "bafyreicoru2pkhlzihy7ntyhtadatpb6gercvubsgfzk2yztmdcxkxjdcq",
+          "tag.booleanTag": false
+        },
+        "message": {
+          "recordId": "bafyreicoru2pkhlzihy7ntyhtadatpb6gercvubsgfzk2yztmdcxkxjdcq",
+          "descriptor": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "http://test-protocol.xyz",
+            "protocolPath": "testRecord",
+            "schema": "http://example.com/post",
+            "tags": {
+              "booleanTag": false
+            },
+            "dataCid": "bafkreiaxchaklvgiqjmwcnkd53obplpvlixztxg4fsdbe2kmljq6mhkve4",
+            "dataSize": 32,
+            "dateCreated": "2026-05-26T20:15:15.229515Z",
+            "messageTimestamp": "2026-05-26T20:15:15.229515Z",
+            "published": true,
+            "datePublished": "2026-05-26T20:15:15.229515Z",
+            "dataFormat": "application/json"
+          },
+          "contextId": "bafyreicoru2pkhlzihy7ntyhtadatpb6gercvubsgfzk2yztmdcxkxjdcq",
+          "authorization": {
+            "signature": {
+              "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWljb3J1MnBraGx6aWh5N250eWh0YWRhdHBiNmdlcmN2dWJzZ2Z6azJ5enRtZGN4a3hqZGNxIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlnZTJjZGF3a2NzcXJlcnpvM2YzaHB6cXZha2N0Y3ZiaWQyanVkYzZ3cXllcjJtbWZwb2JhIiwiY29udGV4dElkIjoiYmFmeXJlaWNvcnUycGtobHppaHk3bnR5aHRhZGF0cGI2Z2VyY3Z1YnNnZnprMnl6dG1kY3hreGpkY3EifQ",
+              "signatures": [
+                {
+                  "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                  "signature": "Y0_kMk2pg8aa6w96msmOrXLwdZiko0FAerjKCVkWdahbogXG0bN1vFJihd9sW2YRMSnw5ssghrTeon0m3gmuBg"
+                }
+              ]
+            }
+          }
+        },
+        "encodedData": "Y3hsJjTwvo2zi9CBw1aO8gBfxOT8KH34K6vQtyOHG78"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "query-string-tag-match",
+      "rustStatus": "supported",
+      "recordsTagsQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "tagged-published-records",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.248515Z",
+              "filter": {
+                "published": true,
+                "tags": {
+                  "stringTag": "string-value"
+                }
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWV2ZHdqaGRjeHN0czZkN250amJmbWhuNHplcXdmNnJjY2lhdjZraHMybnRoNDZyZXN1bm0ifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "tlIHLNLW8Nxgc_7PJHUBx-VV0S181rzseobduCNsYCEaO-TeHMVDgDTGjJvVIYQwJi7XcACLxgg3cSRjFyCXBA"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "recordId": "bafyreih6zrjmxh5gimyqnqs4mdqd73axpstr7zabtcxji7zcqlxq75olwm"
+            }
+          ],
+          "cursor": null
+        }
+      }
+    },
+    {
+      "id": "query-string-tag-no-match",
+      "rustStatus": "supported",
+      "recordsTagsQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "tagged-published-records",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.253515Z",
+              "filter": {
+                "published": true,
+                "tags": {
+                  "stringTag": "other-value"
+                }
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWF3Ym5kY2duZG9qcHVlamx1N2RmNmxybjJwd2R6bTRmb29jZzNpc3VmZzNnbW13dXhtd3kifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "0lbb71nhjwqpTOEJfqVCJKMImkzgPT9Vq8NixI_hbIBsUiII6x7wMnVDkqFKC9ia_dPolrVjJMObeqzpYHXeDg"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [],
+          "cursor": null
+        }
+      }
+    },
+    {
+      "id": "query-number-tag-match",
+      "rustStatus": "supported",
+      "recordsTagsQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "tagged-published-records",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.254515Z",
+              "filter": {
+                "published": true,
+                "tags": {
+                  "numberTag": 54566975
+                }
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWdudGt6ajc3NWwzenZvamFydms0cXptNHZ3cTQ2cjRkeTZmemVkaTZlajVua2F0cWRpd3UifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "s1nqRliGUM6sNs7qDo9MSJZtqw8OgkF_gsScc8PKoQDg4MdwDS4hCRjqAv36bbK94636YK5jMtpWR-iFnaQXDA"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "recordId": "bafyreiggx4glf3pxzjejjfjj247ojyx4rb66l76yeb65otivbh5jy3qmh4"
+            }
+          ],
+          "cursor": null
+        }
+      }
+    },
+    {
+      "id": "query-boolean-tag-true-match",
+      "rustStatus": "supported",
+      "recordsTagsQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "tagged-published-records",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.254515Z",
+              "filter": {
+                "published": true,
+                "tags": {
+                  "booleanTag": true
+                }
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWYzN29qejRndXppMmI1YWs2am1rY3hzYm51NXR6amk2ZXFvNWtkbXJpeHlqbDRmNmNtaXkifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "XOCQRKL_GKJZB494SfNVq7WGHJpgYl_q-MfBzoQJtgFVqfsX8LMLhadNqwR6XhLZ_LpNoWITCLHHIUjM-z0ECQ"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "recordId": "bafyreib4zm6luoxetwkg6dp47ffp2ytw4mxx2mhdl6e4mgswmcpfagvczm"
+            }
+          ],
+          "cursor": null
+        }
+      }
+    },
+    {
+      "id": "query-boolean-tag-false-match",
+      "rustStatus": "supported",
+      "recordsTagsQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "tagged-published-records",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.255515Z",
+              "filter": {
+                "published": true,
+                "tags": {
+                  "booleanTag": false
+                }
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWJ2b3RyNDJueGtrbWQ3ZjdqcmZkdHZ4dWxpZnB2NnRwaHRxdGk0enE0Y3h4dHRla3dncmUifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "AXcFwQncIlkTbXR5w2jZACwTiJ9CqiUeoWn_AeHnekUCxnaVT_8BJi2_SCidS7XRUi3GOg6NiOpEuhX5XZJIAQ"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "recordId": "bafyreicoru2pkhlzihy7ntyhtadatpb6gercvubsgfzk2yztmdcxkxjdcq"
+            }
+          ],
+          "cursor": null
+        }
+      }
+    }
+  ]
+}

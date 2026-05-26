@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
+    "functions": [
+      "PermissionsProtocol.createGrant",
+      "RecordsQuery.create",
+      "PermissionsProtocol.grantPath"
+    ]
+  },
+  "seedSets": {
+    "permissions-grants": [
+      {
+        "id": "permissions-grant-records-write",
+        "messageCid": "bafyreibt53orcpk6vituo7sm2s7etwaa3x7hhfkjx6hwlpqixk7wglef3i",
+        "indexes": {
+          "interface": "Records",
+          "method": "Write",
+          "published": false,
+          "isLatestBaseState": true,
+          "squash": false,
+          "author": "did:example:alice",
+          "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "entryId": "did:example:alice/bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "protocol": "https://identity.foundation/dwn/permissions",
+          "protocolPath": "grant",
+          "recipient": "did:example:bob",
+          "dateCreated": "2025-01-01T00:02:01.000000Z",
+          "messageTimestamp": "2025-01-01T00:02:01.000000Z",
+          "contextId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "tag.protocol": "https://example.com/protocol/notes"
+        },
+        "message": {
+          "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "descriptor": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "https://identity.foundation/dwn/permissions",
+            "protocolPath": "grant",
+            "recipient": "did:example:bob",
+            "tags": {
+              "protocol": "https://example.com/protocol/notes"
+            },
+            "dataCid": "bafkreig5nwatflcy3pux2dzt5djvkonryuy45vkutviguxdcee5rmj43f4",
+            "dataSize": 349,
+            "dateCreated": "2025-01-01T00:02:01.000000Z",
+            "messageTimestamp": "2025-01-01T00:02:01.000000Z",
+            "dataFormat": "application/json"
+          },
+          "contextId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "authorization": {
+            "signature": {
+              "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWljcmZqYTJubGlmaHliamdhZDJpeG82ajZsdGF6dXBsaXJ2dm4zeWJ2YXl6ZDdtNnVrbDNlIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWljbXNncWdsNnk2YWduMjR1ZGVtNGJudnBpNm52d3M0emF3N2RwcXdhbmhrbGRqbnF3aXR5IiwiY29udGV4dElkIjoiYmFmeXJlaWNyZmphMm5saWZoeWJqZ2FkMml4bzZqNmx0YXp1cGxpcnZ2bjN5YnZheXpkN202dWtsM2UifQ",
+              "signatures": [
+                {
+                  "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                  "signature": "dirhPt1NAY_Z9ggjRabHTDoRqjHY0hNPPYHTqKR1dO8y6HKgwvDZwjCWt9ZrzvhBZ91sEhFp8nTfsxZsQ4gaBQ"
+                }
+              ]
+            }
+          }
+        },
+        "encodedData": "eyJkYXRlRXhwaXJlcyI6IjIwMjUtMDItMDFUMDA6MDA6MDAuMDAwMDAwWiIsInJlcXVlc3RJZCI6ImJhZnlyZWlhYTU1dnc2anEyeXo0a3dyaXJ4NGVweTZkZW8ycXBhdW5jM3ByZGY1dnFsa2l2Mnk2djN5IiwiZGVzY3JpcHRpb24iOiJHcmFudCB3cml0ZSBhY2Nlc3MgdG8gcHJvdG9jb2wgbm90ZXMuIiwiZGVsZWdhdGVkIjp0cnVlLCJzY29wZSI6eyJpbnRlcmZhY2UiOiJSZWNvcmRzIiwibWV0aG9kIjoiV3JpdGUiLCJwcm90b2NvbCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vcHJvdG9jb2wvbm90ZXMiLCJwcm90b2NvbFBhdGgiOiJub3RlIn0sImNvbmRpdGlvbnMiOnsicHVibGljYXRpb24iOiJSZXF1aXJlZCJ9fQ"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "query-permissions-grant-by-path",
+      "rustStatus": "supported",
+      "permissionsGrantQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "permissions-grants",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.430515Z",
+              "filter": {
+                "protocol": "https://identity.foundation/dwn/permissions",
+                "protocolPath": "grant"
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWZsM2JzZHpiN2dreTZ0YXVpZzJremU3ZmpvYjRmNmw3aW4zM2lycnVwaXd4ZTc0eHBxcnkifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "ZU2833_fyYhRXkYKNrlLb1qkiT9TBrKbqdJoMDHvYJVmef5AvTexmuHHy_x8Z-w2S8MQB9q4hnT7ATF1rAnwAQ"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e"
+            }
+          ],
+          "cursor": null
+        }
+      }
+    },
+    {
+      "id": "query-permissions-grant-by-protocol-tag",
+      "rustStatus": "supported",
+      "permissionsGrantQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "permissions-grants",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.453515Z",
+              "filter": {
+                "protocol": "https://identity.foundation/dwn/permissions",
+                "protocolPath": "grant",
+                "tags": {
+                  "protocol": "https://example.com/protocol/notes"
+                }
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWdpd3B3a2tjaTJhcHFuMmdhYjNuNDZkbml1NndjYmd2c2FhNHV6ZXViY3V0aWdwZmp3b3EifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "GBH3hDVC-pk6yPjftPOGqq2Cy-CUEcdeE4u9w_7lhG5pdIr24NA_FkNkkP9Mr0c0soJ10MfQxN8I4UxhAoE_DQ"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e"
+            }
+          ],
+          "cursor": null
+        }
+      }
+    },
+    {
+      "id": "query-permissions-grant-tag-no-match",
+      "rustStatus": "supported",
+      "permissionsGrantQuery": {
+        "tenant": "did:example:alice",
+        "seedSet": "permissions-grants",
+        "request": {
+          "message": {
+            "descriptor": {
+              "interface": "Records",
+              "method": "Query",
+              "messageTimestamp": "2026-05-26T20:15:15.454515Z",
+              "filter": {
+                "protocol": "https://identity.foundation/dwn/permissions",
+                "protocolPath": "grant",
+                "tags": {
+                  "protocol": "https://example.com/other"
+                }
+              }
+            },
+            "authorization": {
+              "signature": {
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWZ3NGl2Ymo0MnZ3Zm4yc2VqbWF5bGY1NTdiNWdkdWdldm5uZHQ3ZWtjajdpdmFldW9xeXUifQ",
+                "signatures": [
+                  {
+                    "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                    "signature": "cajenLqNCmIg45gku0z_WGQSXRaLKxy8lCoEcPIfFMHF4wzSO413pWqKg-oGJPC-Ep_ilsiYCoI4t4scJy1eDg"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [],
+          "cursor": null
+        }
+      }
+    }
+  ]
+}
