@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::auth::{Jws, JwsError, JwsPublicKeyResolver};
-use crate::cid::generate_cid_from_json;
+use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Records, RecordsWriteDescriptor,
 };
@@ -1433,7 +1433,7 @@ fn message_interface_and_method(message: &Message<Descriptor>) -> Result<(String
 fn message_cid(message: &Message<Descriptor>) -> Result<String, String> {
     serde_json::to_value(message)
         .map_err(|err| err.to_string())
-        .and_then(|value| generate_cid_from_json(&value).map_err(|err| err.to_string()))
+        .and_then(|value| generate_message_cid_from_json(&value).map_err(|err| err.to_string()))
         .map(|cid| cid.to_string())
 }
 
