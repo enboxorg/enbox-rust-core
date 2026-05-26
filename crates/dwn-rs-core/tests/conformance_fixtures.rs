@@ -133,8 +133,10 @@ struct MessageProcessFixture {
     tenant: String,
     handler: Option<String>,
     valid: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     register_handler: bool,
+    #[serde(default)]
+    stub_reply: bool,
     reply: Value,
 }
 
@@ -878,10 +880,10 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         return;
     }
 
-    if process.register_handler {
+    if process.register_handler || process.stub_reply {
         let kind = MessageKind::from_message(message(case)).unwrap_or_else(|err| {
             panic!(
-                "{} process fixture with registerHandler must route: {err:?}",
+                "{} process fixture with registerHandler/stubReply must route: {err:?}",
                 case.id
             )
         });
@@ -952,10 +954,6 @@ fn message_process_fixture(case: &FixtureCase) -> &MessageProcessFixture {
 fn process_reply(case: &FixtureCase) -> DwnReply {
     serde_json::from_value(message_process_fixture(case).reply.clone())
         .unwrap_or_else(|err| panic!("{} process reply must deserialize: {}", case.id, err))
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn assert_protocol_authorization_fixture(
