@@ -41,6 +41,7 @@ This repository validates DWN behavior through **three independent layers**. The
 | `state-index.operations` | yes | `typescript-state-index.test.ts` | store/state-index specs | — | covered |
 | `messages-sync.replies` | yes | `typescript-messages-sync.test.ts` | handlers/messages-sync specs | — | covered |
 | `native-sync.engine` | yes (`native_dwn_sync_integration.rs`) | — | — | — | covered |
+| `progress-token.replay` | yes (`sqlite_event_log_progress_integration.rs`, `sync_ledger_integration.rs`) | — | handlers/subscribe specs | — | partial |
 | `descriptor.roundtrip` | yes | `typescript-descriptor-roundtrip.test.ts` | handler descriptor specs | — | covered |
 | `message.process` | yes (`SqliteNativeDwn`) | `typescript-message-process.test.ts` | handlers/*.spec.ts | partial (RPC smoke) | partial |
 | `protocol.authorization-corpus` | yes | `typescript-protocol-authorization.test.ts` | features/permissions specs | — | partial |
