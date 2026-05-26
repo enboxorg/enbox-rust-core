@@ -66,6 +66,16 @@
       "id": "dwn.state-index.operations",
       "path": "dwn/state-index/operations.json",
       "assertions": ["state-index.operations"]
+    },
+    {
+      "id": "dwn.records.tag-query-filters",
+      "path": "dwn/records/tag-query-filters.json",
+      "assertions": ["records.tags.query"]
+    },
+    {
+      "id": "dwn.protocols.permissions-grant-query",
+      "path": "dwn/protocols/permissions-grant-query.json",
+      "assertions": ["permissions.grant-query"]
     }
   ]
 }
