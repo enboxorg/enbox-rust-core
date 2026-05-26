@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use crate::desktop_server::{DwnProcessMessage, PROCESS_MESSAGE_METHOD};
 use crate::dwn::DwnReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
+use crate::interfaces::replies::Status;
 use crate::stores::{DataStore, MessageStore, StateHash, StateIndex};
 use crate::sync::{
     MessagesSyncDiff, SyncEndpoint, SyncError, SyncFuture, SyncHashes, SyncMessageEntry,
@@ -262,8 +263,7 @@ where
         let reply = envelope.pointer("/result/reply").cloned().ok_or_else(|| {
             SyncError::permanent("HttpResponseInvalid", "missing result.reply".to_string())
         })?;
-        serde_json::from_value(reply)
-            .map_err(|err| SyncError::permanent("HttpResponseInvalid", err.to_string()))
+        parse_http_dwn_reply(reply)
     }
 
     async fn sync_action(
@@ -386,6 +386,23 @@ async fn collect_subtree_hashes_via_http<A: SyncRequestAuthorizer>(
         stack.push(format!("{prefix}0"));
     }
     Ok(hashes)
+}
+
+fn parse_http_dwn_reply(reply: JsonValue) -> SyncResult<DwnReply> {
+    if reply.get("body").is_some() {
+        let status: Status =
+            serde_json::from_value(reply.get("status").cloned().unwrap_or(JsonValue::Null))
+                .map_err(|err| SyncError::permanent("HttpResponseInvalid", err.to_string()))?;
+        let mut body = BTreeMap::new();
+        if let Some(object) = reply.get("body").and_then(JsonValue::as_object) {
+            for (key, value) in object {
+                body.insert(key.clone(), value.clone());
+            }
+        }
+        return Ok(DwnReply { status, body });
+    }
+    serde_json::from_value(reply)
+        .map_err(|err| SyncError::permanent("HttpResponseInvalid", err.to_string()))
 }
 
 fn reply_root(reply: DwnReply) -> SyncResult<String> {
@@ -717,22 +734,64 @@ impl SyncRequestAuthorizer for JwsSyncAuthorizer {
         let permission_grant_id = self.permission_grant_id.clone();
         let scope = scope.clone();
         Box::pin(async move {
-            let descriptor = json!({
-                "interface": "Messages",
-                "method": "Sync",
-                "messageTimestamp": Self::timestamp().to_rfc3339_opts(SecondsFormat::Micros, true),
-                "action": serde_json::to_value(action).map_err(|err| {
-                    SyncError::permanent("SyncMessageBuildFailed", err.to_string())
-                })?,
-                "protocol": scope.protocol_uri(),
-                "prefix": prefix,
-                "permissionGrantId": permission_grant_id,
-                "depth": depth,
-                "hashes": hashes,
-            });
+            let descriptor = build_messages_sync_descriptor(
+                action,
+                scope.protocol_uri(),
+                prefix,
+                permission_grant_id.as_deref(),
+                depth,
+                hashes.as_ref(),
+                &Self::timestamp().to_rfc3339_opts(SecondsFormat::Micros, true),
+            )?;
             sign_descriptor_message(&signer, descriptor, permission_grant_id.as_deref())
         })
     }
+}
+
+fn build_messages_sync_descriptor(
+    action: SyncAction,
+    protocol: Option<&str>,
+    prefix: Option<&str>,
+    permission_grant_id: Option<&str>,
+    depth: Option<u8>,
+    hashes: Option<&SyncHashes>,
+    message_timestamp: &str,
+) -> SyncResult<JsonValue> {
+    let mut descriptor = serde_json::Map::new();
+    descriptor.insert("interface".into(), JsonValue::String("Messages".into()));
+    descriptor.insert("method".into(), JsonValue::String("Sync".into()));
+    descriptor.insert(
+        "messageTimestamp".into(),
+        JsonValue::String(message_timestamp.to_string()),
+    );
+    descriptor.insert(
+        "action".into(),
+        serde_json::to_value(action)
+            .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?,
+    );
+    if let Some(protocol) = protocol {
+        descriptor.insert("protocol".into(), JsonValue::String(protocol.to_string()));
+    }
+    if let Some(prefix) = prefix {
+        descriptor.insert("prefix".into(), JsonValue::String(prefix.to_string()));
+    }
+    if let Some(permission_grant_id) = permission_grant_id {
+        descriptor.insert(
+            "permissionGrantId".into(),
+            JsonValue::String(permission_grant_id.to_string()),
+        );
+    }
+    if let Some(depth) = depth {
+        descriptor.insert("depth".into(), JsonValue::from(depth));
+    }
+    if let Some(hashes) = hashes {
+        descriptor.insert(
+            "hashes".into(),
+            serde_json::to_value(hashes)
+                .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?,
+        );
+    }
+    Ok(JsonValue::Object(descriptor))
 }
 
 fn sign_descriptor_message(
