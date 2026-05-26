@@ -140,6 +140,7 @@ pub struct MethodHandlerRequest<'a> {
     pub tenant: &'a str,
     pub message: &'a Value,
     pub kind: MessageKind,
+    pub data: Option<bytes::Bytes>,
 }
 
 pub trait MethodHandler: Send + Sync {
@@ -239,6 +240,16 @@ where
     }
 
     pub async fn process_message(&self, tenant: &str, raw_message: Value) -> DwnReply {
+        self.process_message_with_data(tenant, raw_message, None)
+            .await
+    }
+
+    pub async fn process_message_with_data(
+        &self,
+        tenant: &str,
+        raw_message: Value,
+        data: Option<bytes::Bytes>,
+    ) -> DwnReply {
         if let Some(reply) = self.validate_tenant(tenant).await {
             return reply;
         }
@@ -268,6 +279,7 @@ where
                 tenant,
                 message: &raw_message,
                 kind,
+                data,
             })
             .await
     }

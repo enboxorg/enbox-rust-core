@@ -102,13 +102,20 @@ where
     ) -> DesktopFuture<'a, DesktopProcessMessageResult> {
         let dwn = self.dwn.clone();
         Box::pin(async move {
-            let reply = dwn.process_message(&request.tenant, request.message).await;
+            let data = request.data.clone();
+            let reply = dwn
+                .process_message_with_data(
+                    &request.tenant,
+                    request.message,
+                    data.clone().map(bytes::Bytes::from),
+                )
+                .await;
             Ok(DesktopProcessMessageResult {
                 status_code: reply.status.code as u16,
                 status_detail: reply.status.detail,
                 body: serde_json::to_value(&reply.body)
                     .unwrap_or_else(|err| json!({ "serializationError": err.to_string() })),
-                data: request.data,
+                data,
             })
         })
     }
@@ -120,6 +127,16 @@ pub trait DwnProcessMessage: Send + Sync {
         tenant: &str,
         message: JsonValue,
     ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>>;
+
+    fn process_message_with_data(
+        &self,
+        tenant: &str,
+        message: JsonValue,
+        data: Option<bytes::Bytes>,
+    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        let _ = data;
+        self.process_message(tenant, message)
+    }
 }
 
 #[derive(Clone)]

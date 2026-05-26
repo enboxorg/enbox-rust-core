@@ -89,6 +89,17 @@ impl SqliteNativeDwn {
         &mut self.dwn
     }
 
+    pub async fn process_message_with_data(
+        &self,
+        tenant: &str,
+        message: serde_json::Value,
+        data: Option<bytes::Bytes>,
+    ) -> dwn_rs_core::dwn::DwnReply {
+        self.dwn
+            .process_message_with_data(tenant, message, data)
+            .await
+    }
+
     pub fn store(&self) -> &SqliteStore {
         &self.store
     }
