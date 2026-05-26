@@ -41,6 +41,8 @@ Rust CI runs `crates/dwn-rs-core/tests/conformance_fixtures.rs` as part of `carg
 
 Optional TypeScript runners are available under `tools/conformance/`. CI also runs them against a pinned Enbox commit from `.enbox-version` (see the `typescript-conformance` job in `.github/workflows/tests.yaml`).
 
+Store injection phase 1 lives under `tools/interop/`: a JSON-RPC bridge (`store_injection_server`) exposes Rust `SqliteStore` to dwn-sdk-js tests via `TestStores.override`. See [TEST_COVERAGE.md](./TEST_COVERAGE.md#store-injection-layer-5-phase-1).
+
 ```bash
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-cid.test.ts
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/conformance/typescript-jws.test.ts tools/conformance/typescript-jwe.test.ts

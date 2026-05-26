@@ -71,3 +71,8 @@ required-features = ["sqlite"]
 name = "loopback_interop_server"
 path = "examples/loopback_interop_server.rs"
 required-features = ["sqlite"]
+
+[[example]]
+name = "store_injection_server"
+path = "examples/store_injection_server.rs"
+required-features = ["sqlite"]
