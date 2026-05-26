@@ -11,9 +11,7 @@
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 
-use dwn_rs_core::filters::{
-    Filter, FilterKey, Filters, MessageSort, Pagination, ValueFilter,
-};
+use dwn_rs_core::filters::{Filter, FilterKey, Filters, MessageSort, Pagination, ValueFilter};
 use dwn_rs_core::interfaces::messages::Descriptor;
 use dwn_rs_core::stores::{KeyValues, MessageStore};
 use dwn_rs_core::{Message, Value};
