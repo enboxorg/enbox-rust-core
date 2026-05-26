@@ -5,10 +5,12 @@ use std::sync::{Arc, RwLock};
 
 use dwn_rs_core::auth::StaticPublicKeyResolver;
 use dwn_rs_core::dwn::Dwn;
+use dwn_rs_core::handlers::records::{RecordsEventLogSubscribeHandler, RecordsSubscribeReply};
 use dwn_rs_core::native_dwn::{
     build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig, NativeDwnOpenError,
     NativeDwnStores,
 };
+use dwn_rs_core::stores::SubscriptionListener;
 use dwn_rs_core::sync::{
     NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
     SyncRunStatus,
@@ -35,6 +37,7 @@ pub struct SqliteNativeDwn {
     state_index: SqliteStateIndex,
     sync_ledger: SqliteSyncLedger,
     dwn: Arc<NativeDwn>,
+    records_subscribe: RecordsEventLogSubscribeHandler<SqliteStore, SqliteEventLog>,
     sync_identities: Arc<RwLock<BTreeMap<String, SyncIdentityOptions>>>,
 }
 
@@ -67,17 +70,23 @@ impl SqliteNativeDwn {
 
         let dwn = Arc::new(build_native_dwn_with_resolver(
             NativeDwnConfig {
-                stores,
+                stores: stores.clone(),
                 tenant_gate: dwn_rs_core::AllowAllTenantGate,
             },
-            public_key_resolver,
+            public_key_resolver.clone(),
         ));
+        let records_subscribe = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+            store.clone(),
+            stores.event_log,
+            public_key_resolver,
+        );
 
         Ok(Self {
             store,
             state_index,
             sync_ledger,
             dwn,
+            records_subscribe,
             sync_identities: Arc::new(RwLock::new(BTreeMap::new())),
         })
     }
@@ -98,6 +107,18 @@ impl SqliteNativeDwn {
     ) -> dwn_rs_core::dwn::DwnReply {
         self.dwn
             .process_message_with_data(tenant, message, data)
+            .await
+    }
+
+    /// Subscribe to record updates via the event log (used by WebSocket loopback).
+    pub async fn subscribe_records(
+        &self,
+        tenant: &str,
+        message: serde_json::Value,
+        listener: SubscriptionListener,
+    ) -> RecordsSubscribeReply {
+        self.records_subscribe
+            .handle_subscribe(tenant, &message, listener)
             .await
     }
 

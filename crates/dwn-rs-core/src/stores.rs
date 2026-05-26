@@ -518,6 +518,66 @@ pub trait ResumableTaskStore: Default {
     fn clear(&self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
 }
 
+/// Placeholder [`EventLog`] for handlers that do not emit events.
+impl EventLog for () {
+    fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send {
+        async { Ok(()) }
+    }
+
+    fn close(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    fn emit(
+        &self,
+        _tenant: &str,
+        _event: MessageEvent<Descriptor>,
+        _indexes: KeyValues,
+        _message_cid: &str,
+    ) -> impl Future<Output = Result<Option<ProgressToken>, EventLogError>> + Send {
+        async { Ok(None) }
+    }
+
+    fn read(
+        &self,
+        _tenant: &str,
+        _options: Option<EventLogReadOptions>,
+    ) -> impl Future<Output = Result<EventLogReadResult, EventLogError>> + Send {
+        async { Ok(EventLogReadResult::default()) }
+    }
+
+    fn subscribe(
+        &self,
+        _tenant: &str,
+        id: &str,
+        _listener: SubscriptionListener,
+        _options: Option<EventLogSubscribeOptions>,
+    ) -> impl Future<Output = Result<EventSubscription, EventLogError>> + Send {
+        let id = id.to_string();
+        async move {
+            Ok(EventSubscription {
+                id,
+                close: Box::new(|| Box::pin(async { Ok(()) })),
+            })
+        }
+    }
+
+    fn get_replay_bounds(
+        &self,
+        _tenant: &str,
+    ) -> impl Future<Output = Result<Option<EventLogReplayBounds>, EventLogError>> + Send {
+        async { Ok(None) }
+    }
+
+    fn trim(
+        &self,
+        _tenant: &str,
+        _older_than: EventLogTrimBound,
+    ) -> impl Future<Output = Result<(), EventLogError>> + Send {
+        async { Ok(()) }
+    }
+}
+
 #[cfg(test)]
 mod enbox_store_contract_tests {
     use super::*;
