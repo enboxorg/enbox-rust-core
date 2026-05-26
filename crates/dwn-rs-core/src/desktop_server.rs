@@ -10,8 +10,11 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    extract::{
+        ws::WebSocketUpgrade,
+        FromRequest, State,
+    },
+    http::{HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -27,8 +30,10 @@ use crate::desktop::{
     DesktopServerStatus, LOCAL_DWN_SERVER_NAME,
 };
 use crate::dwn::{Dwn, TenantGate};
+use crate::desktop_ws;
 
 pub const PROCESS_MESSAGE_METHOD: &str = "dwn.processMessage";
+pub use crate::desktop_ws::SharedDesktopSubscribeProcessor;
 
 type ProcessorFn = dyn Fn(
         DesktopProcessMessageRequest,
@@ -205,6 +210,7 @@ where
 #[derive(Clone)]
 struct AppState {
     processor: SharedDesktopMessageProcessor,
+    subscribe: Option<SharedDesktopSubscribeProcessor>,
     websocket_enabled: bool,
 }
 
@@ -249,6 +255,7 @@ struct RunningServer {
 #[derive(Clone)]
 pub struct LoopbackDwnServer {
     processor: SharedDesktopMessageProcessor,
+    subscribe: Option<SharedDesktopSubscribeProcessor>,
     running: Arc<Mutex<Option<RunningServer>>>,
     status: Arc<Mutex<DesktopServerStatus>>,
 }
@@ -257,6 +264,19 @@ impl LoopbackDwnServer {
     pub fn new(processor: SharedDesktopMessageProcessor) -> Self {
         Self {
             processor,
+            subscribe: None,
+            running: Arc::new(Mutex::new(None)),
+            status: Arc::new(Mutex::new(DesktopServerStatus::default())),
+        }
+    }
+
+    pub fn with_subscribe(
+        processor: SharedDesktopMessageProcessor,
+        subscribe: SharedDesktopSubscribeProcessor,
+    ) -> Self {
+        Self {
+            processor,
+            subscribe: Some(subscribe),
             running: Arc::new(Mutex::new(None)),
             status: Arc::new(Mutex::new(DesktopServerStatus::default())),
         }
@@ -327,12 +347,13 @@ impl DesktopLocalServer for LoopbackDwnServer {
 
             let state = AppState {
                 processor: self.processor.clone(),
+                subscribe: self.subscribe.clone(),
                 websocket_enabled: config.websocket_enabled,
             };
             let app = Router::new()
                 .route("/health", get(health))
                 .route("/info", get(info))
-                .route("/", post(json_rpc).get(root_hint))
+                .route("/", post(json_rpc).get(root_get))
                 .with_state(state);
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -388,11 +409,40 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
 
+async fn root_get(
+    State(state): State<AppState>,
+    req: Request<axum::body::Body>,
+) -> Response {
+    if state.websocket_enabled && is_websocket_upgrade(req.headers()) {
+        match WebSocketUpgrade::from_request(req, &()).await {
+            Ok(ws) => {
+                let processor = state.processor.clone();
+                let subscribe = state.subscribe.clone();
+                return ws
+                    .on_upgrade(move |socket| {
+                        desktop_ws::handle_websocket(socket, processor, subscribe)
+                    })
+                    .into_response();
+            }
+            Err(rejection) => return rejection.into_response(),
+        }
+    }
+    root_hint().await.into_response()
+}
+
 async fn root_hint() -> impl IntoResponse {
     (
         StatusCode::OK,
         "please use an enbox client, for example: https://github.com/enboxorg/enbox",
     )
+}
+
+fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
+    headers
+        .get("upgrade")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+        && headers.contains_key("sec-websocket-key")
 }
 
 async fn info(State(state): State<AppState>) -> impl IntoResponse {

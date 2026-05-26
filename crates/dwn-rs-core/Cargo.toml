@@ -31,7 +31,7 @@ serde_ipld_dagcbor = "0.6.0"
 serde_repr = "0.1.17"
 serde_with = "3.4.0"
 tokio = { version = "1.39.2", features = ["io-util", "rt", "rt-multi-thread", "net", "macros", "sync"] }
-axum = { version = "0.8.8", default-features = false, features = ["json", "http1", "tokio"] }
+axum = { version = "0.8.8", default-features = false, features = ["json", "http1", "tokio", "ws"] }
 tower = { version = "0.5.2", default-features = false }
 derive_more = { version = "1.0", features = ["display", "from", "try_into"] }
 ssi-dids-core = "0.1.0"

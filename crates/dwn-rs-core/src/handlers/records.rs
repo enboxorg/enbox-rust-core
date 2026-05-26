@@ -40,10 +40,11 @@ const WRITE_METHOD: &str = "Write";
 const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
 
 #[derive(Clone)]
-pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
+pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog = ()> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
+    event_log: Option<EventLog>,
     core_protocol_registry: CoreProtocolRegistry,
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
@@ -103,16 +104,15 @@ pub enum RecordsAuthorizationKind {
     Subscribe,
 }
 
-impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
-    pub fn new(
-        message_store: MessageStore,
-        data_store: DataStore,
-        state_index: StateIndex,
-    ) -> Self {
+impl<MessageStore, DataStore, StateIndex, EventLog>
+    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+{
+    pub fn new(message_store: MessageStore, data_store: DataStore, state_index: StateIndex) -> Self {
         Self {
             message_store,
             data_store,
             state_index,
+            event_log: None,
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             public_key_resolver: None,
         }
@@ -128,6 +128,30 @@ impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, Data
             message_store,
             data_store,
             state_index,
+            event_log: None,
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+}
+
+impl<MessageStore, DataStore, StateIndex, EventLog>
+    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+where
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
+{
+    pub fn with_public_key_resolver_and_event_log(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        event_log: EventLog,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            event_log: Some(event_log),
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
@@ -266,12 +290,13 @@ impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, Event
     }
 }
 
-impl<MessageStore, DataStore, StateIndex> MethodHandler
-    for RecordsWriteHandler<MessageStore, DataStore, StateIndex>
+impl<MessageStore, DataStore, StateIndex, EventLog> MethodHandler
+    for RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     fn handle<'a>(
         &'a self,
@@ -366,11 +391,13 @@ where
     }
 }
 
-impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex>
+impl<MessageStore, DataStore, StateIndex, EventLog>
+    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     pub async fn handle_write(
         &self,
@@ -587,6 +614,33 @@ where
             .await
         {
             return store_error_reply(detail);
+        }
+
+        if let Some(event_log) = &self.event_log {
+            let initial_write = if incoming_is_initial {
+                None
+            } else {
+                find_initial_write(&existing_messages, &signature.author)
+                    .and_then(message_as_write_descriptor)
+            };
+            let indexes = match records_write_event_log_indexes(
+                &message,
+                &signature.author,
+                is_latest_base_state,
+            ) {
+                Ok(indexes) => indexes,
+                Err(detail) => return DwnReply::bad_request(detail),
+            };
+            let event = crate::events::MessageEvent {
+                message: message.clone(),
+                initial_write,
+            };
+            if let Err(err) = event_log
+                .emit(tenant, event, indexes, &incoming_cid)
+                .await
+            {
+                return event_log_error_reply(err);
+            }
         }
 
         if incoming_is_initial && !is_latest_base_state {
@@ -2105,6 +2159,15 @@ fn find_initial_write(
         .cloned()
 }
 
+fn message_as_write_descriptor(
+    message: Message<Descriptor>,
+) -> Option<Message<crate::interfaces::messages::descriptors::records::WriteDescriptor>> {
+    if records_write_descriptor(&message).is_err() {
+        return None;
+    }
+    serde_json::from_value(serde_json::to_value(&message).ok()?).ok()
+}
+
 fn verify_immutable_properties(
     initial_write: &Message<Descriptor>,
     new_message: &Message<Descriptor>,
@@ -2224,6 +2287,23 @@ fn records_write_indexes(
             }
         }
     }
+    Ok(indexes)
+}
+
+fn records_write_event_log_indexes(
+    message: &Message<Descriptor>,
+    author: &str,
+    is_latest_base_state: bool,
+) -> Result<KeyValues, String> {
+    let mut indexes = records_write_indexes(message, author, is_latest_base_state)?;
+    indexes.insert(
+        "interface".to_string(),
+        Value::String(RECORDS_INTERFACE.to_string()),
+    );
+    indexes.insert(
+        "method".to_string(),
+        Value::String(WRITE_METHOD.to_string()),
+    );
     Ok(indexes)
 }
 
@@ -3531,7 +3611,7 @@ mod tests {
         data_store.open().await.unwrap();
         state_index.open().await.unwrap();
 
-        let write_handler = RecordsWriteHandler::with_public_key_resolver(
+        let write_handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store.clone(),
             state_index,
@@ -3592,7 +3672,7 @@ mod tests {
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
         state_index.open().await.unwrap();
-        let handler = RecordsWriteHandler::with_public_key_resolver(
+        let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store,
             state_index,
@@ -3656,7 +3736,7 @@ mod tests {
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
         state_index.open().await.unwrap();
-        let handler = RecordsWriteHandler::with_public_key_resolver(
+        let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store,
             state_index,
@@ -3705,7 +3785,7 @@ mod tests {
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
         state_index.open().await.unwrap();
-        let handler = RecordsWriteHandler::with_public_key_resolver(
+        let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store.clone(),
             state_index,
@@ -3752,7 +3832,7 @@ mod tests {
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
         state_index.open().await.unwrap();
-        let write_handler = RecordsWriteHandler::with_public_key_resolver(
+        let write_handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store.clone(),
             state_index.clone(),
@@ -3826,7 +3906,7 @@ mod tests {
         data_store.open().await.unwrap();
         state_index.open().await.unwrap();
         put_squash_protocol("did:example:alice", &message_store).await;
-        let handler = RecordsWriteHandler::with_public_key_resolver(
+        let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store.clone(),
             state_index,
@@ -3902,7 +3982,7 @@ mod tests {
         state_index.open().await.unwrap();
         put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-        let handler = RecordsWriteHandler::with_public_key_resolver(
+        let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store,
             state_index,
@@ -3980,7 +4060,7 @@ mod tests {
         state_index.open().await.unwrap();
         put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-        let handler = RecordsWriteHandler::with_public_key_resolver(
+        let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store,
             state_index,
@@ -4039,7 +4119,7 @@ mod tests {
         state_index.open().await.unwrap();
         put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-        let handler = RecordsWriteHandler::with_public_key_resolver(
+        let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
             message_store.clone(),
             data_store.clone(),
             state_index,

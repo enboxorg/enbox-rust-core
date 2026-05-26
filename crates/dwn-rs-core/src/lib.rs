@@ -34,6 +34,7 @@ pub mod connect;
 pub mod core_protocol;
 pub mod desktop;
 pub mod desktop_server;
+pub mod desktop_ws;
 pub mod dwn;
 pub mod encryption;
 pub mod errors;

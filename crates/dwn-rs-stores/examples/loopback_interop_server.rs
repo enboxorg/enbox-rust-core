@@ -1,4 +1,4 @@
-//! Loopback HTTP DWN server for TypeScript interop tests.
+//! Loopback HTTP + WebSocket DWN server for TypeScript interop tests.
 //!
 //! Prints `READY <endpoint>` to stdout when listening, then waits for EOF on stdin.
 //!
@@ -18,6 +18,8 @@ use dwn_rs_core::desktop::{
     MemoryDesktopDiscoveryRegistry, LOCAL_DWN_SERVER_NAME,
 };
 use dwn_rs_core::desktop_server::{LoopbackDwnServer, SharedDesktopMessageProcessor};
+use dwn_rs_core::desktop_ws::SharedDesktopSubscribeProcessor;
+use dwn_rs_core::stores::SubscriptionListener;
 use dwn_rs_stores::SqliteNativeDwn;
 use tokio::sync::Mutex;
 
@@ -26,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node = SqliteNativeDwn::open_in_memory(test_resolver()).await?;
     let node = Arc::new(Mutex::new(node));
     let node_for_processor = node.clone();
+    let node_for_subscribe = node.clone();
 
     let processor = SharedDesktopMessageProcessor::new(move |request| {
         let node = node_for_processor.clone();
@@ -51,7 +54,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let server = LoopbackDwnServer::new(processor.clone());
+    let subscribe = SharedDesktopSubscribeProcessor::new(move |request, listener| {
+        let node = node_for_subscribe.clone();
+        async move {
+            let node = node.lock().await;
+            let listener: SubscriptionListener =
+                Box::new(move |message| listener(message));
+            let reply = node
+                .subscribe_records(&request.tenant, request.message, listener)
+                .await;
+            Ok(reply)
+        }
+    });
+
+    let server = LoopbackDwnServer::with_subscribe(processor.clone(), subscribe);
     let mut config = DesktopNodeConfig::new("loopback-interop", "org.enbox.interop");
     config.discovery.publish = false;
 
@@ -70,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     server_name: LOCAL_DWN_SERVER_NAME.to_string(),
                     bind_host: "127.0.0.1".to_string(),
                     port: 0,
-                    websocket_enabled: false,
+                    websocket_enabled: true,
                 },
             },
         })

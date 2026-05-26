@@ -46,7 +46,7 @@ This repository validates DWN behavior through **three independent layers**. The
 | `message.process` | yes (`SqliteNativeDwn`) | `typescript-message-process.test.ts` | handlers/*.spec.ts | partial (RPC smoke) | partial |
 | `protocol.authorization-corpus` | yes | `typescript-protocol-authorization.test.ts` | features/permissions specs | — | partial |
 
-**Loopback interop (layer 4)** now covers unsigned `RecordsQuery`, signed `ProtocolsConfigure`, signed `RecordsWrite` + `RecordsRead` round-trip (`tools/interop/loopback-interop.test.ts`).
+**Loopback interop (layer 4)** covers unsigned `RecordsQuery`, signed `ProtocolsConfigure`, signed `RecordsWrite` + `RecordsRead`, WebSocket `RecordsSubscribe` with HTTP write updates, and permissions grants (`tools/interop/loopback-interop.test.ts`).
 
 **Partial** means the shared fixture corpus exercises a slice of the behavior; the dwn-sdk-js native suite covers the full handler/feature/scenario surface.
 
@@ -72,7 +72,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `rust-tests` | `cargo test --workspace` | Execute all Rust tests including `conformance_fixtures.rs` |
 | `typescript-conformance` | `bun test tools/conformance/typescript-*.test.ts` | Shared JSON fixtures via TS adapters at pinned Enbox |
 | `dwn-sdk-js-reference` | `bun run --filter @enbox/dwn-sdk-js test:node` | Full SDK regression at pinned Enbox |
-| `loopback-interop` | build server + `bun test tools/interop/loopback-interop.test.ts` | TS HTTP client against Rust `LoopbackDwnServer` |
+| `loopback-interop` | build server + `bun test tools/interop/loopback-interop.test.ts` | TS HTTP + WebSocket clients against Rust `LoopbackDwnServer` |
 | Fixture provenance | `tools/conformance/check-fixture-provenance.sh` | Fail if any fixture `source.commit` ≠ `.enbox-version` |
 
 ## Gaps and roadmap

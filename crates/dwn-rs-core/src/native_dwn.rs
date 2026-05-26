@@ -215,7 +215,7 @@ fn register_native_handlers_without_resolver<MS, DS, SI, EL, RTS, Gate>(
     );
     dwn.register_handler(
         MessageKind::new(RECORDS, WRITE),
-        RecordsWriteHandler::new(
+        RecordsWriteHandler::<MS, DS, SI, ()>::new(
             message_store.clone(),
             data_store.clone(),
             state_index.clone(),
@@ -304,10 +304,11 @@ fn register_native_handlers_with_resolver<MS, DS, SI, EL, RTS, Gate, R>(
     );
     dwn.register_handler(
         MessageKind::new(RECORDS, WRITE),
-        RecordsWriteHandler::with_public_key_resolver(
+        RecordsWriteHandler::with_public_key_resolver_and_event_log(
             message_store.clone(),
             data_store.clone(),
             state_index.clone(),
+            event_log.clone(),
             resolver.clone(),
         ),
     );

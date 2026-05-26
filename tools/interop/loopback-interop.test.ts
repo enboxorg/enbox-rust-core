@@ -10,6 +10,30 @@ type HttpDwnRpcClientModule = {
   HttpDwnRpcClient: new () => HttpDwnRpcClient;
 };
 
+type WebSocketDwnRpcClientModule = {
+  WebSocketDwnRpcClient: new () => WebSocketDwnRpcClient;
+};
+
+type DwnSubscriptionHandler = (message: {
+  type: string;
+  event?: {
+    message?: { descriptor?: { interface?: string; method?: string; dataCid?: string } };
+    initialWrite?: { recordId?: string; descriptor?: { dataCid?: string } };
+  };
+}) => void;
+
+type WebSocketDwnRpcClient = {
+  sendDwnRequest(input: {
+    dwnUrl: string;
+    targetDid: string;
+    message: Record<string, unknown>;
+    subscription?: { handler: DwnSubscriptionHandler };
+  }): Promise<{
+    status: { code: number; detail: string };
+    subscription?: { close(): Promise<void> };
+  }>;
+};
+
 type HttpDwnRpcClient = {
   sendDwnRequest(input: {
     dwnUrl: string;
@@ -32,8 +56,17 @@ type DwnSdkModule = {
   };
   TestDataGenerator: {
     generateRecordsWrite(input: Record<string, unknown>): Promise<{
-      message: Record<string, unknown> & { recordId?: string; contextId?: string };
+      message: Record<string, unknown> & { recordId?: string; contextId?: string; descriptor?: { dataCid?: string } };
       dataBytes: Uint8Array;
+      recordsWrite?: Record<string, unknown>;
+    }>;
+    generateFromRecordsWrite(input: Record<string, unknown>): Promise<{
+      message: Record<string, unknown> & { descriptor?: { dataCid?: string } };
+      dataBytes: Uint8Array;
+      recordsWrite?: Record<string, unknown>;
+    }>;
+    generateRecordsSubscribe(input: Record<string, unknown>): Promise<{
+      message: Record<string, unknown>;
     }>;
     generateGrantCreate(input: Record<string, unknown>): Promise<{
       message: Record<string, unknown>;
@@ -53,6 +86,7 @@ const repoRoot = resolve(__dirname, '../..');
 const defaultEnboxTsRoot = resolve(repoRoot, '../enbox');
 const enboxTsRoot = process.env.ENBOX_TS_ROOT ?? defaultEnboxTsRoot;
 const httpClientModulePath = resolve(enboxTsRoot, 'packages/dwn-clients/src/http-dwn-rpc-client.ts');
+const wsClientModulePath = resolve(enboxTsRoot, 'packages/dwn-clients/src/web-socket-clients.ts');
 const dwnSdkModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/index.ts');
 const testDataGeneratorPath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/tests/utils/test-data-generator.ts');
 
@@ -62,8 +96,15 @@ if (!existsSync(httpClientModulePath)) {
     'Set ENBOX_TS_ROOT to the enbox monorepo root before running this Bun test.'
   );
 }
+if (!existsSync(wsClientModulePath)) {
+  throw new Error(
+    `Unable to find WebSocket client at ${wsClientModulePath}. ` +
+    'Set ENBOX_TS_ROOT to the enbox monorepo root before running this Bun test.'
+  );
+}
 
 const { HttpDwnRpcClient } = await import(httpClientModulePath) as HttpDwnRpcClientModule;
+const { WebSocketDwnRpcClient } = await import(wsClientModulePath) as WebSocketDwnRpcClientModule;
 const { ProtocolsConfigure, RecordsRead } = await import(dwnSdkModulePath) as DwnSdkModule;
 const { TestDataGenerator, defaultTestProtocolDefinition } = await import(testDataGeneratorPath) as {
   TestDataGenerator: DwnSdkModule['TestDataGenerator'];
@@ -92,8 +133,9 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
   test('exposes /info', async () => {
     const response = await fetch(`${endpoint}/info`);
     expect(response.ok).toBe(true);
-    const info = await response.json() as { server: string };
+    const info = await response.json() as { server: string; webSocketSupport?: boolean };
     expect(info.server).toBe('@enbox/dwn-server');
+    expect(info.webSocketSupport).toBe(true);
   });
 
   test('processes unsigned RecordsQuery over HTTP JSON-RPC', async () => {
@@ -191,6 +233,94 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     expect(entry).toBeDefined();
     expect(entry?.encodedData).toBeDefined();
     expect(entry?.recordsWrite).toBeDefined();
+  });
+
+  test('WebSocket subscribe receives record updates after HTTP write', async () => {
+    const httpClient = new HttpDwnRpcClient();
+    const wsClient = new WebSocketDwnRpcClient();
+    const alice = await getLoopbackPersona();
+    const wsEndpoint = endpoint.replace(/^http/, 'ws');
+
+    await installLoopbackProtocol(httpClient);
+
+    const {
+      message: writeMessage,
+      dataBytes,
+      recordsWrite,
+    } = await TestDataGenerator.generateRecordsWrite({
+      author: alice,
+      schema: 'foo/bar',
+    });
+
+    const writeReply = await httpClient.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: writeMessage,
+      data: dataBytes,
+    });
+    expect(writeReply.status.code).toBe(202);
+
+    const { message: subscribeMessage } = await TestDataGenerator.generateRecordsSubscribe({
+      author: alice,
+      filter: {
+        recordId: writeMessage.recordId,
+      },
+    });
+
+    const dataCids: string[] = [];
+    const subscribeReply = await wsClient.sendDwnRequest({
+      dwnUrl: wsEndpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: subscribeMessage,
+      subscription: {
+        handler: (msg) => {
+          if (msg.type !== 'event') {
+            return;
+          }
+          const { message, initialWrite } = msg.event ?? {};
+          expect(initialWrite?.recordId).toBe(writeMessage.recordId);
+          if (message?.descriptor?.interface === 'Records' && message.descriptor.method === 'Write') {
+            dataCids.push(message.descriptor.dataCid ?? '');
+          }
+        },
+      },
+    });
+    expect(subscribeReply.status.code).toBe(200);
+    expect(subscribeReply.subscription).toBeDefined();
+
+    const { message: updateMessage, dataBytes: updateData, recordsWrite: updateWrite } =
+      await TestDataGenerator.generateFromRecordsWrite({
+        existingWrite: recordsWrite,
+        author: alice,
+      });
+    const updateReply = await httpClient.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: updateMessage,
+      data: updateData,
+    });
+    expect(updateReply.status.code).toBe(202);
+
+    const { message: update2Message, dataBytes: update2Data } =
+      await TestDataGenerator.generateFromRecordsWrite({
+        existingWrite: updateWrite,
+        author: alice,
+      });
+    const update2Reply = await httpClient.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: update2Message,
+      data: update2Data,
+    });
+    expect(update2Reply.status.code).toBe(202);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await subscribeReply.subscription!.close();
+
+    expect(dataCids).toEqual(expect.arrayContaining([
+      updateMessage.descriptor?.dataCid,
+      update2Message.descriptor?.dataCid,
+    ]));
   });
 
   test('writes a PermissionsProtocol grant over loopback', async () => {
