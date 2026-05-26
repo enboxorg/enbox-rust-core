@@ -39,6 +39,17 @@ pub fn generate_cid_from_json(value: &Value) -> Result<Cid, EncodeError<TryReser
     generate_cid_from_serialized(json_value_to_ipld(value))
 }
 
+/// Generates a message CID matching TypeScript `Message.getCid`.
+///
+/// Inline `encodedData` is transport-only and excluded from CID computation.
+pub fn generate_message_cid_from_json(value: &Value) -> Result<Cid, EncodeError<TryReserveError>> {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("encodedData");
+    }
+    generate_cid_from_json(&value)
+}
+
 /// Generates a CID matching TypeScript `Cid.computeDagPbCidFromBytes`.
 pub fn generate_dag_pb_cid_from_bytes<B>(data: B) -> Cid
 where
@@ -217,6 +228,22 @@ mod tests {
             Cid::from_str("bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra").unwrap(),
         );
         assert_eq!(cid.codec(), DAG_CBOR_CODEC);
+    }
+
+    #[test]
+    fn generate_message_cid_from_json_excludes_encoded_data() {
+        let with_encoded = json!({
+            "descriptor": { "interface": "Records", "method": "Write" },
+            "encodedData": "aGVsbG8"
+        });
+        let without_encoded = json!({
+            "descriptor": { "interface": "Records", "method": "Write" }
+        });
+
+        assert_eq!(
+            generate_message_cid_from_json(&with_encoded).unwrap(),
+            generate_cid_from_json(&without_encoded).unwrap()
+        );
     }
 
     #[test]

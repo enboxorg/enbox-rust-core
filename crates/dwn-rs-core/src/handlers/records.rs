@@ -13,7 +13,9 @@ use futures_util::{stream, TryStreamExt};
 use serde_json::{json, Value as JsonValue};
 
 use crate::auth::JwsPublicKeyResolver;
-use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
+use crate::cid::{
+    generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_message_cid_from_json,
+};
 use crate::core_protocol::{CoreProtocolRegistry, CoreProtocolStores};
 use crate::descriptors::records::CountDescriptor;
 use crate::descriptors::{
@@ -3260,7 +3262,7 @@ fn message_timestamp(
 fn message_cid(message: &Message<Descriptor>) -> Result<String, String> {
     serde_json::to_value(message)
         .map_err(|err| err.to_string())
-        .and_then(|value| generate_cid_from_json(&value).map_err(|err| err.to_string()))
+        .and_then(|value| generate_message_cid_from_json(&value).map_err(|err| err.to_string()))
         .map(|cid| cid.to_string())
 }
 
