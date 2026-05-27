@@ -557,6 +557,49 @@ where
         SyncRunStatus::Stopped
     }
 
+    /// Poll-based SMT reconciliation (TS `SyncEngineLevel.sync()` in poll/degraded mode).
+    pub async fn poll_reconcile(&self, mut request: SyncOnceRequest) -> SyncOnceResult {
+        request.direction = SyncDirection::Pull;
+        request.reason = Some("poll_reconcile".to_string());
+        self.sync_once(request).await
+    }
+
+    /// Transition a live link to degraded poll after subscription loss (TS `enterDegradedPoll`).
+    pub fn enter_degraded_poll(
+        &self,
+        tenant: &str,
+        remote: &str,
+        protocol: Option<&str>,
+    ) -> SyncOnceResult {
+        let link_key = live_link_key(tenant, remote, protocol);
+        let status_key = format!("{tenant}|{remote}");
+        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+        state.live_links.remove(&link_key);
+        state
+            .last_status
+            .insert(status_key.clone(), SyncRunStatus::DegradedPoll);
+        drop(state);
+        let _ = self
+            .ledger
+            .set_last_status(&status_key, SyncRunStatus::DegradedPoll);
+        let mut result = SyncOnceResult::new(SyncRunStatus::DegradedPoll);
+        result.next_recommended_delay_ms = Some(DEGRADED_POLL_INTERVAL_MS);
+        result
+    }
+
+    /// Close live subscriptions and run one poll reconciliation pass.
+    pub async fn reconcile_after_live_disconnect(
+        &self,
+        request: SyncOnceRequest,
+    ) -> SyncOnceResult {
+        self.enter_degraded_poll(
+            &request.tenant,
+            &request.remote,
+            request.protocol.as_deref(),
+        );
+        self.poll_reconcile(request).await
+    }
+
     pub fn sync_status(&self, query: SyncStatusQuery) -> SyncHealthSummary {
         let state = self.state.read().expect("SyncEngine state lock poisoned");
         let scope_filter = query.protocol.as_deref().map(|protocol| {
@@ -1507,6 +1550,9 @@ fn checkpoint_key(
     format!("{tenant}|{remote}|{}|{direction:?}", scope.id())
 }
 
+/// Minimum degraded-poll interval in milliseconds (TS uses 15–30s with jitter).
+const DEGRADED_POLL_INTERVAL_MS: u64 = 15_000;
+
 fn live_link_key(tenant: &str, remote: &str, protocol: Option<&str>) -> String {
     let scope = protocol
         .map(|protocol| SyncScope::protocol(protocol).id())
@@ -1715,6 +1761,121 @@ mod tests {
 
         assert_eq!(result.status, SyncRunStatus::Completed);
         assert!(remote.applied_cids().is_empty());
+    }
+
+    #[tokio::test]
+    async fn poll_reconcile_runs_pull_only_sync() {
+        let local = MockEndpoint::default();
+        let remote = MockEndpoint::default();
+        local.set_root("local-root");
+        remote.set_root("remote-root");
+        remote.set_diff(MessagesSyncDiff {
+            only_remote: vec![parent_entry()],
+            only_local: Vec::new(),
+        });
+        let engine = engine(local.clone(), remote);
+
+        let result = engine
+            .poll_reconcile(SyncOnceRequest::new(
+                "did:example:alice",
+                "https://remote.example",
+                SyncDirection::Bidirectional,
+            ))
+            .await;
+
+        assert_eq!(result.status, SyncRunStatus::Completed);
+        assert_eq!(result.records_pulled, 1);
+        assert_eq!(local.applied_cids(), vec!["parent-cid".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn enter_degraded_poll_clears_live_link_and_sets_status() {
+        let local = MockEndpoint::default();
+        let remote = MockEndpoint::default();
+        local.set_root("local-root");
+        remote.set_root("remote-root");
+        let engine = engine(local, remote);
+        engine
+            .start_sync(StartSyncParams {
+                tenant: "did:example:alice".to_string(),
+                remote: "https://remote.example".to_string(),
+                mode: SyncMode::Live,
+                interval_ms: None,
+                protocol: None,
+            })
+            .await;
+
+        let result =
+            engine.enter_degraded_poll("did:example:alice", "https://remote.example", None);
+
+        assert_eq!(result.status, SyncRunStatus::DegradedPoll);
+        assert_eq!(
+            result.next_recommended_delay_ms,
+            Some(DEGRADED_POLL_INTERVAL_MS)
+        );
+        let status = engine.sync_status(SyncStatusQuery {
+            tenant: "did:example:alice".to_string(),
+            remote: Some("https://remote.example".to_string()),
+            protocol: None,
+        });
+        assert_eq!(status.last_status, Some(SyncRunStatus::DegradedPoll));
+        assert!(status.active_live_links.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_after_live_disconnect_polls_without_duplicating_live_applied_record() {
+        let local = MockEndpoint::default();
+        let remote = MockEndpoint::default();
+        local.set_root("local-root");
+        remote.set_root("remote-root");
+        let live_entry = parent_entry();
+        remote.set_diff(MessagesSyncDiff {
+            only_remote: vec![live_entry.clone(), child_entry()],
+            only_local: Vec::new(),
+        });
+        let engine = engine(local.clone(), remote.clone());
+        let cursor = token("remote-stream", "1", "parent-cid");
+
+        engine
+            .handle_remote_subscription_message(
+                "did:example:alice",
+                "https://remote.example",
+                SyncScope::Full,
+                SubscriptionMessage::Event {
+                    cursor: cursor.clone(),
+                    event: Box::new(MessageEvent {
+                        message: empty_message(),
+                        initial_write: None,
+                    }),
+                },
+            )
+            .await;
+        assert_eq!(local.applied_cids(), vec!["parent-cid".to_string()]);
+
+        // Simulate SMT state after the live-delivered record converged locally.
+        local.set_root("local-root-after-live");
+        remote.set_diff(MessagesSyncDiff {
+            only_remote: vec![child_entry()],
+            only_local: Vec::new(),
+        });
+
+        let reconcile = engine
+            .reconcile_after_live_disconnect(SyncOnceRequest::new(
+                "did:example:alice",
+                "https://remote.example",
+                SyncDirection::Pull,
+            ))
+            .await;
+
+        assert_eq!(reconcile.status, SyncRunStatus::Completed);
+        assert_eq!(
+            reconcile.records_pulled, 1,
+            "poll should apply only the record missed by live path"
+        );
+        assert_eq!(
+            local.applied_cids(),
+            vec!["parent-cid".to_string(), "child-cid".to_string()]
+        );
     }
 
     #[test]

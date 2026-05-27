@@ -15,7 +15,7 @@ use dwn_rs_core::sync::{
     NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
     SyncRunStatus,
 };
-use dwn_rs_core::sync_endpoint::{DirectSyncEndpoint, HttpSyncEndpoint};
+use dwn_rs_core::sync_endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
 
 use crate::sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
 use crate::sqlite_sync_ledger::SqliteSyncLedger;
@@ -155,24 +155,52 @@ impl SqliteNativeDwn {
         request: SyncOnceRequest,
     ) -> SyncOnceResult
     where
-        A: dwn_rs_core::sync_endpoint::SyncRequestAuthorizer,
+        A: SyncRequestAuthorizer,
     {
-        let local = DirectSyncEndpoint::from_arc(
-            Arc::clone(&self.dwn),
-            self.store.clone(),
-            self.store.clone(),
-            self.state_index.clone(),
-        );
-        let remote = match HttpSyncEndpoint::new(remote_url.as_ref(), authorizer) {
-            Ok(remote) => remote,
-            Err(error) => return failed_sync_once(error),
+        let engine = match self.build_http_sync_engine(remote_url, authorizer) {
+            Ok(engine) => engine,
+            Err(result) => return result,
         };
-        let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
-            .with_diff_depth(2);
-        if let Err(result) = self.register_sync_identities_on_engine(&engine) {
-            return result;
-        }
         engine.sync_once(request).await
+    }
+
+    /// Poll-based pull reconciliation against an HTTP remote (live-degraded fallback).
+    pub async fn poll_reconcile_with_http<A>(
+        &self,
+        remote_url: impl AsRef<str>,
+        authorizer: A,
+        request: SyncOnceRequest,
+    ) -> SyncOnceResult
+    where
+        A: SyncRequestAuthorizer,
+    {
+        let engine = match self.build_http_sync_engine(remote_url, authorizer) {
+            Ok(engine) => engine,
+            Err(result) => return result,
+        };
+        engine.poll_reconcile(request).await
+    }
+
+    /// Run a closure against a freshly built HTTP [`NativeSyncEngine`] for this node.
+    pub async fn run_with_http_sync_engine<A, F, Fut, R>(
+        &self,
+        remote_url: impl AsRef<str>,
+        authorizer: A,
+        f: F,
+    ) -> Result<R, SyncOnceResult>
+    where
+        A: SyncRequestAuthorizer,
+        F: FnOnce(
+            NativeSyncEngine<
+                DirectSyncEndpoint<NativeDwn, SqliteStore, SqliteStore, SqliteStateIndex>,
+                HttpSyncEndpoint<A>,
+                SqliteSyncLedger,
+            >,
+        ) -> Fut,
+        Fut: std::future::Future<Output = R>,
+    {
+        let engine = self.build_http_sync_engine(remote_url, authorizer)?;
+        Ok(f(engine).await)
     }
 
     /// Run one sync cycle against another in-process [`SqliteNativeDwn`] peer.
@@ -199,6 +227,35 @@ impl SqliteNativeDwn {
             return result;
         }
         engine.sync_once(request).await
+    }
+
+    fn build_http_sync_engine<A>(
+        &self,
+        remote_url: impl AsRef<str>,
+        authorizer: A,
+    ) -> Result<
+        NativeSyncEngine<
+            DirectSyncEndpoint<NativeDwn, SqliteStore, SqliteStore, SqliteStateIndex>,
+            HttpSyncEndpoint<A>,
+            SqliteSyncLedger,
+        >,
+        SyncOnceResult,
+    >
+    where
+        A: SyncRequestAuthorizer,
+    {
+        let local = DirectSyncEndpoint::from_arc(
+            Arc::clone(&self.dwn),
+            self.store.clone(),
+            self.store.clone(),
+            self.state_index.clone(),
+        );
+        let remote =
+            HttpSyncEndpoint::new(remote_url.as_ref(), authorizer).map_err(failed_sync_once)?;
+        let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
+            .with_diff_depth(2);
+        self.register_sync_identities_on_engine(&engine)?;
+        Ok(engine)
     }
 
     fn register_sync_identities_on_engine<Local, Remote>(
