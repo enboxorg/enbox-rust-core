@@ -250,8 +250,8 @@ impl SqliteNativeDwn {
             self.store.clone(),
             self.state_index.clone(),
         );
-        let remote = HttpSyncEndpoint::new(remote_url.as_ref(), authorizer)
-            .map_err(failed_sync_once)?;
+        let remote =
+            HttpSyncEndpoint::new(remote_url.as_ref(), authorizer).map_err(failed_sync_once)?;
         let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
             .with_diff_depth(2);
         self.register_sync_identities_on_engine(&engine)?;

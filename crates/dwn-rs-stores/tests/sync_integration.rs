@@ -19,8 +19,8 @@ use dwn_rs_core::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Type, Who,
 };
 use dwn_rs_core::sync::{
-    StartSyncParams, SyncDirection, SyncIdentityOptions, SyncMode, SyncOnceRequest,
-    SyncProtocols, SyncRunStatus, SyncStatusQuery,
+    StartSyncParams, SyncDirection, SyncIdentityOptions, SyncMode, SyncOnceRequest, SyncProtocols,
+    SyncRunStatus, SyncStatusQuery,
 };
 use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
 use dwn_rs_core::sync_ledger::SyncLedger;

@@ -1805,11 +1805,8 @@ mod tests {
             })
             .await;
 
-        let result = engine.enter_degraded_poll(
-            "did:example:alice",
-            "https://remote.example",
-            None,
-        );
+        let result =
+            engine.enter_degraded_poll("did:example:alice", "https://remote.example", None);
 
         assert_eq!(result.status, SyncRunStatus::DegradedPoll);
         assert_eq!(
@@ -1826,8 +1823,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_after_live_disconnect_polls_without_duplicating_live_applied_record(
-    ) {
+    async fn reconcile_after_live_disconnect_polls_without_duplicating_live_applied_record() {
         let local = MockEndpoint::default();
         let remote = MockEndpoint::default();
         local.set_root("local-root");
