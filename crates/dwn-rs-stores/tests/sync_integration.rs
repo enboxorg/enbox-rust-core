@@ -19,7 +19,8 @@ use dwn_rs_core::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Type, Who,
 };
 use dwn_rs_core::sync::{
-    SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncProtocols, SyncRunStatus,
+    StartSyncParams, SyncDirection, SyncIdentityOptions, SyncMode, SyncOnceRequest,
+    SyncProtocols, SyncRunStatus, SyncStatusQuery,
 };
 use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
 use dwn_rs_core::sync_ledger::SyncLedger;
@@ -178,6 +179,158 @@ async fn http_incremental_sync_reconnects_using_persisted_ledger_checkpoint() {
     assert_completed_with_pulls(&second, 1, "http reconnect pull after gap");
 
     assert_nodes_converged_remote(&local, &remote, "http reconnect sync").await;
+    remote.stop().await;
+}
+
+#[tokio::test]
+async fn http_poll_reconcile_pulls_incremental_records() {
+    let resolver = test_resolver();
+    let remote = start_loopback_peer_server(resolver.clone()).await;
+    install_protocol_on_locked(&remote.peer, "2025-01-01T00:00:00.000000Z").await;
+
+    peer_write_locked(
+        &remote.peer,
+        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"poll-v1"),
+        b"poll-v1",
+    )
+    .await;
+
+    let local = open_configured_local(&resolver).await;
+    let authorizer = JwsSyncAuthorizer::new(test_signer());
+    let first = local
+        .poll_reconcile_with_http(
+            &remote.endpoint,
+            authorizer.clone(),
+            SyncOnceRequest::new(TENANT, HTTP_REMOTE, SyncDirection::Pull),
+        )
+        .await;
+    assert_completed_with_pulls(&first, 1, "http poll reconcile first pull");
+
+    peer_write_locked(
+        &remote.peer,
+        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"poll-v2"),
+        b"poll-v2",
+    )
+    .await;
+
+    let second = local
+        .poll_reconcile_with_http(
+            &remote.endpoint,
+            authorizer,
+            SyncOnceRequest::new(TENANT, HTTP_REMOTE, SyncDirection::Pull),
+        )
+        .await;
+    assert_completed_with_pulls(&second, 1, "http poll reconcile incremental pull");
+
+    assert_nodes_converged_remote(&local, &remote, "http poll reconcile").await;
+    remote.stop().await;
+}
+
+#[tokio::test]
+async fn live_poll_handoff_catches_up_after_subscription_drop() {
+    let resolver = test_resolver();
+    let remote = start_loopback_peer_server(resolver.clone()).await;
+    install_protocol_on_locked(&remote.peer, "2025-01-01T00:00:00.000000Z").await;
+
+    peer_write_locked(
+        &remote.peer,
+        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"live-v1"),
+        b"live-v1",
+    )
+    .await;
+
+    let local = open_configured_local(&resolver).await;
+    let authorizer = JwsSyncAuthorizer::new(test_signer());
+    let endpoint = remote.endpoint.clone();
+    let peer = remote.peer.clone();
+
+    let baseline = local
+        .poll_reconcile_with_http(
+            &endpoint,
+            authorizer.clone(),
+            SyncOnceRequest::new(TENANT, HTTP_REMOTE, SyncDirection::Pull),
+        )
+        .await;
+    assert_completed_with_pulls(&baseline, 1, "baseline poll before live start");
+
+    local
+        .run_with_http_sync_engine(&endpoint, authorizer.clone(), |engine| async move {
+            let live_start = engine
+                .start_sync(StartSyncParams {
+                    tenant: TENANT.to_string(),
+                    remote: HTTP_REMOTE.to_string(),
+                    mode: SyncMode::Live,
+                    interval_ms: None,
+                    protocol: None,
+                })
+                .await;
+            assert_eq!(
+                live_start.status,
+                SyncRunStatus::Started,
+                "live start on converged nodes: {live_start:?}"
+            );
+        })
+        .await
+        .expect("live start");
+
+    peer_write_locked(
+        &peer,
+        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"live-v2"),
+        b"live-v2",
+    )
+    .await;
+
+    local
+        .run_with_http_sync_engine(&endpoint, authorizer, |engine| async move {
+            let reconcile = engine
+                .reconcile_after_live_disconnect(SyncOnceRequest::new(
+                    TENANT,
+                    HTTP_REMOTE,
+                    SyncDirection::Pull,
+                ))
+                .await;
+            assert_completed_with_pulls(&reconcile, 1, "degraded poll catch-up after live drop");
+            assert!(
+                reconcile.records_pulled >= 1,
+                "poll should apply at least the record missed during live outage"
+            );
+
+            let status = engine.sync_status(SyncStatusQuery {
+                tenant: TENANT.to_string(),
+                remote: Some(HTTP_REMOTE.to_string()),
+                protocol: None,
+            });
+            assert_eq!(
+                status.last_status,
+                Some(SyncRunStatus::Completed),
+                "successful poll reconcile should recover link status"
+            );
+            assert!(
+                status.active_live_links.is_empty(),
+                "degraded poll should not keep live links active"
+            );
+        })
+        .await
+        .expect("live poll handoff reconcile");
+
+    let idle = local
+        .poll_reconcile_with_http(
+            &endpoint,
+            JwsSyncAuthorizer::new(test_signer()),
+            SyncOnceRequest::new(TENANT, HTTP_REMOTE, SyncDirection::Pull),
+        )
+        .await;
+    assert_eq!(
+        idle.status,
+        SyncRunStatus::Completed,
+        "post-handoff poll should be idle: {idle:?}"
+    );
+    assert_eq!(
+        idle.records_pulled, 0,
+        "post-handoff poll should not re-apply converged records"
+    );
+
+    assert_nodes_converged_remote(&local, &remote, "live poll handoff").await;
     remote.stop().await;
 }
 
