@@ -44,8 +44,7 @@
 
         wasmBuildInputs = with pkgs; [
           wasm-pack
-          nodejs_20
-          nodePackages.npm
+          nodejs_22
           binaryen
         ];
 
@@ -211,9 +210,6 @@
 
               # Documentation tools
               mdbook
-
-              # Database tools (for SurrealDB integration)
-              surrealdb
 
               # Additional utilities
               jq
