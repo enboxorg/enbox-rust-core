@@ -44,24 +44,25 @@ See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the full matrix. CI run
 | `loopback-interop` | TS HTTP client against Rust loopback server |
 | `fixture-provenance` | Fixture `source.commit` matches `.enbox-version` |
 
-### Sync and transport (modules shipped, integration in progress)
+### Sync and transport (M4 — complete)
 
-- `NativeSyncEngine`, `DirectSyncEndpoint`, and `HttpSyncEndpoint` in `dwn-rs-core`
-- Durable `SqliteSyncLedger` in `dwn-rs-stores`
-- End-to-end sync on `SqliteNativeDwn` and FFI entry points — tracked in M4 epic [#103](https://github.com/enboxorg/enbox-rust-core/issues/103)
+- `NativeSyncEngine` with `DirectSyncEndpoint` and `HttpSyncEndpoint` in `dwn-rs-core`
+- Durable `SqliteSyncLedger` and `SqliteNativeDwn::sync_once_with_http` / `poll_reconcile_with_http` in `dwn-rs-stores`
+- Multi-node sync integration tests (direct peer + HTTP loopback); live/poll handoff documented in [`docs/SYNC_LIVE_POLL.md`](docs/SYNC_LIVE_POLL.md)
+- WebSocket `RecordsSubscribe` on the loopback server (see `loopback-interop` CI job)
 
 ### Mobile bindings
 
 [`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) with durable SQLite open, lock/unlock, JSON `process_message`, HTTP `sync_once`, and sync status. See the [FFI README](crates/enbox-ffi/README.md).
 
-### Active work (M8 → M4)
+### Completed milestones (M8 + M4)
 
-| Milestone | Epic | Focus |
-|-----------|------|-------|
-| **M8** | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) | Prove handler behavior matches TypeScript (loopback interop, real fixture replies) |
-| **M4** | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) | Wire sync engine, WebSocket subscriptions, FFI sync |
+| Milestone | Epic | Outcome |
+|-----------|------|---------|
+| **M8** | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) | Loopback interop, real `message.process` replies, shared fixtures, TestSuite injection scaffold |
+| **M4** | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) | End-to-end sync, WebSocket loopback, FFI sync, HTTP live/poll reconciliation |
 
-Tech-debt handler splits: [#68](https://github.com/enboxorg/enbox-rust-core/issues/68), [#93](https://github.com/enboxorg/enbox-rust-core/issues/93).
+Handler modules are split per method under `handlers/{records,messages,protocols}/` ([#68](https://github.com/enboxorg/enbox-rust-core/issues/68), [#93](https://github.com/enboxorg/enbox-rust-core/issues/93)).
 
 The inherited WASM bridge (`dwn-rs-wasm`) remains excluded from the active workspace.
 
@@ -70,9 +71,9 @@ The inherited WASM bridge (`dwn-rs-wasm`) remains excluded from the active works
 The migration plan is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md) and mirrored into GitHub milestones/issues.
 
 - **M7** — Runnable local node (complete)
-- **M8** — Behavioral parity and cross-runtime validation (in progress)
-- **M4** — Sync and subscriptions (next major milestone)
-- **M5 / M6** — Agent wallet integration and production bindings (deferred until M8 + M4)
+- **M8** — Behavioral parity and cross-runtime validation (complete)
+- **M4** — Sync and subscriptions (complete)
+- **M5 / M6** — Agent wallet integration and production bindings (next)
 
 See also [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md), [`docs/BINDINGS.md`](docs/BINDINGS.md), [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md), [`docs/MIGRATION_GUIDE.md`](docs/MIGRATION_GUIDE.md), and [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
 

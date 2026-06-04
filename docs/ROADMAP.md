@@ -11,10 +11,10 @@ This roadmap tracks the migration from the inherited `dwn-rs` codebase to a nati
 | M2 — Native storage and StateIndex | Complete | — |
 | M3 — DWN engine parity (modules) | Complete | Handler modules ported; behavioral proof in M8 |
 | M7 — Working local node | Complete | [#92](https://github.com/enboxorg/enbox-rust-core/issues/92) |
-| **M8 — Behavioral parity** | **In progress** | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) |
-| **M4 — Sync and subscriptions** | **Next** | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) |
-| M5 — Agent, auth, and wallet core | Modules shipped; E2E deferred | — |
-| M6 — Native bindings and integration | Skeleton shipped; production FFI in M4/M6 | — |
+| M8 — Behavioral parity | Complete | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) |
+| M4 — Sync and subscriptions | Complete | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) |
+| **M5 — Agent, auth, and wallet core** | **Next** | Modules shipped; E2E integration deferred |
+| M6 — Native bindings and integration | In progress | `enbox-ffi` sync surface shipped in M4 |
 
 Test coverage dashboard: [`docs/TEST_COVERAGE.md`](TEST_COVERAGE.md).
 
@@ -57,12 +57,17 @@ Goal: port `Dwn.processMessage()` and current Enbox handlers.
 
 ## Milestone 4: Sync And Subscriptions
 
-Goal: port Enbox sync behavior for local native nodes.
+Goal: port Enbox sync behavior for local native nodes. **Complete** (epic [#103](https://github.com/enboxorg/enbox-rust-core/issues/103)).
 
-- Implement `MessagesSync` root/subtree/leaves/diff actions.
-- Implement `ProgressToken`, EOSE, gap detection, and replay bounds.
-- Port poll/live sync behavior, WebSocket subscription client support, push/pull reconciliation, dead-letter handling, repair, and scoped protocol sync.
-- Add mobile-friendly background sync entry points, documented in [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md).
+Delivered:
+
+- `NativeSyncEngine` integrated with `SqliteNativeDwn` (`sync_once_with_peer`, `sync_once_with_http`, `poll_reconcile_with_http`)
+- Progress token replay, EOSE, gap repair, and echo suppression (see `sqlite_event_log_progress_integration.rs`, `sync.rs` unit tests)
+- WebSocket `RecordsSubscribe` on loopback server; HTTP + direct multi-node sync tests (`sync_integration.rs`)
+- `enbox-ffi` durable open, `sync_once`, and sync status
+- Live/poll reconciliation vs HTTP remote — [`SYNC_LIVE_POLL.md`](SYNC_LIVE_POLL.md)
+
+Remaining product work (not blocking M4 exit): agent-level live `MessagesSubscribe` client wiring and production background sync scheduling — see [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md).
 
 ## Milestone 5: Agent, Auth, And Wallet Core
 
