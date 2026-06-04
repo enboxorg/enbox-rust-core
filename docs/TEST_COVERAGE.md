@@ -46,7 +46,7 @@ This repository validates DWN behavior through **three independent layers**. The
 | `message.process` | yes (`SqliteNativeDwn`) | `typescript-message-process.test.ts` | handlers/*.spec.ts | partial (RPC smoke) | partial |
 | `protocol.authorization-corpus` | yes | `typescript-protocol-authorization.test.ts` | features/permissions specs | — | partial |
 
-**Loopback interop (layer 4)** covers unsigned `RecordsQuery`, signed `ProtocolsConfigure`, signed `RecordsWrite` + `RecordsRead`, WebSocket `RecordsSubscribe` with HTTP write updates, and permissions grants (`tools/interop/loopback-interop.test.ts`).
+**Loopback interop (layer 4)** covers unsigned `RecordsQuery`, signed `ProtocolsConfigure`, signed `RecordsWrite` + `RecordsRead`, WebSocket `RecordsSubscribe` with HTTP write updates, and permissions grants (`tools/interop/loopback-interop.test.ts`). Runs in the `loopback-interop` CI job.
 
 **Partial** means the shared fixture corpus exercises a slice of the behavior; the dwn-sdk-js native suite covers the full handler/feature/scenario surface.
 
@@ -79,12 +79,12 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 
 | Gap | Mitigation | Status |
 |-----|------------|--------|
-| Fixture echo `message.process` replies vs real handler bodies | Rust uses `SqliteNativeDwn` dispatch; fixture handlers still stub replies for parity | in progress |
+| Fixture echo `message.process` replies vs real handler bodies | Rust uses `SqliteNativeDwn` dispatch for behavior cases (#106) | done |
 | Filter engine DateTime/Cid index coercion | Fixed RFC3339 range + CID string equality in `filters/matching.rs` | done |
 | HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
-| No Rust-backed `TestSuite.runInjectableDependentTests` | Scaffold in `tools/interop/testsuite-injection.test.ts`; wire via `enbox-ffi` / WASM | planned |
+| Rust-backed `TestSuite.runInjectableDependentTests` | Phase 1 scaffold in `tools/interop/testsuite-injection.test.ts` (#108); full injectable suite in CI is future work | partial |
 | `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
-| Scenario/end-to-end specs use in-process `Dwn`, not HTTP | Expand `loopback-interop` harness incrementally | started |
+| Scenario/end-to-end specs use in-process `Dwn`, not HTTP | Expand `loopback-interop` harness incrementally | in progress |
 | `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `sync_status` + crate README | done |
 | Multi-node sync integration (direct + HTTP) | `crates/dwn-rs-stores/tests/sync_integration.rs` (6 scenarios in `cargo test --workspace`) | done |
 | Live/poll reconciliation vs HTTP remote | `poll_reconcile_with_http`, `reconcile_after_live_disconnect`; see [SYNC_LIVE_POLL.md](./SYNC_LIVE_POLL.md) | done |
