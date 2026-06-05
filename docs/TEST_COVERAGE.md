@@ -84,8 +84,8 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
 | Rust-backed `TestSuite.runInjectableDependentTests` | Phase 1 scaffold in `tools/interop/testsuite-injection.test.ts` (#108); full injectable suite in CI is future work | partial |
 | `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
-| Scenario/end-to-end specs use in-process `Dwn`, not HTTP | Expand `loopback-interop` harness incrementally | in progress |
-| `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `sync_status` + crate README | done |
+| Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe, `MessagesSync` root | done |
+| `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `poll_reconcile`, `sync_status` + crate README | done |
 | Multi-node sync integration (direct + HTTP) | `crates/dwn-rs-stores/tests/sync_integration.rs` (6 scenarios in `cargo test --workspace`) | done |
 | Live/poll reconciliation vs HTTP remote | `poll_reconcile_with_http`, `reconcile_after_live_disconnect`; see [SYNC_LIVE_POLL.md](./SYNC_LIVE_POLL.md) | done |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |

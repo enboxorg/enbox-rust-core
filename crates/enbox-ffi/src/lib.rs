@@ -273,6 +273,75 @@ impl EnboxCore {
         })
     }
 
+    /// Pull-only poll reconciliation against an HTTP remote (live-degraded fallback).
+    ///
+    /// `request_json` matches [`Self::sync_once`]; uses [`SqliteNativeDwn::poll_reconcile_with_http`].
+    pub fn poll_reconcile(&self, request_json: String) -> Result<String, EnboxError> {
+        let request: FfiSyncOnceRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let sync_request = SyncOnceRequest {
+            tenant: request.tenant.clone(),
+            remote: request.remote.clone(),
+            direction: request.direction,
+            protocol: request.protocol,
+            max_records: request.max_records,
+            max_bytes: request.max_bytes,
+            connectivity: Default::default(),
+            reason: Some("ffi_poll_reconcile".to_string()),
+        };
+
+        let state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        if state.locked {
+            return Err(EnboxError::Locked);
+        }
+        if state.sync_in_progress {
+            return Err(EnboxError::SyncInProgress);
+        }
+        let Some(node) = state.node.clone() else {
+            return Err(EnboxError::NotInitialized);
+        };
+
+        let signer = if let Some(config) = request.signer {
+            PrivateJwkSigner::new(config.key_id, config.algorithm, config.private_jwk)
+        } else {
+            state
+                .sync_signer
+                .clone()
+                .ok_or(EnboxError::SyncSignerMissing)?
+        };
+        drop(state);
+
+        {
+            let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+                detail: format!("core state lock poisoned: {err}"),
+            })?;
+            state.sync_in_progress = true;
+        }
+
+        let authorizer = JwsSyncAuthorizer::new(signer);
+        let result = self.runtime.block_on(node.poll_reconcile_with_http(
+            &request.remote,
+            authorizer,
+            sync_request,
+        ));
+
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        state.sync_in_progress = false;
+        state.last_sync = Some(result.clone());
+        state.last_sync_tenant = Some(request.tenant);
+        state.last_sync_remote = Some(request.remote);
+
+        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
     /// Return the last sync outcome for the supplied tenant (and optional remote/protocol filter).
     pub fn sync_status(&self, query_json: String) -> Result<EnboxSyncStatus, EnboxError> {
         let query: FfiSyncStatusQuery =
@@ -523,5 +592,19 @@ mod tests {
         assert!(!status.in_progress);
         assert_eq!(status.last_status, "failed");
         assert!(status.last_error_code.is_some());
+
+        let poll_json = core
+            .poll_reconcile(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://127.0.0.1:9/",
+                    "direction": "pull"
+                })
+                .to_string(),
+            )
+            .expect("poll_reconcile returns json even when remote is unreachable");
+        let poll_result: SyncOnceResult =
+            serde_json::from_str(&poll_json).expect("poll reconcile result json");
+        assert_eq!(poll_result.status, SyncRunStatus::Failed);
     }
 }
