@@ -82,7 +82,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | Fixture echo `message.process` replies vs real handler bodies | Rust uses `SqliteNativeDwn` dispatch for behavior cases (#106) | done |
 | Filter engine DateTime/Cid index coercion | Fixed RFC3339 range + CID string equality in `filters/matching.rs` | done |
 | HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
-| Rust-backed `TestSuite.runInjectableDependentTests` | Phase 1 scaffold in `tools/interop/testsuite-injection.test.ts` (#108); full injectable suite in CI is future work | partial |
+| Rust-backed `TestSuite.runInjectableDependentTests` | Phase 1 scaffold in `tools/interop/testsuite-injection.test.ts` (#108); WASM path documented in [STORES_SDK_JS.md](./STORES_SDK_JS.md); FFI adapters future | partial |
 | `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe, `MessagesSync` root | done |
 | `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `poll_reconcile`, `sync_status` + crate README | done |
