@@ -6,10 +6,6 @@ license = "Apache-2.0"
 description = "Core library components for dwn-rs"
 
 [lib]
-# `cdylib` was inherited from the legacy `dwn-rs-wasm` build. The active
-# workspace excludes that crate (see root `Cargo.toml`), so the native core
-# only exports an `rlib`. Re-add `cdylib` here when an FFI consumer (e.g.
-# `enbox-ffi`) needs a shared object.
 crate-type = ["rlib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

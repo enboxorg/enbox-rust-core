@@ -11,8 +11,6 @@ The active workspace is the root `Cargo.toml` member list:
 - `crates/dwn-rs-remote`
 - `crates/dwn-rs-stores`
 
-`crates/dwn-rs-wasm` is intentionally excluded. It is legacy bridge code for the old WASM package shape and still references `@tbd54566975/dwn-sdk-js` in generated TypeScript bindings.
-
 ## Inherited Crate Decisions
 
 | Crate | Current Contents | Decision | Migration Destination |
@@ -21,7 +19,6 @@ The active workspace is the root `Cargo.toml` member list:
 | `dwn-rs-message-derive` | Proc macro for descriptor serialization/deserialization boilerplate. | Keep while descriptors are still macro-based; rename mechanically with the core crate if retained. | `enbox-dwn-message-derive` or inline modules in `enbox-dwn-core` if the macro stops paying for itself. |
 | `dwn-rs-stores` | SurrealDB-backed `MessageStore`, `DataStore`, `EventLog`, and `ResumableTaskStore` implementations plus query glue. | Adapt as reference only. Enbox native storage should target SQLite first, not SurrealDB. Keep active while tests still cover inherited traits. | Traits move to `enbox-dwn-store`; SQLite implementation goes to `enbox-dwn-sqlite`; SurrealDB either becomes legacy/optional or is removed from the active workspace. |
 | `dwn-rs-remote` | JSON-RPC request/response types and an HTTP remote DWN client. | Defer. It may inform a local HTTP/WebSocket server mode, but it is not the native core boundary. | Revisit during desktop/local node integration; likely `enbox-dwn-sync` or a future client/transport crate if needed. |
-| `dwn-rs-wasm` | `wasm-bindgen` wrappers for messages, filters, stores, streams, and SurrealDB bindings. | Legacy-only. Do not add it back to the active workspace unless there is an explicit product need. | No direct migration. Native/mobile bindings should be built through `enbox-ffi`, not this bridge. |
 
 ## Target Crate Graph
 
