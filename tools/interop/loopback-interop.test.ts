@@ -48,6 +48,9 @@ type HttpDwnRpcClient = {
 };
 
 type DwnSdkModule = {
+  MessagesSync: {
+    create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
+  };
   ProtocolsConfigure: {
     create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
   };
@@ -105,7 +108,7 @@ if (!existsSync(wsClientModulePath)) {
 
 const { HttpDwnRpcClient } = await import(httpClientModulePath) as HttpDwnRpcClientModule;
 const { WebSocketDwnRpcClient } = await import(wsClientModulePath) as WebSocketDwnRpcClientModule;
-const { ProtocolsConfigure, RecordsRead } = await import(dwnSdkModulePath) as DwnSdkModule;
+const { MessagesSync, ProtocolsConfigure, RecordsRead } = await import(dwnSdkModulePath) as DwnSdkModule;
 const { TestDataGenerator, defaultTestProtocolDefinition } = await import(testDataGeneratorPath) as {
   TestDataGenerator: DwnSdkModule['TestDataGenerator'];
   defaultTestProtocolDefinition: DwnSdkModule['defaultTestProtocolDefinition'];
@@ -192,6 +195,55 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     });
 
     expect(reply.status.code).toBe(202);
+  });
+
+  test('MessagesSync root over HTTP changes after RecordsWrite', async () => {
+    const client = new HttpDwnRpcClient();
+    const alice = await getLoopbackPersona();
+
+    await installLoopbackProtocol(client);
+
+    const { message: rootMessage } = await MessagesSync.create({
+      signer: alice.signer,
+      action: 'root',
+    });
+    const emptyRootReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: rootMessage,
+    });
+    expect(emptyRootReply.status.code).toBe(200);
+    const emptyRootBody = (emptyRootReply as { body?: { root?: string } }).body
+      ?? emptyRootReply as { root?: string };
+    const emptyRoot = emptyRootBody.root;
+    expect(emptyRoot).toMatch(/^[a-f0-9]{64}$/);
+
+    const { message: writeMessage, dataBytes } = await TestDataGenerator.generateRecordsWrite({
+      author: alice,
+      schema: 'foo/bar',
+    });
+    const writeReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: writeMessage,
+      data: dataBytes,
+    });
+    expect(writeReply.status.code).toBe(202);
+
+    const { message: rootAfterWrite } = await MessagesSync.create({
+      signer: alice.signer,
+      action: 'root',
+    });
+    const afterWriteReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: rootAfterWrite,
+    });
+    expect(afterWriteReply.status.code).toBe(200);
+    const afterWriteBody = (afterWriteReply as { body?: { root?: string } }).body
+      ?? afterWriteReply as { root?: string };
+    expect(afterWriteBody.root).toMatch(/^[a-f0-9]{64}$/);
+    expect(afterWriteBody.root).not.toBe(emptyRoot);
   });
 
   test('RecordsWrite then RecordsRead round-trip signed record', async () => {
