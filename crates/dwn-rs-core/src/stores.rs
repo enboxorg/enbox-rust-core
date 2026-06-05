@@ -14,7 +14,6 @@ use crate::{
 };
 use crate::{Descriptor, MapValue, Message, MessageSort, Pagination};
 
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
     pub id: String,
