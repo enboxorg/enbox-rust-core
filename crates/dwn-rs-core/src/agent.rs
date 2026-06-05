@@ -653,7 +653,7 @@ impl AgentKeyManager for MemoryKeyManager {
 /// In-memory `DidResolverCache` for development and tests.
 ///
 /// Process-local; not durable across runs and not shared across processes.
-/// Production deployments should back the cache with a SQLite/SurrealDB
+/// Production deployments should back the cache with a SQLite
 /// store and respect TTLs from the resolver itself.
 #[derive(Clone, Default)]
 pub struct MemoryDidResolverCache {

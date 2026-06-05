@@ -11,18 +11,9 @@ crate-type = ["rlib"]
 [features]
 # Sqlite is the actively-developed backend that implements the new
 # `MessageStore`/`DataStore`/`EventLog`/`StateIndex`/`ResumableTaskStore`
-# traits. SurrealDB only implements the upstream `Legacy*` traits and is
-# kept around for the legacy migration path (see `surrealdb/` README).
+# traits.
 default = ["sqlite"]
 sqlite = ["dep:rusqlite"]
-surrealdb = [
-    "surrealdb/rustls",
-    "surrealdb/kv-mem",
-    "surrealdb/protocol-ws",
-    "surrealdb/protocol-http",
-]
-surreal-lib = ["surrealdb", "surrealdb/kv-surrealkv"]
-surreal-wasm = ["surrealdb", "surrealdb/kv-indxdb"]
 no-std = []
 
 
@@ -39,7 +30,6 @@ tracing = { version = "0.1.40", default-features = false, features = [
 serde = { version = "1.0.183", features = ["derive"] }
 serde_ipld_dagcbor = "0.6.0"
 serde_with = "3.4.0"
-surrealdb = { version = "=2.0.4", default-features = false, optional = true }
 rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
 
 ulid = { version = "1.1.2", features = ["serde"] }

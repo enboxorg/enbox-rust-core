@@ -2,151 +2,18 @@ use std::{fmt::Debug, future::Future, pin::Pin};
 
 use bytes::Bytes;
 use futures_util::Stream;
-use ipld_core::cid::Cid;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use ulid::Ulid;
 
 use crate::events::MessageEvent;
 use crate::{
-    descriptors::MessageDescriptor,
     errors::{
         DataStoreError, EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError,
     },
     filters::filter_key::Filters,
-    Cursor, QueryReturn,
+    Cursor,
 };
 use crate::{Descriptor, MapValue, Message, MessageSort, Pagination};
 
-/// Legacy `MessageStore` trait inherited from upstream `dwn-rs`. Only the
-/// SurrealDB backend (`crates/dwn-rs-stores/src/surrealdb/*`) implements it.
-/// New code should target [`MessageStore`] (formerly `EnboxMessageStore`).
-pub trait LegacyMessageStore: Default {
-    fn open(&mut self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
-
-    fn close(&mut self) -> impl Future<Output = ()>;
-
-    fn put<D: MessageDescriptor + Serialize + Send + 'static>(
-        &self,
-        tenant: &str,
-        message: Message<D>,
-        indexes: MapValue,
-        tags: MapValue,
-    ) -> impl Future<Output = Result<Cid, MessageStoreError>> + Send;
-
-    fn get<D: MessageDescriptor + DeserializeOwned + Send + 'static>(
-        &self,
-        tenant: &str,
-        cid: &str,
-    ) -> impl Future<Output = Result<Message<D>, MessageStoreError>> + Send
-    where
-        Message<D>: DeserializeOwned;
-
-    fn query<D: MessageDescriptor + DeserializeOwned + Send + 'static>(
-        &self,
-        tenant: &str,
-        filter: Filters,
-        sort: Option<MessageSort>,
-        pagination: Option<Pagination>,
-    ) -> impl Future<Output = Result<QueryReturn<Message<D>>, MessageStoreError>> + Send
-    where
-        Message<D>: DeserializeOwned;
-
-    fn delete(
-        &self,
-        tenant: &str,
-        cid: &str,
-    ) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
-
-    fn clear(&self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
-}
-
-/// Legacy `DataStore` trait inherited from upstream `dwn-rs`. See
-/// [`LegacyMessageStore`].
-pub trait LegacyDataStore: Default {
-    fn open(&mut self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
-
-    fn close(&mut self) -> impl Future<Output = ()> + Send;
-
-    fn put<T: Stream<Item = Bytes> + Send + Unpin>(
-        &self,
-        tenant: &str,
-        record_id: &str,
-        cid: &str,
-        value: T,
-    ) -> impl Future<Output = Result<PutDataResults, DataStoreError>> + Send;
-
-    fn get(
-        &self,
-        tenant: &str,
-        record_id: &str,
-        cid: &str,
-    ) -> impl Future<Output = Result<GetDataResults, DataStoreError>> + Send;
-
-    fn delete(
-        &self,
-        tenant: &str,
-        record_id: &str,
-        cid: &str,
-    ) -> impl Future<Output = Result<(), DataStoreError>> + Send;
-
-    fn clear(&self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PutDataResults {
-    #[serde(rename = "dataSize")]
-    pub size: usize,
-}
-
-pub struct GetDataResults {
-    pub size: usize,
-    pub data: Pin<Box<dyn Stream<Item = u8>>>,
-}
-
-/// Legacy `EventLog` trait inherited from upstream `dwn-rs`. See
-/// [`LegacyMessageStore`].
-pub trait LegacyEventLog: Default {
-    fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send;
-
-    fn close(&mut self) -> impl Future<Output = ()>;
-
-    fn append(
-        &self,
-        tenant: &str,
-        cid: &str,
-        indexes: MapValue,
-        tags: MapValue,
-    ) -> impl Future<Output = Result<(), EventLogError>>;
-
-    fn get_events(
-        &self,
-        tenant: &str,
-        cursor: Option<Cursor>,
-    ) -> impl Future<Output = Result<QueryReturn<String>, EventLogError>> + Send;
-
-    fn query_events(
-        &self,
-        tenant: &str,
-        filter: Filters,
-        cursor: Option<Cursor>,
-    ) -> impl Future<Output = Result<QueryReturn<String>, EventLogError>> + Send;
-
-    fn delete(
-        &self,
-        tenant: &str,
-        cid: &[&str],
-    ) -> impl Future<Output = Result<(), EventLogError>> + Send;
-
-    fn clear(&self) -> impl Future<Output = Result<(), EventLogError>> + Send;
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LegacyManagedResumableTask<T: Serialize + Sync + Send + Debug> {
-    pub id: Ulid,
-    pub task: T,
-    pub timeout: u64,
-    pub retry_count: u64,
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
@@ -155,44 +22,6 @@ pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
     pub timeout: u64,
     #[serde(rename = "retryCount")]
     pub retry_count: u64,
-}
-
-/// Legacy `ResumableTaskStore` trait inherited from upstream `dwn-rs`. See
-/// [`LegacyMessageStore`].
-pub trait LegacyResumableTaskStore: Default {
-    fn open(&mut self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
-
-    fn close(&mut self) -> impl Future<Output = ()> + Send;
-
-    fn register<T: Serialize + Send + Sync + DeserializeOwned + Debug + 'static>(
-        &self,
-        task: T,
-        timeout: u64,
-    ) -> impl Future<Output = Result<LegacyManagedResumableTask<T>, ResumableTaskStoreError>> + Send;
-
-    fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
-        &self,
-        count: u64,
-    ) -> impl Future<Output = Result<Vec<LegacyManagedResumableTask<T>>, ResumableTaskStoreError>> + Send;
-
-    fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
-        &self,
-        task_id: &str,
-    ) -> impl Future<Output = Result<Option<LegacyManagedResumableTask<T>>, ResumableTaskStoreError>>
-           + Send;
-
-    fn extend(
-        &self,
-        task_id: &str,
-        timeout: u64,
-    ) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
-
-    fn delete(
-        &self,
-        task_id: &str,
-    ) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
-
-    fn clear(&self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
 }
 
 /// Queryable index values attached to stored DWN messages and emitted events.
