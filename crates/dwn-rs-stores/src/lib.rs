@@ -24,8 +24,3 @@ pub use sqlite::*;
 #[cfg(feature = "sqlite")]
 pub use sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
 pub use sqlite_sync_ledger::SqliteSyncLedger;
-
-#[cfg(feature = "surrealdb")]
-pub mod surrealdb;
-#[cfg(feature = "surrealdb")]
-pub use surrealdb::*;

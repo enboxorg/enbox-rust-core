@@ -26,7 +26,7 @@ const GRABBED_TASK_TIMEOUT_SECONDS: u64 = 60;
 #[derive(Clone)]
 /// In-memory `EventLog` for development, tests, and the `MobileCore` /
 /// `DesktopLocalNode` reference flows. Process-local; not durable. Wire a
-/// real backend (SQLite, SurrealDB, etc.) for production deployments.
+/// real backend (SQLite, etc.) for production deployments.
 pub struct MemoryEventLog {
     inner: Arc<RwLock<EventLogInner>>,
     epoch: String,
