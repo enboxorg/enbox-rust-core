@@ -7,7 +7,6 @@ members = [
     "crates/dwn-rs-stores",
     "crates/enbox-ffi",
 ]
-exclude = ["crates/dwn-rs-wasm"]
 
 [profile.release]
 lto = "fat"
