@@ -25,10 +25,6 @@ pub struct SqliteConnection {
 }
 
 impl SqliteConnection {
-    pub(crate) fn from_store(store: &SqliteStore) -> Self {
-        store.conn.clone()
-    }
-
     pub async fn open(
         path: impl AsRef<Path>,
         migrate: impl FnOnce(&mut Connection) -> Result<(), StoreError> + Send + 'static,
@@ -54,12 +50,12 @@ impl SqliteConnection {
         F: FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
         T: Send + 'static,
     {
-        run(&self.readers, "reader", f).await
+        run(&self.readers, "reader", move |c: &mut Connection| f(c)).await
     }
 
     pub async fn with_writer<T, F>(&self, f: F) -> Result<T, StoreError>
     where
-        F: FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
         T: Send + 'static,
     {
         run(&self.writer, "writer", f).await
@@ -74,7 +70,7 @@ impl SqliteConnection {
 /// Acquire a connection from `pool` and run `f` on the blocking pool.
 async fn run<T, F>(pool: &Pool, which: &'static str, f: F) -> Result<T, StoreError>
 where
-    F: FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
+    F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
     T: Send + 'static,
 {
     pool.get()
@@ -116,3 +112,4 @@ fn pragmas(c: &Connection, read_only: bool) -> rusqlite::Result<()> {
 
     Ok(())
 }
+
