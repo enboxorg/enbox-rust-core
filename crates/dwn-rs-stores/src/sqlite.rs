@@ -537,6 +537,11 @@ fn migrate(connection: &Connection) -> Result<(), StoreError> {
                 task_json TEXT NOT NULL,
                 timeout_ms INTEGER NOT NULL,
                 retry_count INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_secrets (
+                key TEXT PRIMARY KEY,
+                value BLOB NOT NULL
             );",
         )
         .map_err(sqlite_store_error)

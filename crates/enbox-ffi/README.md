@@ -14,9 +14,28 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `sync_once(request_json)` | Run one sync cycle against a remote DWN URL |
 | `poll_reconcile(request_json)` | Pull-only poll reconciliation (live-degraded HTTP fallback) |
 | `sync_status(query_json)` | Last sync outcome (in-progress flag, status, error, counters) |
+| `initialize_agent_identity(request_json)` | Create or recover an agent identity from a BIP-39 recovery phrase; persists `PortableDid` + vault keys |
+| `current_agent_identity()` | Return the persisted `PortableDid` JSON, or `None` if none initialized |
+| `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
 | `lock()` / `unlock()` | Block message/sync processing while vault is locked |
 
 Typed errors (`EnboxError`) cross the FFI boundary without panics.
+
+## Agent identity workflow
+
+1. Open a durable node: `EnboxCore.open("/path/to/enbox.sqlite")`
+2. Initialize or recover an identity:
+   ```json
+   initialize_agent_identity({
+     "recoveryPhrase": "<12-word BIP-39 phrase, optional>",
+     "dwnEndpoints": ["https://dwn.example/"]
+   })
+   ```
+   Returns JSON `AgentIdentityInitialization` (PortableDid + vault CEK + unlock salt + recovery phrase). The host displays the recovery phrase **once**; the Rust core persists the `PortableDid` to the SQLite-backed `agent_secrets` table.
+3. On subsequent launches, `current_agent_identity()` returns the persisted `PortableDid` JSON (or `null` if missing).
+4. For recovery-screen validation before committing, call `derive_agent_keys_from_phrase(phrase)` — this is pure and does not persist anything.
+
+`PortableDid` and `AgentIdentityInitialization` shapes follow [`agent.rs`](../../crates/dwn-rs-core/src/agent.rs). The secret store layer is `SqliteSecretStore` ([`crates/dwn-rs-stores/src/sqlite_agent.rs`](../../crates/dwn-rs-stores/src/sqlite_agent.rs)), which shares the SQLite database used for DWN data.
 
 ## Sync workflow
 

@@ -6,12 +6,16 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use dwn_rs_core::agent::{
+    derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
+    DeterministicDidJwkProvider, MemoryDidResolverCache, MemoryKeyManager, PortableDid,
+};
 use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::sync::{
     SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncRunStatus,
 };
 use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
-use dwn_rs_stores::SqliteNativeDwn;
+use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
 use serde::{Deserialize, Serialize};
 
 uniffi::setup_scaffolding!();
@@ -44,6 +48,8 @@ pub enum EnboxError {
     Store { detail: String },
     #[error("Sync error: {detail}")]
     Sync { detail: String },
+    #[error("Agent identity error ({code}): {detail}")]
+    Agent { code: String, detail: String },
     #[error("Core is not initialized")]
     NotInitialized,
     #[error("Vault is locked")]
@@ -58,16 +64,33 @@ pub enum EnboxError {
     DeadlineExceeded,
 }
 
+impl From<dwn_rs_core::agent::AgentIdentityError> for EnboxError {
+    fn from(err: dwn_rs_core::agent::AgentIdentityError) -> Self {
+        EnboxError::Agent {
+            code: err.code,
+            detail: err.detail,
+        }
+    }
+}
+
 struct CoreState {
     locked: bool,
     database_path: Option<String>,
     node: Option<Arc<SqliteNativeDwn>>,
+    secret_store: Option<SqliteSecretStore>,
     sync_signer: Option<PrivateJwkSigner>,
     sync_in_progress: bool,
     last_sync: Option<SyncOnceResult>,
     last_sync_tenant: Option<String>,
     last_sync_remote: Option<String>,
 }
+
+type AgentService = AgentIdentityService<
+    DeterministicDidJwkProvider,
+    MemoryKeyManager,
+    SqliteSecretStore,
+    MemoryDidResolverCache,
+>;
 
 #[derive(uniffi::Object)]
 pub struct EnboxCore {
@@ -342,6 +365,60 @@ impl EnboxCore {
         })
     }
 
+    /// Initialize (or recover) an agent identity from a BIP-39 recovery phrase.
+    ///
+    /// `request_json` is JSON-encoded [`AgentIdentityInitializeRequest`]
+    /// (`{ "recoveryPhrase"?: string, "dwnEndpoints": string[] }`). When the
+    /// phrase is omitted a fresh 12-word English mnemonic is generated.
+    ///
+    /// Persists the resulting [`PortableDid`], vault content encryption key,
+    /// and unlock salt to the SQLite-backed [`SqliteSecretStore`]. Returns
+    /// JSON-encoded [`AgentIdentityInitialization`].
+    pub fn initialize_agent_identity(&self, request_json: String) -> Result<String, EnboxError> {
+        let request: AgentIdentityInitializeRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let secret_store = self.require_secret_store()?;
+        let service = self.build_agent_service(secret_store)?;
+        let initialization = self
+            .runtime
+            .block_on(service.initialize_from_recovery(request))?;
+        serde_json::to_string(&initialization).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Return the persisted agent [`PortableDid`] as JSON, or `None` if no
+    /// identity has been initialized on this database.
+    pub fn current_agent_identity(&self) -> Result<Option<String>, EnboxError> {
+        let secret_store = self.require_secret_store()?;
+        let service = self.build_agent_service(secret_store)?;
+        let Some(portable_did) = self.runtime.block_on(service.stored_agent_did())? else {
+            return Ok(None);
+        };
+        serde_json::to_string(&portable_did)
+            .map(Some)
+            .map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })
+    }
+
+    /// Derive the four-key set (vault, identity, signing, encryption) for the
+    /// supplied recovery phrase **without** persisting anything. Useful for
+    /// pre-flight validation on a recovery screen.
+    ///
+    /// Returns JSON-encoded [`AgentDerivedKeys`].
+    pub fn derive_agent_keys_from_phrase(
+        &self,
+        recovery_phrase: String,
+    ) -> Result<String, EnboxError> {
+        let derived = derive_agent_keys(&recovery_phrase)?;
+        serde_json::to_string(&derived).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
     /// Return the last sync outcome for the supplied tenant (and optional remote/protocol filter).
     pub fn sync_status(&self, query_json: String) -> Result<EnboxSyncStatus, EnboxError> {
         let query: FfiSyncStatusQuery =
@@ -356,6 +433,16 @@ impl EnboxCore {
 }
 
 impl EnboxCore {
+    fn require_secret_store(&self) -> Result<SqliteSecretStore, EnboxError> {
+        let state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        if state.locked {
+            return Err(EnboxError::Locked);
+        }
+        state.secret_store.clone().ok_or(EnboxError::NotInitialized)
+    }
+
     fn open_with_resolver(
         database_path: impl AsRef<Path>,
         resolver: StaticPublicKeyResolver,
@@ -377,12 +464,14 @@ impl EnboxCore {
         } else {
             Some(path.to_string_lossy().into_owned())
         };
+        let secret_store = SqliteSecretStore::new(node.store());
         Ok(Arc::new(Self {
             runtime,
             state: Arc::new(Mutex::new(CoreState {
                 locked: false,
                 database_path,
                 node: Some(Arc::new(node)),
+                secret_store: Some(secret_store),
                 sync_signer: None,
                 sync_in_progress: false,
                 last_sync: None,
@@ -391,6 +480,51 @@ impl EnboxCore {
             })),
         }))
     }
+
+    /// Build an [`AgentIdentityService`] backed by the SQLite secret store and
+    /// rehydrated from any previously persisted [`PortableDid`].
+    ///
+    /// The key manager and DID resolver cache are rebuilt on every call. This
+    /// keeps the FFI surface stateless: the only durable state is the
+    /// [`SqliteSecretStore`] backed by the same SQLite file used for DWN data.
+    fn build_agent_service(
+        &self,
+        secret_store: SqliteSecretStore,
+    ) -> Result<AgentService, EnboxError> {
+        let service = AgentIdentityService::new(
+            DeterministicDidJwkProvider::default(),
+            MemoryKeyManager::default(),
+            secret_store,
+            MemoryDidResolverCache::default(),
+        );
+        if let Some(portable_did) = self.runtime.block_on(service.stored_agent_did())? {
+            self.runtime
+                .block_on(import_existing_identity(&service, &portable_did))?;
+        }
+        Ok(service)
+    }
+}
+
+async fn import_existing_identity(
+    service: &AgentService,
+    portable_did: &PortableDid,
+) -> Result<(), dwn_rs_core::agent::AgentIdentityError> {
+    use dwn_rs_core::agent::{AgentKeyManager, DidProvider, DidResolverCache};
+    service
+        .did_provider()
+        .import_did(portable_did.clone())
+        .await?;
+    service
+        .resolver_cache()
+        .put_did(portable_did.clone())
+        .await?;
+    for jwk in &portable_did.private_keys {
+        service
+            .key_manager()
+            .import_private_jwk(jwk.clone())
+            .await?;
+    }
+    Ok(())
 }
 
 fn sync_status_from_state(state: &CoreState, query: &FfiSyncStatusQuery) -> EnboxSyncStatus {
@@ -606,5 +740,123 @@ mod tests {
         let poll_result: SyncOnceResult =
             serde_json::from_str(&poll_json).expect("poll reconcile result json");
         assert_eq!(poll_result.status, SyncRunStatus::Failed);
+    }
+
+    const TEST_RECOVERY_PHRASE: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn initialize_agent_identity_is_deterministic_for_a_given_phrase() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp
+            .path()
+            .join("agent.sqlite")
+            .to_string_lossy()
+            .into_owned();
+
+        let core = EnboxCore::open(path.clone()).expect("open core");
+        let raw = core
+            .initialize_agent_identity(
+                serde_json::json!({
+                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                    "dwnEndpoints": ["https://dwn.example/"]
+                })
+                .to_string(),
+            )
+            .expect("initialize agent");
+
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("init json");
+        let did_uri = parsed["portableDid"]["uri"]
+            .as_str()
+            .expect("did uri present")
+            .to_string();
+        assert!(did_uri.starts_with("did:jwk:"), "got {did_uri}");
+        assert_eq!(parsed["recoveryPhrase"], TEST_RECOVERY_PHRASE);
+        assert!(parsed["vaultContentEncryptionKey"].is_array());
+        assert!(parsed["vaultUnlockSalt"].is_array());
+
+        let current = core
+            .current_agent_identity()
+            .expect("current identity")
+            .expect("identity persisted");
+        let current_did: serde_json::Value =
+            serde_json::from_str(&current).expect("current identity json");
+        assert_eq!(
+            current_did["uri"],
+            serde_json::Value::String(did_uri.clone())
+        );
+
+        drop(core);
+        let reopened = EnboxCore::open(path).expect("reopen core");
+        let reopened_raw = reopened
+            .current_agent_identity()
+            .expect("current identity on reopened core")
+            .expect("identity persisted across reopen");
+        let reopened_did: serde_json::Value =
+            serde_json::from_str(&reopened_raw).expect("reopened identity json");
+        assert_eq!(reopened_did["uri"], serde_json::Value::String(did_uri));
+    }
+
+    #[test]
+    fn initialize_agent_identity_without_phrase_generates_random_did() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let raw = core
+            .initialize_agent_identity(serde_json::json!({ "dwnEndpoints": [] }).to_string())
+            .expect("initialize agent");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("init json");
+        let phrase = parsed["recoveryPhrase"].as_str().expect("generated phrase");
+        assert_eq!(phrase.split_whitespace().count(), 12);
+    }
+
+    #[test]
+    fn current_agent_identity_returns_none_before_initialize() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let identity = core.current_agent_identity().expect("current identity");
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn derive_agent_keys_from_phrase_does_not_persist() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let derived_raw = core
+            .derive_agent_keys_from_phrase(TEST_RECOVERY_PHRASE.to_string())
+            .expect("derive keys");
+        let derived: serde_json::Value =
+            serde_json::from_str(&derived_raw).expect("derived keys json");
+        assert_eq!(derived["identityPrivateJwk"]["kty"], "OKP");
+        assert_eq!(derived["signingPrivateJwk"]["crv"], "Ed25519");
+        assert_eq!(derived["encryptionPrivateJwk"]["crv"], "X25519");
+        assert!(derived["vaultContentEncryptionKey"].is_array());
+
+        let after = core.current_agent_identity().expect("current identity");
+        assert!(
+            after.is_none(),
+            "deriving keys should not persist an identity"
+        );
+    }
+
+    #[test]
+    fn vault_touching_agent_methods_fail_when_locked() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        core.lock();
+        let err = core
+            .initialize_agent_identity(serde_json::json!({ "dwnEndpoints": [] }).to_string())
+            .expect_err("locked initialize must fail");
+        assert!(matches!(err, EnboxError::Locked));
+        let err = core
+            .current_agent_identity()
+            .expect_err("locked current must fail");
+        assert!(matches!(err, EnboxError::Locked));
+    }
+
+    #[test]
+    fn derive_agent_keys_is_pure_and_works_while_locked() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        core.lock();
+        let raw = core
+            .derive_agent_keys_from_phrase(TEST_RECOVERY_PHRASE.to_string())
+            .expect("derive runs while locked (no vault access)");
+        let derived: serde_json::Value = serde_json::from_str(&raw).expect("derived keys json");
+        assert_eq!(derived["signingPrivateJwk"]["crv"], "Ed25519");
     }
 }
