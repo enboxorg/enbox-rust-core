@@ -25,10 +25,11 @@ use dwn_rs_core::setup::{
     register_with_dwn_endpoints, run_restore_flow, TenantRegistrationRequest,
 };
 use dwn_rs_core::sync::{
-    SyncConnectivity, SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult,
-    SyncRunStatus,
+    SyncCheckpoint, SyncConnectivity, SyncDirection, SyncIdentityOptions, SyncOnceRequest,
+    SyncOnceResult, SyncRunStatus,
 };
 use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
+use dwn_rs_core::sync_ledger::SyncLedger;
 use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
 use serde::{Deserialize, Serialize};
 
@@ -138,7 +139,7 @@ pub struct EnboxCore {
     state: Arc<Mutex<CoreState>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SyncSignerConfig {
     key_id: String,
@@ -153,6 +154,123 @@ struct SyncSignerConfig {
 enum SyncBackend {
     SyncOnce,
     PollReconcile,
+}
+
+/// Optional filter for `list_pending_scopes` and `resume_pending`. A
+/// missing field matches everything; supplying `protocol: null`
+/// explicitly is treated identically to omitting it.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FfiPendingScopesQuery {
+    tenant: String,
+    remote: Option<String>,
+    protocol: Option<String>,
+    direction: Option<SyncDirection>,
+}
+
+/// JSON entry returned by `list_pending_scopes`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FfiPendingScope {
+    tenant: String,
+    remote: String,
+    /// Protocol URI when scoped, or `None` for the global scope.
+    protocol: Option<String>,
+    direction: SyncDirection,
+    pending_pull_count: usize,
+    pending_push_count: usize,
+    /// True when either cursor still has more pages to fetch.
+    has_cursor: bool,
+    records_pulled: u64,
+    records_pushed: u64,
+    bytes_downloaded: u64,
+    bytes_uploaded: u64,
+}
+
+impl FfiPendingScope {
+    fn from_checkpoint(checkpoint: &SyncCheckpoint) -> Self {
+        Self {
+            tenant: checkpoint.tenant.clone(),
+            remote: checkpoint.remote.clone(),
+            protocol: protocol_from_scope_id(&checkpoint.scope_id),
+            direction: checkpoint.direction,
+            pending_pull_count: checkpoint.pending_pull_prefixes.len(),
+            pending_push_count: checkpoint.pending_push_prefixes.len(),
+            has_cursor: checkpoint.pull_cursor.is_some() || checkpoint.push_cursor.is_some(),
+            records_pulled: checkpoint.records_pulled,
+            records_pushed: checkpoint.records_pushed,
+            bytes_downloaded: checkpoint.bytes_downloaded,
+            bytes_uploaded: checkpoint.bytes_uploaded,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FfiResumePendingRequest {
+    tenant: String,
+    /// Native deadline budget for the entire resume batch (not per
+    /// scope). Scopes that didn't get a turn stay pending in the
+    /// ledger.
+    deadline_ms: Option<u64>,
+    connectivity: Option<SyncConnectivity>,
+    remote: Option<String>,
+    protocol: Option<String>,
+    direction: Option<SyncDirection>,
+    max_records: Option<usize>,
+    max_bytes: Option<u64>,
+    reason: Option<String>,
+    /// Optional signer override; falls back to the configured
+    /// `sync_signer` when omitted.
+    signer: Option<SyncSignerConfig>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FfiResumePendingResult {
+    attempted: usize,
+    results: Vec<SyncOnceResult>,
+    deadline_exceeded: bool,
+}
+
+/// Map a `SyncCheckpoint.scope_id` (`global` or `protocol:<uri>`) back
+/// to the optional protocol filter used by [`SyncOnceRequest`].
+fn protocol_from_scope_id(scope_id: &str) -> Option<String> {
+    scope_id.strip_prefix("protocol:").map(str::to_string)
+}
+
+/// True when a checkpoint still has unfinished work (pending prefixes
+/// to apply or a cursor to keep paging).
+fn checkpoint_is_pending(checkpoint: &SyncCheckpoint) -> bool {
+    !checkpoint.pending_pull_prefixes.is_empty()
+        || !checkpoint.pending_push_prefixes.is_empty()
+        || checkpoint.pull_cursor.is_some()
+        || checkpoint.push_cursor.is_some()
+}
+
+/// Apply the `tenant` / `remote` / `protocol` / `direction` filter from
+/// a `FfiPendingScopesQuery` to a single ledger checkpoint.
+fn matches_scope_filter(checkpoint: &SyncCheckpoint, query: &FfiPendingScopesQuery) -> bool {
+    if checkpoint.tenant != query.tenant {
+        return false;
+    }
+    if let Some(remote) = query.remote.as_deref() {
+        if checkpoint.remote != remote {
+            return false;
+        }
+    }
+    if let Some(direction) = query.direction {
+        if checkpoint.direction != direction {
+            return false;
+        }
+    }
+    if let Some(protocol) = query.protocol.as_deref() {
+        match protocol_from_scope_id(&checkpoint.scope_id) {
+            Some(scope_protocol) if scope_protocol == protocol => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -370,6 +488,183 @@ impl EnboxCore {
             "ffi_poll_reconcile",
             SyncBackend::PollReconcile,
         )
+    }
+
+    /// Enumerate pending sync scopes for a tenant without running any
+    /// network work. Returns a JSON array of [`FfiPendingScope`] entries
+    /// matching the optional `remote` / `protocol` / `direction` filter.
+    ///
+    /// `query_json` is camelCase:
+    /// `{ "tenant": "did:example:alice", "remote": "https://dwn.example/" }`.
+    pub fn list_pending_scopes(&self, query_json: String) -> Result<String, EnboxError> {
+        let query: FfiPendingScopesQuery =
+            serde_json::from_str(&query_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        let Some(node) = state.node.clone() else {
+            return Err(EnboxError::NotInitialized);
+        };
+        drop(state);
+
+        let snapshot = node.sync_ledger().load().map_err(|err| EnboxError::Sync {
+            detail: format!("{}: {}", err.code, err.detail),
+        })?;
+        let scopes: Vec<FfiPendingScope> = snapshot
+            .checkpoints
+            .values()
+            .filter(|cp| matches_scope_filter(cp, &query))
+            .filter(|cp| checkpoint_is_pending(cp))
+            .map(FfiPendingScope::from_checkpoint)
+            .collect();
+        serde_json::to_string(&scopes).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Resume any pending sync work for a tenant under the supplied
+    /// deadline + connectivity. Iterates the durable checkpoint ledger,
+    /// filters by the optional `remote` / `protocol` / `direction`, and
+    /// re-runs the sync engine on each pending scope until the work is
+    /// drained or the deadline elapses. Scopes that didn't get a turn
+    /// stay pending so the next call picks up where this one left off.
+    ///
+    /// `request_json` is camelCase and accepts the same connectivity /
+    /// deadline / reason / signer fields as [`Self::sync_once`], plus an
+    /// optional `direction` filter.
+    pub fn resume_pending(&self, request_json: String) -> Result<String, EnboxError> {
+        let request: FfiResumePendingRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let deadline_ms = request.deadline_ms;
+        let connectivity = request.connectivity.clone().unwrap_or_default();
+
+        let state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        if state.locked {
+            return Err(EnboxError::Locked);
+        }
+        if state.sync_in_progress {
+            return Err(EnboxError::SyncInProgress);
+        }
+        let Some(node) = state.node.clone() else {
+            return Err(EnboxError::NotInitialized);
+        };
+        let signer = if let Some(config) = request.signer.clone() {
+            PrivateJwkSigner::new(config.key_id, config.algorithm, config.private_jwk)
+        } else {
+            state
+                .sync_signer
+                .clone()
+                .ok_or(EnboxError::SyncSignerMissing)?
+        };
+        drop(state);
+
+        let snapshot = node.sync_ledger().load().map_err(|err| EnboxError::Sync {
+            detail: format!("{}: {}", err.code, err.detail),
+        })?;
+
+        let scope_query = FfiPendingScopesQuery {
+            tenant: request.tenant.clone(),
+            remote: request.remote.clone(),
+            protocol: request.protocol.clone(),
+            direction: request.direction,
+        };
+        let pending: Vec<SyncCheckpoint> = snapshot
+            .checkpoints
+            .into_values()
+            .filter(|cp| matches_scope_filter(cp, &scope_query))
+            .filter(checkpoint_is_pending)
+            .collect();
+        let attempted = pending.len();
+
+        if pending.is_empty() {
+            let response = FfiResumePendingResult {
+                attempted: 0,
+                results: Vec::new(),
+                deadline_exceeded: false,
+            };
+            return serde_json::to_string(&response).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            });
+        }
+
+        {
+            let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+                detail: format!("core state lock poisoned: {err}"),
+            })?;
+            state.sync_in_progress = true;
+        }
+
+        let reason = request
+            .reason
+            .clone()
+            .unwrap_or_else(|| "ffi_resume_pending".to_string());
+        let max_records = request.max_records;
+        let max_bytes = request.max_bytes;
+        let node_clone = node.clone();
+        let signer_clone = signer.clone();
+        let connectivity_clone = connectivity.clone();
+        let last_remote = pending.last().map(|cp| cp.remote.clone());
+
+        let run = async move {
+            let mut results: Vec<SyncOnceResult> = Vec::with_capacity(attempted);
+            for checkpoint in pending {
+                let sync_request = SyncOnceRequest {
+                    tenant: checkpoint.tenant.clone(),
+                    remote: checkpoint.remote.clone(),
+                    direction: checkpoint.direction,
+                    protocol: protocol_from_scope_id(&checkpoint.scope_id),
+                    max_records,
+                    max_bytes,
+                    connectivity: connectivity_clone.clone(),
+                    reason: Some(reason.clone()),
+                };
+                let authorizer = JwsSyncAuthorizer::new(signer_clone.clone());
+                let result = node_clone
+                    .sync_once_with_http(&checkpoint.remote, authorizer, sync_request)
+                    .await;
+                results.push(result);
+            }
+            results
+        };
+
+        let (results, deadline_exceeded) = self.runtime.block_on(async move {
+            match deadline_ms {
+                Some(budget) => {
+                    match tokio::time::timeout(std::time::Duration::from_millis(budget), run).await
+                    {
+                        Ok(results) => (results, false),
+                        Err(_) => (Vec::new(), true),
+                    }
+                }
+                None => (run.await, false),
+            }
+        });
+
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        state.sync_in_progress = false;
+        if let Some(last_result) = results.last().cloned() {
+            state.last_sync = Some(last_result);
+            state.last_sync_tenant = Some(request.tenant.clone());
+            state.last_sync_remote = last_remote;
+        }
+        drop(state);
+
+        let response = FfiResumePendingResult {
+            attempted,
+            results,
+            deadline_exceeded,
+        };
+        serde_json::to_string(&response).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
     }
 
     /// Initialize (or recover) an agent identity from a BIP-39 recovery phrase.
@@ -1457,6 +1752,165 @@ mod tests {
 
         let remaining = core.status().active_background_tasks;
         assert_eq!(remaining, vec!["task-2".to_string()]);
+    }
+
+    #[test]
+    fn list_pending_scopes_returns_empty_when_no_checkpoints_exist() {
+        let core = configured_sync_core();
+        let result = core
+            .list_pending_scopes(serde_json::json!({ "tenant": "did:example:alice" }).to_string())
+            .expect("list_pending_scopes returns json");
+        let scopes: serde_json::Value = serde_json::from_str(&result).expect("json array");
+        assert!(scopes.is_array());
+        assert_eq!(scopes.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn resume_pending_returns_attempted_zero_when_no_work_is_pending() {
+        let core = configured_sync_core();
+        let result_json = core
+            .resume_pending(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "deadlineMs": 5_000
+                })
+                .to_string(),
+            )
+            .expect("resume_pending returns json");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result_json).expect("response parses");
+        assert_eq!(parsed["attempted"], 0);
+        assert_eq!(parsed["deadlineExceeded"], false);
+        assert!(parsed["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn resume_pending_rejects_missing_signer() {
+        // No `configure_sync_signer` call, so the resume should fail
+        // even when there's nothing to do — the lock guard runs before
+        // the no-work short-circuit returns.
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        core.register_sync_identity(
+            serde_json::json!({
+                "did": "did:example:alice",
+                "protocols": { "type": "all" }
+            })
+            .to_string(),
+        )
+        .expect("register identity");
+
+        let err = core.resume_pending(
+            serde_json::json!({
+                "tenant": "did:example:alice"
+            })
+            .to_string(),
+        );
+        assert!(matches!(err, Err(EnboxError::SyncSignerMissing)));
+    }
+
+    #[test]
+    fn resume_pending_rejects_locked_core() {
+        let core = configured_sync_core();
+        core.lock();
+        let err = core.resume_pending(
+            serde_json::json!({
+                "tenant": "did:example:alice"
+            })
+            .to_string(),
+        );
+        assert!(matches!(err, Err(EnboxError::Locked)));
+    }
+
+    #[test]
+    fn list_pending_scopes_surfaces_seeded_checkpoint_and_resume_drains_it_against_unreachable_remote(
+    ) {
+        use dwn_rs_core::sync::{SyncCheckpoint, SyncDirection, SyncScope};
+        use dwn_rs_core::sync_ledger::SyncLedger;
+
+        let core = configured_sync_core();
+
+        // Seed a pending checkpoint directly through the ledger so we
+        // exercise the resume path without standing up a peer.
+        {
+            let state = core.state.lock().expect("state lock");
+            let node = state.node.as_ref().expect("node initialised").clone();
+            drop(state);
+            let checkpoint = SyncCheckpoint {
+                key: "did:example:alice|http://10.255.255.1:9/|global|Pull".to_string(),
+                tenant: "did:example:alice".to_string(),
+                remote: "http://10.255.255.1:9/".to_string(),
+                scope_id: SyncScope::Full.id(),
+                direction: SyncDirection::Pull,
+                local_root: None,
+                remote_root: None,
+                pending_pull_prefixes: vec!["10".to_string()],
+                pending_push_prefixes: Vec::new(),
+                pull_cursor: None,
+                push_cursor: None,
+                records_pulled: 0,
+                records_pushed: 0,
+                bytes_downloaded: 0,
+                bytes_uploaded: 0,
+                last_error: None,
+                updated_at: chrono::Utc::now(),
+            };
+            node.sync_ledger()
+                .upsert_checkpoint(&checkpoint)
+                .expect("upsert seeded checkpoint");
+        }
+
+        let scopes_json = core
+            .list_pending_scopes(serde_json::json!({ "tenant": "did:example:alice" }).to_string())
+            .expect("list_pending_scopes returns json");
+        let scopes: serde_json::Value = serde_json::from_str(&scopes_json).expect("scopes json");
+        let array = scopes.as_array().expect("scopes is array");
+        assert_eq!(array.len(), 1, "the seeded checkpoint shows up as pending");
+        assert_eq!(array[0]["tenant"], "did:example:alice");
+        assert_eq!(array[0]["remote"], "http://10.255.255.1:9/");
+        assert_eq!(array[0]["protocol"], serde_json::Value::Null);
+        assert_eq!(array[0]["direction"], "pull");
+        assert_eq!(array[0]["pendingPullCount"], 1);
+
+        // Tight deadline against an unreachable IP: the resume batch
+        // must finish (returning a `failed`/`deadlineExceeded` per
+        // scope) without panicking and without leaving the in-progress
+        // flag set.
+        let resume_json = core
+            .resume_pending(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "deadlineMs": 250,
+                })
+                .to_string(),
+            )
+            .expect("resume_pending returns json even when remote is unreachable");
+        let resume: serde_json::Value =
+            serde_json::from_str(&resume_json).expect("resume result json");
+        assert_eq!(resume["attempted"], 1);
+        // Either the batch finishes (`results.len == attempted`,
+        // `deadlineExceeded == false` with a per-scope failure) or the
+        // deadline elapses (`results.len == 0`, `deadlineExceeded ==
+        // true`). Both outcomes are acceptable; what matters is that we
+        // never leave sync_in_progress true.
+        let deadline_exceeded = resume["deadlineExceeded"].as_bool().unwrap();
+        let results_len = resume["results"].as_array().unwrap().len();
+        if deadline_exceeded {
+            assert_eq!(results_len, 0);
+        } else {
+            assert_eq!(results_len, 1);
+        }
+
+        // Verify the sync_in_progress guard was released either way.
+        let status_json = core
+            .sync_status(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://10.255.255.1:9/"
+                })
+                .to_string(),
+            )
+            .expect("sync_status");
+        assert!(!status_json.in_progress);
     }
 
     #[test]

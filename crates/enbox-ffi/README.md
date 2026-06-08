@@ -168,6 +168,19 @@ Background-safe request fields (see [`docs/BACKGROUND_SYNC.md`](../../docs/BACKG
 | `reason` | `Option<String>` | Caller-supplied telemetry label (`push_notification`, `periodic`, `manual`, `repair`, `startup_resume`, ...). Recorded on the resulting checkpoints. Defaults to `ffi_sync_once` / `ffi_poll_reconcile`. |
 | `maxRecords` / `maxBytes` | `Option<usize>` / `Option<u64>` | Soft byte/record budgets enforced inside the sync engine. |
 
+### Resume-pending workflow
+
+For hosts that want to "drain any leftover work" without recomputing which scopes need attention (background wake hooks, app cold-start), the facade exposes a checkpoint-driven path:
+
+- `list_pending_scopes({"tenant": "did:..."})` — returns an array of `FfiPendingScope` entries (`{tenant, remote, protocol, direction, pendingPullCount, pendingPushCount, hasCursor, recordsPulled, recordsPushed, bytesDownloaded, bytesUploaded}`) for any checkpoint whose pending prefixes or cursors are non-empty. Pure read; never touches the network. Optional filters: `remote`, `protocol`, `direction`.
+- `resume_pending({"tenant": "did:...", "deadlineMs": 25000, "connectivity": {...}})` — iterates those scopes and re-runs `sync_once` on each under the supplied deadline. The deadline budgets the entire batch, not each scope, so scopes that didn't get a turn stay pending in the ledger for the next call. Optional filters and budgets mirror `sync_once`.
+
+The returned `FfiResumePendingResult` is `{attempted, results, deadlineExceeded}`:
+
+- `attempted`: number of pending scopes that matched the filter.
+- `results`: per-scope `SyncOnceResult` entries, in execution order. Empty when the deadline fired before any scope finished.
+- `deadlineExceeded`: `true` when the batch timer fired mid-iteration.
+
 ## Binding generation
 
 ```bash
