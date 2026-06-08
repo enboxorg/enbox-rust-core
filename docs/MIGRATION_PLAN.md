@@ -81,6 +81,6 @@ The first rename/move change should be limited to crate identity and import path
 | DWN engine and handlers | `#14`, `#15`, `#16`, `#17` |
 | Sync/subscriptions/background entry points | `#19`, `#20`, `#21` |
 | Agent, wallet, grants, and recovery | `#22`, `#23`, `#24`, `#25`, `#55` |
-| Native bindings and integration | `#26`, `#27`, `#28`, `#29` |
+| Native bindings and integration | `#26` (closed), `#27`, `#28`, `#29`, `#143` (FFI agent/connect/setup epic) |
 
 New migration work should either close one of these issues or create a focused follow-up before changing crate boundaries.
