@@ -14,7 +14,7 @@ This roadmap tracks the migration from the inherited `dwn-rs` codebase to a nati
 | M8 — Behavioral parity | Complete | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) |
 | M4 — Sync and subscriptions | Complete | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) |
 | M5 — Agent, auth, and wallet core | Complete | Modules shipped; FFI surface in #148/#149/#150/#151 |
-| **M6 — Native bindings and integration** | **In progress** | UniFFI surface covers DWN, sync, agent identity, protocol install/push/restore, DWeb Connect, registration |
+| M6 — Native bindings and integration | Complete (API surface) | UniFFI parity for DWN + sync + agent + connect + setup + mobile runtime status + background-safe sync (deadline/connectivity/reason) + checkpoint resume + did:key |
 
 Test coverage dashboard: [`docs/TEST_COVERAGE.md`](TEST_COVERAGE.md).
 
@@ -83,15 +83,22 @@ Delivered:
 
 ## Milestone 6: Native Bindings And Integration
 
-Goal: expose the Rust core to product surfaces.
+Goal: expose the Rust core to product surfaces. **Complete** for the API surface; remaining work is product-side packaging.
 
-Delivered so far:
+Delivered:
 
-- UniFFI facade (`crates/enbox-ffi`) covers DWN message dispatch, sync, agent identity, protocol install/push/restore, DWeb Connect, and remote registration. See [crates/enbox-ffi/README.md](../crates/enbox-ffi/README.md).
+- UniFFI facade (`crates/enbox-ffi`) covers DWN message dispatch, sync, agent identity, protocol install/push/restore, DWeb Connect, remote registration, and the mobile runtime status surface. See [crates/enbox-ffi/README.md](../crates/enbox-ffi/README.md).
+- Background-safe sync: `sync_once` / `poll_reconcile` accept `deadlineMs`, full `connectivity`, and `reason` and enforce the deadline via `tokio::time::timeout` ([#153](https://github.com/enboxorg/enbox-rust-core/pull/153)).
+- Durable checkpoint-driven resume: `list_pending_scopes` + `resume_pending` over the SQLite sync ledger, matching [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md) ([#157](https://github.com/enboxorg/enbox-rust-core/pull/157)).
+- Mobile runtime status: `initialize_runtime`, `unlock_with_reason`, `begin_/end_background_task`, extended `EnboxRuntimeStatus` ([#155](https://github.com/enboxorg/enbox-rust-core/pull/155)).
+- DID method parity: `UniversalResolver` now resolves `did:jwk` and `did:key` (Ed25519 multicodec) so DWeb Connect ephemeral DIDs verify in Rust ([#154](https://github.com/enboxorg/enbox-rust-core/pull/154)).
+- Loopback interop expanded to `ProtocolsQuery`, `RecordsDelete`, and delete idempotency over the pinned `@enbox/dwn-clients` HTTP path ([#156](https://github.com/enboxorg/enbox-rust-core/pull/156)).
 - Desktop local node mode (`SqliteNativeDwn` + loopback HTTP/WebSocket server) is in use from M4 onward.
+- Android/iOS FFI builds wired into the Nix flake ([#142](https://github.com/enboxorg/enbox-rust-core/pull/142)).
+- Migration guide refreshed against shipped APIs ([`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md)).
 
-Open work:
+Open product work (out of scope for the core repo, tracked by mobile shell):
 
-- iOS/Android binding builds wired into Nix flake outputs (Android/iOS FFI builds landed in [#142](https://github.com/enboxorg/enbox-rust-core/pull/142)); publish artifacts to the Enbox mobile shell next.
-- Background sync scheduling and notification wake hooks ([`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md)).
-- Migration guide for the TypeScript local DWN path ([`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md)).
+- Publish the iOS/Android FFI artifacts into the Enbox mobile shell build.
+- WorkManager (Android) and `BGAppRefreshTask` / `BGProcessingTask` (iOS) scheduling that calls `sync_once` / `resume_pending`.
+- Cutover plan that retires the TypeScript local DWN once the mobile shell is on the Rust bindings.
