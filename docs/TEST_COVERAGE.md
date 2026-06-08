@@ -86,6 +86,10 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe, `MessagesSync` root | done |
 | `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `poll_reconcile`, `sync_status` + crate README | done |
+| `enbox-ffi` agent identity surface | `initialize_agent_identity`, `current_agent_identity`, `derive_agent_keys_from_phrase` + `SqliteSecretStore`; covered in `crates/enbox-ffi/src/lib.rs` tests | done |
+| `enbox-ffi` protocol install / push / restore | `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption` over `Local`/`HttpDwnProtocolEndpoint` with axum mock server tests | done |
+| `enbox-ffi` DWeb Connect surface | `create_permission_request/_delegate_grant/_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, persisted decryption/context keys; covered in `enbox-ffi` tests | done |
+| `enbox-ffi` HTTP tenant registration | `register_tenant` against axum mock; anonymous, provider-auth-v0, refresh-on-expiry paths | done |
 | Multi-node sync integration (direct + HTTP) | `crates/dwn-rs-stores/tests/sync_integration.rs` (6 scenarios in `cargo test --workspace`) | done |
 | Live/poll reconciliation vs HTTP remote | `poll_reconcile_with_http`, `reconcile_after_live_disconnect`; see [SYNC_LIVE_POLL.md](./SYNC_LIVE_POLL.md) | done |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |

@@ -51,16 +51,25 @@ See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the full matrix. CI run
 - Multi-node sync integration tests (direct peer + HTTP loopback); live/poll handoff documented in [`docs/SYNC_LIVE_POLL.md`](docs/SYNC_LIVE_POLL.md)
 - WebSocket `RecordsSubscribe` on the loopback server (see `loopback-interop` CI job)
 
-### Mobile bindings
+### Mobile bindings (M5 / M6 in progress)
 
-[`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) with durable SQLite open, lock/unlock, JSON `process_message`, HTTP `sync_once`, and sync status. See the [FFI README](crates/enbox-ffi/README.md).
+[`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) covering the full mobile/desktop surface:
 
-### Completed milestones (M8 + M4)
+- DWN message dispatch and HTTP sync (M4): `process_message`, `sync_once`, `poll_reconcile`, `sync_status`, `lock`/`unlock`.
+- Agent identity and vault (M5, [#148](https://github.com/enboxorg/enbox-rust-core/pull/148)): `initialize_agent_identity`, `current_agent_identity`, `derive_agent_keys_from_phrase`; durable `SqliteSecretStore`.
+- Protocol install and encryption (M5, [#149](https://github.com/enboxorg/enbox-rust-core/pull/149)): `install_protocol`, `inject_protocol_encryption` against the local `SqliteNativeDwn`.
+- DWeb Connect (M5, [#150](https://github.com/enboxorg/enbox-rust-core/pull/150)): `create_permission_request`, `create_delegate_grant`, `create_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, persisted decryption/context keys.
+- HTTP register / push / restore (M5, [#151](https://github.com/enboxorg/enbox-rust-core/pull/151)): `register_tenant`, `push_protocol`, `run_restore_flow` against `@enbox/dwn-server`-style endpoints.
+
+See the [FFI README](crates/enbox-ffi/README.md). Android/iOS Nix flake builds were wired in [#142](https://github.com/enboxorg/enbox-rust-core/pull/142).
+
+### Completed milestones (M4, M5, M7, M8)
 
 | Milestone | Epic | Outcome |
 |-----------|------|---------|
 | **M8** | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) | Loopback interop, real `message.process` replies, shared fixtures, TestSuite injection scaffold |
 | **M4** | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) | End-to-end sync, WebSocket loopback, FFI sync, HTTP live/poll reconciliation |
+| **M5** | #143–#146 | Agent identity, protocol install/push/restore, DWeb Connect, HTTP registration — all exposed via `enbox-ffi` |
 
 Handler modules are split per method under `handlers/{records,messages,protocols}/` ([#68](https://github.com/enboxorg/enbox-rust-core/issues/68), [#93](https://github.com/enboxorg/enbox-rust-core/issues/93)).
 
@@ -71,7 +80,8 @@ The migration plan is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md) and mirror
 - **M7** — Runnable local node (complete)
 - **M8** — Behavioral parity and cross-runtime validation (complete)
 - **M4** — Sync and subscriptions (complete)
-- **M5 / M6** — Agent wallet integration and production bindings (next)
+- **M5** — Agent, auth, and wallet core (complete)
+- **M6** — Native bindings and integration (in progress; FFI surface complete, background sync + mobile shell integration remaining)
 
 See also [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md), [`docs/BINDINGS.md`](docs/BINDINGS.md), [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md), [`docs/MIGRATION_GUIDE.md`](docs/MIGRATION_GUIDE.md), and [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
 
