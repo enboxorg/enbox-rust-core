@@ -11,6 +11,12 @@ use dwn_rs_core::agent::{
     DeterministicDidJwkProvider, MemoryDidResolverCache, MemoryKeyManager, PortableDid,
 };
 use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use dwn_rs_core::connect::{
+    create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
+    derive_delegate_keys, load_delegate_context_keys, load_delegate_decryption_keys,
+    save_delegate_context_keys, save_delegate_decryption_keys, DelegateContextKey,
+    DelegateDecryptionKey,
+};
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::setup::{inject_protocol_encryption, install_protocol_if_needed};
 use dwn_rs_core::sync::{
@@ -20,7 +26,12 @@ use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
 use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
 use serde::{Deserialize, Serialize};
 
+pub mod connect;
 pub mod setup;
+use connect::{
+    DelegateGrantInput, DeriveContextKeyInput, DeriveDelegateKeysInput, GrantRevocationInput,
+    PermissionRequestInput,
+};
 use setup::{signer_from_portable_did, LocalDwnProtocolEndpoint};
 
 uniffi::setup_scaffolding!();
@@ -496,6 +507,178 @@ impl EnboxCore {
         })
     }
 
+    /// Build a `PermissionRequestRecord` for a DWeb Connect request.
+    ///
+    /// Pure constructor: takes `{requester, scope, delegated, description?}`
+    /// and returns the JSON-serialized `PermissionRequestRecord` (with a
+    /// fresh ULID id). Mirrors `dwn-sdk-js`'s `PermissionRequest.create()`
+    /// for the parts the agent needs to compose locally.
+    pub fn create_permission_request(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: PermissionRequestInput =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let record = create_permission_request(
+            input.requester,
+            input.scope,
+            input.delegated,
+            input.description,
+        );
+        serde_json::to_string(&record).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Build a `DelegateGrant` for handing scoped access to another DID.
+    ///
+    /// Pure constructor: takes `{grantor, grantee, scope, dateExpires,
+    /// description?}` and returns the JSON-serialized `DelegateGrant`
+    /// (with a fresh ULID id and `dateGranted` set to now). The grant is
+    /// always emitted with `delegated: true` to match the connect protocol
+    /// contract.
+    pub fn create_delegate_grant(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: DelegateGrantInput =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let grant = create_delegate_grant(
+            input.grantor,
+            input.grantee,
+            input.scope,
+            input.date_expires,
+            input.description,
+        );
+        serde_json::to_string(&grant).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Build a `GrantRevocation` for an existing delegate grant.
+    ///
+    /// Pure constructor: takes `{grant, revocationGrantId}` and returns
+    /// the JSON-serialized `GrantRevocation` (with `dateRevoked` set to
+    /// now). Mobile hosts call this to revoke a delegated session before
+    /// pushing the revocation through the DWN.
+    pub fn create_grant_revocation(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: GrantRevocationInput =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let revocation = create_grant_revocation(&input.grant, input.revocation_grant_id);
+        serde_json::to_string(&revocation).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Derive delegate decryption keys for a batch of connect requests.
+    ///
+    /// Takes `{ownerDid, requests}` where `ownerDid` is a
+    /// `PortableDid` whose private keys will rehydrate a per-call
+    /// `MemoryKeyManager`, and `requests` are the `ConnectPermissionRequest`
+    /// objects the connecting app sent. Returns the JSON-serialized
+    /// `DelegateKeyDerivationResult` (decryption keys + multi-party
+    /// protocols that still need context-key delivery).
+    pub fn derive_delegate_keys(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: DeriveDelegateKeysInput =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let key_manager = self.require_key_manager(&input.owner_did)?;
+        let result = self.runtime.block_on(derive_delegate_keys(
+            &key_manager,
+            &input.owner_did,
+            &input.requests,
+        ))?;
+        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Derive a context-scoped delegate key for multi-party protocol records.
+    ///
+    /// Takes `{ownerDid, protocol, contextId}` and returns the
+    /// JSON-serialized `DelegateContextKey`. The owner's private keys
+    /// rehydrate a per-call `MemoryKeyManager`; the derivation path uses
+    /// the `dataFormats` derivation scheme bound to `contextId`.
+    pub fn derive_context_key(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: DeriveContextKeyInput =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let key_manager = self.require_key_manager(&input.owner_did)?;
+        let key = self.runtime.block_on(derive_context_key(
+            &key_manager,
+            &input.owner_did,
+            input.protocol,
+            input.context_id,
+        ))?;
+        serde_json::to_string(&key).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Persist the agent's delegate decryption keys to the secret store.
+    ///
+    /// Input is a JSON array of `DelegateDecryptionKey`. The keys are
+    /// stored under the fixed `agent/delegate-decryption-keys` slot so
+    /// subsequent `load_delegate_decryption_keys` calls return the same
+    /// set. Replaces any previously stored keys.
+    pub fn save_delegate_decryption_keys(&self, keys_json: String) -> Result<(), EnboxError> {
+        let keys: Vec<DelegateDecryptionKey> =
+            serde_json::from_str(&keys_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let secret_store = self.require_secret_store()?;
+        self.runtime
+            .block_on(save_delegate_decryption_keys(&secret_store, &keys))?;
+        Ok(())
+    }
+
+    /// Load the agent's persisted delegate decryption keys.
+    ///
+    /// Returns a JSON-serialized `Vec<DelegateDecryptionKey>`; an empty
+    /// vector is returned when nothing has been stored yet, matching the
+    /// `dwn-rs-core::connect` helper contract.
+    pub fn load_delegate_decryption_keys(&self) -> Result<String, EnboxError> {
+        let secret_store = self.require_secret_store()?;
+        let keys = self
+            .runtime
+            .block_on(load_delegate_decryption_keys(&secret_store))?;
+        serde_json::to_string(&keys).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Persist the agent's delegate context keys to the secret store.
+    ///
+    /// Input is a JSON array of `DelegateContextKey`. Stored under the
+    /// fixed `agent/delegate-context-keys` slot. Replaces any previously
+    /// stored keys.
+    pub fn save_delegate_context_keys(&self, keys_json: String) -> Result<(), EnboxError> {
+        let keys: Vec<DelegateContextKey> =
+            serde_json::from_str(&keys_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let secret_store = self.require_secret_store()?;
+        self.runtime
+            .block_on(save_delegate_context_keys(&secret_store, &keys))?;
+        Ok(())
+    }
+
+    /// Load the agent's persisted delegate context keys.
+    ///
+    /// Returns a JSON-serialized `Vec<DelegateContextKey>`; an empty
+    /// vector is returned when nothing has been stored yet.
+    pub fn load_delegate_context_keys(&self) -> Result<String, EnboxError> {
+        let secret_store = self.require_secret_store()?;
+        let keys = self
+            .runtime
+            .block_on(load_delegate_context_keys(&secret_store))?;
+        serde_json::to_string(&keys).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
     /// Return the last sync outcome for the supplied tenant (and optional remote/protocol filter).
     pub fn sync_status(&self, query_json: String) -> Result<EnboxSyncStatus, EnboxError> {
         let query: FfiSyncStatusQuery =
@@ -535,6 +718,31 @@ impl EnboxCore {
         self.runtime
             .block_on(import_private_keys(&key_manager, portable_did))?;
         Ok((node, key_manager))
+    }
+
+    /// Rehydrate a per-call [`MemoryKeyManager`] from the supplied
+    /// [`PortableDid`]'s private keys, refusing if the core is locked.
+    ///
+    /// Connect operations (derive delegate keys, derive context keys)
+    /// only need a key manager, not the DWN node, so we skip the
+    /// `state.node.is_some()` check that `require_local_endpoint_components`
+    /// imposes.
+    fn require_key_manager(
+        &self,
+        portable_did: &PortableDid,
+    ) -> Result<MemoryKeyManager, EnboxError> {
+        let state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        if state.locked {
+            return Err(EnboxError::Locked);
+        }
+        drop(state);
+
+        let key_manager = MemoryKeyManager::default();
+        self.runtime
+            .block_on(import_private_keys(&key_manager, portable_did))?;
+        Ok(key_manager)
     }
 
     fn require_secret_store(&self) -> Result<SqliteSecretStore, EnboxError> {
@@ -1092,6 +1300,331 @@ mod tests {
                 plain_protocol_definition().to_string(),
             )
             .expect_err("invalid did must fail");
+        assert!(matches!(err, EnboxError::Json { .. }));
+    }
+
+    fn sample_permission_scope() -> serde_json::Value {
+        serde_json::json!({
+            "interface": "Records",
+            "method": "Read",
+            "protocol": "https://protocol.example/notes",
+            "protocolPath": "note"
+        })
+    }
+
+    #[test]
+    fn create_permission_request_returns_record_with_id() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let request = serde_json::json!({
+            "requester": "did:example:requester",
+            "scope": sample_permission_scope(),
+            "delegated": true,
+            "description": "demo"
+        });
+        let raw = core
+            .create_permission_request(request.to_string())
+            .expect("create permission request");
+        let record: serde_json::Value = serde_json::from_str(&raw).expect("record json");
+        assert!(record["id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert_eq!(record["requester"], "did:example:requester");
+        assert_eq!(record["delegated"], true);
+        assert_eq!(record["description"], "demo");
+        assert_eq!(record["scope"]["interface"], "Records");
+    }
+
+    #[test]
+    fn create_delegate_grant_emits_delegated_grant_with_dates() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let request = serde_json::json!({
+            "grantor": "did:example:owner",
+            "grantee": "did:example:delegate",
+            "scope": sample_permission_scope(),
+            "dateExpires": "2030-01-01T00:00:00Z"
+        });
+        let raw = core
+            .create_delegate_grant(request.to_string())
+            .expect("create delegate grant");
+        let grant: serde_json::Value = serde_json::from_str(&raw).expect("grant json");
+        assert!(grant["id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert_eq!(grant["grantor"], "did:example:owner");
+        assert_eq!(grant["grantee"], "did:example:delegate");
+        assert_eq!(grant["delegated"], true);
+        assert_eq!(grant["dateExpires"], "2030-01-01T00:00:00Z");
+        assert!(grant["dateGranted"].as_str().is_some());
+    }
+
+    #[test]
+    fn create_grant_revocation_carries_grant_and_revocation_ids() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let grant_raw = core
+            .create_delegate_grant(
+                serde_json::json!({
+                    "grantor": "did:example:owner",
+                    "grantee": "did:example:delegate",
+                    "scope": sample_permission_scope(),
+                    "dateExpires": "2030-01-01T00:00:00Z"
+                })
+                .to_string(),
+            )
+            .expect("create grant");
+        let grant: serde_json::Value = serde_json::from_str(&grant_raw).expect("grant json");
+        let grant_id = grant["id"].as_str().expect("grant id").to_string();
+
+        let revocation_raw = core
+            .create_grant_revocation(
+                serde_json::json!({
+                    "grant": grant,
+                    "revocationGrantId": "revocation-1"
+                })
+                .to_string(),
+            )
+            .expect("create revocation");
+        let revocation: serde_json::Value =
+            serde_json::from_str(&revocation_raw).expect("revocation json");
+        assert_eq!(revocation["grantId"], grant_id);
+        assert_eq!(revocation["revocationGrantId"], "revocation-1");
+        assert_eq!(revocation["grantor"], "did:example:owner");
+        assert_eq!(revocation["grantee"], "did:example:delegate");
+        assert!(revocation["dateRevoked"].as_str().is_some());
+    }
+
+    fn encrypted_connect_protocol_definition() -> serde_json::Value {
+        serde_json::json!({
+            "protocol": "https://protocol.example/private-notes",
+            "published": true,
+            "types": {
+                "note": {
+                    "dataFormats": ["text/plain"],
+                    "encryptionRequired": true
+                }
+            },
+            "structure": {
+                "note": {
+                    "$actions": [{ "who": "anyone", "can": ["create"] }]
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn derive_delegate_keys_returns_decryption_key_for_read_scope() {
+        let (core, portable_did) = initialized_core_with_did();
+        let request = serde_json::json!({
+            "ownerDid": portable_did,
+            "requests": [{
+                "protocolDefinition": encrypted_connect_protocol_definition(),
+                "permissionScopes": [{
+                    "interface": "Records",
+                    "method": "Read",
+                    "protocol": "https://protocol.example/private-notes",
+                    "protocolPath": "note"
+                }]
+            }]
+        });
+        let raw = core
+            .derive_delegate_keys(request.to_string())
+            .expect("derive delegate keys");
+        let result: serde_json::Value = serde_json::from_str(&raw).expect("derivation json");
+        let keys = result["decryptionKeys"]
+            .as_array()
+            .expect("decryption keys array");
+        assert_eq!(keys.len(), 1, "expected one decryption key: {result:?}");
+        assert_eq!(
+            keys[0]["protocol"],
+            "https://protocol.example/private-notes"
+        );
+        assert_eq!(
+            keys[0]["derivedPrivateKey"]["derivedPrivateKey"]["crv"],
+            "X25519"
+        );
+        assert!(result["multiPartyProtocols"]
+            .as_array()
+            .is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn derive_delegate_keys_skips_protocols_that_do_not_require_encryption() {
+        let (core, portable_did) = initialized_core_with_did();
+        let request = serde_json::json!({
+            "ownerDid": portable_did,
+            "requests": [{
+                "protocolDefinition": plain_protocol_definition(),
+                "permissionScopes": [{
+                    "interface": "Records",
+                    "method": "Read",
+                    "protocol": "https://protocol.example/notes",
+                    "protocolPath": "note"
+                }]
+            }]
+        });
+        let raw = core
+            .derive_delegate_keys(request.to_string())
+            .expect("derive delegate keys");
+        let result: serde_json::Value = serde_json::from_str(&raw).expect("derivation json");
+        assert!(result["decryptionKeys"]
+            .as_array()
+            .is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn derive_context_key_returns_context_scoped_x25519_key() {
+        let (core, portable_did) = initialized_core_with_did();
+        let request = serde_json::json!({
+            "ownerDid": portable_did,
+            "protocol": "https://protocol.example/notes",
+            "contextId": "context-abc"
+        });
+        let raw = core
+            .derive_context_key(request.to_string())
+            .expect("derive context key");
+        let key: serde_json::Value = serde_json::from_str(&raw).expect("context key json");
+        assert_eq!(key["protocol"], "https://protocol.example/notes");
+        assert_eq!(key["contextId"], "context-abc");
+        assert_eq!(
+            key["derivedPrivateKey"]["derivedPrivateKey"]["crv"],
+            "X25519"
+        );
+    }
+
+    #[test]
+    fn delegate_decryption_keys_roundtrip_through_secret_store() {
+        let (core, portable_did) = initialized_core_with_did();
+        let derived_raw = core
+            .derive_delegate_keys(
+                serde_json::json!({
+                    "ownerDid": portable_did,
+                    "requests": [{
+                        "protocolDefinition": encrypted_connect_protocol_definition(),
+                        "permissionScopes": [{
+                            "interface": "Records",
+                            "method": "Read",
+                            "protocol": "https://protocol.example/private-notes",
+                            "protocolPath": "note"
+                        }]
+                    }]
+                })
+                .to_string(),
+            )
+            .expect("derive delegate keys");
+        let derived: serde_json::Value =
+            serde_json::from_str(&derived_raw).expect("derivation json");
+        let keys = derived["decryptionKeys"].clone();
+
+        core.save_delegate_decryption_keys(keys.to_string())
+            .expect("save decryption keys");
+        let loaded_raw = core
+            .load_delegate_decryption_keys()
+            .expect("load decryption keys");
+        let loaded: serde_json::Value = serde_json::from_str(&loaded_raw).expect("loaded json");
+        assert_eq!(loaded, keys);
+    }
+
+    #[test]
+    fn delegate_context_keys_roundtrip_through_secret_store() {
+        let (core, portable_did) = initialized_core_with_did();
+        let derived_raw = core
+            .derive_context_key(
+                serde_json::json!({
+                    "ownerDid": portable_did,
+                    "protocol": "https://protocol.example/notes",
+                    "contextId": "context-1"
+                })
+                .to_string(),
+            )
+            .expect("derive context key");
+        let key: serde_json::Value = serde_json::from_str(&derived_raw).expect("key json");
+
+        let payload = serde_json::Value::Array(vec![key.clone()]);
+        core.save_delegate_context_keys(payload.to_string())
+            .expect("save context keys");
+        let loaded_raw = core
+            .load_delegate_context_keys()
+            .expect("load context keys");
+        let loaded: serde_json::Value = serde_json::from_str(&loaded_raw).expect("loaded json");
+        assert_eq!(loaded, payload);
+    }
+
+    #[test]
+    fn load_delegate_decryption_keys_returns_empty_array_when_unset() {
+        let (core, _) = initialized_core_with_did();
+        let raw = core
+            .load_delegate_decryption_keys()
+            .expect("load when unset");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("load json");
+        assert!(parsed.as_array().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn load_delegate_context_keys_returns_empty_array_when_unset() {
+        let (core, _) = initialized_core_with_did();
+        let raw = core.load_delegate_context_keys().expect("load when unset");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("load json");
+        assert!(parsed.as_array().is_some_and(Vec::is_empty));
+    }
+
+    #[test]
+    fn connect_state_touching_methods_reject_locked_core() {
+        let (core, portable_did) = initialized_core_with_did();
+        core.lock();
+
+        let err = core
+            .derive_delegate_keys(
+                serde_json::json!({ "ownerDid": portable_did, "requests": [] }).to_string(),
+            )
+            .expect_err("derive must fail while locked");
+        assert!(matches!(err, EnboxError::Locked));
+
+        let err = core
+            .derive_context_key(
+                serde_json::json!({
+                    "ownerDid": portable_did,
+                    "protocol": "p",
+                    "contextId": "c"
+                })
+                .to_string(),
+            )
+            .expect_err("context key must fail while locked");
+        assert!(matches!(err, EnboxError::Locked));
+
+        let err = core
+            .save_delegate_decryption_keys("[]".to_string())
+            .expect_err("save must fail while locked");
+        assert!(matches!(err, EnboxError::Locked));
+
+        let err = core
+            .load_delegate_context_keys()
+            .expect_err("load must fail while locked");
+        assert!(matches!(err, EnboxError::Locked));
+    }
+
+    #[test]
+    fn pure_connect_constructors_work_while_locked() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        core.lock();
+        let raw = core
+            .create_permission_request(
+                serde_json::json!({
+                    "requester": "did:example:requester",
+                    "scope": sample_permission_scope(),
+                    "delegated": false
+                })
+                .to_string(),
+            )
+            .expect("create runs while locked - no vault access");
+        let record: serde_json::Value = serde_json::from_str(&raw).expect("record json");
+        assert_eq!(record["delegated"], false);
+    }
+
+    #[test]
+    fn connect_methods_surface_json_errors() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let err = core
+            .create_permission_request("not-json".to_string())
+            .expect_err("invalid json must fail");
+        assert!(matches!(err, EnboxError::Json { .. }));
+        let err = core
+            .save_delegate_decryption_keys("not-json".to_string())
+            .expect_err("invalid json must fail");
         assert!(matches!(err, EnboxError::Json { .. }));
     }
 }
