@@ -15,7 +15,25 @@ use dwn_rs_core::interfaces::messages::descriptors::protocols::QueryFilter;
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::setup::{ProtocolEndpoint, SetupFuture};
 use dwn_rs_stores::SqliteNativeDwn;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PushProtocolInput {
+    pub tenant_did: PortableDid,
+    pub remote_url: String,
+    pub definition: Definition,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RunRestoreFlowInput {
+    pub agent_did: PortableDid,
+    pub remote_url: String,
+    #[serde(default)]
+    pub protocols: Vec<Definition>,
+}
 
 /// Build a [`PrivateJwkSigner`] from a [`PortableDid`].
 ///
@@ -221,4 +239,145 @@ fn require_ok(reply: &JsonValue, error_code: &str) -> AgentIdentityResult<()> {
         error_code,
         format!("DWN reply status {code}: {detail}"),
     ))
+}
+
+/// [`ProtocolEndpoint`] backed by a remote `@enbox/dwn-server`-style HTTP
+/// endpoint.
+///
+/// Sends signed `ProtocolsQuery`/`ProtocolsConfigure` messages as JSON-RPC
+/// requests in the `dwn-request` header. Mirrors the transport used by
+/// [`dwn_rs_core::sync_endpoint::HttpSyncEndpoint`]: the response payload
+/// is read from the `dwn-response` header when present, otherwise from
+/// the response body.
+#[derive(Clone)]
+pub struct HttpDwnProtocolEndpoint {
+    url: String,
+    client: reqwest::Client,
+    signer: PrivateJwkSigner,
+}
+
+impl HttpDwnProtocolEndpoint {
+    pub fn new(url: impl Into<String>, signer: PrivateJwkSigner) -> AgentIdentityResult<Self> {
+        let client = reqwest::Client::builder()
+            .user_agent(format!("enbox-ffi/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|err| {
+                AgentIdentityError::new("HttpProtocolClientBuildFailed", err.to_string())
+            })?;
+        Ok(Self::with_client(url, client, signer))
+    }
+
+    pub fn with_client(
+        url: impl Into<String>,
+        client: reqwest::Client,
+        signer: PrivateJwkSigner,
+    ) -> Self {
+        Self {
+            url: url.into(),
+            client,
+            signer,
+        }
+    }
+
+    async fn process(&self, tenant: &str, message: JsonValue) -> AgentIdentityResult<JsonValue> {
+        let envelope = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": ulid::Ulid::new().to_string(),
+            "method": "dwn.processMessage",
+            "params": { "target": tenant, "message": message }
+        });
+        let response = self
+            .client
+            .post(&self.url)
+            .header("dwn-request", envelope.to_string())
+            .send()
+            .await
+            .map_err(|err| {
+                AgentIdentityError::new("HttpProtocolTransportFailed", err.to_string())
+            })?;
+        if !response.status().is_success() {
+            return Err(AgentIdentityError::new(
+                "HttpProtocolTransportFailed",
+                format!("remote server returned HTTP {}", response.status()),
+            ));
+        }
+
+        let payload = if let Some(header) = response.headers().get("dwn-response") {
+            header
+                .to_str()
+                .map_err(|err| {
+                    AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string())
+                })?
+                .to_string()
+        } else {
+            response.text().await.map_err(|err| {
+                AgentIdentityError::new("HttpProtocolTransportFailed", err.to_string())
+            })?
+        };
+        let envelope: JsonValue = serde_json::from_str(&payload).map_err(|err| {
+            AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string())
+        })?;
+        if let Some(error) = envelope.get("error") {
+            return Err(AgentIdentityError::new(
+                "HttpProtocolJsonRpcError",
+                error.to_string(),
+            ));
+        }
+        envelope.pointer("/result/reply").cloned().ok_or_else(|| {
+            AgentIdentityError::new(
+                "HttpProtocolResponseInvalid",
+                "missing result.reply in JSON-RPC response",
+            )
+        })
+    }
+}
+
+impl ProtocolEndpoint for HttpDwnProtocolEndpoint {
+    fn query_protocol<'a>(
+        &'a self,
+        tenant: &'a str,
+        protocol: &'a str,
+    ) -> SetupFuture<'a, Option<Definition>> {
+        Box::pin(async move {
+            let message = build_signed_protocols_query(protocol, &self.signer)?;
+            let reply = self.process(tenant, message).await?;
+            require_ok(&reply, "HttpProtocolsQueryRejected")?;
+            let Some(entries) = reply.get("entries") else {
+                return Ok(None);
+            };
+            let Some(array) = entries.as_array() else {
+                return Ok(None);
+            };
+            let Some(entry) = array.last() else {
+                return Ok(None);
+            };
+            let definition_json = entry
+                .get("descriptor")
+                .and_then(|descriptor| descriptor.get("definition"))
+                .ok_or_else(|| {
+                    AgentIdentityError::new(
+                        "HttpProtocolsQueryRejected",
+                        "ProtocolsQuery reply entry is missing descriptor.definition",
+                    )
+                })?;
+            let definition: Definition =
+                serde_json::from_value(definition_json.clone()).map_err(|err| {
+                    AgentIdentityError::new("HttpProtocolsQueryRejected", err.to_string())
+                })?;
+            Ok(Some(definition))
+        })
+    }
+
+    fn configure_protocol<'a>(
+        &'a self,
+        tenant: &'a str,
+        definition: Definition,
+    ) -> SetupFuture<'a, ()> {
+        Box::pin(async move {
+            let message = build_signed_protocols_configure(definition, &self.signer)?;
+            let reply = self.process(tenant, message).await?;
+            require_ok(&reply, "HttpProtocolsConfigureRejected")?;
+            Ok(())
+        })
+    }
 }

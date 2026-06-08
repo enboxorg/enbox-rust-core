@@ -1485,14 +1485,17 @@ dependencies = [
 name = "enbox-ffi"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "dwn-rs-core",
  "dwn-rs-stores",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "ulid",
  "uniffi",
 ]
 
@@ -5167,6 +5170,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.3",
