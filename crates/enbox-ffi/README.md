@@ -19,6 +19,15 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
 | `install_protocol(tenant_did_json, definition_json)` | Install a protocol on the local DWN (signs a `ProtocolsConfigure`, injects encryption when required); idempotent |
 | `inject_protocol_encryption(tenant_did_json, definition_json)` | Augment a protocol `Definition` with per-path key-agreement encryption; pure (no I/O) |
+| `create_permission_request(request_json)` | Build a `PermissionRequestRecord` for DWeb Connect; pure |
+| `create_delegate_grant(request_json)` | Build a `DelegateGrant` (`{grantor, grantee, scope, dateExpires, description?}`); pure |
+| `create_grant_revocation(request_json)` | Build a `GrantRevocation` for an existing grant; pure |
+| `derive_delegate_keys(request_json)` | Derive `DelegateDecryptionKey` batch for a connect request; key manager rehydrated from `ownerDid` |
+| `derive_context_key(request_json)` | Derive a context-scoped `DelegateContextKey`; key manager rehydrated from `ownerDid` |
+| `save_delegate_decryption_keys(keys_json)` | Persist `DelegateDecryptionKey[]` to the agent secret store |
+| `load_delegate_decryption_keys()` | Load persisted `DelegateDecryptionKey[]` (empty array when unset) |
+| `save_delegate_context_keys(keys_json)` | Persist `DelegateContextKey[]` to the agent secret store |
+| `load_delegate_context_keys()` | Load persisted `DelegateContextKey[]` (empty array when unset) |
 | `lock()` / `unlock()` | Block message/sync processing while vault is locked |
 
 Typed errors (`EnboxError`) cross the FFI boundary without panics.
@@ -60,6 +69,28 @@ Returns JSON `ProtocolInstallResult` (`{protocol, installed, encryptionActive}`)
 Encrypted protocols (those with `encryptionRequired: true`) have per-path key-agreement encryption injected automatically. For preview or sharing the augmented definition with another agent, call `inject_protocol_encryption` separately — it is pure and does not touch the DWN.
 
 Pushing to remote DWN servers, tenant registration, and full restore-flow replay are not yet exposed; they are tracked in #145 (HTTP transport follow-up).
+
+## DWeb Connect workflow
+
+The connect FFI mirrors [`dwn_rs_core::connect`](../../crates/dwn-rs-core/src/connect.rs) so a mobile host can drive a delegate session without a JS runtime:
+
+1. Build a permission request to present in UI: `create_permission_request({ requester, scope, delegated, description? })`.
+2. After the user approves, mint a delegate grant: `create_delegate_grant({ grantor, grantee, scope, dateExpires, description? })`.
+3. Derive decryption keys for the delegate session:
+   ```json
+   derive_delegate_keys({
+     "ownerDid": <portable_did_json>,
+     "requests": [{ "protocolDefinition": <Definition>, "permissionScopes": [<PermissionScope>, ...] }]
+   })
+   ```
+   Returns `DelegateKeyDerivationResult` (`decryptionKeys`, `contextKeys`, `multiPartyProtocols`).
+4. For multi-party protocols, derive a context key per record context: `derive_context_key({ ownerDid, protocol, contextId })`.
+5. Persist the derived keys to the agent secret store for re-use across launches:
+   `save_delegate_decryption_keys(keys_json)` / `save_delegate_context_keys(keys_json)`.
+   Re-load them with `load_delegate_decryption_keys()` / `load_delegate_context_keys()` (each returns `[]` when nothing is stored yet).
+6. To revoke a grant later, compose `create_grant_revocation({ grant, revocationGrantId })` and push it through `process_message` once the host has chosen a transport.
+
+All key-derivation methods rehydrate a per-call `MemoryKeyManager` from the supplied `PortableDid.privateKeys`, so they refuse to run while the core is locked. The pure constructors (`create_permission_request`, `create_delegate_grant`, `create_grant_revocation`) do not touch the vault and remain available even when locked, mirroring `derive_agent_keys_from_phrase`.
 
 ## Sync workflow
 
