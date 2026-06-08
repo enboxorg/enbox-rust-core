@@ -3,6 +3,7 @@
 //! This crate exposes a small, stable boundary over the native Rust DWN core.
 //! Internal crates remain idiomatic Rust; DTO translation happens here.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +18,7 @@ use dwn_rs_core::connect::{
     save_delegate_context_keys, save_delegate_decryption_keys, DelegateContextKey,
     DelegateDecryptionKey,
 };
+use dwn_rs_core::mobile::MobileInitializeRequest;
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::setup::{
     inject_protocol_encryption, install_protocol_if_needed, push_protocol_if_needed,
@@ -47,6 +49,17 @@ pub struct EnboxRuntimeStatus {
     pub initialized: bool,
     pub locked: bool,
     pub database_path: Option<String>,
+    /// Host-provided device identifier, set by `initialize_runtime`.
+    pub device_id: Option<String>,
+    /// iOS App Group / Android shared user id, when the host provides one.
+    pub app_group: Option<String>,
+    /// Whether the host has enabled background sync wake hooks.
+    pub background_refresh_enabled: bool,
+    /// Last reason supplied to `unlock_with_reason`. Cleared on `lock()`.
+    pub last_unlock_reason: Option<String>,
+    /// IDs of background tasks currently checked out via
+    /// `begin_background_task`. Sorted for deterministic comparison.
+    pub active_background_tasks: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -105,6 +118,11 @@ struct CoreState {
     last_sync: Option<SyncOnceResult>,
     last_sync_tenant: Option<String>,
     last_sync_remote: Option<String>,
+    device_id: Option<String>,
+    app_group: Option<String>,
+    background_refresh_enabled: bool,
+    last_unlock_reason: Option<String>,
+    active_background_tasks: BTreeSet<String>,
 }
 
 type AgentService = AgentIdentityService<
@@ -192,13 +210,81 @@ impl EnboxCore {
     pub fn lock(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.locked = true;
+            state.last_unlock_reason = None;
         }
     }
 
+    /// Mark the vault unlocked without recording a reason. Prefer
+    /// [`Self::unlock_with_reason`] from mobile hosts so audit logs can
+    /// distinguish user-initiated unlocks from background-task wakes.
     pub fn unlock(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.locked = false;
         }
+    }
+
+    /// Mark the vault unlocked and record `reason` on the runtime status.
+    ///
+    /// Mirrors `MobileBiometricVault::unlock(reason)` in `dwn-rs-core`:
+    /// Rust does not perform the biometric check itself, so the host
+    /// must call this only after a successful platform prompt (Face ID,
+    /// Touch ID, BiometricPrompt, ...).
+    pub fn unlock_with_reason(&self, reason: String) -> Result<(), EnboxError> {
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        state.locked = false;
+        state.last_unlock_reason = Some(reason);
+        Ok(())
+    }
+
+    /// Record host-supplied runtime metadata (`device_id`, `app_group`,
+    /// optional override `database_path`, and `background_refresh_enabled`).
+    ///
+    /// `request_json` must match [`dwn_rs_core::mobile::MobileInitializeRequest`]
+    /// (camelCase: `deviceId`, `appGroup`, `databasePath`,
+    /// `backgroundRefreshEnabled`). Calling this does **not** open or
+    /// migrate the SQLite database — use [`Self::open`] for that.
+    pub fn initialize_runtime(
+        &self,
+        request_json: String,
+    ) -> Result<EnboxRuntimeStatus, EnboxError> {
+        let request: MobileInitializeRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        state.device_id = Some(request.device_id);
+        state.app_group = request.app_group;
+        if let Some(database_path) = request.database_path {
+            state.database_path = Some(database_path);
+        }
+        state.background_refresh_enabled = request.background_refresh_enabled;
+        Ok(status_from_state(&state))
+    }
+
+    /// Register a background task id on the runtime status. Returns
+    /// `true` if the id was newly inserted, `false` if it was already
+    /// active (matching `dwn-sdk-js` / `MobileCore::track_background_task`
+    /// idempotency semantics expected by WorkManager and BGTaskScheduler).
+    pub fn begin_background_task(&self, task_id: String) -> Result<bool, EnboxError> {
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        Ok(state.active_background_tasks.insert(task_id))
+    }
+
+    /// Remove a previously registered background task id. Returns `true`
+    /// if the id was present, `false` if it was unknown. Safe to call
+    /// from a `defer`-style cleanup path (e.g. iOS `BGTask` expiration
+    /// handler) even if the task already completed normally.
+    pub fn end_background_task(&self, task_id: String) -> Result<bool, EnboxError> {
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        Ok(state.active_background_tasks.remove(&task_id))
     }
 
     pub fn status(&self) -> EnboxRuntimeStatus {
@@ -206,11 +292,7 @@ impl EnboxCore {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        EnboxRuntimeStatus {
-            initialized: state.node.is_some(),
-            locked: state.locked,
-            database_path: state.database_path.clone(),
-        }
+        status_from_state(&state)
     }
 
     /// Install a local private JWK signer used to authorize HTTP sync requests.
@@ -911,6 +993,11 @@ impl EnboxCore {
                 last_sync: None,
                 last_sync_tenant: None,
                 last_sync_remote: None,
+                device_id: None,
+                app_group: None,
+                background_refresh_enabled: false,
+                last_unlock_reason: None,
+                active_background_tasks: BTreeSet::new(),
             })),
         }))
     }
@@ -964,6 +1051,22 @@ pub(crate) async fn import_private_keys(
         key_manager.import_private_jwk(jwk.clone()).await?;
     }
     Ok(())
+}
+
+/// Build an `EnboxRuntimeStatus` snapshot from the locked `CoreState`.
+/// Centralised so `status()`, `initialize_runtime()`, and tests render
+/// the same view.
+fn status_from_state(state: &CoreState) -> EnboxRuntimeStatus {
+    EnboxRuntimeStatus {
+        initialized: state.node.is_some(),
+        locked: state.locked,
+        database_path: state.database_path.clone(),
+        device_id: state.device_id.clone(),
+        app_group: state.app_group.clone(),
+        background_refresh_enabled: state.background_refresh_enabled,
+        last_unlock_reason: state.last_unlock_reason.clone(),
+        active_background_tasks: state.active_background_tasks.iter().cloned().collect(),
+    }
 }
 
 fn sync_status_from_state(state: &CoreState, query: &FfiSyncStatusQuery) -> EnboxSyncStatus {
@@ -1279,6 +1382,81 @@ mod tests {
         let result: SyncOnceResult = serde_json::from_str(&result_json).expect("sync result json");
         assert_eq!(result.status, SyncRunStatus::DeadlineExceeded);
         assert_eq!(result.next_recommended_delay_ms, Some(50));
+    }
+
+    #[test]
+    fn initialize_runtime_records_host_metadata_in_status() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let baseline = core.status();
+        assert!(baseline.initialized);
+        assert!(baseline.device_id.is_none());
+        assert!(!baseline.background_refresh_enabled);
+        assert!(baseline.active_background_tasks.is_empty());
+
+        let status = core
+            .initialize_runtime(
+                serde_json::json!({
+                    "deviceId": "device-123",
+                    "appGroup": "group.com.enbox.app",
+                    "backgroundRefreshEnabled": true
+                })
+                .to_string(),
+            )
+            .expect("initialize_runtime");
+        assert_eq!(status.device_id.as_deref(), Some("device-123"));
+        assert_eq!(status.app_group.as_deref(), Some("group.com.enbox.app"));
+        assert!(status.background_refresh_enabled);
+        // database_path is set by `open_in_memory` to None; the host did
+        // not override it.
+        assert!(status.database_path.is_none());
+
+        let refreshed = core.status();
+        assert_eq!(refreshed, status, "status() and initialize_runtime() agree");
+    }
+
+    #[test]
+    fn unlock_with_reason_records_audit_label_and_lock_clears_it() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        core.lock();
+        assert!(core.status().locked);
+
+        core.unlock_with_reason("push_notification".to_string())
+            .expect("unlock_with_reason");
+        let status = core.status();
+        assert!(!status.locked);
+        assert_eq!(
+            status.last_unlock_reason.as_deref(),
+            Some("push_notification")
+        );
+
+        core.lock();
+        let after_lock = core.status();
+        assert!(after_lock.locked);
+        assert!(after_lock.last_unlock_reason.is_none());
+    }
+
+    #[test]
+    fn background_task_tracking_is_idempotent_and_set_membership_based() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+
+        assert!(core.begin_background_task("task-1".to_string()).unwrap());
+        assert!(core.begin_background_task("task-2".to_string()).unwrap());
+        assert!(
+            !core.begin_background_task("task-1".to_string()).unwrap(),
+            "begin returns false when the task id is already active"
+        );
+
+        let active = core.status().active_background_tasks;
+        assert_eq!(active, vec!["task-1".to_string(), "task-2".to_string()]);
+
+        assert!(core.end_background_task("task-1".to_string()).unwrap());
+        assert!(
+            !core.end_background_task("task-1".to_string()).unwrap(),
+            "end returns false when the task id is not active"
+        );
+
+        let remaining = core.status().active_background_tasks;
+        assert_eq!(remaining, vec!["task-2".to_string()]);
     }
 
     #[test]
