@@ -19,6 +19,9 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
 | `install_protocol(tenant_did_json, definition_json)` | Install a protocol on the local DWN (signs a `ProtocolsConfigure`, injects encryption when required); idempotent |
 | `inject_protocol_encryption(tenant_did_json, definition_json)` | Augment a protocol `Definition` with per-path key-agreement encryption; pure (no I/O) |
+| `register_tenant(request_json)` | Register agent + connected DIDs with one or more `@enbox/dwn-server` HTTP endpoints; refreshes provider-auth tokens when expired |
+| `push_protocol(request_json)` | Push a protocol to a remote `@enbox/dwn-server` (signs `ProtocolsQuery` first; idempotent) |
+| `run_restore_flow(request_json)` | Replay protocol install + push across local + remote endpoints for a recovered agent |
 | `create_permission_request(request_json)` | Build a `PermissionRequestRecord` for DWeb Connect; pure |
 | `create_delegate_grant(request_json)` | Build a `DelegateGrant` (`{grantor, grantee, scope, dateExpires, description?}`); pure |
 | `create_grant_revocation(request_json)` | Build a `GrantRevocation` for an existing grant; pure |
@@ -68,7 +71,47 @@ Returns JSON `ProtocolInstallResult` (`{protocol, installed, encryptionActive}`)
 
 Encrypted protocols (those with `encryptionRequired: true`) have per-path key-agreement encryption injected automatically. For preview or sharing the augmented definition with another agent, call `inject_protocol_encryption` separately — it is pure and does not touch the DWN.
 
-Pushing to remote DWN servers, tenant registration, and full restore-flow replay are not yet exposed; they are tracked in #145 (HTTP transport follow-up).
+## Remote setup workflow
+
+For HTTP-backed registration and protocol push (closes #145), three additional methods sit alongside the local install helpers:
+
+1. Register the agent with one or more endpoints:
+   ```json
+   register_tenant({
+     "dwnEndpoints": ["https://dwn.example/"],
+     "agentDid": "did:dht:agent",
+     "connectedDid": "did:dht:connected",
+     "registrationTokens": {
+       "https://dwn.example/": {
+         "registrationToken": "<jwt>",
+         "tokenUrl": "https://example/token",
+         "refreshUrl": "https://example/refresh",
+         "refreshToken": "<refresh>",
+         "expiresAt": 1717000000000
+       }
+     },
+     "persistTokens": true
+   })
+   ```
+   The agent calls `GET <endpoint>/info` to discover requirements, refreshes any expired `provider-auth-v0` tokens (`POST <refreshUrl>`), then `POST <endpoint>/registration` per DID. When `persistTokens: true`, the token map is read from and written back to the agent secret store under `agent/registration-tokens`. Returns a `TenantRegistrationResult` (per-endpoint `records` + final token map).
+2. Push a protocol to a remote DWN:
+   ```json
+   push_protocol({
+     "tenantDid": <portable_did_json>,
+     "remoteUrl": "https://dwn.example/",
+     "definition": <protocol_definition>
+   })
+   ```
+   Signs a `ProtocolsQuery` against the remote first (idempotent path), otherwise signs and sends a `ProtocolsConfigure` (with encryption injected when required). Same JSON-RPC transport as `HttpSyncEndpoint`: `dwn-request` header on `POST <url>/`, response read from `dwn-response` header or body.
+3. Replay a recovery flow across local + remote endpoints:
+   ```json
+   run_restore_flow({
+     "agentDid": <portable_did_json>,
+     "remoteUrl": "https://dwn.example/",
+     "protocols": [<definition>, ...]
+   })
+   ```
+   For each protocol: local `install_protocol_if_needed` then remote `push_protocol_if_needed`. Returns a `RestoreFlowResult` (`steps`, `localInstalls`, `remotePushes`). Identity tenant restoration is out of scope (see [`run_restore_flow`](../../crates/dwn-rs-core/src/setup.rs) docs).
 
 ## DWeb Connect workflow
 

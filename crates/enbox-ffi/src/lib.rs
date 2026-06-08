@@ -18,7 +18,10 @@ use dwn_rs_core::connect::{
     DelegateDecryptionKey,
 };
 use dwn_rs_core::protocols::Definition;
-use dwn_rs_core::setup::{inject_protocol_encryption, install_protocol_if_needed};
+use dwn_rs_core::setup::{
+    inject_protocol_encryption, install_protocol_if_needed, push_protocol_if_needed,
+    register_with_dwn_endpoints, run_restore_flow, TenantRegistrationRequest,
+};
 use dwn_rs_core::sync::{
     SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncRunStatus,
 };
@@ -27,12 +30,14 @@ use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
 use serde::{Deserialize, Serialize};
 
 pub mod connect;
+pub mod http_registration;
 pub mod setup;
 use connect::{
     DelegateGrantInput, DeriveContextKeyInput, DeriveDelegateKeysInput, GrantRevocationInput,
     PermissionRequestInput,
 };
-use setup::{signer_from_portable_did, LocalDwnProtocolEndpoint};
+use http_registration::HttpTenantRegistrationClient;
+use setup::{signer_from_portable_did, HttpDwnProtocolEndpoint, LocalDwnProtocolEndpoint};
 
 uniffi::setup_scaffolding!();
 
@@ -503,6 +508,99 @@ impl EnboxCore {
             &portable_did,
         ))?;
         serde_json::to_string(&augmented).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Register the supplied DIDs with one or more `@enbox/dwn-server`
+    /// HTTP endpoints.
+    ///
+    /// Input is a `TenantRegistrationRequest`:
+    /// `{dwnEndpoints, agentDid, connectedDid, registrationTokens?, persistTokens?}`.
+    /// When `persistTokens: true`, the agent secret store is read first
+    /// (overriding any inline `registrationTokens`) and written back at
+    /// the end with any refreshed tokens, matching
+    /// `dwn_rs_core::setup::register_with_dwn_endpoints`.
+    ///
+    /// Returns the JSON-serialized `TenantRegistrationResult` (per-endpoint
+    /// `records` and the final `registrationTokens` map).
+    pub fn register_tenant(&self, request_json: String) -> Result<String, EnboxError> {
+        let request: TenantRegistrationRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let secret_store = self.require_secret_store()?;
+        let client = HttpTenantRegistrationClient::new()?;
+        let secret_store_ref = if request.persist_tokens {
+            Some(&secret_store)
+        } else {
+            None
+        };
+        let result = self.runtime.block_on(register_with_dwn_endpoints(
+            &client,
+            secret_store_ref,
+            request,
+        ))?;
+        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Push a protocol to a remote `@enbox/dwn-server` HTTP endpoint.
+    ///
+    /// Input is `{tenantDid, remoteUrl, definition}`. The method signs a
+    /// `ProtocolsQuery` against the remote first; when the protocol is
+    /// already installed it returns `{installed: false, encryptionActive: …}`
+    /// without sending a configure. Encryption injection mirrors the local
+    /// `install_protocol` path: protocols with `encryptionRequired: true`
+    /// receive per-path key-agreement encryption derived from the tenant's
+    /// `keyAgreement` verification method.
+    pub fn push_protocol(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: setup::PushProtocolInput =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let key_manager = self.require_key_manager(&input.tenant_did)?;
+        let signer = signer_from_portable_did(&input.tenant_did)?;
+        let endpoint = HttpDwnProtocolEndpoint::new(input.remote_url, signer)?;
+        let result = self.runtime.block_on(push_protocol_if_needed(
+            &endpoint,
+            &key_manager,
+            &input.tenant_did,
+            input.definition,
+        ))?;
+        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Replay protocol install + push across local and remote endpoints
+    /// for a recovered agent.
+    ///
+    /// Input is `{agentDid, remoteUrl, protocols}`. The method:
+    /// 1. Signs and installs each protocol on the local SQLite DWN.
+    /// 2. Signs and pushes each protocol to the remote HTTP endpoint.
+    ///
+    /// Returns the JSON-serialized `RestoreFlowResult` (ordered `steps`,
+    /// `localInstalls`, `remotePushes`). Identity tenant restoration is
+    /// out of scope (see `dwn_rs_core::setup::run_restore_flow` docs).
+    pub fn run_restore_flow(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: setup::RunRestoreFlowInput =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let (node, key_manager) = self.require_local_endpoint_components(&input.agent_did)?;
+        let signer = signer_from_portable_did(&input.agent_did)?;
+        let local = LocalDwnProtocolEndpoint::new(node, signer.clone());
+        let remote = HttpDwnProtocolEndpoint::new(input.remote_url, signer)?;
+        let result = self.runtime.block_on(run_restore_flow(
+            &local,
+            &remote,
+            &key_manager,
+            &input.agent_did,
+            input.protocols,
+        ))?;
+        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
             detail: err.to_string(),
         })
     }
@@ -1626,5 +1724,536 @@ mod tests {
             .save_delegate_decryption_keys("not-json".to_string())
             .expect_err("invalid json must fail");
         assert!(matches!(err, EnboxError::Json { .. }));
+    }
+
+    mod http_setup_tests {
+        use std::net::SocketAddr;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        use std::thread::JoinHandle as ThreadJoinHandle;
+
+        use axum::extract::State;
+        use axum::http::{HeaderMap, StatusCode};
+        use axum::response::IntoResponse;
+        use axum::routing::{get, post};
+        use axum::{Json, Router};
+        use serde_json::Value as JsonValue;
+        use tokio::net::TcpListener;
+        use tokio::sync::oneshot;
+
+        use super::{
+            initialized_core_with_did, plain_protocol_definition, EnboxCore, EnboxError,
+            TEST_RECOVERY_PHRASE,
+        };
+
+        #[derive(Debug, Clone)]
+        pub(super) struct RegistrationCall {
+            pub did: String,
+            pub registration_token: Option<String>,
+        }
+
+        #[derive(Default)]
+        pub(super) struct MockState {
+            pub info_response: JsonValue,
+            pub registration_calls: Vec<RegistrationCall>,
+            pub refresh_calls: Vec<String>,
+            pub refresh_response: Option<JsonValue>,
+            pub dwn_replies: Vec<JsonValue>,
+            pub dwn_calls: Vec<JsonValue>,
+        }
+
+        /// Mock `@enbox/dwn-server`-style HTTP server that runs on a
+        /// dedicated multi-threaded tokio runtime hosted on its own OS
+        /// thread, so the FFI's blocking `block_on` calls can drive
+        /// requests against it without the runtime being dropped between
+        /// calls.
+        pub(super) struct MockServer {
+            pub url: String,
+            pub state: Arc<Mutex<MockState>>,
+            shutdown: Option<oneshot::Sender<()>>,
+            thread: Option<ThreadJoinHandle<()>>,
+        }
+
+        impl MockServer {
+            pub fn snapshot(&self) -> MockSnapshot {
+                let guard = self.state.lock().unwrap();
+                MockSnapshot {
+                    registration_calls: guard.registration_calls.clone(),
+                    refresh_calls: guard.refresh_calls.clone(),
+                    dwn_calls: guard.dwn_calls.clone(),
+                }
+            }
+        }
+
+        impl Drop for MockServer {
+            fn drop(&mut self) {
+                if let Some(shutdown) = self.shutdown.take() {
+                    let _ = shutdown.send(());
+                }
+                if let Some(thread) = self.thread.take() {
+                    let _ = thread.join();
+                }
+            }
+        }
+
+        #[derive(Debug, Clone)]
+        pub(super) struct MockSnapshot {
+            pub registration_calls: Vec<RegistrationCall>,
+            pub refresh_calls: Vec<String>,
+            pub dwn_calls: Vec<JsonValue>,
+        }
+
+        async fn info_handler(State(state): State<Arc<Mutex<MockState>>>) -> impl IntoResponse {
+            let body = state.lock().unwrap().info_response.clone();
+            Json(body)
+        }
+
+        async fn registration_handler(
+            State(state): State<Arc<Mutex<MockState>>>,
+            Json(body): Json<JsonValue>,
+        ) -> impl IntoResponse {
+            let did = body
+                .get("did")
+                .and_then(|did| did.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let registration_token = body
+                .get("registrationToken")
+                .and_then(|token| token.as_str())
+                .map(str::to_string);
+            state
+                .lock()
+                .unwrap()
+                .registration_calls
+                .push(RegistrationCall {
+                    did,
+                    registration_token,
+                });
+            StatusCode::OK
+        }
+
+        async fn refresh_handler(
+            State(state): State<Arc<Mutex<MockState>>>,
+            Json(body): Json<JsonValue>,
+        ) -> impl IntoResponse {
+            let token = body
+                .get("refreshToken")
+                .and_then(|token| token.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let mut guard = state.lock().unwrap();
+            guard.refresh_calls.push(token);
+            let response = guard.refresh_response.clone().unwrap_or_else(|| {
+                serde_json::json!({
+                    "registrationToken": "fresh-token",
+                    "tokenUrl": "https://example.invalid/token"
+                })
+            });
+            (StatusCode::OK, Json(response))
+        }
+
+        async fn dwn_handler(
+            State(state): State<Arc<Mutex<MockState>>>,
+            headers: HeaderMap,
+        ) -> impl IntoResponse {
+            let Some(request_header) = headers
+                .get("dwn-request")
+                .and_then(|value| value.to_str().ok())
+            else {
+                return (StatusCode::BAD_REQUEST, "missing dwn-request").into_response();
+            };
+            let envelope: JsonValue = match serde_json::from_str(request_header) {
+                Ok(value) => value,
+                Err(err) => {
+                    return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+                }
+            };
+            let id = envelope.get("id").cloned().unwrap_or(JsonValue::Null);
+
+            let mut guard = state.lock().unwrap();
+            guard.dwn_calls.push(envelope.clone());
+            let reply = if guard.dwn_replies.is_empty() {
+                serde_json::json!({ "status": { "code": 202, "detail": "Accepted" } })
+            } else {
+                guard.dwn_replies.remove(0)
+            };
+            drop(guard);
+
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "reply": reply }
+            });
+            (StatusCode::OK, Json(body)).into_response()
+        }
+
+        pub(super) fn start_mock_server() -> MockServer {
+            let state = Arc::new(Mutex::new(MockState::default()));
+            let state_clone = state.clone();
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel::<String>();
+
+            let thread = std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .expect("mock server runtime");
+                runtime.block_on(async move {
+                    let app = Router::new()
+                        .route("/info", get(info_handler))
+                        .route("/registration", post(registration_handler))
+                        .route("/refresh", post(refresh_handler))
+                        .route("/", post(dwn_handler))
+                        .with_state(state_clone);
+                    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+                        .await
+                        .expect("listener");
+                    let addr = listener.local_addr().expect("local addr");
+                    ready_tx
+                        .send(format!("http://{addr}"))
+                        .expect("ready signal");
+                    let _ = axum::serve(listener, app)
+                        .with_graceful_shutdown(async {
+                            let _ = shutdown_rx.await;
+                        })
+                        .await;
+                });
+            });
+
+            let url = ready_rx.recv().expect("mock server start");
+            MockServer {
+                url,
+                state,
+                shutdown: Some(shutdown_tx),
+                thread: Some(thread),
+            }
+        }
+
+        fn portable_did_uri(portable_did: &JsonValue) -> String {
+            portable_did["uri"].as_str().expect("did uri").to_string()
+        }
+
+        #[test]
+        fn register_tenant_handles_anonymous_endpoint() {
+            let server = start_mock_server();
+            {
+                let mut guard = server.state.lock().unwrap();
+                guard.info_response = serde_json::json!({
+                    "registrationRequirements": [],
+                });
+            }
+            let (core, portable_did) = initialized_core_with_did();
+            let agent_did = portable_did_uri(&portable_did);
+
+            let raw = core
+                .register_tenant(
+                    serde_json::json!({
+                        "dwnEndpoints": [server.url.clone()],
+                        "agentDid": agent_did,
+                        "connectedDid": agent_did,
+                    })
+                    .to_string(),
+                )
+                .expect("register tenant");
+            let result: JsonValue = serde_json::from_str(&raw).expect("registration json");
+            let records = result["records"].as_array().expect("records array");
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0]["endpoint"], server.url);
+            assert_eq!(records[0]["did"], agent_did);
+            assert_eq!(records[0]["method"], "not_required");
+
+            let snapshot = server.snapshot();
+            assert_eq!(
+                snapshot.registration_calls.len(),
+                0,
+                "anonymous endpoints with no requirements should skip /registration"
+            );
+        }
+
+        #[test]
+        fn register_tenant_handles_provider_auth_endpoint() {
+            let server = start_mock_server();
+            {
+                let mut guard = server.state.lock().unwrap();
+                guard.info_response = serde_json::json!({
+                    "registrationRequirements": ["provider-auth-v0"],
+                    "providerAuth": {
+                        "authorizeUrl": "https://example.invalid/authorize",
+                        "tokenUrl": "https://example.invalid/token"
+                    }
+                });
+            }
+            let (core, portable_did) = initialized_core_with_did();
+            let agent_did = portable_did_uri(&portable_did);
+
+            let raw = core
+                .register_tenant(
+                    serde_json::json!({
+                        "dwnEndpoints": [server.url.clone()],
+                        "agentDid": agent_did,
+                        "connectedDid": agent_did,
+                        "registrationTokens": {
+                            server.url.clone(): {
+                                "registrationToken": "preset-token",
+                                "tokenUrl": "https://example.invalid/token"
+                            }
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect("register tenant with token");
+            let result: JsonValue = serde_json::from_str(&raw).expect("registration json");
+            let records = result["records"].as_array().expect("records array");
+            assert_eq!(records[0]["method"], "provider_auth_token");
+
+            let snapshot = server.snapshot();
+            assert_eq!(snapshot.registration_calls.len(), 1);
+            assert_eq!(snapshot.registration_calls[0].did, agent_did);
+            assert_eq!(
+                snapshot.registration_calls[0].registration_token.as_deref(),
+                Some("preset-token")
+            );
+        }
+
+        #[test]
+        fn register_tenant_refreshes_expired_token() {
+            let server = start_mock_server();
+            let refresh_url = format!("{}/refresh", server.url);
+            {
+                let mut guard = server.state.lock().unwrap();
+                guard.info_response = serde_json::json!({
+                    "registrationRequirements": ["provider-auth-v0"],
+                    "providerAuth": {
+                        "authorizeUrl": "https://example.invalid/authorize",
+                        "tokenUrl": "https://example.invalid/token",
+                        "refreshUrl": refresh_url
+                    }
+                });
+                guard.refresh_response = Some(serde_json::json!({
+                    "registrationToken": "fresh-token",
+                    "tokenUrl": "https://example.invalid/token"
+                }));
+            }
+            let (core, portable_did) = initialized_core_with_did();
+            let agent_did = portable_did_uri(&portable_did);
+
+            let raw = core
+                .register_tenant(
+                    serde_json::json!({
+                        "dwnEndpoints": [server.url.clone()],
+                        "agentDid": agent_did,
+                        "connectedDid": agent_did,
+                        "registrationTokens": {
+                            server.url.clone(): {
+                                "registrationToken": "stale-token",
+                                "tokenUrl": "https://example.invalid/token",
+                                "refreshUrl": refresh_url,
+                                "refreshToken": "stale-refresh",
+                                "expiresAt": 1
+                            }
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect("register tenant with refresh");
+            let result: JsonValue = serde_json::from_str(&raw).expect("registration json");
+            let tokens = result["registrationTokens"]
+                .as_object()
+                .expect("tokens map");
+            let updated = tokens
+                .get(&server.url)
+                .and_then(JsonValue::as_object)
+                .expect("updated entry");
+            assert_eq!(
+                updated.get("registrationToken").and_then(JsonValue::as_str),
+                Some("fresh-token")
+            );
+
+            let snapshot = server.snapshot();
+            assert_eq!(snapshot.refresh_calls, vec!["stale-refresh".to_string()]);
+            assert_eq!(snapshot.registration_calls.len(), 1);
+            assert_eq!(
+                snapshot.registration_calls[0].registration_token.as_deref(),
+                Some("fresh-token")
+            );
+        }
+
+        #[test]
+        fn push_protocol_returns_installed_true_when_remote_is_empty() {
+            let server = start_mock_server();
+            {
+                let mut guard = server.state.lock().unwrap();
+                guard.dwn_replies.push(serde_json::json!({
+                    "status": { "code": 200, "detail": "OK" },
+                    "entries": []
+                }));
+                guard.dwn_replies.push(serde_json::json!({
+                    "status": { "code": 202, "detail": "Accepted" }
+                }));
+            }
+            let (core, portable_did) = initialized_core_with_did();
+            let raw = core
+                .push_protocol(
+                    serde_json::json!({
+                        "tenantDid": portable_did,
+                        "remoteUrl": server.url,
+                        "definition": plain_protocol_definition()
+                    })
+                    .to_string(),
+                )
+                .expect("push protocol");
+            let result: JsonValue = serde_json::from_str(&raw).expect("push result");
+            assert_eq!(result["installed"], true);
+            assert_eq!(result["encryptionActive"], false);
+            assert_eq!(result["protocol"], "https://protocol.example/notes");
+            let snapshot = server.snapshot();
+            assert_eq!(
+                snapshot.dwn_calls.len(),
+                2,
+                "expected query then configure roundtrips"
+            );
+        }
+
+        #[test]
+        fn push_protocol_is_idempotent_when_remote_already_has_definition() {
+            let server = start_mock_server();
+            {
+                let mut guard = server.state.lock().unwrap();
+                guard.dwn_replies.push(serde_json::json!({
+                    "status": { "code": 200, "detail": "OK" },
+                    "entries": [{
+                        "descriptor": {
+                            "interface": "Protocols",
+                            "method": "Configure",
+                            "definition": plain_protocol_definition()
+                        }
+                    }]
+                }));
+            }
+            let (core, portable_did) = initialized_core_with_did();
+            let raw = core
+                .push_protocol(
+                    serde_json::json!({
+                        "tenantDid": portable_did,
+                        "remoteUrl": server.url,
+                        "definition": plain_protocol_definition()
+                    })
+                    .to_string(),
+                )
+                .expect("push protocol idempotent");
+            let result: JsonValue = serde_json::from_str(&raw).expect("push result");
+            assert_eq!(result["installed"], false);
+            let snapshot = server.snapshot();
+            assert_eq!(
+                snapshot.dwn_calls.len(),
+                1,
+                "idempotent path should skip the configure roundtrip"
+            );
+        }
+
+        #[test]
+        fn run_restore_flow_installs_locally_and_pushes_remotely() {
+            let server = start_mock_server();
+            {
+                let mut guard = server.state.lock().unwrap();
+                guard.dwn_replies.push(serde_json::json!({
+                    "status": { "code": 200, "detail": "OK" },
+                    "entries": []
+                }));
+                guard.dwn_replies.push(serde_json::json!({
+                    "status": { "code": 202, "detail": "Accepted" }
+                }));
+            }
+            let (core, portable_did) = initialized_core_with_did();
+            let raw = core
+                .run_restore_flow(
+                    serde_json::json!({
+                        "agentDid": portable_did,
+                        "remoteUrl": server.url,
+                        "protocols": [plain_protocol_definition()]
+                    })
+                    .to_string(),
+                )
+                .expect("run restore flow");
+            let result: JsonValue = serde_json::from_str(&raw).expect("restore json");
+            let steps = result["steps"].as_array().expect("steps");
+            assert_eq!(steps.len(), 3);
+            assert_eq!(steps[0], "agent_did_sync");
+            assert_eq!(steps[1], "protocol_install");
+            assert_eq!(steps[2], "protocol_push");
+            let local = result["localInstalls"].as_array().expect("local installs");
+            let remote = result["remotePushes"].as_array().expect("remote pushes");
+            assert_eq!(local.len(), 1);
+            assert_eq!(remote.len(), 1);
+            assert_eq!(local[0]["installed"], true);
+            assert_eq!(remote[0]["installed"], true);
+        }
+
+        #[test]
+        fn http_setup_methods_reject_locked_core() {
+            let server = start_mock_server();
+            let (core, portable_did) = initialized_core_with_did();
+            core.lock();
+            let agent_did = portable_did_uri(&portable_did);
+            let err = core
+                .register_tenant(
+                    serde_json::json!({
+                        "dwnEndpoints": [server.url.clone()],
+                        "agentDid": agent_did,
+                        "connectedDid": agent_did
+                    })
+                    .to_string(),
+                )
+                .expect_err("register must fail while locked");
+            assert!(matches!(err, EnboxError::Locked));
+            let err = core
+                .push_protocol(
+                    serde_json::json!({
+                        "tenantDid": portable_did,
+                        "remoteUrl": server.url,
+                        "definition": plain_protocol_definition()
+                    })
+                    .to_string(),
+                )
+                .expect_err("push must fail while locked");
+            assert!(matches!(err, EnboxError::Locked));
+            let err = core
+                .run_restore_flow(
+                    serde_json::json!({
+                        "agentDid": portable_did,
+                        "remoteUrl": server.url,
+                        "protocols": [plain_protocol_definition()]
+                    })
+                    .to_string(),
+                )
+                .expect_err("restore must fail while locked");
+            assert!(matches!(err, EnboxError::Locked));
+        }
+
+        #[test]
+        fn http_setup_methods_surface_json_errors() {
+            let core = EnboxCore::open_in_memory().expect("core opens");
+            core.initialize_agent_identity(
+                serde_json::json!({
+                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                    "dwnEndpoints": []
+                })
+                .to_string(),
+            )
+            .expect("init identity");
+            let err = core
+                .register_tenant("not-json".to_string())
+                .expect_err("invalid json must fail");
+            assert!(matches!(err, EnboxError::Json { .. }));
+            let err = core
+                .push_protocol("not-json".to_string())
+                .expect_err("invalid json must fail");
+            assert!(matches!(err, EnboxError::Json { .. }));
+            let err = core
+                .run_restore_flow("not-json".to_string())
+                .expect_err("invalid json must fail");
+            assert!(matches!(err, EnboxError::Json { .. }));
+        }
     }
 }
