@@ -25,6 +25,78 @@ pub enum Value {
     DateTime(DateTime<Utc>),
 }
 
+impl Value {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            Value::Null => vec![],
+            Value::Bool(b) => b.to_string().into_bytes(),
+            Value::String(s) => s.clone().into_bytes(),
+            Value::Number(n) => n.to_string().into_bytes(),
+            Value::Float(f) => f.to_string().into_bytes(),
+            Value::Cid(c) => c.to_string().into_bytes(),
+            Value::Map(m) => serde_json::to_vec(m).unwrap_or_default(),
+            Value::Array(a) => serde_json::to_vec(a).unwrap_or_default(),
+            Value::DateTime(dt) => dt.to_rfc3339_opts(SecondsFormat::Micros, true).into_bytes(),
+        }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let s = String::from_utf8(bytes.to_vec()).ok()?;
+
+        if s == "null" {
+            return Some(Value::Null);
+        }
+
+        if s == "true" {
+            return Some(Value::Bool(true));
+        } else if s == "false" {
+            return Some(Value::Bool(false));
+        }
+
+        if let Ok(n) = s.parse::<i64>() {
+            return Some(Value::Number(n));
+        }
+
+        if let Ok(f) = s.parse::<f64>() {
+            return Some(Value::Float(f));
+        }
+
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
+            return Some(Value::DateTime(dt.with_timezone(&Utc)));
+        }
+
+        if let Ok(cid) = Cid::try_from(s.as_str()) {
+            return Some(Value::Cid(cid));
+        }
+
+        // Try to parse as JSON map or array, otherwise treat as string
+        let v = serde_json::from_str::<MapValue>(&s)
+            .map(Value::Map)
+            .or_else(|_| serde_json::from_str::<Vec<Value>>(&s).map(Value::Array))
+            .unwrap_or(Value::String(s));
+
+        Some(v)
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Value::Null => 0,
+            Value::Bool(_) => 1,
+            Value::String(s) => s.len(),
+            Value::Number(_) => 1,
+            Value::Float(_) => 1,
+            Value::Cid(c) => c.to_string().len(),
+            Value::Map(m) => m.len(),
+            Value::Array(a) => a.len(),
+            Value::DateTime(dt) => dt.to_rfc3339_opts(SecondsFormat::Micros, true).len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 impl serde::Serialize for Value {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
