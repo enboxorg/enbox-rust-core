@@ -9,6 +9,7 @@ description = "UniFFI facade for Enbox native DWN integrations"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 dwn-rs-core = { path = "../dwn-rs-core" }
 dwn-rs-stores = { path = "../dwn-rs-stores" }
 serde = { version = "1.0.183", features = ["derive"] }

@@ -1485,6 +1485,7 @@ dependencies = [
 name = "enbox-ffi"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dwn-rs-core",
  "dwn-rs-stores",
  "serde",
