@@ -1,6 +1,6 @@
 # Using Rust stores with dwn-sdk-js
 
-The Enbox product path uses **native SQLite** (`SqliteNativeDwn` in `dwn-rs-stores`) behind `enbox-ffi` or the loopback HTTP server. For **behavior parity** against the TypeScript SDK, you can still run `dwn-sdk-js` handler specs with Rust-backed persistence in two ways: WASM Surreal adapters (today) and future FFI store injection (planned).
+The Enbox product path uses **native SQLite** (`SqliteNativeDwn` in `dwn-rs-stores`) behind `enbox-ffi` or the loopback HTTP server. The TypeScript SDK still owns the full handler/feature/scenario regression in CI; Rust validates the same behavior through shared fixtures and loopback interop.
 
 ## Native SQLite (production)
 
@@ -12,48 +12,21 @@ The Enbox product path uses **native SQLite** (`SqliteNativeDwn` in `dwn-rs-stor
 
 `Dwn::create({ messageStore, dataStore, stateIndex, eventLog, resumableTaskStore })` in TypeScript maps to constructing a `SqliteNativeDwn` (or in-memory test node) in Rust and calling `process_message` on the embedded `Dwn` instance.
 
-## WASM Surreal adapters (SDK injectable suite)
+## TypeScript SDK behavior parity
 
-The inherited `dwn-rs-wasm` crate exposes Surreal-backed store implementations that implement the same contracts `dwn-sdk-js` expects for `TestSuite.runInjectableDependentTests`:
+Three layers prove the Rust SQLite implementation matches `@enbox/dwn-sdk-js`:
 
-```javascript
-import { TestSuite } from "@enbox/dwn-sdk-js/tests";
-import {
-  SurrealDataStore,
-  SurrealMessageStore,
-  SurrealEventLog,
-  SurrealResumableTaskStore,
-  EventStream,
-} from "../pkg/index.js"; // wasm-pack output
+1. **Shared fixtures** (`tools/conformance/typescript-*.test.ts`) — 15 assertion types across CID, JWS, JWE, StateIndex, MessagesSync, descriptor roundtrip, message.process, and protocol authorization. Same fixtures consumed by Rust (`conformance_fixtures.rs`) and TS (pinned `@enbox/dwn-sdk-js`).
+2. **dwn-sdk-js native suite** (`bun run --filter @enbox/dwn-sdk-js test:node`) — full handler/feature/scenario coverage runs at the pinned Enbox commit; protects against TS-side regressions before Rust touches behavior.
+3. **Loopback interop** (`tools/interop/loopback-interop.test.ts`) — TS HTTP and WebSocket clients call into the Rust `LoopbackDwnServer`, covering signed Records, Protocols, Permissions grants, `RecordsSubscribe` over WebSocket, and `MessagesSync` root.
 
-await messageStore.connect("mem://");
-// … connect other stores …
-
-TestSuite.runInjectableDependentTests({
-  messageStore,
-  dataStore,
-  eventLog,
-  eventStream: new EventStream(),
-  resumableTaskStore,
-});
-```
-
-Reference harness: [`crates/dwn-rs-wasm/tests/test.js`](../crates/dwn-rs-wasm/tests/test.js).
-
-Build (from repo root, with wasm-pack installed):
-
-```bash
-cd crates/dwn-rs-wasm
-wasm-pack build --target web --features surrealdb
-```
-
-Browser runs use the package’s Web Test Runner config (`web-test-runner.config.mjs`).
+See [`TEST_COVERAGE.md`](./TEST_COVERAGE.md) for the full matrix and CI jobs.
 
 ## In-process TypeScript stores (default SDK tests)
 
-`packages/dwn-sdk-js/tests/test-stores.ts` provides in-memory implementations. Handler specs call `TestStores.get()` unless overrides are passed to `TestSuite.runInjectableDependentTests`. This is what CI runs in the Enbox monorepo (`bun run --filter @enbox/dwn-sdk-js test:node`).
+`packages/dwn-sdk-js/tests/test-stores.ts` provides in-memory implementations. Handler specs call `TestStores.get()` unless overrides are passed to `TestSuite.runInjectableDependentTests`. This is what the `dwn-sdk-js-reference` CI job runs.
 
-## Future: Rust stores via FFI in CI
+## Future: Rust stores via FFI store injection
 
 Phase 1 scaffold: [`tools/interop/testsuite-injection.test.ts`](../tools/interop/testsuite-injection.test.ts).
 
@@ -71,7 +44,6 @@ Do **not** import `test-suite.ts` from the scaffold: many Enbox spec modules sel
 |------|----------|
 | Ship mobile/desktop native DWN | `enbox-ffi` + `SqliteNativeDwn` |
 | Prove TS client ↔ Rust server | Loopback interop tests |
-| Run full SDK store-dependent specs on Rust persistence today | `dwn-rs-wasm` Surreal adapters |
-| Long-term CI parity without WASM | FFI store adapters + injectable harness (planned) |
+| Run full SDK store-dependent specs against Rust persistence | FFI store adapters + injectable harness (planned) |
 
 See also [`TEST_COVERAGE.md`](./TEST_COVERAGE.md) (layer 5) and [`MIGRATION_GUIDE.md`](./MIGRATION_GUIDE.md) (identity/recovery boundary).

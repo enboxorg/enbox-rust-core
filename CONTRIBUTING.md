@@ -42,7 +42,7 @@ ENBOX_TS_ROOT=/path/to/enbox bun test tools/interop/loopback-interop.test.ts
 
 See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the CI job matrix (`rust-tests`, `typescript-conformance`, `dwn-sdk-js-reference`, `loopback-interop`, `fixture-provenance`).
 
-For running `dwn-sdk-js` against Rust-backed stores (WASM Surreal adapters vs native SQLite), see [`docs/STORES_SDK_JS.md`](docs/STORES_SDK_JS.md).
+For running `dwn-sdk-js` against Rust-backed SQLite stores (today via loopback interop, eventually via FFI store injection), see [`docs/STORES_SDK_JS.md`](docs/STORES_SDK_JS.md).
 
 ## Branch Policy
 

@@ -170,7 +170,6 @@
             cargoBuildFlags = [ "--workspace" ];
             checkFlags = [
               "--skip=test_remote"
-              "--skip=surrealdb"
             ];
           };
 
