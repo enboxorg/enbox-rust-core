@@ -4,6 +4,7 @@ use bytes::Bytes;
 use futures_util::Stream;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+use crate::descriptors::MessageDescriptor;
 use crate::events::MessageEvent;
 use crate::{
     errors::{
@@ -145,18 +146,21 @@ pub trait MessageStore: Default {
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
 
-    fn put(
+    fn put<D: MessageDescriptor + Send>(
         &self,
         tenant: &str,
-        message: Message<Descriptor>,
+        message: Message<D>,
         indexes: KeyValues,
     ) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 
-    fn get(
+    fn get<D>(
         &self,
         tenant: &str,
         cid: &str,
-    ) -> impl Future<Output = Result<Option<Message<Descriptor>>, MessageStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<Message<D>>, MessageStoreError>> + Send
+    where
+        D: MessageDescriptor + Send,
+        Message<D>: DeserializeOwned;
 
     /// Applies OR semantics across filter sets and AND semantics within a set.
     fn query(
