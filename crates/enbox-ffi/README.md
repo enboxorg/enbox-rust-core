@@ -135,6 +135,19 @@ The connect FFI mirrors [`dwn_rs_core::connect`](../../crates/dwn-rs-core/src/co
 
 All key-derivation methods rehydrate a per-call `MemoryKeyManager` from the supplied `PortableDid.privateKeys`, so they refuse to run while the core is locked. The pure constructors (`create_permission_request`, `create_delegate_grant`, `create_grant_revocation`) do not touch the vault and remain available even when locked, mirroring `derive_agent_keys_from_phrase`.
 
+## Mobile runtime status
+
+The Rust facade tracks the bookkeeping a mobile host needs to coordinate biometric prompts, background-task scheduling, and audit telemetry. None of this performs platform work itself — the host stays the source of truth for the biometric prompt and the background scheduler.
+
+| Method | Purpose |
+|---|---|
+| `initialize_runtime(json)` | Record `deviceId`, `appGroup`, optional `databasePath` override, and `backgroundRefreshEnabled` (matches [`MobileInitializeRequest`](../dwn-rs-core/src/mobile.rs)). |
+| `unlock_with_reason(reason)` | Same effect as `unlock()`, but records the reason on the runtime status for audit logs. Use after a successful Face ID / Touch ID / `BiometricPrompt`. |
+| `lock()` | Mark vault locked; clears `last_unlock_reason`. |
+| `begin_background_task(taskId)` | Returns `true` if the id was newly registered, `false` if it was already active. Mirrors `MobileCore::track_background_task` idempotency expected by WorkManager / `BGTaskScheduler`. |
+| `end_background_task(taskId)` | Returns `true` if removed, `false` if unknown. Safe to call from expiration / cleanup paths. |
+| `status()` | Returns `EnboxRuntimeStatus` with `initialized`, `locked`, `databasePath`, `deviceId`, `appGroup`, `backgroundRefreshEnabled`, `lastUnlockReason`, `activeBackgroundTasks`. |
+
 ## Sync workflow
 
 1. Open a durable node: `EnboxCore.open("/path/to/enbox.sqlite")`
