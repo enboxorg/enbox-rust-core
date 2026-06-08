@@ -11,12 +11,17 @@ use dwn_rs_core::agent::{
     DeterministicDidJwkProvider, MemoryDidResolverCache, MemoryKeyManager, PortableDid,
 };
 use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use dwn_rs_core::protocols::Definition;
+use dwn_rs_core::setup::{inject_protocol_encryption, install_protocol_if_needed};
 use dwn_rs_core::sync::{
     SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncRunStatus,
 };
 use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
 use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
 use serde::{Deserialize, Serialize};
+
+pub mod setup;
+use setup::{signer_from_portable_did, LocalDwnProtocolEndpoint};
 
 uniffi::setup_scaffolding!();
 
@@ -419,6 +424,78 @@ impl EnboxCore {
         })
     }
 
+    /// Install a protocol definition on the local DWN for the supplied tenant.
+    ///
+    /// `tenant_did_json` is a JSON-encoded [`PortableDid`] (typically the
+    /// value returned by [`Self::current_agent_identity`]). `definition_json`
+    /// is a JSON-encoded [`Definition`]. If the protocol requires encryption,
+    /// it is injected before the `ProtocolsConfigure` is signed and
+    /// persisted; if the protocol is already installed, the call is a
+    /// no-op (mirrors [`install_protocol_if_needed`]).
+    ///
+    /// Returns JSON-encoded [`ProtocolInstallResult`].
+    pub fn install_protocol(
+        &self,
+        tenant_did_json: String,
+        definition_json: String,
+    ) -> Result<String, EnboxError> {
+        let portable_did: PortableDid =
+            serde_json::from_str(&tenant_did_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let definition: Definition =
+            serde_json::from_str(&definition_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+
+        let (node, key_manager) = self.require_local_endpoint_components(&portable_did)?;
+        let signer = signer_from_portable_did(&portable_did)?;
+        let endpoint = LocalDwnProtocolEndpoint::new(node, signer);
+        let result = self.runtime.block_on(install_protocol_if_needed(
+            &endpoint,
+            &key_manager,
+            &portable_did,
+            definition,
+        ))?;
+        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Inject protocol-path encryption keys into a definition using the
+    /// tenant's key-agreement root key.
+    ///
+    /// Pure function: does not touch the DWN or the vault. Useful for
+    /// previewing what `install_protocol` will persist for an encrypted
+    /// protocol, or for sharing a pre-augmented definition with another
+    /// agent that needs to push the same protocol.
+    ///
+    /// Returns JSON-encoded [`Definition`] with `encryption` populated on
+    /// each leaf rule set.
+    pub fn inject_protocol_encryption(
+        &self,
+        tenant_did_json: String,
+        definition_json: String,
+    ) -> Result<String, EnboxError> {
+        let portable_did: PortableDid =
+            serde_json::from_str(&tenant_did_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let definition: Definition =
+            serde_json::from_str(&definition_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let (_node, key_manager) = self.require_local_endpoint_components(&portable_did)?;
+        let augmented = self.runtime.block_on(inject_protocol_encryption(
+            definition,
+            &key_manager,
+            &portable_did,
+        ))?;
+        serde_json::to_string(&augmented).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
     /// Return the last sync outcome for the supplied tenant (and optional remote/protocol filter).
     pub fn sync_status(&self, query_json: String) -> Result<EnboxSyncStatus, EnboxError> {
         let query: FfiSyncStatusQuery =
@@ -433,6 +510,33 @@ impl EnboxCore {
 }
 
 impl EnboxCore {
+    /// Borrow the shared SQLite node and rebuild a per-call [`MemoryKeyManager`]
+    /// rehydrated from the supplied [`PortableDid`]'s private keys.
+    ///
+    /// Setup operations (install protocol, inject encryption) need both
+    /// pieces: the node for DWN dispatch and the key manager for protocol-
+    /// path encryption derivation. Keeping the key manager per-call mirrors
+    /// the agent-identity FFI helper and keeps the only durable state in the
+    /// SQLite secret store.
+    fn require_local_endpoint_components(
+        &self,
+        portable_did: &PortableDid,
+    ) -> Result<(Arc<SqliteNativeDwn>, MemoryKeyManager), EnboxError> {
+        let state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        if state.locked {
+            return Err(EnboxError::Locked);
+        }
+        let node = state.node.clone().ok_or(EnboxError::NotInitialized)?;
+        drop(state);
+
+        let key_manager = MemoryKeyManager::default();
+        self.runtime
+            .block_on(import_private_keys(&key_manager, portable_did))?;
+        Ok((node, key_manager))
+    }
+
     fn require_secret_store(&self) -> Result<SqliteSecretStore, EnboxError> {
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
@@ -505,11 +609,11 @@ impl EnboxCore {
     }
 }
 
-async fn import_existing_identity(
+pub(crate) async fn import_existing_identity(
     service: &AgentService,
     portable_did: &PortableDid,
 ) -> Result<(), dwn_rs_core::agent::AgentIdentityError> {
-    use dwn_rs_core::agent::{AgentKeyManager, DidProvider, DidResolverCache};
+    use dwn_rs_core::agent::{DidProvider, DidResolverCache};
     service
         .did_provider()
         .import_did(portable_did.clone())
@@ -518,11 +622,16 @@ async fn import_existing_identity(
         .resolver_cache()
         .put_did(portable_did.clone())
         .await?;
+    import_private_keys(service.key_manager(), portable_did).await
+}
+
+pub(crate) async fn import_private_keys(
+    key_manager: &MemoryKeyManager,
+    portable_did: &PortableDid,
+) -> Result<(), dwn_rs_core::agent::AgentIdentityError> {
+    use dwn_rs_core::agent::AgentKeyManager;
     for jwk in &portable_did.private_keys {
-        service
-            .key_manager()
-            .import_private_jwk(jwk.clone())
-            .await?;
+        key_manager.import_private_jwk(jwk.clone()).await?;
     }
     Ok(())
 }
@@ -858,5 +967,131 @@ mod tests {
             .expect("derive runs while locked (no vault access)");
         let derived: serde_json::Value = serde_json::from_str(&raw).expect("derived keys json");
         assert_eq!(derived["signingPrivateJwk"]["crv"], "Ed25519");
+    }
+
+    fn initialized_core_with_did() -> (Arc<EnboxCore>, serde_json::Value) {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let init_raw = core
+            .initialize_agent_identity(
+                serde_json::json!({
+                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                    "dwnEndpoints": []
+                })
+                .to_string(),
+            )
+            .expect("initialize agent");
+        let init: serde_json::Value = serde_json::from_str(&init_raw).expect("initialization json");
+        let portable_did = init["portableDid"].clone();
+        (core, portable_did)
+    }
+
+    fn plain_protocol_definition() -> serde_json::Value {
+        serde_json::json!({
+            "protocol": "https://protocol.example/notes",
+            "published": true,
+            "types": {
+                "note": {
+                    "schema": "https://schema.example/note",
+                    "dataFormats": ["text/plain"]
+                }
+            },
+            "structure": {
+                "note": {
+                    "$actions": [{ "who": "anyone", "can": ["create", "read"] }]
+                }
+            }
+        })
+    }
+
+    fn encrypted_protocol_definition() -> serde_json::Value {
+        serde_json::json!({
+            "protocol": "https://protocol.example/private-notes",
+            "published": true,
+            "types": {
+                "note": {
+                    "schema": "https://schema.example/note",
+                    "dataFormats": ["text/plain"],
+                    "encryptionRequired": true
+                }
+            },
+            "structure": {
+                "note": {
+                    "$actions": [{ "who": "anyone", "can": ["create"] }]
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn install_protocol_persists_and_is_idempotent() {
+        let (core, portable_did) = initialized_core_with_did();
+        let tenant = portable_did.to_string();
+        let definition = plain_protocol_definition().to_string();
+
+        let first_raw = core
+            .install_protocol(tenant.clone(), definition.clone())
+            .expect("install first time");
+        let first: serde_json::Value =
+            serde_json::from_str(&first_raw).expect("install result json");
+        assert_eq!(first["installed"], true);
+        assert_eq!(first["encryptionActive"], false);
+        assert_eq!(first["protocol"], "https://protocol.example/notes");
+
+        let second_raw = core
+            .install_protocol(tenant, definition)
+            .expect("install second time is no-op");
+        let second: serde_json::Value =
+            serde_json::from_str(&second_raw).expect("install result json");
+        assert_eq!(second["installed"], false);
+    }
+
+    #[test]
+    fn install_encrypted_protocol_injects_key_agreement() {
+        let (core, portable_did) = initialized_core_with_did();
+        let tenant_did_json = portable_did.to_string();
+        let definition_json = encrypted_protocol_definition().to_string();
+
+        let augmented_raw = core
+            .inject_protocol_encryption(tenant_did_json.clone(), definition_json.clone())
+            .expect("inject encryption");
+        let augmented: serde_json::Value =
+            serde_json::from_str(&augmented_raw).expect("definition json");
+        assert!(
+            augmented["structure"]["note"]["$encryption"].is_object(),
+            "encryption block missing: {augmented:?}"
+        );
+
+        let install_raw = core
+            .install_protocol(tenant_did_json, definition_json)
+            .expect("install encrypted protocol");
+        let install: serde_json::Value =
+            serde_json::from_str(&install_raw).expect("install result");
+        assert_eq!(install["installed"], true);
+        assert_eq!(install["encryptionActive"], true);
+    }
+
+    #[test]
+    fn install_protocol_rejects_locked_core() {
+        let (core, portable_did) = initialized_core_with_did();
+        core.lock();
+        let err = core
+            .install_protocol(
+                portable_did.to_string(),
+                plain_protocol_definition().to_string(),
+            )
+            .expect_err("install must fail while locked");
+        assert!(matches!(err, EnboxError::Locked));
+    }
+
+    #[test]
+    fn install_protocol_rejects_invalid_did() {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        let err = core
+            .install_protocol(
+                "not-json".to_string(),
+                plain_protocol_definition().to_string(),
+            )
+            .expect_err("invalid did must fail");
+        assert!(matches!(err, EnboxError::Json { .. }));
     }
 }

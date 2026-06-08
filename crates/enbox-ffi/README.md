@@ -17,6 +17,8 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `initialize_agent_identity(request_json)` | Create or recover an agent identity from a BIP-39 recovery phrase; persists `PortableDid` + vault keys |
 | `current_agent_identity()` | Return the persisted `PortableDid` JSON, or `None` if none initialized |
 | `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
+| `install_protocol(tenant_did_json, definition_json)` | Install a protocol on the local DWN (signs a `ProtocolsConfigure`, injects encryption when required); idempotent |
+| `inject_protocol_encryption(tenant_did_json, definition_json)` | Augment a protocol `Definition` with per-path key-agreement encryption; pure (no I/O) |
 | `lock()` / `unlock()` | Block message/sync processing while vault is locked |
 
 Typed errors (`EnboxError`) cross the FFI boundary without panics.
@@ -36,6 +38,28 @@ Typed errors (`EnboxError`) cross the FFI boundary without panics.
 4. For recovery-screen validation before committing, call `derive_agent_keys_from_phrase(phrase)` — this is pure and does not persist anything.
 
 `PortableDid` and `AgentIdentityInitialization` shapes follow [`agent.rs`](../../crates/dwn-rs-core/src/agent.rs). The secret store layer is `SqliteSecretStore` ([`crates/dwn-rs-stores/src/sqlite_agent.rs`](../../crates/dwn-rs-stores/src/sqlite_agent.rs)), which shares the SQLite database used for DWN data.
+
+## Protocol install workflow
+
+Once an identity exists, install user protocols on the local DWN:
+
+```json
+install_protocol(
+  <portable_did_json>,
+  {
+    "protocol": "https://protocol.example/notes",
+    "published": true,
+    "types": { "note": { "schema": "…", "dataFormats": ["text/plain"] } },
+    "structure": { "note": { "$actions": [...] } }
+  }
+)
+```
+
+Returns JSON `ProtocolInstallResult` (`{protocol, installed, encryptionActive}`). Subsequent calls for the same protocol return `installed: false` — the helper queries before configuring, matching [`install_protocol_if_needed`](../../crates/dwn-rs-core/src/setup.rs).
+
+Encrypted protocols (those with `encryptionRequired: true`) have per-path key-agreement encryption injected automatically. For preview or sharing the augmented definition with another agent, call `inject_protocol_encryption` separately — it is pure and does not touch the DWN.
+
+Pushing to remote DWN servers, tenant registration, and full restore-flow replay are not yet exposed; they are tracked in #145 (HTTP transport follow-up).
 
 ## Sync workflow
 
