@@ -92,6 +92,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `enbox-ffi` HTTP tenant registration | `register_tenant` against axum mock; anonymous, provider-auth-v0, refresh-on-expiry paths | done |
 | `UniversalResolver` DID method coverage | `did:jwk` (decode JWK from suffix) and `did:key` (Ed25519 multicodec); end-to-end JWS signed by a `did:key` verifies through the resolver | done |
 | `enbox-ffi` mobile runtime status | `initialize_runtime`, `unlock_with_reason`, `lock`, `begin_background_task`, `end_background_task`; covered in `enbox-ffi` tests | done |
+| `enbox-ffi` resume-pending sync | `list_pending_scopes`, `resume_pending` (batch deadline + per-scope `sync_once`); covered in `enbox-ffi` tests including a seeded-checkpoint drain | done |
 | Multi-node sync integration (direct + HTTP) | `crates/dwn-rs-stores/tests/sync_integration.rs` (6 scenarios in `cargo test --workspace`) | done |
 | Live/poll reconciliation vs HTTP remote | `poll_reconcile_with_http`, `reconcile_after_live_disconnect`; see [SYNC_LIVE_POLL.md](./SYNC_LIVE_POLL.md) | done |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |
