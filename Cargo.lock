@@ -1294,6 +1294,7 @@ dependencies = [
  "ipld-core",
  "jsonschema",
  "k256",
+ "multibase",
  "multihash",
  "multihash-codetable",
  "p256",

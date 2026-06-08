@@ -90,6 +90,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `enbox-ffi` protocol install / push / restore | `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption` over `Local`/`HttpDwnProtocolEndpoint` with axum mock server tests | done |
 | `enbox-ffi` DWeb Connect surface | `create_permission_request/_delegate_grant/_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, persisted decryption/context keys; covered in `enbox-ffi` tests | done |
 | `enbox-ffi` HTTP tenant registration | `register_tenant` against axum mock; anonymous, provider-auth-v0, refresh-on-expiry paths | done |
+| `UniversalResolver` DID method coverage | `did:jwk` (decode JWK from suffix) and `did:key` (Ed25519 multicodec); end-to-end JWS signed by a `did:key` verifies through the resolver | done |
 | Multi-node sync integration (direct + HTTP) | `crates/dwn-rs-stores/tests/sync_integration.rs` (6 scenarios in `cargo test --workspace`) | done |
 | Live/poll reconciliation vs HTTP remote | `poll_reconcile_with_http`, `reconcile_after_live_disconnect`; see [SYNC_LIVE_POLL.md](./SYNC_LIVE_POLL.md) | done |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |
