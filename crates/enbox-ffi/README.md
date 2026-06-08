@@ -146,6 +146,15 @@ All key-derivation methods rehydrate a per-call `MemoryKeyManager` from the supp
 
 `sync_once` and `poll_reconcile` return JSON [`SyncOnceResult`](../../crates/dwn-rs-core/src/sync.rs) mirroring the native engine. HTTP remotes use `@enbox/dwn-server` JSON-RPC via [`HttpSyncEndpoint`](../dwn-rs-core/src/sync_endpoint.rs).
 
+Background-safe request fields (see [`docs/BACKGROUND_SYNC.md`](../../docs/BACKGROUND_SYNC.md)):
+
+| Field | Type | Effect |
+|---|---|---|
+| `deadlineMs` | `Option<u64>` | Wraps the run in `tokio::time::timeout`; returns `SyncRunStatus::DeadlineExceeded` if exceeded. Durable checkpoints written before the timeout remain in SQLite for the next call. |
+| `connectivity` | `Option<SyncConnectivity>` | `{online, expensive, roaming, backgroundRestricted, powerSave, allowMetered, allowRoaming, preferredMaxBytes?}`. Offline/metered/roaming policy is enforced in Rust and short-circuits to `noConnectivity` before any HTTP request. |
+| `reason` | `Option<String>` | Caller-supplied telemetry label (`push_notification`, `periodic`, `manual`, `repair`, `startup_resume`, ...). Recorded on the resulting checkpoints. Defaults to `ffi_sync_once` / `ffi_poll_reconcile`. |
+| `maxRecords` / `maxBytes` | `Option<usize>` / `Option<u64>` | Soft byte/record budgets enforced inside the sync engine. |
+
 ## Binding generation
 
 ```bash

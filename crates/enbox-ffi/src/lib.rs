@@ -23,7 +23,8 @@ use dwn_rs_core::setup::{
     register_with_dwn_endpoints, run_restore_flow, TenantRegistrationRequest,
 };
 use dwn_rs_core::sync::{
-    SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncRunStatus,
+    SyncConnectivity, SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult,
+    SyncRunStatus,
 };
 use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
 use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
@@ -127,6 +128,15 @@ struct SyncSignerConfig {
     private_jwk: JwsPrivateJwk,
 }
 
+/// Which `SqliteNativeDwn` HTTP entry point a sync invocation should
+/// dispatch to. Kept private; `sync_once` and `poll_reconcile` are the
+/// only callers.
+#[derive(Debug, Clone, Copy)]
+enum SyncBackend {
+    SyncOnce,
+    PollReconcile,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FfiSyncOnceRequest {
@@ -138,6 +148,20 @@ struct FfiSyncOnceRequest {
     max_records: Option<usize>,
     max_bytes: Option<u64>,
     signer: Option<SyncSignerConfig>,
+    /// Native deadline in milliseconds; when set, the sync run is wrapped
+    /// in a [`tokio::time::timeout`] and returns a
+    /// `SyncRunStatus::DeadlineExceeded` result if the budget elapses.
+    /// Durable checkpoints written before the timeout are preserved so a
+    /// follow-up call resumes from the same point.
+    deadline_ms: Option<u64>,
+    /// Caller-supplied connectivity snapshot. Omitting it keeps the
+    /// permissive default (`online=true`, `allow_metered=true`,
+    /// `allow_roaming=false`) so existing callers see no behaviour change.
+    connectivity: Option<SyncConnectivity>,
+    /// Caller-supplied reason label (`push_notification`, `periodic`,
+    /// `manual`, `repair`, `startup_resume`, ...). Recorded for telemetry
+    /// in the resulting checkpoints.
+    reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -252,138 +276,18 @@ impl EnboxCore {
     /// `request_json` follows [`SyncOnceRequest`] (`tenant`, `remote`, `direction`, …).
     /// HTTP remotes require a signer via [`Self::configure_sync_signer`] or inline `signer`.
     pub fn sync_once(&self, request_json: String) -> Result<String, EnboxError> {
-        let request: FfiSyncOnceRequest =
-            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
-                detail: err.to_string(),
-            })?;
-        let sync_request = SyncOnceRequest {
-            tenant: request.tenant.clone(),
-            remote: request.remote.clone(),
-            direction: request.direction,
-            protocol: request.protocol,
-            max_records: request.max_records,
-            max_bytes: request.max_bytes,
-            connectivity: Default::default(),
-            reason: Some("ffi_sync_once".to_string()),
-        };
-
-        let state = self.state.lock().map_err(|err| EnboxError::Store {
-            detail: format!("core state lock poisoned: {err}"),
-        })?;
-        if state.locked {
-            return Err(EnboxError::Locked);
-        }
-        if state.sync_in_progress {
-            return Err(EnboxError::SyncInProgress);
-        }
-        let Some(node) = state.node.clone() else {
-            return Err(EnboxError::NotInitialized);
-        };
-
-        let signer = if let Some(config) = request.signer {
-            PrivateJwkSigner::new(config.key_id, config.algorithm, config.private_jwk)
-        } else {
-            state
-                .sync_signer
-                .clone()
-                .ok_or(EnboxError::SyncSignerMissing)?
-        };
-        drop(state);
-
-        {
-            let mut state = self.state.lock().map_err(|err| EnboxError::Store {
-                detail: format!("core state lock poisoned: {err}"),
-            })?;
-            state.sync_in_progress = true;
-        }
-
-        let authorizer = JwsSyncAuthorizer::new(signer);
-        let result = self.runtime.block_on(node.sync_once_with_http(
-            &request.remote,
-            authorizer,
-            sync_request,
-        ));
-
-        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
-            detail: format!("core state lock poisoned: {err}"),
-        })?;
-        state.sync_in_progress = false;
-        state.last_sync = Some(result.clone());
-        state.last_sync_tenant = Some(request.tenant);
-        state.last_sync_remote = Some(request.remote);
-
-        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
-            detail: err.to_string(),
-        })
+        self.run_sync_request(request_json, "ffi_sync_once", SyncBackend::SyncOnce)
     }
 
     /// Pull-only poll reconciliation against an HTTP remote (live-degraded fallback).
     ///
     /// `request_json` matches [`Self::sync_once`]; uses [`SqliteNativeDwn::poll_reconcile_with_http`].
     pub fn poll_reconcile(&self, request_json: String) -> Result<String, EnboxError> {
-        let request: FfiSyncOnceRequest =
-            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
-                detail: err.to_string(),
-            })?;
-        let sync_request = SyncOnceRequest {
-            tenant: request.tenant.clone(),
-            remote: request.remote.clone(),
-            direction: request.direction,
-            protocol: request.protocol,
-            max_records: request.max_records,
-            max_bytes: request.max_bytes,
-            connectivity: Default::default(),
-            reason: Some("ffi_poll_reconcile".to_string()),
-        };
-
-        let state = self.state.lock().map_err(|err| EnboxError::Store {
-            detail: format!("core state lock poisoned: {err}"),
-        })?;
-        if state.locked {
-            return Err(EnboxError::Locked);
-        }
-        if state.sync_in_progress {
-            return Err(EnboxError::SyncInProgress);
-        }
-        let Some(node) = state.node.clone() else {
-            return Err(EnboxError::NotInitialized);
-        };
-
-        let signer = if let Some(config) = request.signer {
-            PrivateJwkSigner::new(config.key_id, config.algorithm, config.private_jwk)
-        } else {
-            state
-                .sync_signer
-                .clone()
-                .ok_or(EnboxError::SyncSignerMissing)?
-        };
-        drop(state);
-
-        {
-            let mut state = self.state.lock().map_err(|err| EnboxError::Store {
-                detail: format!("core state lock poisoned: {err}"),
-            })?;
-            state.sync_in_progress = true;
-        }
-
-        let authorizer = JwsSyncAuthorizer::new(signer);
-        let result = self.runtime.block_on(node.poll_reconcile_with_http(
-            &request.remote,
-            authorizer,
-            sync_request,
-        ));
-
-        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
-            detail: format!("core state lock poisoned: {err}"),
-        })?;
-        state.sync_in_progress = false;
-        state.last_sync = Some(result.clone());
-        state.last_sync_tenant = Some(request.tenant);
-        state.last_sync_remote = Some(request.remote);
-
-        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
-            detail: err.to_string(),
-        })
+        self.run_sync_request(
+            request_json,
+            "ffi_poll_reconcile",
+            SyncBackend::PollReconcile,
+        )
     }
 
     /// Initialize (or recover) an agent identity from a BIP-39 recovery phrase.
@@ -818,6 +722,126 @@ impl EnboxCore {
         Ok((node, key_manager))
     }
 
+    /// Build a [`SyncOnceRequest`] from the FFI request, applying
+    /// `default_reason` only when the caller didn't supply one.
+    fn build_sync_once_request(
+        request: &FfiSyncOnceRequest,
+        default_reason: &str,
+    ) -> SyncOnceRequest {
+        SyncOnceRequest {
+            tenant: request.tenant.clone(),
+            remote: request.remote.clone(),
+            direction: request.direction,
+            protocol: request.protocol.clone(),
+            max_records: request.max_records,
+            max_bytes: request.max_bytes,
+            connectivity: request.connectivity.clone().unwrap_or_default(),
+            reason: Some(
+                request
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| default_reason.to_string()),
+            ),
+        }
+    }
+
+    /// Common scaffolding for `sync_once` and `poll_reconcile`: parses the
+    /// request, gates on lock/in-progress/initialised, applies the
+    /// optional `deadline_ms` budget via [`tokio::time::timeout`], and
+    /// records the result in `CoreState`.
+    fn run_sync_request(
+        &self,
+        request_json: String,
+        default_reason: &str,
+        backend: SyncBackend,
+    ) -> Result<String, EnboxError> {
+        let request: FfiSyncOnceRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let sync_request = Self::build_sync_once_request(&request, default_reason);
+        let deadline_ms = request.deadline_ms;
+
+        let state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        if state.locked {
+            return Err(EnboxError::Locked);
+        }
+        if state.sync_in_progress {
+            return Err(EnboxError::SyncInProgress);
+        }
+        let Some(node) = state.node.clone() else {
+            return Err(EnboxError::NotInitialized);
+        };
+
+        let signer = if let Some(config) = request.signer {
+            PrivateJwkSigner::new(config.key_id, config.algorithm, config.private_jwk)
+        } else {
+            state
+                .sync_signer
+                .clone()
+                .ok_or(EnboxError::SyncSignerMissing)?
+        };
+        drop(state);
+
+        {
+            let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+                detail: format!("core state lock poisoned: {err}"),
+            })?;
+            state.sync_in_progress = true;
+        }
+
+        let authorizer = JwsSyncAuthorizer::new(signer);
+        let remote = request.remote.clone();
+        let result = self.runtime.block_on(async move {
+            let future = async {
+                match backend {
+                    SyncBackend::SyncOnce => {
+                        node.sync_once_with_http(&remote, authorizer, sync_request)
+                            .await
+                    }
+                    SyncBackend::PollReconcile => {
+                        node.poll_reconcile_with_http(&remote, authorizer, sync_request)
+                            .await
+                    }
+                }
+            };
+            match deadline_ms {
+                Some(budget_ms) => {
+                    match tokio::time::timeout(std::time::Duration::from_millis(budget_ms), future)
+                        .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => SyncOnceResult {
+                            status: SyncRunStatus::DeadlineExceeded,
+                            checkpoints: Vec::new(),
+                            records_pulled: 0,
+                            records_pushed: 0,
+                            bytes_downloaded: 0,
+                            bytes_uploaded: 0,
+                            next_recommended_delay_ms: Some(budget_ms),
+                            error: None,
+                        },
+                    }
+                }
+                None => future.await,
+            }
+        });
+
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        state.sync_in_progress = false;
+        state.last_sync = Some(result.clone());
+        state.last_sync_tenant = Some(request.tenant);
+        state.last_sync_remote = Some(request.remote);
+
+        serde_json::to_string(&result).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
     /// Rehydrate a per-call [`MemoryKeyManager`] from the supplied
     /// [`PortableDid`]'s private keys, refusing if the core is locked.
     ///
@@ -1155,6 +1179,124 @@ mod tests {
         let poll_result: SyncOnceResult =
             serde_json::from_str(&poll_json).expect("poll reconcile result json");
         assert_eq!(poll_result.status, SyncRunStatus::Failed);
+    }
+
+    fn configured_sync_core() -> Arc<EnboxCore> {
+        let core = EnboxCore::open_in_memory().expect("core opens");
+        core.register_sync_identity(
+            serde_json::json!({
+                "did": "did:example:alice",
+                "protocols": { "type": "all" }
+            })
+            .to_string(),
+        )
+        .expect("register identity");
+        core.configure_sync_signer(
+            serde_json::json!({
+                "keyId": "did:example:alice#key1",
+                "algorithm": "EdDSA",
+                "privateJwk": {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+                    "d": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+                    "kid": "did:example:alice#key1",
+                    "alg": "EdDSA"
+                }
+            })
+            .to_string(),
+        )
+        .expect("configure signer");
+        core
+    }
+
+    #[test]
+    fn sync_once_respects_connectivity_offline_short_circuits_before_network() {
+        let core = configured_sync_core();
+        let result_json = core
+            .sync_once(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://127.0.0.1:9/",
+                    "direction": "pull",
+                    "connectivity": {
+                        "online": false,
+                        "expensive": false,
+                        "roaming": false,
+                        "backgroundRestricted": false,
+                        "powerSave": false,
+                        "allowMetered": true,
+                        "allowRoaming": false
+                    }
+                })
+                .to_string(),
+            )
+            .expect("sync_once returns json when offline");
+        let result: SyncOnceResult = serde_json::from_str(&result_json).expect("sync result json");
+        assert_eq!(result.status, SyncRunStatus::NoConnectivity);
+    }
+
+    #[test]
+    fn sync_once_respects_metered_connectivity_when_not_allowed() {
+        let core = configured_sync_core();
+        let result_json = core
+            .sync_once(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://127.0.0.1:9/",
+                    "direction": "pull",
+                    "connectivity": {
+                        "online": true,
+                        "expensive": true,
+                        "roaming": false,
+                        "backgroundRestricted": false,
+                        "powerSave": false,
+                        "allowMetered": false,
+                        "allowRoaming": false
+                    }
+                })
+                .to_string(),
+            )
+            .expect("sync_once returns json when metered");
+        let result: SyncOnceResult = serde_json::from_str(&result_json).expect("sync result json");
+        assert_eq!(result.status, SyncRunStatus::NoConnectivity);
+    }
+
+    #[test]
+    fn sync_once_enforces_deadline_returns_deadline_exceeded() {
+        let core = configured_sync_core();
+        let result_json = core
+            .sync_once(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://10.255.255.1:9/",
+                    "direction": "pull",
+                    "deadlineMs": 50
+                })
+                .to_string(),
+            )
+            .expect("sync_once returns even when deadline expires");
+        let result: SyncOnceResult = serde_json::from_str(&result_json).expect("sync result json");
+        assert_eq!(result.status, SyncRunStatus::DeadlineExceeded);
+        assert_eq!(result.next_recommended_delay_ms, Some(50));
+    }
+
+    #[test]
+    fn poll_reconcile_enforces_deadline_returns_deadline_exceeded() {
+        let core = configured_sync_core();
+        let result_json = core
+            .poll_reconcile(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://10.255.255.1:9/",
+                    "direction": "pull",
+                    "deadlineMs": 50
+                })
+                .to_string(),
+            )
+            .expect("poll_reconcile returns even when deadline expires");
+        let result: SyncOnceResult = serde_json::from_str(&result_json).expect("poll result json");
+        assert_eq!(result.status, SyncRunStatus::DeadlineExceeded);
     }
 
     const TEST_RECOVERY_PHRASE: &str =

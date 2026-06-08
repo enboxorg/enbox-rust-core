@@ -225,6 +225,10 @@ pub enum SyncRunStatus {
     DegradedPoll,
     Started,
     Stopped,
+    /// The native deadline elapsed before the run finished. Durable
+    /// checkpoints (if any) remain in [`SyncOnceResult::checkpoints`] so
+    /// the next call can resume.
+    DeadlineExceeded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
