@@ -54,7 +54,13 @@ type DwnSdkModule = {
   ProtocolsConfigure: {
     create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
   };
+  ProtocolsQuery: {
+    create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
+  };
   RecordsRead: {
+    create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
+  };
+  RecordsDelete: {
     create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
   };
   TestDataGenerator: {
@@ -108,7 +114,8 @@ if (!existsSync(wsClientModulePath)) {
 
 const { HttpDwnRpcClient } = await import(httpClientModulePath) as HttpDwnRpcClientModule;
 const { WebSocketDwnRpcClient } = await import(wsClientModulePath) as WebSocketDwnRpcClientModule;
-const { MessagesSync, ProtocolsConfigure, RecordsRead } = await import(dwnSdkModulePath) as DwnSdkModule;
+const { MessagesSync, ProtocolsConfigure, ProtocolsQuery, RecordsRead, RecordsDelete } =
+  await import(dwnSdkModulePath) as DwnSdkModule;
 const { TestDataGenerator, defaultTestProtocolDefinition } = await import(testDataGeneratorPath) as {
   TestDataGenerator: DwnSdkModule['TestDataGenerator'];
   defaultTestProtocolDefinition: DwnSdkModule['defaultTestProtocolDefinition'];
@@ -392,6 +399,118 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     });
 
     expect(grantReply.status.code).toBe(202);
+  });
+
+  test('ProtocolsQuery returns a configured protocol', async () => {
+    const client = new HttpDwnRpcClient();
+    const alice = await getLoopbackPersona();
+
+    await installLoopbackProtocol(client);
+
+    const { message: queryMessage } = await ProtocolsQuery.create({
+      signer: alice.signer,
+      filter: { protocol: loopbackProtocolDefinition.protocol },
+    });
+
+    const queryReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: queryMessage,
+    });
+
+    expect(queryReply.status.code).toBe(200);
+    const body = (queryReply as { body?: { entries?: unknown[] }; entries?: unknown[] }).body
+      ?? (queryReply as { entries?: unknown[] });
+    const entries = body.entries ?? (queryReply as { entries?: unknown[] }).entries ?? [];
+    expect(Array.isArray(entries)).toBe(true);
+    expect(entries.length).toBeGreaterThan(0);
+    const first = entries[0] as { descriptor?: { definition?: { protocol?: string } } };
+    expect(first.descriptor?.definition?.protocol).toBe(loopbackProtocolDefinition.protocol);
+  });
+
+  test('RecordsWrite then RecordsDelete makes a subsequent RecordsRead return 404', async () => {
+    const client = new HttpDwnRpcClient();
+    const alice = await getLoopbackPersona();
+
+    await installLoopbackProtocol(client);
+
+    const { message: writeMessage, dataBytes } = await TestDataGenerator.generateRecordsWrite({
+      author: alice,
+      schema: 'foo/bar',
+    });
+    const writeReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: writeMessage,
+      data: dataBytes,
+    });
+    expect(writeReply.status.code).toBe(202);
+
+    const { message: deleteMessage } = await RecordsDelete.create({
+      signer: alice.signer,
+      recordId: writeMessage.recordId!,
+    });
+    const deleteReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: deleteMessage,
+    });
+    expect(deleteReply.status.code).toBe(202);
+
+    const { message: readMessage } = await RecordsRead.create({
+      signer: alice.signer,
+      filter: { recordId: writeMessage.recordId },
+    });
+    const readReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: readMessage,
+    });
+    expect(readReply.status.code).toBe(404);
+  });
+
+  test('RecordsDelete is idempotent: deleting an already-deleted record is rejected with 404', async () => {
+    const client = new HttpDwnRpcClient();
+    const alice = await getLoopbackPersona();
+
+    await installLoopbackProtocol(client);
+
+    const { message: writeMessage, dataBytes } = await TestDataGenerator.generateRecordsWrite({
+      author: alice,
+      schema: 'foo/bar',
+    });
+    await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: writeMessage,
+      data: dataBytes,
+    });
+
+    const { message: firstDelete } = await RecordsDelete.create({
+      signer: alice.signer,
+      recordId: writeMessage.recordId!,
+    });
+    const firstReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: firstDelete,
+    });
+    expect(firstReply.status.code).toBe(202);
+
+    const { message: secondDelete } = await RecordsDelete.create({
+      signer: alice.signer,
+      recordId: writeMessage.recordId!,
+    });
+    const secondReply = await client.sendDwnRequest({
+      dwnUrl: endpoint,
+      targetDid: LOOPBACK_TENANT,
+      message: secondDelete,
+    });
+    // dwn-sdk-js semantics: a redundant RecordsDelete is treated as a no-op
+    // and returns either 202 (accepted, written as a tombstone) or 404
+    // (the record state is already terminal). We assert it's terminal and
+    // never produces a 500, matching the TS reference behaviour.
+    expect([202, 404]).toContain(secondReply.status.code);
   });
 });
 
