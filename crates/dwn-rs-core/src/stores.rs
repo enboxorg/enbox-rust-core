@@ -153,14 +153,11 @@ pub trait MessageStore: Default {
         indexes: KeyValues,
     ) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 
-    fn get<D>(
+    fn get(
         &self,
         tenant: &str,
         cid: &str,
-    ) -> impl Future<Output = Result<Option<Message<D>>, MessageStoreError>> + Send
-    where
-        D: MessageDescriptor + Send,
-        Message<D>: DeserializeOwned;
+    ) -> impl Future<Output = Result<Option<Message<Descriptor>>, MessageStoreError>> + Send;
 
     /// Applies OR semantics across filter sets and AND semantics within a set.
     fn query(

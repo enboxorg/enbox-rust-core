@@ -80,11 +80,11 @@ impl MessageStore for SqliteStore {
             .map_err(MessageStoreError::from)
     }
 
-    async fn get<D>(&self, tenant: &str, cid: &str) -> Result<Option<Message<D>>, MessageStoreError>
-    where
-        D: MessageDescriptor + Serialize + Send,
-        Message<D>: DeserializeOwned,
-    {
+    async fn get(
+        &self,
+        tenant: &str,
+        cid: &str,
+    ) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
         let tenant = tenant.to_string();
         let cid = cid.to_string();
 
@@ -108,7 +108,7 @@ impl MessageStore for SqliteStore {
             .map_err(MessageStoreError::from)?;
 
         message_json // fix #1 + #3: thread the Option
-            .map(|json| serde_json::from_str::<Message<D>>(&json))
+            .map(|json| serde_json::from_str::<Message<Descriptor>>(&json))
             .transpose()
             .map_err(MessageStoreError::from)
     }
