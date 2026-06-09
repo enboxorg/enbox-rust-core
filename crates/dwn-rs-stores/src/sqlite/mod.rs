@@ -2,11 +2,15 @@ use dwn_rs_core::errors::StoreError;
 
 pub mod conn;
 pub mod data_store;
+pub mod event_log;
 pub mod message_store;
 mod query;
+pub mod state_index;
 pub mod store;
 
 pub use self::conn::SqliteConnection;
+pub use self::event_log::SqliteEventLog;
+pub use self::state_index::SqliteStateIndex;
 pub(crate) use self::store::sqlite_store_error;
 pub use self::store::SqliteStore;
 
@@ -19,13 +23,15 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use futures_util::TryStreamExt;
+    use bytes::Bytes;
+    use futures_util::{stream, TryStreamExt};
 
     use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
     use dwn_rs_core::descriptors::{Records, RecordsWriteDescriptor};
-    use dwn_rs_core::fields::WriteFields;
-    use dwn_rs_core::filters::{Filter, FilterKey};
-    use dwn_rs_core::Fields;
+    use dwn_rs_core::fields::{MessageFields, WriteFields};
+    use dwn_rs_core::filters::{Filter, FilterKey, Filters};
+    use dwn_rs_core::stores::{DataStore, KeyValues, MessageStore};
+    use dwn_rs_core::{Descriptor, Fields, Message, MessageSort, Pagination, SortDirection, Value};
 
     use super::*;
 
