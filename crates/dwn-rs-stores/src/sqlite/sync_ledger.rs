@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use dwn_rs_core::errors::StoreError;
+use rusqlite::{params, Connection, OptionalExtension};
 
 use dwn_rs_core::sync::{
     DeadLetterCategory, DeadLetterEntry, SyncCheckpoint, SyncDirection, SyncError, SyncResult,
@@ -16,7 +17,7 @@ use crate::sqlite::{json_store_error, sqlite_store_error, SqliteConnection, Sqli
 /// SQLite-backed [`SyncLedger`] persisted alongside the native DWN database.
 #[derive(Debug, Clone)]
 pub struct SqliteSyncLedger {
-    connection: SqliteConnection,
+    store: SqliteStore,
 }
 
 impl Default for SqliteSyncLedger {
@@ -27,28 +28,29 @@ impl Default for SqliteSyncLedger {
 
 impl SqliteSyncLedger {
     pub fn new(store: &SqliteStore) -> Self {
-        let connection = store.shared_connection();
-        let _ = connection.open();
-        let _ = connection.with_connection(migrate_sync_ledger);
-        Self { connection }
+        Self {
+            store: store.clone(),
+        }
     }
 
-    fn with_connection<T>(
-        &self,
-        f: impl FnOnce(&rusqlite::Connection) -> Result<T, dwn_rs_core::errors::StoreError>,
-    ) -> SyncResult<T> {
-        self.connection
-            .open()
-            .map_err(|err| SyncError::permanent("SyncLedgerOpenFailed", err.to_string()))?;
-        self.connection
-            .with_connection(f)
-            .map_err(|err| SyncError::permanent("SyncLedgerStoreFailed", err.to_string()))
+    async fn with_writer<T, F>(&self, f: F) -> SyncResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
+    {
+        self.store
+            .connection()
+            .await
+            .map_err(|e| SyncError::transient("SyncLedgerOpenFailed", e.to_string()))?
+            .with_writer(f)
+            .await
+            .map_err(|e| SyncError::permanent("SyncLedgerWriteFailed", e.to_string()))
     }
 }
 
 impl SyncLedger for SqliteSyncLedger {
-    fn load(&self) -> SyncResult<SyncLedgerSnapshot> {
-        self.with_connection(|connection| {
+    async fn load(&self) -> SyncResult<SyncLedgerSnapshot> {
+        self.with_writer(|connection| {
             let mut checkpoints = BTreeMap::new();
             let mut statement = connection
                 .prepare(
@@ -225,10 +227,12 @@ impl SyncLedger for SqliteSyncLedger {
                 last_status,
             })
         })
+        .await
     }
 
-    fn upsert_checkpoint(&self, checkpoint: &SyncCheckpoint) -> SyncResult<()> {
-        self.with_connection(|connection| {
+    async fn upsert_checkpoint(&self, checkpoint: &SyncCheckpoint) -> SyncResult<()> {
+        let checkpoint = checkpoint.clone();
+        self.with_writer(move |connection| {
             connection
                 .execute(
                     "INSERT OR REPLACE INTO sync_checkpoints \
@@ -278,11 +282,12 @@ impl SyncLedger for SqliteSyncLedger {
                 )
                 .map_err(sqlite_store_error)?;
             Ok(())
-        })
+        }).await
     }
 
-    fn insert_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
-        self.with_connection(|connection| {
+    async fn insert_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
+        let entry = entry.clone();
+        self.with_writer(move |connection| {
             connection
                 .execute(
                     "INSERT INTO sync_dead_letters \
@@ -312,10 +317,12 @@ impl SyncLedger for SqliteSyncLedger {
                 .map_err(sqlite_store_error)?;
             Ok(())
         })
+        .await
     }
 
-    fn update_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
-        self.with_connection(|connection| {
+    async fn update_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
+        let entry = entry.clone();
+        self.with_writer(move |connection| {
             connection
                 .execute(
                     "UPDATE sync_dead_letters \
@@ -339,19 +346,23 @@ impl SyncLedger for SqliteSyncLedger {
                 .map_err(sqlite_store_error)?;
             Ok(())
         })
+        .await
     }
 
-    fn remove_dead_letter(&self, id: &str) -> SyncResult<bool> {
-        self.with_connection(|connection| {
+    async fn remove_dead_letter(&self, id: &str) -> SyncResult<bool> {
+        let id = id.to_string();
+        self.with_writer(move |connection| {
             let changed = connection
                 .execute("DELETE FROM sync_dead_letters WHERE id = ?1", params![id])
                 .map_err(sqlite_store_error)?;
             Ok(changed > 0)
         })
+        .await
     }
 
-    fn remember_echo(&self, key: &str, at: DateTime<Utc>) -> SyncResult<()> {
-        self.with_connection(|connection| {
+    async fn remember_echo(&self, key: &str, at: DateTime<Utc>) -> SyncResult<()> {
+        let key = key.to_string();
+        self.with_writer(move |connection| {
             connection
                 .execute(
                     "INSERT OR REPLACE INTO sync_echo_cache (key, remembered_at) VALUES (?1, ?2)",
@@ -360,10 +371,12 @@ impl SyncLedger for SqliteSyncLedger {
                 .map_err(sqlite_store_error)?;
             Ok(())
         })
+        .await
     }
 
-    fn contains_echo(&self, key: &str) -> SyncResult<bool> {
-        self.with_connection(|connection| {
+    async fn contains_echo(&self, key: &str) -> SyncResult<bool> {
+        let key = key.to_string();
+        self.with_writer(move |connection| {
             connection
                 .query_row(
                     "SELECT 1 FROM sync_echo_cache WHERE key = ?1 LIMIT 1",
@@ -374,10 +387,12 @@ impl SyncLedger for SqliteSyncLedger {
                 .map_err(sqlite_store_error)
                 .map(|value| value.is_some())
         })
+        .await
     }
 
-    fn set_last_status(&self, key: &str, status: SyncRunStatus) -> SyncResult<()> {
-        self.with_connection(|connection| {
+    async fn set_last_status(&self, key: &str, status: SyncRunStatus) -> SyncResult<()> {
+        let key = key.to_string();
+        self.with_writer(move |connection| {
             connection
                 .execute(
                     "INSERT OR REPLACE INTO sync_last_status (key, status) VALUES (?1, ?2)",
@@ -386,6 +401,7 @@ impl SyncLedger for SqliteSyncLedger {
                 .map_err(sqlite_store_error)?;
             Ok(())
         })
+        .await
     }
 }
 
@@ -397,56 +413,6 @@ fn parse_rfc3339(value: &str) -> Result<DateTime<Utc>, dwn_rs_core::errors::Stor
                 "invalid RFC3339 timestamp: {err}"
             ))
         })
-}
-fn migrate_sync_ledger(
-    connection: &rusqlite::Connection,
-) -> Result<(), dwn_rs_core::errors::StoreError> {
-    connection
-        .execute_batch(
-            "CREATE TABLE IF NOT EXISTS sync_checkpoints (
-                key TEXT PRIMARY KEY,
-                tenant TEXT NOT NULL,
-                remote TEXT NOT NULL,
-                scope_id TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                local_root TEXT,
-                remote_root TEXT,
-                pending_pull_prefixes_json TEXT NOT NULL,
-                pending_push_prefixes_json TEXT NOT NULL,
-                pull_cursor_json TEXT,
-                push_cursor_json TEXT,
-                records_pulled INTEGER NOT NULL,
-                records_pushed INTEGER NOT NULL,
-                bytes_downloaded INTEGER NOT NULL,
-                bytes_uploaded INTEGER NOT NULL,
-                last_error_json TEXT,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sync_dead_letters (
-                id TEXT PRIMARY KEY,
-                tenant TEXT NOT NULL,
-                remote TEXT NOT NULL,
-                scope_id TEXT NOT NULL,
-                message_cid TEXT,
-                entry_json TEXT,
-                category TEXT NOT NULL,
-                error_json TEXT NOT NULL,
-                attempts INTEGER NOT NULL,
-                last_attempt_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sync_echo_cache (
-                key TEXT PRIMARY KEY,
-                remembered_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sync_last_status (
-                key TEXT PRIMARY KEY,
-                status TEXT NOT NULL
-            );",
-        )
-        .map_err(sqlite_store_error)
 }
 
 fn parse_direction(value: &str) -> Result<SyncDirection, dwn_rs_core::errors::StoreError> {
@@ -497,8 +463,8 @@ mod tests {
     use super::*;
     use dwn_rs_core::sync::{SyncError, SyncScope};
 
-    #[test]
-    fn sqlite_sync_ledger_survives_reopen() {
+    #[tokio::test]
+    async fn sqlite_sync_ledger_survives_reopen() {
         let path =
             std::env::temp_dir().join(format!("enbox-sync-ledger-{}.sqlite", ulid::Ulid::new()));
         let store = SqliteStore::new(&path);

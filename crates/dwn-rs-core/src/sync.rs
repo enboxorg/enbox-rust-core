@@ -3,13 +3,14 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use tokio::sync::RwLock;
 use ulid::Ulid;
 
 use crate::dwn::DwnReply;
@@ -444,13 +445,8 @@ where
     }
 
     pub fn with_ledger(local: Local, remote: Remote, ledger: L) -> Self {
-        let mut engine_state = SyncEngineState::default();
-        if let Ok(snapshot) = ledger.load() {
-            engine_state.checkpoints = snapshot.checkpoints;
-            engine_state.dead_letters = snapshot.dead_letters;
-            engine_state.echo_cache = snapshot.echo_cache;
-            engine_state.last_status = snapshot.last_status;
-        }
+        let engine_state = SyncEngineState::default();
+
         Self {
             local,
             remote,
@@ -460,14 +456,27 @@ where
         }
     }
 
+    pub async fn restore(&self) -> Result<&Self, SyncError> {
+        let mut engine_state = self.state.write().await;
+
+        if let Ok(snapshot) = self.ledger.load().await {
+            engine_state.checkpoints = snapshot.checkpoints;
+            engine_state.dead_letters = snapshot.dead_letters;
+            engine_state.echo_cache = snapshot.echo_cache;
+            engine_state.last_status = snapshot.last_status;
+        }
+
+        Ok(self)
+    }
+
     pub fn with_diff_depth(mut self, diff_depth: u8) -> Self {
         self.diff_depth = diff_depth;
         self
     }
 
-    pub fn register_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
+    pub async fn register_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
         validate_identity_options(&options)?;
-        let mut state = self.state.write().map_err(SyncError::lock_poisoned)?;
+        let mut state = self.state.write().await;
         if state.identities.contains_key(&options.did) {
             return Err(SyncError::permanent(
                 "SyncIdentityAlreadyRegistered",
@@ -478,9 +487,9 @@ where
         Ok(())
     }
 
-    pub fn update_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
+    pub async fn update_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
         validate_identity_options(&options)?;
-        let mut state = self.state.write().map_err(SyncError::lock_poisoned)?;
+        let mut state = self.state.write().await;
         if !state.identities.contains_key(&options.did) {
             return Err(SyncError::permanent(
                 "SyncIdentityNotRegistered",
@@ -491,8 +500,8 @@ where
         Ok(())
     }
 
-    pub fn unregister_identity(&self, did: &str) -> SyncResult<()> {
-        let mut state = self.state.write().map_err(SyncError::lock_poisoned)?;
+    pub async fn unregister_identity(&self, did: &str) -> SyncResult<()> {
+        let mut state = self.state.write().await;
         if state.identities.remove(did).is_none() {
             return Err(SyncError::permanent(
                 "SyncIdentityNotRegistered",
@@ -502,13 +511,8 @@ where
         Ok(())
     }
 
-    pub fn identity(&self, did: &str) -> Option<SyncIdentityOptions> {
-        self.state
-            .read()
-            .expect("SyncEngine state lock poisoned")
-            .identities
-            .get(did)
-            .cloned()
+    pub async fn identity(&self, did: &str) -> Option<SyncIdentityOptions> {
+        self.state.read().await.identities.get(did).cloned()
     }
 
     pub async fn sync_once(&self, request: SyncOnceRequest) -> SyncOnceResult {
@@ -519,22 +523,19 @@ where
         }
 
         let operation_key = operation_key(&request.tenant, &request.remote, request.direction);
-        if !self.begin_operation(&operation_key) {
+        if !self.begin_operation(&operation_key).await {
             return SyncOnceResult::new(SyncRunStatus::AlreadyRunning);
         }
 
         let result = self.sync_once_unlocked(request).await;
-        self.end_operation(&operation_key, result.status.clone());
+        self.end_operation(&operation_key, result.status.clone())
+            .await;
         result
     }
 
     pub async fn start_sync(&self, params: StartSyncParams) -> SyncOnceResult {
         let link_key = live_link_key(&params.tenant, &params.remote, params.protocol.as_deref());
-        self.state
-            .write()
-            .expect("SyncEngine state lock poisoned")
-            .live_links
-            .insert(link_key);
+        self.state.write().await.live_links.insert(link_key);
         let mut request =
             SyncOnceRequest::new(params.tenant, params.remote, SyncDirection::Bidirectional);
         request.protocol = params.protocol;
@@ -549,8 +550,8 @@ where
         result
     }
 
-    pub fn stop_sync(&self, tenant: &str, remote: Option<&str>) -> SyncRunStatus {
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+    pub async fn stop_sync(&self, tenant: &str, remote: Option<&str>) -> SyncRunStatus {
+        let mut state = self.state.write().await;
         state.live_links.retain(|link| {
             if let Some(remote) = remote {
                 !link.starts_with(&format!("{tenant}|{remote}|"))
@@ -569,7 +570,7 @@ where
     }
 
     /// Transition a live link to degraded poll after subscription loss (TS `enterDegradedPoll`).
-    pub fn enter_degraded_poll(
+    pub async fn enter_degraded_poll(
         &self,
         tenant: &str,
         remote: &str,
@@ -577,7 +578,7 @@ where
     ) -> SyncOnceResult {
         let link_key = live_link_key(tenant, remote, protocol);
         let status_key = format!("{tenant}|{remote}");
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().await;
         state.live_links.remove(&link_key);
         state
             .last_status
@@ -585,7 +586,8 @@ where
         drop(state);
         let _ = self
             .ledger
-            .set_last_status(&status_key, SyncRunStatus::DegradedPoll);
+            .set_last_status(&status_key, SyncRunStatus::DegradedPoll)
+            .await;
         let mut result = SyncOnceResult::new(SyncRunStatus::DegradedPoll);
         result.next_recommended_delay_ms = Some(DEGRADED_POLL_INTERVAL_MS);
         result
@@ -600,12 +602,13 @@ where
             &request.tenant,
             &request.remote,
             request.protocol.as_deref(),
-        );
+        )
+        .await;
         self.poll_reconcile(request).await
     }
 
-    pub fn sync_status(&self, query: SyncStatusQuery) -> SyncHealthSummary {
-        let state = self.state.read().expect("SyncEngine state lock poisoned");
+    pub async fn sync_status(&self, query: SyncStatusQuery) -> SyncHealthSummary {
+        let state = self.state.read().await;
         let scope_filter = query.protocol.as_deref().map(|protocol| {
             SyncScope::Protocol {
                 protocol: protocol.to_string(),
@@ -673,10 +676,10 @@ where
         }
     }
 
-    pub fn dead_letters(&self, tenant: &str, remote: Option<&str>) -> Vec<DeadLetterEntry> {
+    pub async fn dead_letters(&self, tenant: &str, remote: Option<&str>) -> Vec<DeadLetterEntry> {
         self.state
             .read()
-            .expect("SyncEngine state lock poisoned")
+            .await
             .dead_letters
             .iter()
             .filter(|entry| entry.tenant == tenant)
@@ -685,12 +688,13 @@ where
             .collect()
     }
 
-    pub fn clear_dead_letter(&self, id: &str) -> bool {
-        let removed = self.ledger.remove_dead_letter(id).unwrap_or(false);
+    pub async fn clear_dead_letter(&self, id: &str) -> bool {
+        let removed = self.ledger.remove_dead_letter(id).await.unwrap_or(false);
         if removed {
-            let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+            let mut state = self.state.write().await;
             state.dead_letters.retain(|entry| entry.id != id);
         }
+
         removed
     }
 
@@ -698,7 +702,7 @@ where
         let Some(dead_letter) = self
             .state
             .read()
-            .unwrap()
+            .await
             .dead_letters
             .iter()
             .find(|entry| entry.id == id)
@@ -738,7 +742,7 @@ where
             }
         };
         let operation_key = operation_key(&dead_letter.tenant, &dead_letter.remote, direction);
-        if !self.begin_operation(&operation_key) {
+        if !self.begin_operation(&operation_key).await {
             return SyncOnceResult::new(SyncRunStatus::AlreadyRunning);
         }
 
@@ -759,7 +763,8 @@ where
                             &dead_letter.tenant,
                             &dead_letter.remote,
                             &entry.message_cid,
-                        );
+                        )
+                        .await;
                         self.update_checkpoint(
                             &dead_letter.tenant,
                             &dead_letter.remote,
@@ -771,6 +776,7 @@ where
                                 checkpoint.last_error = None;
                             },
                         )
+                        .await
                     }
                     SyncDirection::Push => {
                         result.records_pushed = 1;
@@ -786,21 +792,24 @@ where
                                 checkpoint.last_error = None;
                             },
                         )
+                        .await
                     }
                     SyncDirection::Bidirectional => {
                         unreachable!("dead-letter retry chooses one direction")
                     }
                 };
-                self.clear_dead_letter(&dead_letter.id);
+                self.clear_dead_letter(&dead_letter.id).await;
                 result.checkpoints.push(checkpoint);
                 result
             }
             Err(error) => {
-                self.update_dead_letter_failure(&dead_letter.id, error.clone());
+                self.update_dead_letter_failure(&dead_letter.id, error.clone())
+                    .await;
                 failed_result(error)
             }
         };
-        self.end_operation(&operation_key, result.status.clone());
+        self.end_operation(&operation_key, result.status.clone())
+            .await;
         result
     }
 
@@ -813,8 +822,13 @@ where
     ) -> SyncOnceResult {
         match message {
             SubscriptionMessage::Event { cursor, event } => {
-                if let Err(error) = self.validate_pull_cursor(tenant, remote, &scope, &cursor) {
-                    return self.handle_progress_gap(tenant, remote, scope, error.detail);
+                if let Err(error) = self
+                    .validate_pull_cursor(tenant, remote, &scope, &cursor)
+                    .await
+                {
+                    return self
+                        .handle_progress_gap(tenant, remote, scope, error.detail)
+                        .await;
                 }
                 let entry = SyncMessageEntry::from_subscription_event(&cursor, &event);
                 let bytes = entry.encoded_data_bytes();
@@ -823,19 +837,21 @@ where
                     Ok(()) => {
                         result.records_pulled = 1;
                         result.bytes_downloaded = bytes;
-                        self.remember_echo(tenant, remote, &entry.message_cid);
-                        let checkpoint = self.update_checkpoint(
-                            tenant,
-                            remote,
-                            &scope,
-                            SyncDirection::Pull,
-                            |checkpoint| {
-                                checkpoint.pull_cursor = Some(cursor);
-                                checkpoint.records_pulled += 1;
-                                checkpoint.bytes_downloaded += bytes;
-                                checkpoint.last_error = None;
-                            },
-                        );
+                        self.remember_echo(tenant, remote, &entry.message_cid).await;
+                        let checkpoint = self
+                            .update_checkpoint(
+                                tenant,
+                                remote,
+                                &scope,
+                                SyncDirection::Pull,
+                                |checkpoint| {
+                                    checkpoint.pull_cursor = Some(cursor);
+                                    checkpoint.records_pulled += 1;
+                                    checkpoint.bytes_downloaded += bytes;
+                                    checkpoint.last_error = None;
+                                },
+                            )
+                            .await;
                         result.checkpoints.push(checkpoint);
                     }
                     Err(error) => {
@@ -846,7 +862,8 @@ where
                             Some(entry),
                             DeadLetterCategory::PullApply,
                             error.clone(),
-                        );
+                        )
+                        .await;
                         result.status = SyncRunStatus::Failed;
                         result.error = Some(error);
                     }
@@ -854,13 +871,11 @@ where
                 result
             }
             SubscriptionMessage::Eose { cursor } => {
-                let checkpoint = self.update_checkpoint(
-                    tenant,
-                    remote,
-                    &scope,
-                    SyncDirection::Pull,
-                    |checkpoint| checkpoint.pull_cursor = Some(cursor),
-                );
+                let checkpoint = self
+                    .update_checkpoint(tenant, remote, &scope, SyncDirection::Pull, |checkpoint| {
+                        checkpoint.pull_cursor = Some(cursor)
+                    })
+                    .await;
                 let mut result = SyncOnceResult::new(SyncRunStatus::Completed);
                 result.checkpoints.push(checkpoint);
                 result
@@ -877,14 +892,19 @@ where
     ) -> SyncOnceResult {
         match message {
             SubscriptionMessage::Event { cursor, event } => {
-                if self.should_suppress_echo(tenant, remote, &cursor.message_cid) {
-                    let checkpoint = self.update_checkpoint(
-                        tenant,
-                        remote,
-                        &scope,
-                        SyncDirection::Push,
-                        |checkpoint| checkpoint.push_cursor = Some(cursor),
-                    );
+                if self
+                    .should_suppress_echo(tenant, remote, &cursor.message_cid)
+                    .await
+                {
+                    let checkpoint = self
+                        .update_checkpoint(
+                            tenant,
+                            remote,
+                            &scope,
+                            SyncDirection::Push,
+                            |checkpoint| checkpoint.push_cursor = Some(cursor),
+                        )
+                        .await;
                     let mut result = SyncOnceResult::new(SyncRunStatus::Completed);
                     result.checkpoints.push(checkpoint);
                     return result;
@@ -896,18 +916,20 @@ where
                     Ok(()) => {
                         result.records_pushed = 1;
                         result.bytes_uploaded = bytes;
-                        let checkpoint = self.update_checkpoint(
-                            tenant,
-                            remote,
-                            &scope,
-                            SyncDirection::Push,
-                            |checkpoint| {
-                                checkpoint.push_cursor = Some(cursor);
-                                checkpoint.records_pushed += 1;
-                                checkpoint.bytes_uploaded += bytes;
-                                checkpoint.last_error = None;
-                            },
-                        );
+                        let checkpoint = self
+                            .update_checkpoint(
+                                tenant,
+                                remote,
+                                &scope,
+                                SyncDirection::Push,
+                                |checkpoint| {
+                                    checkpoint.push_cursor = Some(cursor);
+                                    checkpoint.records_pushed += 1;
+                                    checkpoint.bytes_uploaded += bytes;
+                                    checkpoint.last_error = None;
+                                },
+                            )
+                            .await;
                         result.checkpoints.push(checkpoint);
                     }
                     Err(error) => {
@@ -918,7 +940,8 @@ where
                             Some(entry),
                             DeadLetterCategory::PushApply,
                             error.clone(),
-                        );
+                        )
+                        .await;
                         result.status = SyncRunStatus::Failed;
                         result.error = Some(error);
                     }
@@ -926,13 +949,11 @@ where
                 result
             }
             SubscriptionMessage::Eose { cursor } => {
-                let checkpoint = self.update_checkpoint(
-                    tenant,
-                    remote,
-                    &scope,
-                    SyncDirection::Push,
-                    |checkpoint| checkpoint.push_cursor = Some(cursor),
-                );
+                let checkpoint = self
+                    .update_checkpoint(tenant, remote, &scope, SyncDirection::Push, |checkpoint| {
+                        checkpoint.push_cursor = Some(cursor)
+                    })
+                    .await;
                 let mut result = SyncOnceResult::new(SyncRunStatus::Completed);
                 result.checkpoints.push(checkpoint);
                 result
@@ -940,7 +961,7 @@ where
         }
     }
 
-    pub fn handle_progress_gap(
+    pub async fn handle_progress_gap(
         &self,
         tenant: &str,
         remote: &str,
@@ -948,18 +969,20 @@ where
         detail: impl Into<String>,
     ) -> SyncOnceResult {
         let error = SyncError::progress_gap(detail.into());
-        let checkpoint =
-            self.update_checkpoint(tenant, remote, &scope, SyncDirection::Pull, |checkpoint| {
+        let checkpoint = self
+            .update_checkpoint(tenant, remote, &scope, SyncDirection::Pull, |checkpoint| {
                 checkpoint.last_error = Some(error.clone())
-            });
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+            })
+            .await;
+        let mut state = self.state.write().await;
         let status_key = format!("{tenant}|{remote}");
         state
             .last_status
             .insert(status_key.clone(), SyncRunStatus::Repairing);
         let _ = self
             .ledger
-            .set_last_status(&status_key, SyncRunStatus::Repairing);
+            .set_last_status(&status_key, SyncRunStatus::Repairing)
+            .await;
         drop(state);
         let mut result = SyncOnceResult::new(SyncRunStatus::Repairing);
         result.error = Some(error);
@@ -969,7 +992,7 @@ where
     }
 
     async fn sync_once_unlocked(&self, request: SyncOnceRequest) -> SyncOnceResult {
-        let identity = match self.identity(&request.tenant) {
+        let identity = match self.identity(&request.tenant).await {
             Some(identity) => identity,
             None => {
                 let mut result = SyncOnceResult::new(SyncRunStatus::Failed);
@@ -1035,18 +1058,20 @@ where
             Err(error) => return failed_result(error),
         };
         if local_root == remote_root {
-            let checkpoint = self.update_checkpoint(
-                &request.tenant,
-                &request.remote,
-                scope,
-                SyncDirection::Pull,
-                |checkpoint| {
-                    checkpoint.local_root = Some(local_root.clone());
-                    checkpoint.remote_root = Some(remote_root.clone());
-                    checkpoint.pending_pull_prefixes.clear();
-                    checkpoint.last_error = None;
-                },
-            );
+            let checkpoint = self
+                .update_checkpoint(
+                    &request.tenant,
+                    &request.remote,
+                    scope,
+                    SyncDirection::Pull,
+                    |checkpoint| {
+                        checkpoint.local_root = Some(local_root.clone());
+                        checkpoint.remote_root = Some(remote_root.clone());
+                        checkpoint.pending_pull_prefixes.clear();
+                        checkpoint.last_error = None;
+                    },
+                )
+                .await;
             result.checkpoints.push(checkpoint);
             return result;
         }
@@ -1091,7 +1116,8 @@ where
                 Ok(()) => {
                     applied += 1;
                     bytes += entry_bytes;
-                    self.remember_echo(&request.tenant, &request.remote, &message_cid);
+                    self.remember_echo(&request.tenant, &request.remote, &message_cid)
+                        .await;
                 }
                 Err(error) => {
                     self.record_dead_letter(
@@ -1101,7 +1127,8 @@ where
                         Some(entry),
                         DeadLetterCategory::PullApply,
                         error.clone(),
-                    );
+                    )
+                    .await;
                     return failed_result(error);
                 }
             }
@@ -1109,20 +1136,22 @@ where
 
         result.records_pulled += applied as u64;
         result.bytes_downloaded += bytes;
-        let checkpoint = self.update_checkpoint(
-            &request.tenant,
-            &request.remote,
-            scope,
-            SyncDirection::Pull,
-            |checkpoint| {
-                checkpoint.local_root = Some(local_root);
-                checkpoint.remote_root = Some(remote_root);
-                checkpoint.pending_push_prefixes = diff.only_local;
-                checkpoint.records_pulled += applied as u64;
-                checkpoint.bytes_downloaded += bytes;
-                checkpoint.last_error = None;
-            },
-        );
+        let checkpoint = self
+            .update_checkpoint(
+                &request.tenant,
+                &request.remote,
+                scope,
+                SyncDirection::Pull,
+                |checkpoint| {
+                    checkpoint.local_root = Some(local_root);
+                    checkpoint.remote_root = Some(remote_root);
+                    checkpoint.pending_push_prefixes = diff.only_local;
+                    checkpoint.records_pulled += applied as u64;
+                    checkpoint.bytes_downloaded += bytes;
+                    checkpoint.last_error = None;
+                },
+            )
+            .await;
         result.checkpoints.push(checkpoint);
         result
     }
@@ -1142,18 +1171,20 @@ where
             Err(error) => return failed_result(error),
         };
         if local_root == remote_root {
-            let checkpoint = self.update_checkpoint(
-                &request.tenant,
-                &request.remote,
-                scope,
-                SyncDirection::Push,
-                |checkpoint| {
-                    checkpoint.local_root = Some(local_root.clone());
-                    checkpoint.remote_root = Some(remote_root.clone());
-                    checkpoint.pending_push_prefixes.clear();
-                    checkpoint.last_error = None;
-                },
-            );
+            let checkpoint = self
+                .update_checkpoint(
+                    &request.tenant,
+                    &request.remote,
+                    scope,
+                    SyncDirection::Push,
+                    |checkpoint| {
+                        checkpoint.local_root = Some(local_root.clone());
+                        checkpoint.remote_root = Some(remote_root.clone());
+                        checkpoint.pending_push_prefixes.clear();
+                        checkpoint.last_error = None;
+                    },
+                )
+                .await;
             result.checkpoints.push(checkpoint);
             return result;
         }
@@ -1178,7 +1209,10 @@ where
         let mut pushed = 0usize;
         let mut bytes = 0u64;
         for entry in sort_diff_entries_topologically(diff.only_remote) {
-            if self.should_suppress_echo(&request.tenant, &request.remote, &entry.message_cid) {
+            if self
+                .should_suppress_echo(&request.tenant, &request.remote, &entry.message_cid)
+                .await
+            {
                 continue;
             }
             if request
@@ -1209,7 +1243,8 @@ where
                         Some(entry),
                         DeadLetterCategory::PushApply,
                         error.clone(),
-                    );
+                    )
+                    .await;
                     return failed_result(error);
                 }
             }
@@ -1217,26 +1252,28 @@ where
 
         result.records_pushed += pushed as u64;
         result.bytes_uploaded += bytes;
-        let checkpoint = self.update_checkpoint(
-            &request.tenant,
-            &request.remote,
-            scope,
-            SyncDirection::Push,
-            |checkpoint| {
-                checkpoint.local_root = Some(local_root);
-                checkpoint.remote_root = Some(remote_root);
-                checkpoint.pending_pull_prefixes = diff.only_local;
-                checkpoint.records_pushed += pushed as u64;
-                checkpoint.bytes_uploaded += bytes;
-                checkpoint.last_error = None;
-            },
-        );
+        let checkpoint = self
+            .update_checkpoint(
+                &request.tenant,
+                &request.remote,
+                scope,
+                SyncDirection::Push,
+                |checkpoint| {
+                    checkpoint.local_root = Some(local_root);
+                    checkpoint.remote_root = Some(remote_root);
+                    checkpoint.pending_pull_prefixes = diff.only_local;
+                    checkpoint.records_pushed += pushed as u64;
+                    checkpoint.bytes_uploaded += bytes;
+                    checkpoint.last_error = None;
+                },
+            )
+            .await;
         result.checkpoints.push(checkpoint);
         result
     }
 
-    fn begin_operation(&self, operation_key: &str) -> bool {
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+    async fn begin_operation(&self, operation_key: &str) -> bool {
+        let mut state = self.state.write().await;
         if state.running.contains(operation_key) {
             return false;
         }
@@ -1244,17 +1281,18 @@ where
         true
     }
 
-    fn end_operation(&self, operation_key: &str, status: SyncRunStatus) {
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+    async fn end_operation(&self, operation_key: &str, status: SyncRunStatus) {
+        let mut state = self.state.write().await;
         state.running.remove(operation_key);
         if let Some((tenant, remote, _)) = split_operation_key(operation_key) {
             let status_key = format!("{tenant}|{remote}");
             state.last_status.insert(status_key.clone(), status.clone());
-            let _ = self.ledger.set_last_status(&status_key, status);
+            drop(state);
+            let _ = self.ledger.set_last_status(&status_key, status).await;
         }
     }
 
-    fn update_checkpoint(
+    async fn update_checkpoint(
         &self,
         tenant: &str,
         remote: &str,
@@ -1263,7 +1301,7 @@ where
         update: impl FnOnce(&mut SyncCheckpoint),
     ) -> SyncCheckpoint {
         let key = checkpoint_key(tenant, remote, scope, direction);
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+        let mut state = self.state.write().await;
         let checkpoint = state
             .checkpoints
             .entry(key.clone())
@@ -1289,11 +1327,12 @@ where
         update(checkpoint);
         checkpoint.updated_at = Utc::now();
         let checkpoint = checkpoint.clone();
-        let _ = self.ledger.upsert_checkpoint(&checkpoint);
+        drop(state);
+        let _ = self.ledger.upsert_checkpoint(&checkpoint).await;
         checkpoint
     }
 
-    fn record_dead_letter(
+    async fn record_dead_letter(
         &self,
         tenant: &str,
         remote: &str,
@@ -1317,45 +1356,38 @@ where
         };
         self.state
             .write()
-            .expect("SyncEngine state lock poisoned")
+            .await
             .dead_letters
             .push(dead_letter.clone());
-        let _ = self.ledger.insert_dead_letter(&dead_letter);
+        let _ = self.ledger.insert_dead_letter(&dead_letter).await;
     }
 
-    fn update_dead_letter_failure(&self, id: &str, error: SyncError) {
-        let mut state = self.state.write().expect("SyncEngine state lock poisoned");
+    async fn update_dead_letter_failure(&self, id: &str, error: SyncError) {
+        let mut state = self.state.write().await;
         if let Some(entry) = state.dead_letters.iter_mut().find(|entry| entry.id == id) {
             entry.error = error.clone();
             entry.attempts += 1;
             entry.last_attempt_at = Utc::now();
-            let _ = self.ledger.update_dead_letter(entry);
+            let _ = self.ledger.update_dead_letter(entry).await;
         }
     }
 
-    fn remember_echo(&self, tenant: &str, remote: &str, message_cid: &str) {
+    async fn remember_echo(&self, tenant: &str, remote: &str, message_cid: &str) {
         let key = echo_key(tenant, remote, message_cid);
         let now = Utc::now();
-        self.state
-            .write()
-            .expect("SyncEngine state lock poisoned")
-            .echo_cache
-            .insert(key.clone(), now);
-        let _ = self.ledger.remember_echo(&key, now);
+        self.state.write().await.echo_cache.insert(key.clone(), now);
+        let _ = self.ledger.remember_echo(&key, now).await;
     }
 
-    fn should_suppress_echo(&self, tenant: &str, remote: &str, message_cid: &str) -> bool {
+    async fn should_suppress_echo(&self, tenant: &str, remote: &str, message_cid: &str) -> bool {
         let key = echo_key(tenant, remote, message_cid);
-        self.ledger.contains_echo(&key).unwrap_or_else(|_| {
-            self.state
-                .read()
-                .expect("SyncEngine state lock poisoned")
-                .echo_cache
-                .contains_key(&key)
-        })
+        match self.ledger.contains_echo(&key).await {
+            Ok(v) => v,
+            Err(_) => self.state.read().await.echo_cache.contains_key(&key),
+        }
     }
 
-    fn validate_pull_cursor(
+    async fn validate_pull_cursor(
         &self,
         tenant: &str,
         remote: &str,
@@ -1366,7 +1398,7 @@ where
         let Some(previous) = self
             .state
             .read()
-            .unwrap()
+            .await
             .checkpoints
             .get(&key)
             .and_then(|checkpoint| checkpoint.pull_cursor.clone())
@@ -1657,9 +1689,9 @@ mod tests {
             .await;
 
         assert_eq!(result.status, SyncRunStatus::Failed);
-        let dead_letters = engine.dead_letters("did:example:alice", None);
+        let dead_letters = engine.dead_letters("did:example:alice", None).await;
         assert_eq!(dead_letters.len(), 1);
-        assert_eq!(dead_letters[0].message_cid.as_deref(), Some("parent-cid"));
+        assert_eq!(dead_letters[0], message_cid.as_deref(), Some("parent-cid"));
         assert_eq!(
             dead_letters[0].entry.as_ref().unwrap().message_cid,
             "parent-cid"
@@ -1687,7 +1719,7 @@ mod tests {
             ))
             .await;
         assert_eq!(result.status, SyncRunStatus::Failed);
-        let dead_letter = engine.dead_letters("did:example:alice", None)[0].clone();
+        let dead_letter = engine.dead_letters("did:example:alice", None).await[0];
 
         local.allow_apply("parent-cid");
         let retry = engine.retry_dead_letter(&dead_letter.id).await;

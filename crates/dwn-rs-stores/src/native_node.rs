@@ -1,7 +1,7 @@
 //! Convenience entry point for a SQLite-backed native DWN node.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use dwn_rs_core::auth::StaticPublicKeyResolver;
 use dwn_rs_core::dwn::Dwn;
@@ -16,10 +16,11 @@ use dwn_rs_core::sync::{
     SyncRunStatus,
 };
 use dwn_rs_core::sync_endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
+use tokio::sync::RwLock;
 
-use crate::sqlite_sync_ledger::SqliteSyncLedger;
-use crate::SqliteStore;
-use crate::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
+use crate::{
+    SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex, SqliteStore, SqliteSyncLedger,
+};
 
 type NativeDwn = Dwn<
     SqliteStore,
@@ -131,12 +132,9 @@ impl SqliteNativeDwn {
     }
 
     /// Register a tenant DID and protocol scope for sync runs on this node.
-    pub fn register_sync_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
+    pub async fn register_sync_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
         dwn_rs_core::sync::validate_identity_options(&options)?;
-        let mut identities = self
-            .sync_identities
-            .write()
-            .map_err(SyncError::lock_poisoned)?;
+        let mut identities = self.sync_identities.write().await;
         if identities.contains_key(&options.did) {
             return Err(SyncError::permanent(
                 "SyncIdentityAlreadyRegistered",
@@ -157,7 +155,7 @@ impl SqliteNativeDwn {
     where
         A: SyncRequestAuthorizer,
     {
-        let engine = match self.build_http_sync_engine(remote_url, authorizer) {
+        let engine = match self.build_http_sync_engine(remote_url, authorizer).await {
             Ok(engine) => engine,
             Err(result) => return result,
         };
@@ -174,7 +172,7 @@ impl SqliteNativeDwn {
     where
         A: SyncRequestAuthorizer,
     {
-        let engine = match self.build_http_sync_engine(remote_url, authorizer) {
+        let engine = match self.build_http_sync_engine(remote_url, authorizer).await {
             Ok(engine) => engine,
             Err(result) => return result,
         };
@@ -199,7 +197,7 @@ impl SqliteNativeDwn {
         ) -> Fut,
         Fut: std::future::Future<Output = R>,
     {
-        let engine = self.build_http_sync_engine(remote_url, authorizer)?;
+        let engine = self.build_http_sync_engine(remote_url, authorizer).await?;
         Ok(f(engine).await)
     }
 
@@ -223,13 +221,13 @@ impl SqliteNativeDwn {
         );
         let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
             .with_diff_depth(2);
-        if let Err(result) = self.register_sync_identities_on_engine(&engine) {
+        if let Err(result) = self.register_sync_identities_on_engine(&engine).await {
             return result;
         }
         engine.sync_once(request).await
     }
 
-    fn build_http_sync_engine<A>(
+    async fn build_http_sync_engine<A>(
         &self,
         remote_url: impl AsRef<str>,
         authorizer: A,
@@ -254,11 +252,11 @@ impl SqliteNativeDwn {
             HttpSyncEndpoint::new(remote_url.as_ref(), authorizer).map_err(failed_sync_once)?;
         let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
             .with_diff_depth(2);
-        self.register_sync_identities_on_engine(&engine)?;
+        self.register_sync_identities_on_engine(&engine).await?;
         Ok(engine)
     }
 
-    fn register_sync_identities_on_engine<Local, Remote>(
+    async fn register_sync_identities_on_engine<Local, Remote>(
         &self,
         engine: &NativeSyncEngine<Local, Remote, SqliteSyncLedger>,
     ) -> Result<(), SyncOnceResult>
@@ -266,12 +264,9 @@ impl SqliteNativeDwn {
         Local: dwn_rs_core::sync::SyncEndpoint,
         Remote: dwn_rs_core::sync::SyncEndpoint,
     {
-        let identities = match self.sync_identities.read() {
-            Ok(identities) => identities,
-            Err(err) => return Err(failed_sync_once(SyncError::lock_poisoned(err))),
-        };
+        let identities = self.sync_identities.read().await;
         for options in identities.values() {
-            if let Err(error) = engine.register_identity(options.clone()) {
+            if let Err(error) = engine.register_identity(options.clone()).await {
                 return Err(failed_sync_once(error));
             }
         }

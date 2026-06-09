@@ -1,6 +1,7 @@
 //! Durable and in-memory replication ledgers for [`NativeSyncEngine`](crate::sync::NativeSyncEngine).
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
@@ -18,21 +19,38 @@ pub struct SyncLedgerSnapshot {
 
 /// Persistence for sync checkpoints, dead letters, and echo suppression.
 pub trait SyncLedger: Send + Sync {
-    fn load(&self) -> SyncResult<SyncLedgerSnapshot>;
+    fn load(&self) -> impl Future<Output = SyncResult<SyncLedgerSnapshot>> + Send;
 
-    fn upsert_checkpoint(&self, checkpoint: &SyncCheckpoint) -> SyncResult<()>;
+    fn upsert_checkpoint(
+        &self,
+        checkpoint: &SyncCheckpoint,
+    ) -> impl Future<Output = SyncResult<()>> + Send;
 
-    fn insert_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()>;
+    fn insert_dead_letter(
+        &self,
+        entry: &DeadLetterEntry,
+    ) -> impl Future<Output = SyncResult<()>> + Send;
 
-    fn update_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()>;
+    fn update_dead_letter(
+        &self,
+        entry: &DeadLetterEntry,
+    ) -> impl Future<Output = SyncResult<()>> + Send;
 
-    fn remove_dead_letter(&self, id: &str) -> SyncResult<bool>;
+    fn remove_dead_letter(&self, id: &str) -> impl Future<Output = SyncResult<bool>> + Send;
 
-    fn remember_echo(&self, key: &str, at: DateTime<Utc>) -> SyncResult<()>;
+    fn remember_echo(
+        &self,
+        key: &str,
+        at: DateTime<Utc>,
+    ) -> impl Future<Output = SyncResult<()>> + Send;
 
-    fn contains_echo(&self, key: &str) -> SyncResult<bool>;
+    fn contains_echo(&self, key: &str) -> impl Future<Output = SyncResult<bool>> + Send;
 
-    fn set_last_status(&self, key: &str, status: SyncRunStatus) -> SyncResult<()>;
+    fn set_last_status(
+        &self,
+        key: &str,
+        status: SyncRunStatus,
+    ) -> impl Future<Output = SyncResult<()>> + Send;
 }
 
 /// In-memory ledger used by default and in unit tests.
@@ -54,14 +72,14 @@ impl MemorySyncLedger {
 }
 
 impl SyncLedger for MemorySyncLedger {
-    fn load(&self) -> SyncResult<SyncLedgerSnapshot> {
+    async fn load(&self) -> SyncResult<SyncLedgerSnapshot> {
         self.state
             .read()
             .map(|state| state.clone())
             .map_err(SyncError::lock_poisoned)
     }
 
-    fn upsert_checkpoint(&self, checkpoint: &SyncCheckpoint) -> SyncResult<()> {
+    async fn upsert_checkpoint(&self, checkpoint: &SyncCheckpoint) -> SyncResult<()> {
         self.state
             .write()
             .map_err(SyncError::lock_poisoned)?
@@ -70,7 +88,7 @@ impl SyncLedger for MemorySyncLedger {
         Ok(())
     }
 
-    fn insert_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
+    async fn insert_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
         self.state
             .write()
             .map_err(SyncError::lock_poisoned)?
@@ -79,7 +97,7 @@ impl SyncLedger for MemorySyncLedger {
         Ok(())
     }
 
-    fn update_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
+    async fn update_dead_letter(&self, entry: &DeadLetterEntry) -> SyncResult<()> {
         let mut state = self.state.write().map_err(SyncError::lock_poisoned)?;
         if let Some(existing) = state
             .dead_letters
@@ -91,14 +109,14 @@ impl SyncLedger for MemorySyncLedger {
         Ok(())
     }
 
-    fn remove_dead_letter(&self, id: &str) -> SyncResult<bool> {
+    async fn remove_dead_letter(&self, id: &str) -> SyncResult<bool> {
         let mut state = self.state.write().map_err(SyncError::lock_poisoned)?;
         let before = state.dead_letters.len();
         state.dead_letters.retain(|entry| entry.id != id);
         Ok(before != state.dead_letters.len())
     }
 
-    fn remember_echo(&self, key: &str, at: DateTime<Utc>) -> SyncResult<()> {
+    async fn remember_echo(&self, key: &str, at: DateTime<Utc>) -> SyncResult<()> {
         self.state
             .write()
             .map_err(SyncError::lock_poisoned)?
@@ -107,7 +125,7 @@ impl SyncLedger for MemorySyncLedger {
         Ok(())
     }
 
-    fn contains_echo(&self, key: &str) -> SyncResult<bool> {
+    async fn contains_echo(&self, key: &str) -> SyncResult<bool> {
         Ok(self
             .state
             .read()
@@ -116,7 +134,7 @@ impl SyncLedger for MemorySyncLedger {
             .contains_key(key))
     }
 
-    fn set_last_status(&self, key: &str, status: SyncRunStatus) -> SyncResult<()> {
+    async fn set_last_status(&self, key: &str, status: SyncRunStatus) -> SyncResult<()> {
         self.state
             .write()
             .map_err(SyncError::lock_poisoned)?
@@ -131,8 +149,8 @@ mod tests {
     use super::*;
     use crate::sync::{DeadLetterCategory, SyncDirection, SyncScope};
 
-    #[test]
-    fn memory_ledger_persists_checkpoint_and_echo_entries() {
+    #[tokio::test]
+    async fn memory_ledger_persists_checkpoint_and_echo_entries() {
         let ledger = MemorySyncLedger::new();
         let checkpoint = SyncCheckpoint {
             key: "did:example:alice|https://peer|global|Pull".to_string(),
@@ -153,15 +171,17 @@ mod tests {
             last_error: None,
             updated_at: Utc::now(),
         };
-        ledger.upsert_checkpoint(&checkpoint).unwrap();
+        ledger.upsert_checkpoint(&checkpoint).await.unwrap();
         ledger
             .remember_echo("did:example:alice|https://peer|cid", Utc::now())
+            .await
             .unwrap();
 
-        let loaded = ledger.load().unwrap();
+        let loaded = ledger.load().await.unwrap();
         assert_eq!(loaded.checkpoints.len(), 1);
         assert!(ledger
             .contains_echo("did:example:alice|https://peer|cid")
+            .await
             .unwrap());
 
         let dead_letter = DeadLetterEntry {
@@ -176,9 +196,9 @@ mod tests {
             attempts: 1,
             last_attempt_at: Utc::now(),
         };
-        ledger.insert_dead_letter(&dead_letter).unwrap();
-        assert_eq!(ledger.load().unwrap().dead_letters.len(), 1);
-        assert!(ledger.remove_dead_letter("dead-1").unwrap());
-        assert!(ledger.load().unwrap().dead_letters.is_empty());
+        ledger.insert_dead_letter(&dead_letter).await.unwrap();
+        assert_eq!(ledger.load().await.unwrap().dead_letters.len(), 1);
+        assert!(ledger.remove_dead_letter("dead-1").await.unwrap());
+        assert!(ledger.load().await.unwrap().dead_letters.is_empty());
     }
 }

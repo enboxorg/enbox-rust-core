@@ -111,6 +111,49 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             CREATE TABLE IF NOT EXISTS agent_secrets (
                 key TEXT PRIMARY KEY,
                 value BLOB NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sync_checkpoints (
+                key TEXT PRIMARY KEY,
+                tenant TEXT NOT NULL,
+                remote TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                local_root TEXT,
+                remote_root TEXT,
+                pending_pull_prefixes_json TEXT NOT NULL,
+                pending_push_prefixes_json TEXT NOT NULL,
+                pull_cursor_json TEXT,
+                push_cursor_json TEXT,
+                records_pulled INTEGER NOT NULL,
+                records_pushed INTEGER NOT NULL,
+                bytes_downloaded INTEGER NOT NULL,
+                bytes_uploaded INTEGER NOT NULL,
+                last_error_json TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sync_dead_letters (
+                id TEXT PRIMARY KEY,
+                tenant TEXT NOT NULL,
+                remote TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                message_cid TEXT,
+                entry_json TEXT,
+                category TEXT NOT NULL,
+                error_json TEXT NOT NULL,
+                attempts INTEGER NOT NULL,
+                last_attempt_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sync_echo_cache (
+                key TEXT PRIMARY KEY,
+                remembered_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sync_last_status (
+                key TEXT PRIMARY KEY,
+                status TEXT NOT NULL
             );",
         )
         .map_err(sqlite_store_error)

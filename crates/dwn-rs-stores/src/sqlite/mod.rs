@@ -9,6 +9,7 @@ pub mod resumable_task_store;
 pub mod secrets_store;
 pub mod state_index;
 pub mod store;
+mod sync_ledger;
 
 pub use self::conn::SqliteConnection;
 pub use self::event_log::SqliteEventLog;
@@ -17,6 +18,7 @@ pub use self::secrets_store::SqliteSecretStore;
 pub use self::state_index::SqliteStateIndex;
 pub(crate) use self::store::sqlite_store_error;
 pub use self::store::SqliteStore;
+pub use self::sync_ledger::SqliteSyncLedger;
 
 pub(crate) fn json_store_error(error: serde_json::Error) -> StoreError {
     StoreError::InternalException(error.to_string())
