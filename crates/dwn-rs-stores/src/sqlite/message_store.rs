@@ -1,5 +1,3 @@
-use std::future::Future;
-
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use dwn_rs_core::descriptors::MessageDescriptor;

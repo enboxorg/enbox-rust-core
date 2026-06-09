@@ -3,8 +3,7 @@ use futures_util::{stream, Stream, StreamExt};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use dwn_rs_core::errors::{DataStoreError, StoreError};
-use dwn_rs_core::stores::{DataStore, DataStoreGetResult, DataStorePutResult, KeyValues};
-use dwn_rs_core::{Descriptor, Message};
+use dwn_rs_core::stores::{DataStore, DataStoreGetResult, DataStorePutResult};
 
 use crate::store::sqlite_store_error;
 use crate::SqliteStore;
