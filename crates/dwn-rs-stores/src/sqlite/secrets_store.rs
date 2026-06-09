@@ -12,14 +12,14 @@
 use dwn_rs_core::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore};
 use rusqlite::{params, OptionalExtension};
 
-use crate::sqlite::{sqlite_store_error, SqliteConnection, SqliteStore};
+use crate::sqlite::{sqlite_store_error, SqliteStore};
 
 const VAULT_ERROR_CODE: &str = "AgentVaultError";
 
 /// Durable [`SecretStore`] backed by the shared SQLite database.
 #[derive(Clone)]
 pub struct SqliteSecretStore {
-    connection: SqliteConnection,
+    store: SqliteStore,
 }
 
 impl SqliteSecretStore {
@@ -29,25 +29,26 @@ impl SqliteSecretStore {
     /// [`SqliteNativeDwn::open_at`](crate::SqliteNativeDwn::open_at)).
     pub fn new(store: &SqliteStore) -> Self {
         Self {
-            connection: store.shared_connection(),
+            store: store.clone(),
         }
     }
 
     /// Ensure the underlying connection is open. Idempotent.
     pub fn open(&self) -> Result<(), AgentIdentityError> {
-        self.connection
-            .open()
-            .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
+        // store is opened lazily
+        Ok(())
     }
 }
 
 impl SecretStore for SqliteSecretStore {
     fn get<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, Option<Vec<u8>>> {
-        let connection = self.connection.clone();
         let key = key.to_string();
         Box::pin(async move {
-            connection
-                .with_connection(|connection| {
+            self.store
+                .connection()
+                .await
+                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))?
+                .with_reader(move |connection| {
                     connection
                         .query_row(
                             "SELECT value FROM agent_secrets WHERE key = ?1",
@@ -57,16 +58,19 @@ impl SecretStore for SqliteSecretStore {
                         .optional()
                         .map_err(sqlite_store_error)
                 })
+                .await
                 .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
         })
     }
 
     fn put<'a>(&'a self, key: &'a str, value: Vec<u8>) -> AgentIdentityFuture<'a, ()> {
-        let connection = self.connection.clone();
         let key = key.to_string();
         Box::pin(async move {
-            connection
-                .with_connection(|connection| {
+            self.store
+                .connection()
+                .await
+                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))?
+                .with_writer(move |connection| {
                     connection
                         .execute(
                             "INSERT OR REPLACE INTO agent_secrets (key, value) VALUES (?1, ?2)",
@@ -75,21 +79,25 @@ impl SecretStore for SqliteSecretStore {
                         .map_err(sqlite_store_error)?;
                     Ok(())
                 })
+                .await
                 .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
         })
     }
 
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool> {
-        let connection = self.connection.clone();
         let key = key.to_string();
         Box::pin(async move {
-            connection
-                .with_connection(|connection| {
+            self.store
+                .connection()
+                .await
+                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))?
+                .with_writer(move |connection| {
                     let affected = connection
                         .execute("DELETE FROM agent_secrets WHERE key = ?1", params![key])
                         .map_err(sqlite_store_error)?;
                     Ok(affected > 0)
                 })
+                .await
                 .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
         })
     }

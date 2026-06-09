@@ -17,9 +17,9 @@ use dwn_rs_core::sync::{
 };
 use dwn_rs_core::sync_endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
 
-use crate::sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
 use crate::sqlite_sync_ledger::SqliteSyncLedger;
 use crate::SqliteStore;
+use crate::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
 
 type NativeDwn = Dwn<
     SqliteStore,
