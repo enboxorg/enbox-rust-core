@@ -112,4 +112,3 @@ fn pragmas(c: &Connection, read_only: bool) -> rusqlite::Result<()> {
 
     Ok(())
 }
-
