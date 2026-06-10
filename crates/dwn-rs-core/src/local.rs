@@ -13,6 +13,7 @@ use crate::cid::generate_cid_from_json;
 use crate::descriptors::MessageDescriptor;
 use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError};
 use crate::events::MessageEvent;
+use crate::fields::MessageFields;
 use crate::filters::Filters;
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
@@ -57,7 +58,9 @@ impl MessageStore for MemoryMessageStore {
     {
         let value = serde_json::to_value(&message)?;
         let message: Message<Descriptor> = serde_json::from_value(value)?;
-        let cid = message.cid()?.to_string();
+        let mut canonical = message.clone();
+        canonical.fields.encoded_data();
+        let cid = canonical.cid()?.to_string();
 
         let mut rows = self.messages.write().expect("MessageStore lock poisoned");
         rows.retain(|row| !(row.tenant == tenant && row.cid == cid));

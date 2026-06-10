@@ -48,7 +48,6 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
                 message_cid TEXT NOT NULL,
                 message_json TEXT NOT NULL,
                 indexes_json TEXT NOT NULL,
-                encoded_data TEXT NOT NULL,
                 PRIMARY KEY (tenant, message_cid)
             );
 

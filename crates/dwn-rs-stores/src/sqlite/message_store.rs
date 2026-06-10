@@ -8,19 +8,11 @@ use dwn_rs_core::fields::MessageFields;
 use dwn_rs_core::filters::Filters;
 use dwn_rs_core::stores::{KeyValues, MessageQueryResult, MessageStore};
 use dwn_rs_core::{Descriptor, Message, MessageSort, Pagination, Query};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::sqlite::query::SqliteQuery;
 use crate::store::sqlite_store_error;
 use crate::SqliteStore;
-
-#[derive(Debug, Clone)]
-struct MessageRow {
-    cid: String,
-    message: Message<Descriptor>,
-    indexes: KeyValues,
-}
 
 impl MessageStore for SqliteStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
@@ -31,7 +23,9 @@ impl MessageStore for SqliteStore {
     }
 
     async fn close(&mut self) {
-        self.connection().await.ok().map(|conn| conn.close());
+        if let Ok(conn) = self.connection().await {
+            conn.close()
+        }
     }
 
     async fn put<D>(
@@ -44,11 +38,10 @@ impl MessageStore for SqliteStore {
         D: MessageDescriptor + Serialize + Send,
     {
         let tenant = tenant.to_string();
-        let data = message.fields.clone().encoded_data();
-
-        let message_cid = message.cid()?.to_string();
-
         let message_json = serde_json::to_string(&message)?;
+        let mut message = message;
+        let data = message.fields.encoded_data();
+        let message_cid = message.cid()?.to_string();
         let indexes_json = serde_json::to_string(&indexes)?;
 
         self.connection()
@@ -61,16 +54,18 @@ impl MessageStore for SqliteStore {
                              (tenant, message_cid, message_json, indexes_json) \
                              VALUES (?1, ?2, ?3, ?4)",
                     params![tenant, message_cid, message_json, indexes_json],
-                );
+                )
+                .map_err(sqlite_store_error)?;
 
                 if let Some(value) = data {
-                    let enc_data = STANDARD.encode(&value.to_bytes());
+                    let enc_data = STANDARD.encode(value.to_bytes());
                     tx.execute(
                         "INSERT OR REPLACE INTO message_data \
                          (message_cid, data, data_size) \
                          VALUES (?1, ?2, ?3)",
                         params![message_cid, enc_data, value.len() as i64],
-                    );
+                    )
+                    .map_err(sqlite_store_error)?;
                 }
 
                 tx.commit().map_err(sqlite_store_error)?;
@@ -137,7 +132,7 @@ impl MessageStore for SqliteStore {
 
         let (messages, cursor) = q.query().await?;
 
-        return Ok(MessageQueryResult { messages, cursor });
+        Ok(MessageQueryResult { messages, cursor })
     }
 
     async fn count(
