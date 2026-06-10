@@ -122,7 +122,10 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
         let remote = MockEndpoint::default();
         local.set_root("local-root");
         remote.set_root("remote-root");
-        let engine = NativeSyncEngine::with_ledger(local, remote, ledger).with_diff_depth(2);
+        let engine = NativeSyncEngine::open(local, remote, ledger)
+            .await
+            .expect("open sync engine")
+            .with_diff_depth(2);
         engine
             .register_identity(SyncIdentityOptions {
                 did: TENANT.to_string(),

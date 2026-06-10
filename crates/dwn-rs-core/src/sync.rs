@@ -444,6 +444,12 @@ where
         Self::with_ledger(local, remote, L::default())
     }
 
+    pub async fn open(local: Local, remote: Remote, ledger: L) -> Result<Self, SyncError> {
+        let engine = Self::with_ledger(local, remote, ledger);
+        engine.restore().await?;
+        Ok(engine)
+    }
+
     pub fn with_ledger(local: Local, remote: Remote, ledger: L) -> Self {
         let engine_state = SyncEngineState::default();
 

@@ -230,8 +230,10 @@ impl SqliteNativeDwn {
             peer.store.clone(),
             peer.state_index.clone(),
         );
-        let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
-            .with_diff_depth(2);
+        let engine = match NativeSyncEngine::open(local, remote, self.sync_ledger.clone()).await {
+            Ok(engine) => engine.with_diff_depth(2),
+            Err(e) => return failed_sync_once(e),
+        };
         if let Err(result) = self.register_sync_identities_on_engine(&engine).await {
             return result;
         }
@@ -261,7 +263,9 @@ impl SqliteNativeDwn {
         );
         let remote =
             HttpSyncEndpoint::new(remote_url.as_ref(), authorizer).map_err(failed_sync_once)?;
-        let engine = NativeSyncEngine::with_ledger(local, remote, self.sync_ledger.clone())
+        let engine = NativeSyncEngine::open(local, remote, self.sync_ledger.clone())
+            .await
+            .map_err(failed_sync_once)?
             .with_diff_depth(2);
         self.register_sync_identities_on_engine(&engine).await?;
         Ok(engine)
