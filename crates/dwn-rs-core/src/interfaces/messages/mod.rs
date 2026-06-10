@@ -59,13 +59,18 @@ impl Message<RecordsWriteDescriptor> {
 
 impl<D> Message<D>
 where
-    D: MessageDescriptor + DeserializeOwned,
-    D::Parameters: MessageParameters<Descriptor = D, Fields = D::Fields>,
+    D: MessageDescriptor,
 {
     pub fn cid(&self) -> Result<Cid, EncodeError<TryReserveError>> {
         generate_cid_from_serialized(self)
     }
+}
 
+impl<D> Message<D>
+where
+    D: MessageDescriptor + DeserializeOwned,
+    D::Parameters: MessageParameters<Descriptor = D, Fields = D::Fields>,
+{
     pub async fn create<S: JwsSigner>(
         parameters: D::Parameters,
         signer: Option<S>,

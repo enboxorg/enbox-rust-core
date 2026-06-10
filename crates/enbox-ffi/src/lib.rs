@@ -4,7 +4,6 @@
 //! Internal crates remain idiomatic Rust; DTO translation happens here.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use dwn_rs_core::agent::{
@@ -137,6 +136,20 @@ type AgentService = AgentIdentityService<
 pub struct EnboxCore {
     runtime: tokio::runtime::Runtime,
     state: Arc<Mutex<CoreState>>,
+}
+
+impl Drop for EnboxCore {
+    fn drop(&mut self) {
+        // deadpool recycles pooled SQLite connections via `spawn_blocking` on drop, which
+        // requires a Tokio runtime context. FFI callers drop the core off-runtime, so tear
+        // down everything holding a pool (node + secret store) inside the runtime before
+        // `runtime` itself is dropped — otherwise the pool drop panics with "no reactor".
+        let _guard = self.runtime.enter();
+        if let Ok(mut state) = self.state.lock() {
+            state.node = None;
+            state.secret_store = None;
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -316,13 +329,22 @@ fn default_sync_direction() -> SyncDirection {
 impl EnboxCore {
     #[uniffi::constructor]
     pub fn open_in_memory() -> Result<Arc<Self>, EnboxError> {
-        Self::open_with_resolver(":memory:", StaticPublicKeyResolver::default())
+        Self::open_with_resolver(
+            SqliteNativeDwn::open_in_memory,
+            StaticPublicKeyResolver::default(),
+            None,
+        )
     }
 
     /// Open a durable SQLite-backed DWN at `database_path`.
     #[uniffi::constructor]
     pub fn open(database_path: String) -> Result<Arc<Self>, EnboxError> {
-        Self::open_with_resolver(database_path, StaticPublicKeyResolver::default())
+        let path = database_path.clone();
+        Self::open_with_resolver(
+            move |resolver| SqliteNativeDwn::open_at(path, resolver),
+            StaticPublicKeyResolver::default(),
+            Some(database_path),
+        )
     }
 
     pub fn lock(&self) {
@@ -439,7 +461,8 @@ impl EnboxCore {
         let Some(node) = state.node.as_ref() else {
             return Err(EnboxError::NotInitialized);
         };
-        node.register_sync_identity(options)
+        self.runtime
+            .block_on(node.register_sync_identity(options))
             .map_err(|err| EnboxError::Sync {
                 detail: format!("{}: {}", err.code, err.detail),
             })
@@ -509,9 +532,12 @@ impl EnboxCore {
         };
         drop(state);
 
-        let snapshot = node.sync_ledger().load().map_err(|err| EnboxError::Sync {
-            detail: format!("{}: {}", err.code, err.detail),
-        })?;
+        let snapshot = self
+            .runtime
+            .block_on(node.sync_ledger().load())
+            .map_err(|err| EnboxError::Sync {
+                detail: format!("{}: {}", err.code, err.detail),
+            })?;
         let scopes: Vec<FfiPendingScope> = snapshot
             .checkpoints
             .values()
@@ -564,9 +590,12 @@ impl EnboxCore {
         };
         drop(state);
 
-        let snapshot = node.sync_ledger().load().map_err(|err| EnboxError::Sync {
-            detail: format!("{}: {}", err.code, err.detail),
-        })?;
+        let snapshot = self
+            .runtime
+            .block_on(node.sync_ledger().load())
+            .map_err(|err| EnboxError::Sync {
+                detail: format!("{}: {}", err.code, err.detail),
+            })?;
 
         let scope_query = FfiPendingScopesQuery {
             tenant: request.tenant.clone(),
@@ -1254,27 +1283,27 @@ impl EnboxCore {
         state.secret_store.clone().ok_or(EnboxError::NotInitialized)
     }
 
-    fn open_with_resolver(
-        database_path: impl AsRef<Path>,
+    fn open_with_resolver<F, Fut, E>(
+        dwn: F,
         resolver: StaticPublicKeyResolver,
-    ) -> Result<Arc<Self>, EnboxError> {
+        database_path: Option<String>,
+    ) -> Result<Arc<Self>, EnboxError>
+    where
+        F: FnOnce(StaticPublicKeyResolver) -> Fut,
+        Fut: std::future::Future<Output = Result<SqliteNativeDwn, E>>,
+        E: std::fmt::Display,
+    {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|err| EnboxError::Store {
                 detail: err.to_string(),
             })?;
-        let path = database_path.as_ref().to_path_buf();
         let node = runtime
-            .block_on(SqliteNativeDwn::open_at(&path, resolver))
+            .block_on(dwn(resolver))
             .map_err(|err| EnboxError::Store {
                 detail: err.to_string(),
             })?;
-        let database_path = if path.to_string_lossy() == ":memory:" {
-            None
-        } else {
-            Some(path.to_string_lossy().into_owned())
-        };
         let secret_store = SqliteSecretStore::new(node.store());
         Ok(Arc::new(Self {
             runtime,
@@ -1854,8 +1883,8 @@ mod tests {
                 last_error: None,
                 updated_at: chrono::Utc::now(),
             };
-            node.sync_ledger()
-                .upsert_checkpoint(&checkpoint)
+            core.runtime
+                .block_on(node.sync_ledger().upsert_checkpoint(&checkpoint))
                 .expect("upsert seeded checkpoint");
         }
 

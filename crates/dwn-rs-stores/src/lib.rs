@@ -10,16 +10,10 @@ pub mod native_node;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(feature = "sqlite")]
-mod sqlite_agent;
+pub use crate::SqliteSecretStore;
 #[cfg(feature = "sqlite")]
-mod sqlite_aux;
-mod sqlite_sync_ledger;
+pub use crate::SqliteSyncLedger;
 #[cfg(feature = "sqlite")]
 pub use native_node::SqliteNativeDwn;
 #[cfg(feature = "sqlite")]
 pub use sqlite::*;
-#[cfg(feature = "sqlite")]
-pub use sqlite_agent::SqliteSecretStore;
-#[cfg(feature = "sqlite")]
-pub use sqlite_aux::{SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex};
-pub use sqlite_sync_ledger::SqliteSyncLedger;

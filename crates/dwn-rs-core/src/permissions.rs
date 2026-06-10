@@ -1572,10 +1572,10 @@ mod tests {
 
         async fn close(&mut self) {}
 
-        async fn put(
+        async fn put<D: crate::descriptors::MessageDescriptor + Send>(
             &self,
             _tenant: &str,
-            _message: Message<Descriptor>,
+            _message: Message<D>,
             _indexes: BTreeMap<String, Value>,
         ) -> Result<(), MessageStoreError> {
             Ok(())

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -9,19 +10,217 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::cid::generate_cid_from_json;
-use crate::errors::{EventLogError, ResumableTaskStoreError, StoreError};
+use crate::descriptors::MessageDescriptor;
+use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError};
 use crate::events::MessageEvent;
+use crate::fields::MessageFields;
 use crate::filters::Filters;
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
-    KeyValues, ManagedResumableTask, ProgressGapInfo, ProgressGapReason, ProgressToken,
-    ResumableTaskStore, SubscriptionListener, SubscriptionMessage,
+    KeyValues, ManagedResumableTask, MessageQueryResult, MessageStore, ProgressGapInfo,
+    ProgressGapReason, ProgressToken, ResumableTaskStore, SubscriptionListener,
+    SubscriptionMessage,
 };
-use crate::{Descriptor, Value};
+use crate::{compare_values, Cursor, Descriptor, Message, MessageSort, SortDirection, Value};
 
 const DEFAULT_MAX_EVENTS_PER_TENANT: usize = 10_000;
 const GRABBED_TASK_TIMEOUT_SECONDS: u64 = 60;
+
+#[derive(Clone, Debug)]
+struct MessageRow {
+    tenant: String,
+    cid: String,
+    message: Message<Descriptor>,
+    indexes: KeyValues,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MemoryMessageStore {
+    messages: Arc<RwLock<Vec<MessageRow>>>,
+}
+
+impl MessageStore for MemoryMessageStore {
+    async fn open(&mut self) -> Result<(), MessageStoreError> {
+        Ok(())
+    }
+
+    async fn close(&mut self) {}
+
+    async fn put<D>(
+        &self,
+        tenant: &str,
+        message: Message<D>,
+        indexes: KeyValues,
+    ) -> Result<(), MessageStoreError>
+    where
+        D: MessageDescriptor + Serialize + Send,
+    {
+        let value = serde_json::to_value(&message)?;
+        let message: Message<Descriptor> = serde_json::from_value(value)?;
+        let mut canonical = message.clone();
+        canonical.fields.encoded_data();
+        let cid = canonical.cid()?.to_string();
+
+        let mut rows = self.messages.write().expect("MessageStore lock poisoned");
+        rows.retain(|row| !(row.tenant == tenant && row.cid == cid));
+        rows.push(MessageRow {
+            tenant: tenant.to_string(),
+            cid,
+            message,
+            indexes,
+        });
+
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        tenant: &str,
+        cid: &str,
+    ) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
+        let rows = self.messages.read().expect("MessageStore lock poisoned");
+        Ok(rows
+            .iter()
+            .find(|row| row.tenant == tenant && row.cid == cid)
+            .map(|row| row.message.clone()))
+    }
+
+    async fn delete(&self, tenant: &str, cid: &str) -> Result<(), MessageStoreError> {
+        self.messages
+            .write()
+            .expect("MessageStore lock poisoned")
+            .retain(|row| !(row.tenant == tenant && row.cid == cid));
+        Ok(())
+    }
+
+    async fn clear(&self) -> Result<(), MessageStoreError> {
+        self.messages
+            .write()
+            .expect("MessageStore lock poisoned")
+            .clear();
+        Ok(())
+    }
+
+    async fn query(
+        &self,
+        tenant: &str,
+        filters: Filters,
+        sort: Option<crate::MessageSort>,
+        pagination: Option<crate::Pagination>,
+    ) -> Result<crate::stores::MessageQueryResult, MessageStoreError> {
+        if matches!(pagination.as_ref().and_then(|p| p.limit), Some(0)) {
+            return Ok(MessageQueryResult {
+                messages: Vec::new(),
+                cursor: None,
+            });
+        }
+
+        let (property, direction) = sort_property(sort.unwrap_or_default());
+
+        let mut rows: Vec<MessageRow> = {
+            let g = self.messages.read().expect("MessageStore lock poisoned");
+            g.iter()
+                .filter(|row| row.tenant == tenant && matches_filters(&row.indexes, Some(&filters)))
+                .cloned()
+                .collect()
+        };
+
+        rows.retain(|row| row.indexes.contains_key(property));
+
+        rows.sort_by(|a, b| {
+            let ord = compare_indexes(a.indexes.get(property), b.indexes.get(property))
+                .then_with(|| a.cid.cmp(&b.cid));
+            apply_dir(ord, direction)
+        });
+
+        let start = match pagination.as_ref().and_then(|p| p.cursor.as_ref()) {
+            Some(cursor) => cursor_start(&rows, property, direction, cursor),
+            None => 0,
+        };
+        let mut page: Vec<MessageRow> = rows.into_iter().skip(start).collect();
+
+        let cursor = match pagination.and_then(|p| p.limit) {
+            Some(limit) if (page.len() as u64) > limit => {
+                page.truncate(limit as usize);
+                let last = page
+                    .last()
+                    .expect("page must have at least one entry after truncation");
+                Some(Cursor {
+                    cursor: last
+                        .cid
+                        .parse()
+                        .map_err(MessageStoreError::CidEncodeError)?,
+                    value: last.indexes.get(property).cloned(),
+                })
+            }
+            _ => None,
+        };
+
+        Ok(MessageQueryResult {
+            messages: page.into_iter().map(|row| row.message).collect(),
+            cursor,
+        })
+    }
+
+    async fn count(
+        &self,
+        tenant: &str,
+        filters: Filters,
+        sort: Option<crate::MessageSort>,
+    ) -> Result<u64, MessageStoreError> {
+        let property = Some(sort_property(sort.unwrap_or_default()).0);
+        let guard = self.messages.read().expect("MessageStore lock poisoned");
+
+        Ok(guard
+            .iter()
+            .filter(|row| {
+                row.tenant == tenant
+                    && matches_filters(&row.indexes, Some(&filters))
+                    && property.is_none_or(|prop| row.indexes.contains_key(prop))
+            })
+            .count() as u64)
+    }
+}
+
+fn sort_property(sort: MessageSort) -> (&'static str, SortDirection) {
+    match sort {
+        MessageSort::DateCreated(d) => ("dateCreated", d),
+        MessageSort::DatePublished(d) => ("datePublished", d),
+        MessageSort::Timestamp(d) => ("messageTimestamp", d),
+    }
+}
+
+fn compare_indexes(a: Option<&Value>, b: Option<&Value>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => compare_values(a, b).unwrap_or(Ordering::Equal),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn cursor_start(
+    rows: &[MessageRow],
+    property: &str,
+    direction: SortDirection,
+    c: &Cursor,
+) -> usize {
+    let cursor_cid = c.cursor.to_string();
+    rows.iter()
+        .position(|r| {
+            let val = compare_indexes(r.indexes.get(property), c.value.as_ref());
+            apply_dir(val.then_with(|| r.cid.cmp(&cursor_cid)), direction) == Ordering::Greater
+        })
+        .unwrap_or(rows.len())
+}
+
+fn apply_dir(o: Ordering, d: SortDirection) -> Ordering {
+    match d {
+        SortDirection::Ascending => o,
+        SortDirection::Descending => o.reverse(),
+    }
+}
 
 #[derive(Clone)]
 /// In-memory `EventLog` for development, tests, and the `MobileCore` /
@@ -735,6 +934,8 @@ fn task_store_error(error: impl std::error::Error) -> ResumableTaskStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filters::{Filter, FilterKey};
+    use crate::Pagination;
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -865,5 +1066,250 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    // Distinct `descriptor.messageTimestamp` yields a distinct CID (so rows don't
+    // collapse on upsert); the index `messageTimestamp` is supplied separately, so
+    // tests can hold the sort value constant while CIDs differ.
+    fn msg(descriptor_ts: &str) -> Message<Descriptor> {
+        serde_json::from_value(json!({
+            "descriptor": {
+                "interface": "Messages",
+                "method": "Query",
+                "messageTimestamp": descriptor_ts,
+            },
+            "authorization": { "signature": {} },
+        }))
+        .expect("valid message")
+    }
+
+    fn idx(timestamp: &str, protocol: Option<&str>) -> KeyValues {
+        let mut indexes = KeyValues::default();
+        indexes.insert(
+            "messageTimestamp".to_string(),
+            Value::String(timestamp.to_string()),
+        );
+        if let Some(protocol) = protocol {
+            indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
+        }
+        indexes
+    }
+
+    #[tokio::test]
+    async fn message_store_put_get_delete_and_upsert() {
+        let store = MemoryMessageStore::default();
+        let message = msg("2025-01-01T00:00:00.000001Z");
+        let cid = message.cid().unwrap().to_string();
+
+        store
+            .put(
+                "did:alice",
+                message.clone(),
+                idx("2025-01-01T00:00:01Z", None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get("did:alice", &cid).await.unwrap(),
+            Some(message.clone())
+        );
+
+        // re-putting the same message (same CID) upserts rather than duplicating
+        store
+            .put(
+                "did:alice",
+                message.clone(),
+                idx("2025-01-01T00:00:01Z", None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .count("did:alice", Filters::default(), None)
+                .await
+                .unwrap(),
+            1
+        );
+
+        // tenant isolation
+        assert_eq!(store.get("did:bob", &cid).await.unwrap(), None);
+
+        store.delete("did:alice", &cid).await.unwrap();
+        assert_eq!(store.get("did:alice", &cid).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn message_store_filters_sorts_and_counts() {
+        let store = MemoryMessageStore::default();
+        let m1 = msg("2025-01-01T00:00:00.000001Z");
+        let m2 = msg("2025-01-01T00:00:00.000002Z");
+        let m3 = msg("2025-01-01T00:00:00.000003Z");
+        store
+            .put("t", m1.clone(), idx("2025-01-01T00:00:01Z", Some("notes")))
+            .await
+            .unwrap();
+        store
+            .put("t", m2.clone(), idx("2025-01-01T00:00:02Z", Some("notes")))
+            .await
+            .unwrap();
+        store
+            .put("t", m3.clone(), idx("2025-01-01T00:00:03Z", Some("tasks")))
+            .await
+            .unwrap();
+
+        let notes = Filters::from([[(
+            FilterKey::Index("protocol".to_string()),
+            Filter::Equal(Value::String("notes".to_string())),
+        )]]);
+
+        assert_eq!(store.count("t", notes.clone(), None).await.unwrap(), 2);
+
+        let desc = store
+            .query(
+                "t",
+                notes.clone(),
+                Some(MessageSort::Timestamp(SortDirection::Descending)),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(desc.messages, vec![m2.clone(), m1.clone()]); // notes only, newest first
+        assert!(desc.cursor.is_none());
+
+        let asc = store
+            .query(
+                "t",
+                notes,
+                Some(MessageSort::Timestamp(SortDirection::Ascending)),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(asc.messages, vec![m1, m2]);
+    }
+
+    #[tokio::test]
+    async fn message_store_paginates_with_cursor() {
+        let store = MemoryMessageStore::default();
+        let m1 = msg("2025-01-01T00:00:00.000001Z");
+        let m2 = msg("2025-01-01T00:00:00.000002Z");
+        let m3 = msg("2025-01-01T00:00:00.000003Z");
+        store
+            .put("t", m1.clone(), idx("2025-01-01T00:00:01Z", None))
+            .await
+            .unwrap();
+        store
+            .put("t", m2.clone(), idx("2025-01-01T00:00:02Z", None))
+            .await
+            .unwrap();
+        store
+            .put("t", m3.clone(), idx("2025-01-01T00:00:03Z", None))
+            .await
+            .unwrap();
+
+        let sort = Some(MessageSort::Timestamp(SortDirection::Ascending));
+
+        let p1 = store
+            .query(
+                "t",
+                Filters::default(),
+                sort,
+                Some(Pagination::with_limit(1)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(p1.messages, vec![m1]);
+        assert!(p1.cursor.is_some());
+
+        let p2 = store
+            .query(
+                "t",
+                Filters::default(),
+                sort,
+                Some(Pagination::new(p1.cursor, Some(1))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(p2.messages, vec![m2]);
+        assert!(p2.cursor.is_some());
+
+        let p3 = store
+            .query(
+                "t",
+                Filters::default(),
+                sort,
+                Some(Pagination::new(p2.cursor, Some(1))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(p3.messages, vec![m3]);
+        assert!(p3.cursor.is_none()); // last page, no overflow
+    }
+
+    #[tokio::test]
+    async fn message_store_cursor_breaks_ties_on_identical_sort_value() {
+        let store = MemoryMessageStore::default();
+        // distinct CIDs, identical index sort value -> exercises the cid tiebreak
+        let a = msg("2025-01-01T00:00:00.000001Z");
+        let b = msg("2025-01-01T00:00:00.000002Z");
+        store
+            .put("t", a.clone(), idx("2025-01-01T00:00:05Z", None))
+            .await
+            .unwrap();
+        store
+            .put("t", b.clone(), idx("2025-01-01T00:00:05Z", None))
+            .await
+            .unwrap();
+
+        let sort = Some(MessageSort::Timestamp(SortDirection::Ascending));
+        let p1 = store
+            .query(
+                "t",
+                Filters::default(),
+                sort,
+                Some(Pagination::with_limit(1)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(p1.messages.len(), 1);
+        let p2 = store
+            .query(
+                "t",
+                Filters::default(),
+                sort,
+                Some(Pagination::new(p1.cursor.clone(), Some(1))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(p2.messages.len(), 1);
+
+        // no row dropped or duplicated across the tie: the two pages are distinct and cover {a, b}
+        assert_ne!(p1.messages[0], p2.messages[0]);
+        let page = [p1.messages[0].clone(), p2.messages[0].clone()];
+        assert!(page.contains(&a) && page.contains(&b));
+    }
+
+    #[tokio::test]
+    async fn message_store_query_limit_zero_is_empty() {
+        let store = MemoryMessageStore::default();
+        store
+            .put(
+                "t",
+                msg("2025-01-01T00:00:00.000001Z"),
+                idx("2025-01-01T00:00:01Z", None),
+            )
+            .await
+            .unwrap();
+        let result = store
+            .query(
+                "t",
+                Filters::default(),
+                None,
+                Some(Pagination::with_limit(0)),
+            )
+            .await
+            .unwrap();
+        assert!(result.messages.is_empty());
+        assert!(result.cursor.is_none());
     }
 }

@@ -156,7 +156,11 @@ async fn http_incremental_sync_reconnects_using_persisted_ledger_checkpoint() {
         )
         .await;
     assert_completed_with_pulls(&first, 1, "http first pull");
-    let ledger_after_first = local.sync_ledger().load().expect("ledger after first pull");
+    let ledger_after_first = local
+        .sync_ledger()
+        .load()
+        .await
+        .expect("ledger after first pull");
     assert!(
         !ledger_after_first.checkpoints.is_empty(),
         "expected persisted checkpoint after first HTTP sync"
@@ -295,11 +299,13 @@ async fn live_poll_handoff_catches_up_after_subscription_drop() {
                 "poll should apply at least the record missed during live outage"
             );
 
-            let status = engine.sync_status(SyncStatusQuery {
-                tenant: TENANT.to_string(),
-                remote: Some(HTTP_REMOTE.to_string()),
-                protocol: None,
-            });
+            let status = engine
+                .sync_status(SyncStatusQuery {
+                    tenant: TENANT.to_string(),
+                    remote: Some(HTTP_REMOTE.to_string()),
+                    protocol: None,
+                })
+                .await;
             assert_eq!(
                 status.last_status,
                 Some(SyncRunStatus::Completed),
@@ -438,6 +444,7 @@ async fn open_configured_local(resolver: &StaticPublicKeyResolver) -> SqliteNati
             protocols: SyncProtocols::All,
             delegate_did: None,
         })
+        .await
         .expect("register sync identity");
     local
 }

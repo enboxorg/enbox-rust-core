@@ -23,14 +23,21 @@ chrono = { version = "0.4.37", features = ["serde", "wasmbind"] }
 cid = { version = "0.11.1", features = ["serde"] }
 thiserror = "1.0.63"
 time = "0.3.36"
-tokio = { version = "1.39.2", features = ["io-util", "rt", "rt-multi-thread", "macros", "sync", "signal"] }
+tokio = { version = "1.39.2", features = [
+    "io-util",
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "signal",
+] }
 tracing = { version = "0.1.40", default-features = false, features = [
     "attributes",
 ] }
 serde = { version = "1.0.183", features = ["derive"] }
 serde_ipld_dagcbor = "0.6.0"
 serde_with = "3.4.0"
-rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
+rusqlite = { version = "0.38", features = ["bundled"], optional = true }
 
 ulid = { version = "1.1.2", features = ["serde"] }
 url = { version = "2.5.0", features = ["serde"] }
@@ -46,6 +53,9 @@ async-std = { version = "1.12.0", default-features = false, features = [
 ] }
 memoize = { version = "0.4.2", default-features = false }
 bytes = { version = "1.8.0", features = ["serde"] }
+deadpool-sqlite = "0.13.0"
+base64 = "0.22.1"
+uuid = { version = "1.23.3", features = ["v4"] }
 
 [dev-dependencies]
 rand = "0.8.5"

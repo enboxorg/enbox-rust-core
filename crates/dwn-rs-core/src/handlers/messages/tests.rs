@@ -580,15 +580,17 @@ impl MessageStore for TestMessageStore {
 
     async fn close(&mut self) {}
 
-    async fn put(
+    async fn put<D: crate::descriptors::MessageDescriptor + Send>(
         &self,
         tenant: &str,
-        message: Message<Descriptor>,
+        message: Message<D>,
         _indexes: MapValue,
     ) -> Result<(), MessageStoreError> {
-        let cid = generate_cid_from_json(&serde_json::to_value(&message).unwrap())
+        let value = serde_json::to_value(&message)?;
+        let cid = generate_cid_from_json(&value)
             .map_err(test_message_store_error)?
             .to_string();
+        let message: Message<Descriptor> = serde_json::from_value(value)?;
         self.insert(tenant, &cid, message).await;
         Ok(())
     }

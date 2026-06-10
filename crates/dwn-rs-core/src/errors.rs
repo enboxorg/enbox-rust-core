@@ -68,10 +68,10 @@ pub enum MessageStoreError {
     StoreError(#[from] StoreError),
 
     #[error("failed to encode message: {0}")]
-    MessageEncodeError(#[from] ipld_core::serde::SerdeError),
+    MessageEncodeError(#[from] serde_json::Error),
 
     #[error("failed to decode message: {0}")]
-    MessageDecodeError(#[source] ipld_core::serde::SerdeError),
+    MessageDecodeError(#[source] serde_json::Error),
 
     #[error("failed to serde encode message: {0}")]
     SerdeEncodeError(#[from] serde_ipld_dagcbor::error::EncodeError<TryReserveError>),

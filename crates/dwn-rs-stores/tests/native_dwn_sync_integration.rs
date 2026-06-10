@@ -58,6 +58,7 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
             protocols: SyncProtocols::All,
             delegate_did: None,
         })
+        .await
         .expect("register sync identity");
 
     let result = local
@@ -75,7 +76,11 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
     );
     assert!(!result.checkpoints.is_empty(), "{result:?}");
 
-    let ledger = local.sync_ledger().load().expect("reload sync ledger");
+    let ledger = local
+        .sync_ledger()
+        .load()
+        .await
+        .expect("reload sync ledger");
     assert!(!ledger.checkpoints.is_empty());
     assert_eq!(ledger.checkpoints.values().next().unwrap().tenant, TENANT);
 }
