@@ -1,5 +1,3 @@
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use dwn_rs_core::descriptors::MessageDescriptor;
 use rusqlite::{params, OptionalExtension};
 
@@ -40,7 +38,7 @@ impl MessageStore for SqliteStore {
         let tenant = tenant.to_string();
         let message_json = serde_json::to_string(&message)?;
         let mut message = message;
-        let data = message.fields.encoded_data();
+        message.fields.encoded_data(); // strip inline encodedData so the CID is canonical
         let message_cid = message.cid()?.to_string();
         let indexes_json = serde_json::to_string(&indexes)?;
 
@@ -56,17 +54,6 @@ impl MessageStore for SqliteStore {
                     params![tenant, message_cid, message_json, indexes_json],
                 )
                 .map_err(sqlite_store_error)?;
-
-                if let Some(value) = data {
-                    let enc_data = STANDARD.encode(value.to_bytes());
-                    tx.execute(
-                        "INSERT OR REPLACE INTO message_data \
-                         (message_cid, data, data_size) \
-                         VALUES (?1, ?2, ?3)",
-                        params![message_cid, enc_data, value.len() as i64],
-                    )
-                    .map_err(sqlite_store_error)?;
-                }
 
                 tx.commit().map_err(sqlite_store_error)?;
                 Ok(())

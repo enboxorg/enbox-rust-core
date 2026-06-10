@@ -51,12 +51,6 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
                 PRIMARY KEY (tenant, message_cid)
             );
 
-            CREATE TABLE IF NOT EXISTS message_data (
-                message_cid TEXT PRIMARY KEY,
-                data BLOB NOT NULL,
-                data_size INTEGER NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS data_blocks (
                 data_cid TEXT PRIMARY KEY,
                 data BLOB NOT NULL,
