@@ -20,7 +20,7 @@ impl Default for SqliteStore {
 
 impl SqliteStore {
     pub fn in_memory() -> Self {
-        Self::new("file:dwn-rs?mode=memory&cache=shared")
+        Self::new(unique_memory_uri())
     }
 
     pub fn new(path: impl AsRef<Path>) -> Self {
@@ -159,6 +159,13 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
         .map_err(sqlite_store_error)
 }
 
+fn unique_memory_uri() -> String {
+    format!(
+        "file:dwn-mem-{}?mode=memory&cache=shared",
+        uuid::Uuid::new_v4()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -173,7 +180,10 @@ mod tests {
         MessageStore::open(&mut store).await.unwrap();
 
         let tables = store
-            .with_connection(|connection| {
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
                 let mut statement = connection
                     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
                     .map_err(sqlite_store_error)?;
@@ -186,6 +196,7 @@ mod tests {
                 }
                 Ok(tables)
             })
+            .await
             .unwrap();
 
         assert!(tables.contains("messages"));

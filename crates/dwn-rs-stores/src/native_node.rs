@@ -47,7 +47,7 @@ impl SqliteNativeDwn {
     pub async fn open_in_memory(
         public_key_resolver: StaticPublicKeyResolver,
     ) -> Result<Self, NativeDwnOpenError> {
-        Self::open_at(":memory:", public_key_resolver).await
+        Self::open(SqliteStore::in_memory(), public_key_resolver).await
     }
 
     /// Open a SQLite native node at `path` with the supplied public-key resolver.
@@ -55,7 +55,18 @@ impl SqliteNativeDwn {
         path: impl AsRef<std::path::Path>,
         public_key_resolver: StaticPublicKeyResolver,
     ) -> Result<Self, NativeDwnOpenError> {
-        let store = SqliteStore::new(path);
+        Self::open(SqliteStore::new(path), public_key_resolver).await
+    }
+
+    pub async fn open(
+        store: SqliteStore,
+        public_key_resolver: StaticPublicKeyResolver,
+    ) -> Result<Self, NativeDwnOpenError> {
+        store
+            .connection()
+            .await
+            .map_err(NativeDwnOpenError::StateIndex)?;
+
         let state_index = SqliteStateIndex::new(&store);
         let event_log = SqliteEventLog::new(&store);
         let resumable_task_store = SqliteResumableTaskStore::new(&store);

@@ -70,7 +70,7 @@ pub enum NativeDwnOpenError {
     MessageStore(#[from] MessageStoreError),
     #[error("data store: {0}")]
     DataStore(#[from] DataStoreError),
-    #[error("state index: {0}")]
+    #[error("state index and store: {0}")]
     StateIndex(#[from] StoreError),
     #[error("event log: {0}")]
     EventLog(#[from] EventLogError),
