@@ -103,6 +103,7 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
                 protocols: SyncProtocols::All,
                 delegate_did: None,
             })
+            .await
             .expect("register identity");
 
         let result = engine
@@ -112,7 +113,7 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
         assert!(!result.checkpoints.is_empty());
     }
 
-    let loaded = ledger.load().expect("reload ledger");
+    let loaded = ledger.load().await.expect("reload ledger");
     assert!(!loaded.checkpoints.is_empty());
     assert_eq!(loaded.checkpoints.values().next().unwrap().tenant, TENANT);
 
@@ -128,13 +129,16 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
                 protocols: SyncProtocols::All,
                 delegate_did: None,
             })
+            .await
             .expect("register identity");
 
-        let status = engine.sync_status(dwn_rs_core::sync::SyncStatusQuery {
-            tenant: TENANT.to_string(),
-            remote: Some(REMOTE.to_string()),
-            protocol: None,
-        });
+        let status = engine
+            .sync_status(dwn_rs_core::sync::SyncStatusQuery {
+                tenant: TENANT.to_string(),
+                remote: Some(REMOTE.to_string()),
+                protocol: None,
+            })
+            .await;
         assert!(!status.checkpoints.is_empty());
         assert_eq!(status.checkpoints[0].scope_id, SyncScope::Full.id());
     }
@@ -142,7 +146,7 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
     let _ = std::fs::remove_file(path);
 }
 
-fn registered_engine(
+async fn registered_engine(
     ledger: SqliteSyncLedger,
 ) -> NativeSyncEngine<MockEndpoint, MockEndpoint, SqliteSyncLedger> {
     let local = MockEndpoint::default();
@@ -154,6 +158,7 @@ fn registered_engine(
             protocols: SyncProtocols::All,
             delegate_did: None,
         })
+        .await
         .expect("register identity");
     engine
 }
@@ -175,7 +180,7 @@ async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
     ));
     let store = SqliteStore::new(&path);
     let ledger = SqliteSyncLedger::new(&store);
-    let engine = registered_engine(ledger.clone());
+    let engine = registered_engine(ledger.clone()).await;
     let cursor = sample_progress_token("2", "cid-2");
 
     let result = engine
@@ -190,28 +195,30 @@ async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
         .await;
 
     assert_eq!(result.status, SyncRunStatus::Completed);
-    let loaded = ledger.load().expect("reload ledger");
+    let loaded = ledger.load().await.expect("reload ledger");
     let checkpoint = loaded.checkpoints.values().next().expect("checkpoint");
     assert_eq!(checkpoint.pull_cursor.as_ref(), Some(&cursor));
 
     let _ = std::fs::remove_file(path);
 }
 
-#[test]
-fn sync_engine_persists_progress_gap_as_repairing_in_sqlite_ledger() {
+#[tokio::test]
+async fn sync_engine_persists_progress_gap_as_repairing_in_sqlite_ledger() {
     let path = std::env::temp_dir().join(format!(
         "enbox-sync-gap-ledger-{}.sqlite",
         ulid::Ulid::new()
     ));
     let store = SqliteStore::new(&path);
     let ledger = SqliteSyncLedger::new(&store);
-    let engine = registered_engine(ledger.clone());
+    let engine = registered_engine(ledger.clone()).await;
 
-    let result = engine.handle_progress_gap(TENANT, REMOTE, SyncScope::Full, "token_too_old");
+    let result = engine
+        .handle_progress_gap(TENANT, REMOTE, SyncScope::Full, "token_too_old")
+        .await;
 
     assert_eq!(result.status, SyncRunStatus::Repairing);
     assert_eq!(result.error.as_ref().unwrap().code, "ProgressGap");
-    let loaded = ledger.load().expect("reload ledger");
+    let loaded = ledger.load().await.expect("reload ledger");
     let status_key = format!("{TENANT}|{REMOTE}");
     assert_eq!(
         loaded.last_status.get(&status_key),

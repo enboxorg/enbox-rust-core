@@ -488,13 +488,14 @@ mod tests {
             last_error: Some(SyncError::transient("ProgressGap", "gap")),
             updated_at: Utc::now(),
         };
-        ledger.upsert_checkpoint(&checkpoint).unwrap();
+        ledger.upsert_checkpoint(&checkpoint).await.unwrap();
         ledger
             .remember_echo("did:example:alice|https://peer|cid", Utc::now())
+            .await
             .unwrap();
 
         let reopened = SqliteSyncLedger::new(&store);
-        let loaded = reopened.load().unwrap();
+        let loaded = reopened.load().await.unwrap();
         assert_eq!(loaded.checkpoints.len(), 1);
         assert_eq!(
             loaded.checkpoints[&checkpoint.key].records_pulled,
@@ -502,6 +503,7 @@ mod tests {
         );
         assert!(reopened
             .contains_echo("did:example:alice|https://peer|cid")
+            .await
             .unwrap());
 
         let _ = std::fs::remove_file(path);
