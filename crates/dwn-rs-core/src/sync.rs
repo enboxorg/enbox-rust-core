@@ -1637,7 +1637,7 @@ mod tests {
             only_remote: vec![local_entry()],
             only_local: Vec::new(),
         });
-        let engine = engine(local.clone(), remote.clone());
+        let engine = engine(local.clone(), remote.clone()).await;
 
         let result = engine
             .sync_once(SyncOnceRequest::new(
@@ -1655,11 +1655,13 @@ mod tests {
             vec!["parent-cid".to_string(), "child-cid".to_string()]
         );
         assert_eq!(remote.applied_cids(), vec!["local-cid".to_string()]);
-        let status = engine.sync_status(SyncStatusQuery {
-            tenant: "did:example:alice".to_string(),
-            remote: Some("https://remote.example".to_string()),
-            protocol: None,
-        });
+        let status = engine
+            .sync_status(SyncStatusQuery {
+                tenant: "did:example:alice".to_string(),
+                remote: Some("https://remote.example".to_string()),
+                protocol: None,
+            })
+            .await;
         assert_eq!(status.dead_letters.len(), 0);
         assert!(status
             .checkpoints
@@ -1678,7 +1680,7 @@ mod tests {
             only_local: Vec::new(),
         });
         local.fail_apply("parent-cid");
-        let engine = engine(local.clone(), remote);
+        let engine = engine(local.clone(), remote).await;
 
         let result = engine
             .sync_once(SyncOnceRequest::new(
@@ -1691,7 +1693,7 @@ mod tests {
         assert_eq!(result.status, SyncRunStatus::Failed);
         let dead_letters = engine.dead_letters("did:example:alice", None).await;
         assert_eq!(dead_letters.len(), 1);
-        assert_eq!(dead_letters[0], message_cid.as_deref(), Some("parent-cid"));
+        assert_eq!(dead_letters[0].message_cid.as_deref(), Some("parent-cid"));
         assert_eq!(
             dead_letters[0].entry.as_ref().unwrap().message_cid,
             "parent-cid"
@@ -1710,7 +1712,7 @@ mod tests {
             only_local: Vec::new(),
         });
         local.fail_apply("parent-cid");
-        let engine = engine(local.clone(), remote);
+        let engine = engine(local.clone(), remote).await;
         let result = engine
             .sync_once(SyncOnceRequest::new(
                 "did:example:alice",
@@ -1719,7 +1721,7 @@ mod tests {
             ))
             .await;
         assert_eq!(result.status, SyncRunStatus::Failed);
-        let dead_letter = engine.dead_letters("did:example:alice", None).await[0];
+        let dead_letter = &engine.dead_letters("did:example:alice", None).await[0];
 
         local.allow_apply("parent-cid");
         let retry = engine.retry_dead_letter(&dead_letter.id).await;
@@ -1728,14 +1730,17 @@ mod tests {
         assert_eq!(retry.records_pulled, 1);
         assert_eq!(retry.bytes_downloaded, b"parent".len() as u64);
         assert_eq!(local.applied_cids(), vec!["parent-cid".to_string()]);
-        assert!(engine.dead_letters("did:example:alice", None).is_empty());
+        assert!(engine
+            .dead_letters("did:example:alice", None)
+            .await
+            .is_empty());
     }
 
     #[tokio::test]
     async fn remote_subscription_event_applies_and_advances_cursor() {
         let local = MockEndpoint::default();
         let remote = MockEndpoint::default();
-        let engine = engine(local.clone(), remote);
+        let engine = engine(local.clone(), remote).await;
         let cursor = token("remote-stream", "1", "event-cid");
 
         let result = engine
@@ -1762,7 +1767,7 @@ mod tests {
     async fn local_subscription_event_skips_recently_pulled_echo() {
         let local = MockEndpoint::default();
         let remote = MockEndpoint::default();
-        let engine = engine(local, remote.clone());
+        let engine = engine(local, remote.clone()).await;
         let cursor = token("remote-stream", "1", "same-cid");
         let event = SubscriptionMessage::Event {
             cursor: cursor.clone(),
@@ -1809,7 +1814,7 @@ mod tests {
             only_remote: vec![parent_entry()],
             only_local: Vec::new(),
         });
-        let engine = engine(local.clone(), remote);
+        let engine = engine(local.clone(), remote).await;
 
         let result = engine
             .poll_reconcile(SyncOnceRequest::new(
@@ -1830,7 +1835,7 @@ mod tests {
         let remote = MockEndpoint::default();
         local.set_root("local-root");
         remote.set_root("remote-root");
-        let engine = engine(local, remote);
+        let engine = engine(local, remote).await;
         engine
             .start_sync(StartSyncParams {
                 tenant: "did:example:alice".to_string(),
@@ -1841,19 +1846,22 @@ mod tests {
             })
             .await;
 
-        let result =
-            engine.enter_degraded_poll("did:example:alice", "https://remote.example", None);
+        let result = engine
+            .enter_degraded_poll("did:example:alice", "https://remote.example", None)
+            .await;
 
         assert_eq!(result.status, SyncRunStatus::DegradedPoll);
         assert_eq!(
             result.next_recommended_delay_ms,
             Some(DEGRADED_POLL_INTERVAL_MS)
         );
-        let status = engine.sync_status(SyncStatusQuery {
-            tenant: "did:example:alice".to_string(),
-            remote: Some("https://remote.example".to_string()),
-            protocol: None,
-        });
+        let status = engine
+            .sync_status(SyncStatusQuery {
+                tenant: "did:example:alice".to_string(),
+                remote: Some("https://remote.example".to_string()),
+                protocol: None,
+            })
+            .await;
         assert_eq!(status.last_status, Some(SyncRunStatus::DegradedPoll));
         assert!(status.active_live_links.is_empty());
     }
@@ -1869,7 +1877,7 @@ mod tests {
             only_remote: vec![live_entry.clone(), child_entry()],
             only_local: Vec::new(),
         });
-        let engine = engine(local.clone(), remote.clone());
+        let engine = engine(local.clone(), remote.clone()).await;
         let cursor = token("remote-stream", "1", "parent-cid");
 
         engine
@@ -1914,18 +1922,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn progress_gap_marks_repairing_and_keeps_dead_letters_visible() {
+    #[tokio::test]
+    async fn progress_gap_marks_repairing_and_keeps_dead_letters_visible() {
         let local = MockEndpoint::default();
         let remote = MockEndpoint::default();
-        let engine = engine(local, remote);
+        let engine = engine(local, remote).await;
 
-        let result = engine.handle_progress_gap(
-            "did:example:alice",
-            "https://remote.example",
-            SyncScope::Full,
-            "token_too_old",
-        );
+        let result = engine
+            .handle_progress_gap(
+                "did:example:alice",
+                "https://remote.example",
+                SyncScope::Full,
+                "token_too_old",
+            )
+            .await;
 
         assert_eq!(result.status, SyncRunStatus::Repairing);
         assert_eq!(result.error.as_ref().unwrap().code, "ProgressGap");
@@ -1935,19 +1945,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn identity_protocols_must_be_explicit_and_non_empty() {
-        let engine = engine(MockEndpoint::default(), MockEndpoint::default());
-        let result = engine.register_identity(SyncIdentityOptions {
-            did: "did:example:alice".to_string(),
-            protocols: SyncProtocols::Protocols(Vec::new()),
-            delegate_did: None,
-        });
+    #[tokio::test]
+    async fn identity_protocols_must_be_explicit_and_non_empty() {
+        let engine = engine(MockEndpoint::default(), MockEndpoint::default()).await;
+        let result = engine
+            .register_identity(SyncIdentityOptions {
+                did: "did:example:alice".to_string(),
+                protocols: SyncProtocols::Protocols(Vec::new()),
+                delegate_did: None,
+            })
+            .await;
 
         assert_eq!(result.unwrap_err().code, "SyncIdentityInvalidProtocols");
     }
 
-    fn engine(
+    async fn engine(
         local: MockEndpoint,
         remote: MockEndpoint,
     ) -> NativeSyncEngine<MockEndpoint, MockEndpoint> {
@@ -1958,6 +1970,7 @@ mod tests {
                 protocols: SyncProtocols::All,
                 delegate_did: None,
             })
+            .await
             .unwrap();
         engine
     }
