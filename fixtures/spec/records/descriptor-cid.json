@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "source": {
+    "spec": {
+      "name": "Decentralized Web Node (DWN)",
+      "organization": "Decentralized Identity Foundation",
+      "version": "0.0.1 (Draft Community Group Report)",
+      "url": "https://identity.foundation/decentralized-web-node/spec/",
+      "section": "Record ID Generation / descriptorCid",
+      "anchor": "#record-id-generation",
+      "algorithm": {
+        "name": "CIDv1",
+        "codec": "dag-cbor (0x71)",
+        "multihash": "sha2-256 (0x12)",
+        "multibase": "base32 lower ('b')",
+        "reference": "https://github.com/multiformats/cid"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "records-write-descriptor-cid",
+      "description": "descriptorCid is the CIDv1 of the DAG-CBOR encoding of the RecordsWrite descriptor object. Descriptor reused from fixtures/dwn/messages/basic-interface-messages.json (records-write-basic).",
+      "descriptor": {
+        "interface": "Records",
+        "method": "Write",
+        "messageTimestamp": "2025-01-01T00:00:06.000000Z",
+        "dateCreated": "2025-01-01T00:00:06.000000Z",
+        "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+        "dataSize": 11,
+        "dataFormat": "text/plain"
+      },
+      "expected": {
+        "descriptorCid": "bafyreidgpqe6zujtci3k7gze4dh7e7prapj3tqer6cvpzhuyzil7ju6wo4"
+      },
+      "verification": {
+        "method": "independent-tool",
+        "tool": "pure-Python DAG-CBOR encoder (length-first canonical map key order) + sha2-256 + CIDv1 + base32, implemented directly from the multiformats spec, NOT via the Rust impl",
+        "note": "Literal independently reproduced from the spec algorithm; the harness asserts the impl's compute_cid(descriptor) equals this literal (no tautology — the literal is not recomputed by the impl on the expected side)."
+      }
+    }
+  ]
+}

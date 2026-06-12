@@ -3064,3 +3064,154 @@ where
     let typed: T = serde_json::from_value(descriptor.clone()).expect("descriptor must deserialize");
     serde_json::to_value(typed).expect("descriptor must serialize")
 }
+
+// ---------------------------------------------------------------------------
+// Track A: spec-conformance floor (fixtures/spec)
+//
+// This is a SEPARATE oracle from the TS-parity fixtures above. Spec fixtures
+// declare `oracle: "spec"` and carry their expected values from an external
+// published specification or test vector — never from the enbox TypeScript
+// implementation. They are intentionally NOT forced through `FixtureCase`.
+// ---------------------------------------------------------------------------
+
+const SPEC_DESCRIPTOR_CID_ASSERTION: &str = "spec.descriptorCid";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecFixtureManifest {
+    schema_version: u64,
+    oracle: String,
+    sets: Vec<SpecFixtureSetRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecFixtureSetRef {
+    id: String,
+    path: String,
+    assertions: Vec<String>,
+}
+
+#[derive(Debug)]
+struct LoadedSpecFixtureSet {
+    set_ref: SpecFixtureSetRef,
+    fixture_set: SpecFixtureSet,
+}
+
+impl LoadedSpecFixtureSet {
+    fn has_assertion(&self, assertion: &str) -> bool {
+        self.set_ref
+            .assertions
+            .iter()
+            .any(|candidate| candidate == assertion)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecFixtureSet {
+    schema_version: u64,
+    oracle: String,
+    source: SpecSource,
+    cases: Vec<SpecFixtureCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecSource {
+    spec: SpecReference,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecReference {
+    name: String,
+    url: String,
+    section: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecFixtureCase {
+    id: String,
+    descriptor: Value,
+    expected: SpecExpected,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecExpected {
+    descriptor_cid: String,
+}
+
+fn load_spec_fixture_sets() -> Vec<LoadedSpecFixtureSet> {
+    let root = fixtures_root().join("spec");
+    let manifest_path = root.join("manifest.json");
+    let manifest = read_json::<SpecFixtureManifest>(&manifest_path);
+
+    assert_eq!(
+        manifest.schema_version, 1,
+        "spec fixture manifest schema version"
+    );
+    assert_eq!(
+        manifest.oracle, "spec",
+        "spec fixture manifest must declare oracle=spec"
+    );
+
+    manifest
+        .sets
+        .into_iter()
+        .map(|set_ref| {
+            let fixture_path = root.join(&set_ref.path);
+            let fixture_set = read_json::<SpecFixtureSet>(&fixture_path);
+
+            assert_eq!(
+                fixture_set.schema_version, 1,
+                "{} spec set schema version",
+                set_ref.id
+            );
+            assert_eq!(
+                fixture_set.oracle, "spec",
+                "{} spec set must declare oracle=spec",
+                set_ref.id
+            );
+
+            LoadedSpecFixtureSet {
+                set_ref,
+                fixture_set,
+            }
+        })
+        .collect()
+}
+
+/// Track A conformance: the impl's DAG-CBOR CID of a RecordsWrite descriptor
+/// must equal the descriptorCid literal independently derived from the DWN
+/// spec's CIDv1/DAG-CBOR/sha2-256/base32 algorithm. The expected side is a
+/// hardcoded spec-derived literal — it is NOT recomputed by the impl, so this
+/// is a genuine spec assertion rather than a tautology.
+#[test]
+fn fixture_descriptor_cid_match_spec() {
+    let mut checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_DESCRIPTOR_CID_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+
+        for case in &set.fixture_set.cases {
+            assert_eq!(
+                compute_cid(&case.descriptor),
+                case.expected.descriptor_cid,
+                "{} descriptorCid must match the spec-derived literal",
+                case.id
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec descriptorCid case must be checked"
+    );
+}

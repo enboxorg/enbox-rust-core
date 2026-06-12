@@ -1,5 +1,11 @@
 {
   "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
+    "note": "TS-parity JWE encryption vectors; provenance block restored to match sibling crypto fixtures and satisfy the provenance gate."
+  },
   "cases": [
     {
       "id": "jwe-a256gcm-protocol-path",
