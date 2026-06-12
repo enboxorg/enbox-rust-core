@@ -9,6 +9,11 @@
       "assertions": ["spec.descriptorCid"]
     },
     {
+      "id": "spec.cid.dag-cbor",
+      "path": "cid/dag-cbor.json",
+      "assertions": ["spec.cid.dagcbor"]
+    },
+    {
       "id": "spec.did.did-key-ed25519",
       "path": "did/did-key-ed25519.json",
       "assertions": ["spec.did.resolve"]

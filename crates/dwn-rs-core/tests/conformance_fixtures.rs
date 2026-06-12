@@ -3076,6 +3076,7 @@ where
 // ---------------------------------------------------------------------------
 
 const SPEC_DESCRIPTOR_CID_ASSERTION: &str = "spec.descriptorCid";
+const SPEC_CID_DAGCBOR_ASSERTION: &str = "spec.cid.dagcbor";
 const SPEC_DID_RESOLVE_ASSERTION: &str = "spec.did.resolve";
 
 #[derive(Debug, Deserialize)]
@@ -3135,6 +3136,8 @@ struct SpecFixtureCase {
     #[serde(default)]
     descriptor: Option<Value>,
     #[serde(default)]
+    object: Option<Value>,
+    #[serde(default)]
     did: Option<String>,
     expected: SpecExpected,
 }
@@ -3144,6 +3147,8 @@ struct SpecFixtureCase {
 struct SpecExpected {
     #[serde(default)]
     descriptor_cid: Option<String>,
+    #[serde(default)]
+    cid: Option<String>,
     #[serde(default)]
     public_key: Option<SpecExpectedPublicKey>,
 }
@@ -3241,6 +3246,66 @@ fn fixture_descriptor_cid_match_spec() {
     assert!(
         checked > 0,
         "at least one spec descriptorCid case must be checked"
+    );
+}
+
+/// Track A conformance: the impl's DAG-CBOR CIDv1 of an arbitrary IPLD map must
+/// equal the CID literal independently derived from the IPLD DAG-CBOR spec
+/// (length-first canonical map-key ordering, sha2-256, CIDv1, base32-lower). The
+/// expected side is a hardcoded spec-derived literal produced by a separate
+/// pure-Python encoder — NOT recomputed by the impl — so this is a genuine spec
+/// assertion, not a tautology.
+///
+/// The corpus deliberately includes ORDERING-DIVERGENT maps whose keys sort
+/// differently under length-first canonical ordering than under plain bytewise
+/// lexicographic ordering (e.g. `{"z":1,"aa":2}`: canonical "z" before "aa",
+/// lexicographic "aa" before "z"). These pin down that `serde_ipld_dagcbor`
+/// emits canonical length-first ordering even though the impl feeds it a Rust
+/// `BTreeMap` (byte-lexicographic). A regression to lexicographic encoding would
+/// flip these CIDs and fail loudly here.
+#[test]
+fn fixture_cid_dagcbor_match_spec() {
+    let mut checked = 0usize;
+    let mut divergent_checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_CID_DAGCBOR_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+
+        for case in &set.fixture_set.cases {
+            let object = case
+                .object
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} dagcbor case must include an object", case.id));
+            let expected_cid = case.expected.cid.as_deref().unwrap_or_else(|| {
+                panic!("{} dagcbor case must include expected.cid", case.id)
+            });
+            assert_eq!(
+                compute_cid(object),
+                expected_cid,
+                "{} DAG-CBOR CIDv1 must match the spec-derived literal",
+                case.id
+            );
+            checked += 1;
+            if case.id.contains("divergent") {
+                divergent_checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec DAG-CBOR CID case must be checked"
+    );
+    assert!(
+        divergent_checked > 0,
+        "the DAG-CBOR corpus must include at least one ordering-divergent vector"
     );
 }
 

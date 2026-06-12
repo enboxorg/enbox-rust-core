@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "source": {
+    "spec": {
+      "name": "IPLD DAG-CBOR",
+      "organization": "IPLD / Protocol Labs",
+      "version": "1.0",
+      "url": "https://ipld.io/specs/codecs/dag-cbor/spec/",
+      "section": "Strictness — canonical map key ordering",
+      "anchor": "#strictness",
+      "ordering": "Map keys MUST be sorted length-first: shorter UTF-8 key byte-length first, then bytewise lexicographic within equal length (RFC 8949 §4.2.1 deterministic encoding).",
+      "algorithm": {
+        "name": "CIDv1",
+        "codec": "dag-cbor (0x71)",
+        "multihash": "sha2-256 (0x12)",
+        "multibase": "base32 lower ('b')",
+        "reference": "https://github.com/multiformats/cid"
+      }
+    },
+    "vector": {
+      "name": "IPLD codec-fixtures (dag-cbor)",
+      "url": "https://github.com/ipld/codec-fixtures/tree/master/fixtures",
+      "note": "Cross-referenced. Expected CIDs below were independently produced by a pure-Python DAG-CBOR encoder that implements length-first canonical map-key ordering directly from the IPLD spec / RFC 8949 §4.2.1 (NOT via the Rust impl). The hello-world and empty-map literals additionally match the widely published dag-cbor reference vectors in js-multiformats / IPLD documentation."
+    }
+  },
+  "cases": [
+    {
+      "id": "dag-cbor-empty-map",
+      "description": "CIDv1 of the DAG-CBOR encoding of an empty map. Well-known IPLD reference vector.",
+      "object": {},
+      "expected": {
+        "cid": "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua"
+      },
+      "verification": {
+        "method": "independent-tool",
+        "dagCborHex": "a0",
+        "tool": "pure-Python length-first DAG-CBOR encoder + sha2-256 + CIDv1 + base32-lower, implemented from the IPLD spec; cross-checked against the published js-multiformats dag-cbor reference value."
+      }
+    },
+    {
+      "id": "dag-cbor-hello-world",
+      "description": "CIDv1 of the DAG-CBOR encoding of {\"hello\":\"world\"}. Canonical IPLD reference vector.",
+      "object": { "hello": "world" },
+      "expected": {
+        "cid": "bafyreidykglsfhoixmivffc5uwhcgshx4j465xwqntbmu43nb2dzqwfvae"
+      },
+      "verification": {
+        "method": "independent-tool",
+        "dagCborHex": "a16568656c6c6f65776f726c64",
+        "tool": "pure-Python length-first DAG-CBOR encoder + sha2-256 + CIDv1 + base32-lower; cross-checked against the published js-multiformats dag-cbor reference value for {hello:world}."
+      }
+    },
+    {
+      "id": "dag-cbor-descriptor-like-map",
+      "description": "CIDv1 of a small descriptor-shaped map mixing string and integer values. Keys exercise length-first ordering across differing key byte-lengths (method(6), dataSize(8), interface(9), dataFormat(10)).",
+      "object": {
+        "interface": "Records",
+        "method": "Write",
+        "dataFormat": "application/json",
+        "dataSize": 123
+      },
+      "expected": {
+        "cid": "bafyreie5mghn5rn4j6qq7yb47bcae3tn226g3qhrfkbqoznajmpjfh3chq"
+      },
+      "verification": {
+        "method": "independent-tool",
+        "dagCborHex": "a4666d6574686f64655772697465686461746153697a65187b69696e74657266616365675265636f7264736a64617461466f726d6174706170706c69636174696f6e2f6a736f6e",
+        "tool": "pure-Python length-first DAG-CBOR encoder + sha2-256 + CIDv1 + base32-lower, implemented from the IPLD spec."
+      }
+    },
+    {
+      "id": "dag-cbor-divergent-key-ordering-2key",
+      "description": "ORDERING-DIVERGENT vector. Keys \"z\" (1 byte) and \"aa\" (2 bytes) sort DIFFERENTLY under the two candidate orderings: length-first (canonical DAG-CBOR) emits \"z\" before \"aa\"; plain bytewise/lexicographic emits \"aa\" before \"z\". The expected literal below is the length-first canonical CID. A passing assertion proves the impl emits canonical length-first ordering, not lexicographic.",
+      "object": { "z": 1, "aa": 2 },
+      "expected": {
+        "cid": "bafyreifn4ilfoehustlx752pkq6la7pmeqr6z2kkxsxiuk5etnxbiagjxq"
+      },
+      "verification": {
+        "method": "independent-tool",
+        "dagCborHex": "a2617a0162616102",
+        "canonicalOrder": "z, aa",
+        "lexicographicOrderWouldBe": "aa, z",
+        "tool": "pure-Python length-first DAG-CBOR encoder + sha2-256 + CIDv1 + base32-lower, implemented from the IPLD spec / RFC 8949 §4.2.1."
+      }
+    },
+    {
+      "id": "dag-cbor-divergent-key-ordering-3key",
+      "description": "ORDERING-DIVERGENT vector, 3 keys. \"b\" (1 byte), \"z\" (1 byte) and \"aa\" (2 bytes). Length-first canonical order: b, z, aa. Lexicographic order would be: aa, b, z. The expected literal is the length-first canonical CID.",
+      "object": { "b": 1, "aa": 2, "z": 3 },
+      "expected": {
+        "cid": "bafyreidypezyoikih27ej2zdefadk3hln3ifglc4zy4v6s5guzz26qc4cy"
+      },
+      "verification": {
+        "method": "independent-tool",
+        "dagCborHex": "a3616201617a0362616102",
+        "canonicalOrder": "b, z, aa",
+        "lexicographicOrderWouldBe": "aa, b, z",
+        "tool": "pure-Python length-first DAG-CBOR encoder + sha2-256 + CIDv1 + base32-lower, implemented from the IPLD spec / RFC 8949 §4.2.1."
+      }
+    }
+  ]
+}
