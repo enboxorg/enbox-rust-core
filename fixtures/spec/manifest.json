@@ -22,6 +22,11 @@
       "id": "spec.did.did-jwk",
       "path": "did/did-jwk.json",
       "assertions": ["spec.did.resolve"]
+    },
+    {
+      "id": "spec.crypto.jws-ed25519-rfc8037",
+      "path": "crypto/jws-ed25519-rfc8037.json",
+      "assertions": ["spec.jws.verify"]
     }
   ]
 }

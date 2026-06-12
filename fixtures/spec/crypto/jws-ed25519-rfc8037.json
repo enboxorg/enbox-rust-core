@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "description": "JWS Ed25519 (EdDSA) verification. The compact JWS segments, the signing input, the signature, and the public key JWK are taken verbatim from RFC 8037 Appendix A.4 (signing) and A.2 (public key). The expected value is whether Jws::verify_signatures_public_jwk accepts the signature: true for the published RFC vector, false for a one-character-tampered copy of the signature. The expected booleans are spec-fixed (RFC-derived), NOT computed by the impl on the expected side.",
+  "source": {
+    "spec": {
+      "name": "CFRG Elliptic Curve Diffie-Hellman (ECDH) and Signatures in JSON Object Signing and Encryption (JOSE)",
+      "organization": "IETF",
+      "rfc": "RFC 8037",
+      "url": "https://www.rfc-editor.org/rfc/rfc8037",
+      "section": "Appendix A.4 (Ed25519 Signing) + Appendix A.2 (Ed25519 Public Key)",
+      "algorithm": {
+        "alg": "EdDSA",
+        "crv": "Ed25519",
+        "signingInput": "eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc",
+        "signatureHex": "860c98d2297f3060a33f42739672d61b53cf3adefed3d3c672f320dc021b411e9d59b8628dc351e248b88b29468e0e41855b0fb7d83bb15be902bfccb8cd0a02",
+        "reference": "https://www.rfc-editor.org/rfc/rfc8037#appendix-A.4"
+      }
+    },
+    "vector": {
+      "rfc": "RFC 8037",
+      "permalink": "https://www.rfc-editor.org/rfc/rfc8037.txt",
+      "protectedHeader": "{\"alg\":\"EdDSA\"}",
+      "payloadText": "Example of Ed25519 signing",
+      "note": "Values confirmed character-for-character against the published RFC 8037 text (A.1/A.2/A.4). The signature literal reproduced in some secondary sources is wrong; the RFC A.4 signature ends in '...M0KAg'."
+    }
+  },
+  "cases": [
+    {
+      "id": "jws-ed25519-rfc8037-valid",
+      "description": "The exact RFC 8037 A.4 compact JWS: protected header {\"alg\":\"EdDSA\"}, payload 'Example of Ed25519 signing', and the published Ed25519 signature, verified against the A.2 public JWK. Must verify.",
+      "jws": {
+        "protected": "eyJhbGciOiJFZERTQSJ9",
+        "payload": "RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc",
+        "signature": "hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg"
+      },
+      "publicJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      },
+      "expected": {
+        "verify": true
+      }
+    },
+    {
+      "id": "jws-ed25519-rfc8037-tampered",
+      "description": "Negative control: identical protected header, payload, and public JWK, but the leading character of the signature is flipped from 'h' to 'H' (still a valid 86-character / 64-byte base64url signature). Must NOT verify.",
+      "jws": {
+        "protected": "eyJhbGciOiJFZERTQSJ9",
+        "payload": "RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc",
+        "signature": "HgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg"
+      },
+      "publicJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      },
+      "expected": {
+        "verify": false
+      }
+    }
+  ]
+}

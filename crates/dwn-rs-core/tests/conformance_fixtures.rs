@@ -6,7 +6,7 @@ use base64::Engine as _;
 use bytes::Bytes;
 use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
 use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, JwsPublicKeyResolver, PrivateJwkSigner,
+    Jws, JwsPrivateJwk, JwsPublicJwk, JwsPublicKeyResolver, JwsSignature, PrivateJwkSigner,
     StaticPublicKeyResolver, UniversalResolver,
 };
 use dwn_rs_core::cid::{
@@ -3078,6 +3078,7 @@ where
 const SPEC_DESCRIPTOR_CID_ASSERTION: &str = "spec.descriptorCid";
 const SPEC_CID_DAGCBOR_ASSERTION: &str = "spec.cid.dagcbor";
 const SPEC_DID_RESOLVE_ASSERTION: &str = "spec.did.resolve";
+const SPEC_JWS_VERIFY_ASSERTION: &str = "spec.jws.verify";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -3139,7 +3140,21 @@ struct SpecFixtureCase {
     object: Option<Value>,
     #[serde(default)]
     did: Option<String>,
+    #[serde(default)]
+    jws: Option<SpecJwsInput>,
+    #[serde(default, rename = "publicJwk")]
+    public_jwk: Option<JwsPublicJwk>,
     expected: SpecExpected,
+}
+
+/// Raw compact-JWS segments for a `spec.jws.verify` case: the base64url
+/// protected header, the base64url payload, and the base64url signature. The
+/// test reassembles these into a [`Jws`] and verifies it against `publicJwk`.
+#[derive(Debug, Deserialize)]
+struct SpecJwsInput {
+    protected: String,
+    payload: String,
+    signature: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3151,6 +3166,8 @@ struct SpecExpected {
     cid: Option<String>,
     #[serde(default)]
     public_key: Option<SpecExpectedPublicKey>,
+    #[serde(default)]
+    verify: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3365,6 +3382,64 @@ fn fixture_did_resolution_match_spec() {
         checked > 0,
         "at least one spec DID resolution case must be checked"
     );
+}
+
+/// Track A conformance: `Jws::verify_signatures_public_jwk` must accept the
+/// Ed25519 (EdDSA) JWS example published in RFC 8037 Appendix A.4 and reject a
+/// one-character-tampered copy of its signature. The compact segments, the
+/// signature, and the public JWK (RFC 8037 A.2) are spec literals; the expected
+/// accept/reject boolean is fixed by the RFC, not computed by the impl on the
+/// expected side — so this is a genuine spec assertion, not a tautology.
+#[test]
+fn fixture_jws_ed25519_match_spec() {
+    let mut checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_JWS_VERIFY_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+
+        for case in &set.fixture_set.cases {
+            let input = case
+                .jws
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} jws.verify case must include jws segments", case.id));
+            let public_jwk = case
+                .public_jwk
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} jws.verify case must include publicJwk", case.id));
+            let expected = case.expected.verify.unwrap_or_else(|| {
+                panic!("{} jws.verify case must include expected.verify", case.id)
+            });
+
+            let jws = Jws {
+                payload: Some(input.payload.clone()),
+                signatures: Some(vec![JwsSignature {
+                    protected: Some(input.protected.clone()),
+                    signature: Some(input.signature.clone()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            };
+
+            let verified = jws.verify_signatures_public_jwk(public_jwk).unwrap_or_else(|err| {
+                panic!("{} verify_signatures_public_jwk errored: {err:?}", case.id)
+            });
+            assert_eq!(
+                verified, expected,
+                "{} verification result must match the RFC 8037 expectation",
+                case.id
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(checked > 0, "at least one spec JWS verify case must be checked");
 }
 
 // ---------------------------------------------------------------------------
