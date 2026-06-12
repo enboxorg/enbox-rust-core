@@ -5,9 +5,13 @@
 //! DWN without a JavaScript runtime. Mobile, desktop, and server consumers
 //! build on the same core.
 //!
-//! The behavior source of truth is the TypeScript implementation in
-//! [`@enbox/dwn-sdk-js`](https://github.com/enboxorg/enbox); the Rust crates
-//! are kept in conformance via fixtures (see `docs/CONFORMANCE.md`).
+//! Correctness is anchored in tiers. Where an external specification or test
+//! vector exists, that is the source of truth: those checks form a
+//! spec-conformance floor (see `fixtures/spec/` and `docs/CONFORMANCE.md`).
+//! Where the DWN spec is incomplete, silent, or wrong, the behavior matches the
+//! DIF reference implementation ([`@enbox/dwn-sdk-js`](https://github.com/enboxorg/enbox)),
+//! and every such gap is tracked as upstream-contribution work in
+//! `docs/SPEC_DIVERGENCE.md`.
 //!
 //! # Entry points
 //!

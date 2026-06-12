@@ -3215,3 +3215,216 @@ fn fixture_descriptor_cid_match_spec() {
         "at least one spec descriptorCid case must be checked"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Track B: spec-vs-impl divergence ledger (fixtures/spec/divergence/ledger.json)
+//
+// The ledger catalogs places where the DIF DWN prose spec is wrong, silent, or
+// an explicit TODO and the impl is the de-facto truth. This test is a
+// REGRESSION MARKER, not a conformance test: for entries with an executable
+// proof it recomputes both the spec-prose-derived value and the impl value and
+// asserts they STILL differ. If upstream ever fixes the spec — or someone
+// "fixes" the impl to match the broken prose — these assertions FAIL LOUD,
+// forcing the ledger entry to be re-evaluated and the divergence retired.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DivergenceLedger {
+    schema_version: u64,
+    oracle: String,
+    entries: Vec<DivergenceEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DivergenceEntry {
+    id: String,
+    surface: String,
+    #[serde(rename = "impl")]
+    impl_side: DivergenceImpl,
+    spec: DivergenceSpec,
+    proof: DivergenceProof,
+    disposition: String,
+    upstream: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DivergenceImpl {
+    behavior: String,
+    #[allow(dead_code)]
+    #[serde(rename = "ref")]
+    reference: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DivergenceSpec {
+    says: String,
+    class: String,
+    #[allow(dead_code)]
+    #[serde(rename = "ref")]
+    reference: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DivergenceProof {
+    executable: bool,
+    // Populated only for executable proofs (e.g. recordId).
+    algorithm: Option<String>,
+    descriptor: Option<Value>,
+    author: Option<String>,
+    descriptor_cid: Option<String>,
+    impl_record_id: Option<String>,
+    spec_record_id: Option<String>,
+}
+
+fn load_divergence_ledger() -> DivergenceLedger {
+    let path = fixtures_root()
+        .join("spec")
+        .join("divergence")
+        .join("ledger.json");
+    let ledger = read_json::<DivergenceLedger>(&path);
+    assert_eq!(ledger.schema_version, 1, "divergence ledger schema version");
+    assert_eq!(
+        ledger.oracle, "spec",
+        "divergence ledger must declare oracle=spec"
+    );
+    ledger
+}
+
+#[test]
+fn ledger_divergences_still_hold() {
+    let ledger = load_divergence_ledger();
+
+    // Every seeded RecordsWrite-ID divergence must be present and well-formed.
+    let expected_ids = [
+        "records-write-recordid-author",
+        "records-write-entryid-undefined",
+        "records-write-contextid-todo",
+    ];
+    let actual_ids = ledger
+        .entries
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for id in expected_ids {
+        assert!(
+            actual_ids.contains(id),
+            "divergence ledger must contain entry {id}"
+        );
+    }
+
+    let mut executable_checked = 0usize;
+    for entry in &ledger.entries {
+        assert!(!entry.surface.is_empty(), "{} surface", entry.id);
+        assert!(!entry.impl_side.behavior.is_empty(), "{} impl behavior", entry.id);
+        assert!(!entry.spec.says.is_empty(), "{} spec says", entry.id);
+        assert!(
+            matches!(
+                entry.spec.class.as_str(),
+                "spec-wrong" | "spec-silent" | "spec-todo"
+            ),
+            "{} spec class must be a known divergence class",
+            entry.id
+        );
+        assert_eq!(
+            entry.disposition, "contribute-upstream",
+            "{} disposition",
+            entry.id
+        );
+        assert!(
+            entry.upstream.is_none(),
+            "{} upstream link should be null until contributed",
+            entry.id
+        );
+
+        if !entry.proof.executable {
+            // spec-silent / spec-todo: prose has no algorithm to recompute, so
+            // the ledger entry is documentation-only. Just assert it is intact.
+            assert!(
+                entry.proof.algorithm.is_none(),
+                "{} non-executable proof must not claim an algorithm",
+                entry.id
+            );
+            continue;
+        }
+
+        // Executable proof: recompute both sides with the IMPL's CID code and
+        // assert the divergence still holds, pinned to the recorded literals.
+        assert_eq!(
+            entry.proof.algorithm.as_deref(),
+            Some("recordId"),
+            "{} only the recordId algorithm is executable",
+            entry.id
+        );
+        let descriptor = entry
+            .proof
+            .descriptor
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} executable proof must include descriptor", entry.id));
+        let author = entry
+            .proof
+            .author
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} executable proof must include author", entry.id));
+        let descriptor_cid = entry
+            .proof
+            .descriptor_cid
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} executable proof must include descriptorCid", entry.id));
+        let expected_impl = entry
+            .proof
+            .impl_record_id
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} executable proof must include implRecordId", entry.id));
+        let expected_spec = entry
+            .proof
+            .spec_record_id
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} executable proof must include specRecordId", entry.id));
+
+        // descriptorCid the proof carries must itself be correct per the impl.
+        assert_eq!(
+            compute_cid(descriptor),
+            descriptor_cid,
+            "{} proof descriptorCid",
+            entry.id
+        );
+
+        // impl recordId = CID({ ...descriptor, author }).
+        let mut impl_input = descriptor.clone();
+        impl_input
+            .as_object_mut()
+            .expect("descriptor must be an object")
+            .insert("author".to_string(), Value::String(author.to_string()));
+        let impl_record_id = compute_cid(&impl_input);
+
+        // spec-prose recordId = CID({ descriptorCid }) — author omitted (the bug).
+        let spec_input = serde_json::json!({ "descriptorCid": descriptor_cid });
+        let spec_record_id = compute_cid(&spec_input);
+
+        assert_eq!(
+            impl_record_id, expected_impl,
+            "{} impl recordId drifted from the recorded literal — update the ledger",
+            entry.id
+        );
+        assert_eq!(
+            spec_record_id, expected_spec,
+            "{} spec-prose recordId drifted from the recorded literal — update the ledger",
+            entry.id
+        );
+        // The whole point of the divergence: these must still differ. If this
+        // ever passes (impl == spec), upstream or the impl converged — retire it.
+        assert_ne!(
+            impl_record_id, spec_record_id,
+            "{} divergence resolved (impl recordId now equals spec-prose recordId) — retire the ledger entry",
+            entry.id
+        );
+        executable_checked += 1;
+    }
+
+    assert!(
+        executable_checked > 0,
+        "at least one executable divergence proof must be exercised"
+    );
+}

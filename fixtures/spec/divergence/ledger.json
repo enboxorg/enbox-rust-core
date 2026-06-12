@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "description": "Divergence ledger (Track B). Catalogs places where the DIF DWN prose spec is wrong, silent, or an explicit TODO, and the implementation is the de-facto truth. This is an upstream-contribution backlog, NOT a conformance test. The reference being diverged from is the DIF DWN spec named in source.spec; each entry records the impl behavior, what the spec says (or fails to say), and a disposition.",
+  "source": {
+    "spec": {
+      "name": "Decentralized Web Node (DWN)",
+      "organization": "Decentralized Identity Foundation",
+      "version": "0.0.1 (Draft Community Group Report)",
+      "url": "https://identity.foundation/decentralized-web-node/spec/",
+      "section": "Record ID Generation, Context ID Generation"
+    }
+  },
+  "entries": [
+    {
+      "id": "records-write-recordid-author",
+      "surface": "RecordsWrite.recordId",
+      "impl": {
+        "behavior": "recordId = CIDv1(dag-cbor({ ...descriptor, author })). The author DID is folded into the CID input alongside the descriptor fields.",
+        "ref": "crates/dwn-rs-core/src/handlers/records/common.rs entry_id() (~line 203)"
+      },
+      "spec": {
+        "says": "The prose Record ID Generation algorithm computes recordId = CID({ descriptorCid }) — a CID over an object containing only the descriptorCid, with NO author DID. This omits the author and does not match any known interoperable implementation.",
+        "ref": "https://identity.foundation/decentralized-web-node/spec/#record-id-generation",
+        "class": "spec-wrong"
+      },
+      "proof": {
+        "executable": true,
+        "algorithm": "recordId",
+        "descriptor": {
+          "interface": "Records",
+          "method": "Write",
+          "messageTimestamp": "2025-01-01T00:00:06.000000Z",
+          "dateCreated": "2025-01-01T00:00:06.000000Z",
+          "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+          "dataSize": 11,
+          "dataFormat": "text/plain"
+        },
+        "author": "did:example:alice",
+        "descriptorCid": "bafyreidgpqe6zujtci3k7gze4dh7e7prapj3tqer6cvpzhuyzil7ju6wo4",
+        "implRecordId": "bafyreig7m4ezumnhkzmnn6gvlxm63lqm63rppi5pt67shyyke7jaasabxa",
+        "specRecordId": "bafyreicroejdjo7rmrvzohxukhwzefknntzgdhxqxkorbsutqlidm5p7di",
+        "note": "implRecordId = CID({ ...descriptor, author }); specRecordId = CID({ descriptorCid }). The two literals were derived from an independent pure-Python DAG-CBOR encoder and must remain distinct while this divergence holds."
+      },
+      "disposition": "contribute-upstream",
+      "upstream": null
+    },
+    {
+      "id": "records-write-entryid-undefined",
+      "surface": "RecordsWrite.entryId",
+      "impl": {
+        "behavior": "entryId is defined as the recordId derivation: CIDv1(dag-cbor({ ...descriptor, author })). An initial write is detected by entryId == recordId.",
+        "ref": "crates/dwn-rs-core/src/handlers/records/common.rs entry_id() / is_initial_write() (~line 203)"
+      },
+      "spec": {
+        "says": "The prose spec never defines entryId as an algorithm. The term is used implicitly in surrounding machinery but no Entry ID Generation section exists.",
+        "ref": "https://identity.foundation/decentralized-web-node/spec/ (no Entry ID Generation section)",
+        "class": "spec-silent"
+      },
+      "proof": {
+        "executable": false,
+        "note": "No spec-prose algorithm exists for entryId, so there is nothing to recompute and contrast. Documentation-only ledger entry: the impl is the de-facto definition."
+      },
+      "disposition": "contribute-upstream",
+      "upstream": null
+    },
+    {
+      "id": "records-write-contextid-todo",
+      "surface": "RecordsWrite.contextId",
+      "impl": {
+        "behavior": "contextId = parentContextId + \"/\" + entryId; the root contextId equals the recordId. Integrity validation enforces that a parent-less write has contextId == recordId.",
+        "ref": "crates/dwn-rs-core/src/handlers/records/common.rs context_id() and validate_integrity (~line 180)"
+      },
+      "spec": {
+        "says": "The Context ID Generation section of the prose spec is an empty TODO (\"::: todo :::\"). No algorithm is provided.",
+        "ref": "https://identity.foundation/decentralized-web-node/spec/#context-id-generation (TODO)",
+        "class": "spec-todo"
+      },
+      "proof": {
+        "executable": false,
+        "note": "The spec section is an empty TODO, so there is no prose algorithm to recompute. Documentation-only ledger entry: the impl is the de-facto definition."
+      },
+      "disposition": "contribute-upstream",
+      "upstream": null
+    }
+  ]
+}
