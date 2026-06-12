@@ -3523,10 +3523,14 @@ fn ledger_divergences_still_hold() {
     let ledger = load_divergence_ledger();
 
     // Every seeded RecordsWrite-ID divergence must be present and well-formed.
+    // entryId is no longer a standalone entry: the spec DOES define it (by
+    // reference to the Record ID Generation Process), so it folds into the
+    // recordId entry. A new entry records the contextId protocol-guard
+    // impl/fork divergence.
     let expected_ids = [
         "records-write-recordid-author",
-        "records-write-entryid-undefined",
         "records-write-contextid-todo",
+        "records-write-contextid-protocol-guard",
     ];
     let actual_ids = ledger
         .entries
@@ -3548,13 +3552,20 @@ fn ledger_divergences_still_hold() {
         assert!(
             matches!(
                 entry.spec.class.as_str(),
-                "spec-wrong" | "spec-silent" | "spec-todo"
+                "spec-wrong" | "spec-silent" | "spec-todo" | "impl-extension"
             ),
             "{} spec class must be a known divergence class",
             entry.id
         );
+        // Spec-side entries are upstream-contribution backlog; the impl/fork
+        // divergence (impl-extension) awaits an owner decision instead.
+        let expected_disposition = if entry.spec.class == "impl-extension" {
+            "needs-owner-decision"
+        } else {
+            "contribute-upstream"
+        };
         assert_eq!(
-            entry.disposition, "contribute-upstream",
+            entry.disposition, expected_disposition,
             "{} disposition",
             entry.id
         );
