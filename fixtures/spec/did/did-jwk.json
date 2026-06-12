@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "description": "did:jwk resolution. The DID suffix is base64url(JWK); resolution strips the did:jwk: prefix, base64url-decodes, and parses the JSON as the public-key JWK. Both input DIDs and their decoded JWKs are taken verbatim from the did:jwk method specification's worked examples. The expected value is exactly the JWK the UniversalResolver yields — a hardcoded spec literal, NOT recomputed by the impl on the expected side.",
+  "source": {
+    "spec": {
+      "name": "did:jwk Method Specification",
+      "organization": "Jeremie Miller (quartzjer) / W3C DID method registry",
+      "url": "https://github.com/quartzjer/did-jwk",
+      "section": "Examples + Read (Resolve) algorithm (strip did:jwk: prefix, base64url-decode, parse JSON as the public-key JWK)",
+      "algorithm": {
+        "encoding": "base64url(utf8(JWK))",
+        "reference": "https://raw.githubusercontent.com/quartzjer/did-jwk/main/spec.md"
+      }
+    },
+    "vector": {
+      "repository": "github.com/quartzjer/did-jwk",
+      "path": "spec.md",
+      "permalink": "https://raw.githubusercontent.com/quartzjer/did-jwk/main/spec.md",
+      "note": "The did:jwk spec's Examples section publishes a P-256 (EC) and an X25519 (OKP) worked example; both are used here. The resolver returns the decoded JWK verbatim, so kid/alg are absent (the spec examples carry none)."
+    }
+  },
+  "cases": [
+    {
+      "id": "did-jwk-okp-x25519",
+      "description": "did:jwk spec Examples — OKP X25519 worked example. The 'use':'enc' member is not part of the verification-key JWK shape the resolver models and is ignored on decode; the resolver yields kty/crv/x verbatim.",
+      "did": "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ1c2UiOiJlbmMiLCJ4IjoiM3A3YmZYdDl3YlRUVzJIQzdPUTFOei1EUThoYmVHZE5yZngtRkctSUswOCJ9",
+      "expected": {
+        "publicKey": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
+        }
+      },
+      "verification": {
+        "method": "spec-literal",
+        "decodedJwk": "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"use\":\"enc\",\"x\":\"3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08\"}",
+        "note": "DID string and decoded JWK quoted verbatim from the did:jwk spec Examples section."
+      }
+    },
+    {
+      "id": "did-jwk-ec-p256",
+      "description": "did:jwk spec Examples — EC P-256 worked example. The resolver decodes the JWK verbatim, including the y coordinate.",
+      "did": "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9",
+      "expected": {
+        "publicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "acbIQiuMs3i8_uszEjJ2tpTtRM4EU3yz91PH6CdH2V0",
+          "y": "_KcyLj9vWMptnmKtm46GqDz8wf74I5LKgrl2GzH3nSE"
+        }
+      },
+      "verification": {
+        "method": "spec-literal",
+        "decodedJwk": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"acbIQiuMs3i8_uszEjJ2tpTtRM4EU3yz91PH6CdH2V0\",\"y\":\"_KcyLj9vWMptnmKtm46GqDz8wf74I5LKgrl2GzH3nSE\"}",
+        "note": "DID string and decoded JWK quoted verbatim from the did:jwk spec Examples section."
+      }
+    }
+  ]
+}

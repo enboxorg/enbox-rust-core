@@ -6,7 +6,8 @@ use base64::Engine as _;
 use bytes::Bytes;
 use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
 use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
+    Jws, JwsPrivateJwk, JwsPublicJwk, JwsPublicKeyResolver, PrivateJwkSigner,
+    StaticPublicKeyResolver, UniversalResolver,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -3075,6 +3076,7 @@ where
 // ---------------------------------------------------------------------------
 
 const SPEC_DESCRIPTOR_CID_ASSERTION: &str = "spec.descriptorCid";
+const SPEC_DID_RESOLVE_ASSERTION: &str = "spec.did.resolve";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -3130,14 +3132,33 @@ struct SpecReference {
 #[derive(Debug, Deserialize)]
 struct SpecFixtureCase {
     id: String,
-    descriptor: Value,
+    #[serde(default)]
+    descriptor: Option<Value>,
+    #[serde(default)]
+    did: Option<String>,
     expected: SpecExpected,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpecExpected {
-    descriptor_cid: String,
+    #[serde(default)]
+    descriptor_cid: Option<String>,
+    #[serde(default)]
+    public_key: Option<SpecExpectedPublicKey>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecExpectedPublicKey {
+    kty: String,
+    crv: String,
+    x: String,
+    #[serde(default)]
+    y: Option<String>,
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    alg: Option<String>,
 }
 
 fn load_spec_fixture_sets() -> Vec<LoadedSpecFixtureSet> {
@@ -3200,9 +3221,16 @@ fn fixture_descriptor_cid_match_spec() {
         assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
 
         for case in &set.fixture_set.cases {
+            let descriptor = case
+                .descriptor
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} descriptorCid case must include a descriptor", case.id));
+            let expected_cid = case.expected.descriptor_cid.as_deref().unwrap_or_else(|| {
+                panic!("{} descriptorCid case must include expected.descriptorCid", case.id)
+            });
             assert_eq!(
-                compute_cid(&case.descriptor),
-                case.expected.descriptor_cid,
+                compute_cid(descriptor),
+                expected_cid,
                 "{} descriptorCid must match the spec-derived literal",
                 case.id
             );
@@ -3213,6 +3241,64 @@ fn fixture_descriptor_cid_match_spec() {
     assert!(
         checked > 0,
         "at least one spec descriptorCid case must be checked"
+    );
+}
+
+/// Track A conformance: the `UniversalResolver` must resolve a `did:key`
+/// (Ed25519) and a `did:jwk` DID to exactly the public-key JWK fixed by the
+/// respective external method specifications. The expected JWK material on each
+/// case is a hardcoded spec-vector literal (the did:key Ed25519/X25519 worked
+/// example from W3C-CCG, and the did:jwk Examples), NOT recomputed by the impl
+/// on the expected side — so this is a genuine spec assertion, not a tautology.
+#[test]
+fn fixture_did_resolution_match_spec() {
+    let resolver = UniversalResolver::new();
+    let mut checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_DID_RESOLVE_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+
+        for case in &set.fixture_set.cases {
+            let did = case
+                .did
+                .as_deref()
+                .unwrap_or_else(|| panic!("{} DID resolution case must include a did", case.id));
+            let expected = case.expected.public_key.as_ref().unwrap_or_else(|| {
+                panic!("{} DID resolution case must include expected.publicKey", case.id)
+            });
+
+            let expected_jwk = JwsPublicJwk {
+                kty: expected.kty.clone(),
+                crv: expected.crv.clone(),
+                x: expected.x.clone(),
+                y: expected.y.clone(),
+                kid: expected.kid.clone(),
+                alg: expected.alg.clone(),
+            };
+
+            let resolved = resolver
+                .resolve_public_jwk(did)
+                .unwrap_or_else(|| panic!("{} resolver yielded no key for {did}", case.id));
+
+            assert_eq!(
+                resolved, expected_jwk,
+                "{} resolved public key must match the spec-vector literal",
+                case.id
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec DID resolution case must be checked"
     );
 }
 

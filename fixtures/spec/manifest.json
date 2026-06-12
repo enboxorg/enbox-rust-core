@@ -7,6 +7,16 @@
       "id": "spec.records.descriptor-cid",
       "path": "records/descriptor-cid.json",
       "assertions": ["spec.descriptorCid"]
+    },
+    {
+      "id": "spec.did.did-key-ed25519",
+      "path": "did/did-key-ed25519.json",
+      "assertions": ["spec.did.resolve"]
+    },
+    {
+      "id": "spec.did.did-jwk",
+      "path": "did/did-jwk.json",
+      "assertions": ["spec.did.resolve"]
     }
   ]
 }
