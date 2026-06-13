@@ -691,9 +691,12 @@ mod tests {
 
     #[tokio::test]
     async fn verify_signatures_public_jwk_rejects_wrong_key() {
-        let jws = Jws::create(b"hello world".to_vec(), Some(vec![JWK::generate_secp256k1()]))
-            .await
-            .expect("could not create JWS");
+        let jws = Jws::create(
+            b"hello world".to_vec(),
+            Some(vec![JWK::generate_secp256k1()]),
+        )
+        .await
+        .expect("could not create JWS");
 
         // A different key must not verify the signature.
         let other: JwsPublicJwk =

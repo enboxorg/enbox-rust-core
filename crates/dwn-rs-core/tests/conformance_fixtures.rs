@@ -3240,15 +3240,21 @@ fn fixture_descriptor_cid_match_spec() {
         let source = &set.fixture_set.source.spec;
         assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
         assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
-        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
 
         for case in &set.fixture_set.cases {
-            let descriptor = case
-                .descriptor
-                .as_ref()
-                .unwrap_or_else(|| panic!("{} descriptorCid case must include a descriptor", case.id));
+            let descriptor = case.descriptor.as_ref().unwrap_or_else(|| {
+                panic!("{} descriptorCid case must include a descriptor", case.id)
+            });
             let expected_cid = case.expected.descriptor_cid.as_deref().unwrap_or_else(|| {
-                panic!("{} descriptorCid case must include expected.descriptorCid", case.id)
+                panic!(
+                    "{} descriptorCid case must include expected.descriptorCid",
+                    case.id
+                )
             });
             assert_eq!(
                 compute_cid(descriptor),
@@ -3293,16 +3299,21 @@ fn fixture_cid_dagcbor_match_spec() {
         let source = &set.fixture_set.source.spec;
         assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
         assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
-        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
 
         for case in &set.fixture_set.cases {
             let object = case
                 .object
                 .as_ref()
                 .unwrap_or_else(|| panic!("{} dagcbor case must include an object", case.id));
-            let expected_cid = case.expected.cid.as_deref().unwrap_or_else(|| {
-                panic!("{} dagcbor case must include expected.cid", case.id)
-            });
+            let expected_cid =
+                case.expected.cid.as_deref().unwrap_or_else(|| {
+                    panic!("{} dagcbor case must include expected.cid", case.id)
+                });
             assert_eq!(
                 compute_cid(object),
                 expected_cid,
@@ -3345,7 +3356,11 @@ fn fixture_did_resolution_match_spec() {
         let source = &set.fixture_set.source.spec;
         assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
         assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
-        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
 
         for case in &set.fixture_set.cases {
             let did = case
@@ -3353,7 +3368,10 @@ fn fixture_did_resolution_match_spec() {
                 .as_deref()
                 .unwrap_or_else(|| panic!("{} DID resolution case must include a did", case.id));
             let expected = case.expected.public_key.as_ref().unwrap_or_else(|| {
-                panic!("{} DID resolution case must include expected.publicKey", case.id)
+                panic!(
+                    "{} DID resolution case must include expected.publicKey",
+                    case.id
+                )
             });
 
             let expected_jwk = JwsPublicJwk {
@@ -3402,7 +3420,11 @@ fn fixture_jws_ed25519_match_spec() {
         let source = &set.fixture_set.source.spec;
         assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
         assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
-        assert!(!source.section.is_empty(), "{} spec section", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
 
         for case in &set.fixture_set.cases {
             let input = case
@@ -3427,9 +3449,11 @@ fn fixture_jws_ed25519_match_spec() {
                 ..Default::default()
             };
 
-            let verified = jws.verify_signatures_public_jwk(public_jwk).unwrap_or_else(|err| {
-                panic!("{} verify_signatures_public_jwk errored: {err:?}", case.id)
-            });
+            let verified = jws
+                .verify_signatures_public_jwk(public_jwk)
+                .unwrap_or_else(|err| {
+                    panic!("{} verify_signatures_public_jwk errored: {err:?}", case.id)
+                });
             assert_eq!(
                 verified, expected,
                 "{} verification result must match the RFC 8037 expectation",
@@ -3439,7 +3463,10 @@ fn fixture_jws_ed25519_match_spec() {
         }
     }
 
-    assert!(checked > 0, "at least one spec JWS verify case must be checked");
+    assert!(
+        checked > 0,
+        "at least one spec JWS verify case must be checked"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3547,7 +3574,11 @@ fn ledger_divergences_still_hold() {
     let mut executable_checked = 0usize;
     for entry in &ledger.entries {
         assert!(!entry.surface.is_empty(), "{} surface", entry.id);
-        assert!(!entry.impl_side.behavior.is_empty(), "{} impl behavior", entry.id);
+        assert!(
+            !entry.impl_side.behavior.is_empty(),
+            "{} impl behavior",
+            entry.id
+        );
         assert!(!entry.spec.says.is_empty(), "{} spec says", entry.id);
         assert!(
             matches!(
@@ -3604,21 +3635,18 @@ fn ledger_divergences_still_hold() {
             .author
             .as_deref()
             .unwrap_or_else(|| panic!("{} executable proof must include author", entry.id));
-        let descriptor_cid = entry
-            .proof
-            .descriptor_cid
-            .as_deref()
-            .unwrap_or_else(|| panic!("{} executable proof must include descriptorCid", entry.id));
-        let expected_impl = entry
-            .proof
-            .impl_record_id
-            .as_deref()
-            .unwrap_or_else(|| panic!("{} executable proof must include implRecordId", entry.id));
-        let expected_spec = entry
-            .proof
-            .spec_record_id
-            .as_deref()
-            .unwrap_or_else(|| panic!("{} executable proof must include specRecordId", entry.id));
+        let descriptor_cid =
+            entry.proof.descriptor_cid.as_deref().unwrap_or_else(|| {
+                panic!("{} executable proof must include descriptorCid", entry.id)
+            });
+        let expected_impl =
+            entry.proof.impl_record_id.as_deref().unwrap_or_else(|| {
+                panic!("{} executable proof must include implRecordId", entry.id)
+            });
+        let expected_spec =
+            entry.proof.spec_record_id.as_deref().unwrap_or_else(|| {
+                panic!("{} executable proof must include specRecordId", entry.id)
+            });
 
         // descriptorCid the proof carries must itself be correct per the impl.
         assert_eq!(
