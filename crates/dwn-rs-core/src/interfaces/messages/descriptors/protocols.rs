@@ -129,7 +129,7 @@ pub struct QueryFilter {
 mod test {
     use std::collections::BTreeMap;
 
-    use crate::protocols::ActionWho;
+    use crate::{canonical_rfc3339, protocols::ActionWho};
 
     use super::*;
     use chrono::{SecondsFormat, Utc};
@@ -138,11 +138,10 @@ mod test {
 
     #[test]
     fn test_configure_descriptor() {
-        let message_timestamp = chrono::DateTime::parse_from_rfc3339(
-            &Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
-        )
-        .unwrap()
-        .with_timezone(&Utc);
+        let message_timestamp =
+            chrono::DateTime::parse_from_rfc3339(canonical_rfc3339(Utc::now()).as_str())
+                .unwrap()
+                .with_timezone(&Utc);
         let definition = protocols::Definition {
             protocol: "example".to_string(),
             published: true,
@@ -156,7 +155,7 @@ mod test {
             permission_grant_id: None,
         };
         let json = json!({
-            "messageTimestamp": message_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
+            "messageTimestamp": canonical_rfc3339(message_timestamp),
             "definition": {
                 "protocol": "example",
                 "published": true,

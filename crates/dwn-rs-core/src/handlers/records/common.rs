@@ -8,7 +8,6 @@ use std::sync::Arc;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use bytes::Bytes;
-use chrono::SecondsFormat;
 use futures_util::{stream, TryStreamExt};
 use serde_json::{json, Value as JsonValue};
 
@@ -33,7 +32,7 @@ use crate::interfaces::messages::protocols::{
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
-use crate::{Message, MessageSort, Pagination, SortDirection, Value};
+use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
 use super::{
     RecordsAuthorizationKind, RecordsSubscribeReply, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE,
@@ -173,8 +172,8 @@ pub(crate) fn validate_records_write_integrity(
         if descriptor.message_timestamp != descriptor.date_created {
             return Err(format!(
                 "RecordsWriteValidateIntegrityDateCreatedMismatch: messageTimestamp {} must match dateCreated {} for the initial write",
-                descriptor.message_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
-                descriptor.date_created.to_rfc3339_opts(SecondsFormat::Micros, true)
+                canonical_rfc3339(descriptor.message_timestamp),
+                canonical_rfc3339(descriptor.date_created),
             ));
         }
         if descriptor.parent_id.is_none() && context_id != record_id {
@@ -416,11 +415,7 @@ pub(crate) fn records_delete_indexes(
     }
     indexes.insert(
         "dateCreated".to_string(),
-        Value::String(
-            initial
-                .date_created
-                .to_rfc3339_opts(SecondsFormat::Micros, true),
-        ),
+        Value::String(canonical_rfc3339(initial.date_created).to_string()),
     );
     if let Some(context_id) = context_id(initial_write) {
         indexes.insert("contextId".to_string(), Value::String(context_id));
@@ -1226,7 +1221,7 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     if is_initial_write(message, author)? {
-        return Ok(message_timestamp(message)?.to_rfc3339_opts(SecondsFormat::Micros, true));
+        return Ok(canonical_rfc3339(message_timestamp(message)?));
     }
     let record_id = record_id(message)
         .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
@@ -1235,7 +1230,7 @@ where
         .ok_or_else(|| {
             "RecordsWriteGetInitialWriteNotFound: Initial write is not found.".to_string()
         })?;
-    Ok(message_timestamp(&initial)?.to_rfc3339_opts(SecondsFormat::Micros, true))
+    Ok(canonical_rfc3339(message_timestamp(&initial)?))
 }
 
 pub(crate) async fn construct_record_chain<MessageStore>(

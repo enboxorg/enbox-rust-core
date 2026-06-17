@@ -298,7 +298,7 @@ impl MessageDescriptor for Messages {
 mod test {
     use serde_json::json;
 
-    use crate::filters::Records as RecordsFilter;
+    use crate::{canonical_rfc3339, filters::Records as RecordsFilter};
 
     #[test]
     fn test_descriptor_serialize() {
@@ -313,7 +313,7 @@ mod test {
         }))));
         let serialized = json!(&desc);
 
-        let fmt_now = now.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        let fmt_now = canonical_rfc3339(now);
         let expected = json!({"interface": RECORDS,"method": READ, "messageTimestamp": fmt_now, "filter": RecordsFilter::default()});
 
         assert_eq!(serialized, expected);

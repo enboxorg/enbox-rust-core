@@ -3,9 +3,11 @@ use derive_more::{Display, From, TryInto};
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use ipld_core::cid::Cid;
 use serde::ser::{SerializeMap, SerializeSeq};
+
+use crate::canonical_rfc3339;
 
 /// Value represents a JSON-like value, that can be serialized and deserialized and
 /// used in DWN to represent data frmo various sources, such as Messages. Values
@@ -36,7 +38,7 @@ impl Value {
             Value::Cid(c) => c.to_string().into_bytes(),
             Value::Map(m) => serde_json::to_vec(m).unwrap_or_default(),
             Value::Array(a) => serde_json::to_vec(a).unwrap_or_default(),
-            Value::DateTime(dt) => dt.to_rfc3339_opts(SecondsFormat::Micros, true).into_bytes(),
+            Value::DateTime(dt) => canonical_rfc3339(*dt).into_bytes(),
         }
     }
 
@@ -88,7 +90,7 @@ impl Value {
             Value::Cid(c) => c.to_string().len(),
             Value::Map(m) => m.len(),
             Value::Array(a) => a.len(),
-            Value::DateTime(dt) => dt.to_rfc3339_opts(SecondsFormat::Micros, true).len(),
+            Value::DateTime(dt) => canonical_rfc3339(*dt).len(),
         }
     }
 
@@ -116,9 +118,7 @@ impl serde::Serialize for Value {
                 }
                 map.end()
             }
-            Value::DateTime(dt) => {
-                serializer.serialize_str(&dt.to_rfc3339_opts(SecondsFormat::Micros, true))
-            }
+            Value::DateTime(dt) => serializer.serialize_str(&canonical_rfc3339(*dt)),
             Value::Array(a) => {
                 let mut map = serializer.serialize_seq(Some(a.len()))?;
                 for v in a.iter() {
@@ -240,7 +240,7 @@ mod test {
     use std::str::FromStr;
 
     use super::*;
-    use chrono::{DateTime, SecondsFormat, Utc};
+    use chrono::{DateTime, Utc};
     use serde_json::json;
     use tracing_test::traced_test;
 
@@ -252,11 +252,7 @@ mod test {
             json: serde_json::Value,
         }
 
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        );
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str());
 
         let cases = vec![
             TestCase {
@@ -285,9 +281,7 @@ mod test {
             },
             TestCase {
                 value: Value::DateTime(message_timestamp.unwrap()),
-                json: json!(message_timestamp
-                    .unwrap()
-                    .to_rfc3339_opts(SecondsFormat::Micros, true)),
+                json: json!(canonical_rfc3339(message_timestamp.unwrap())),
             },
             TestCase {
                 value: Value::Cid(Cid::new_v1(0x71, cid::multihash::Multihash::default())),

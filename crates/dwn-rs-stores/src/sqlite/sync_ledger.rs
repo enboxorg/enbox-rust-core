@@ -11,8 +11,9 @@ use dwn_rs_core::sync::{
     SyncRunStatus,
 };
 use dwn_rs_core::sync_ledger::{SyncLedger, SyncLedgerSnapshot};
+use dwn_rs_core::utils::canonical_rfc3339;
 
-use crate::sqlite::{json_store_error, sqlite_store_error, SqliteConnection, SqliteStore};
+use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};
 
 /// SQLite-backed [`SyncLedger`] persisted alongside the native DWN database.
 #[derive(Debug, Clone)]
@@ -275,9 +276,7 @@ impl SyncLedger for SqliteSyncLedger {
                             .map(serde_json::to_string)
                             .transpose()
                             .map_err(json_store_error)?,
-                        checkpoint
-                            .updated_at
-                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                        canonical_rfc3339(checkpoint.updated_at),
                     ],
                 )
                 .map_err(sqlite_store_error)?;
@@ -309,9 +308,7 @@ impl SyncLedger for SqliteSyncLedger {
                         format!("{:?}", entry.category),
                         serde_json::to_string(&entry.error).map_err(json_store_error)?,
                         entry.attempts as i64,
-                        entry
-                            .last_attempt_at
-                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                        canonical_rfc3339(entry.last_attempt_at),
                     ],
                 )
                 .map_err(sqlite_store_error)?;
@@ -332,9 +329,7 @@ impl SyncLedger for SqliteSyncLedger {
                         entry.id,
                         serde_json::to_string(&entry.error).map_err(json_store_error)?,
                         entry.attempts as i64,
-                        entry
-                            .last_attempt_at
-                            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                        canonical_rfc3339(entry.last_attempt_at),
                         entry
                             .entry
                             .as_ref()
@@ -366,7 +361,7 @@ impl SyncLedger for SqliteSyncLedger {
             connection
                 .execute(
                     "INSERT OR REPLACE INTO sync_echo_cache (key, remembered_at) VALUES (?1, ?2)",
-                    params![key, at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)],
+                    params![key, canonical_rfc3339(at)],
                 )
                 .map_err(sqlite_store_error)?;
             Ok(())

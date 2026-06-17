@@ -236,7 +236,7 @@ mod test {
     use fields::MessageFields;
     use serde_json::json;
 
-    use crate::auth::Authorization;
+    use crate::{auth::Authorization, canonical_rfc3339};
 
     use super::*;
 
@@ -304,7 +304,7 @@ mod test {
 
         let message = Message::new(desc, fields).unwrap();
         let serialized = json!(&message);
-        let fmt_now = now.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        let fmt_now = canonical_rfc3339(now);
         let expected = json!({
                 "descriptor": {
                     "messageTimestamp": fmt_now,

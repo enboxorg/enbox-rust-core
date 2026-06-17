@@ -22,7 +22,7 @@ use crate::filters::{Filter, FilterKey, Filters};
 use crate::interfaces::messages::descriptors::messages::{ReadDescriptor, SyncAction};
 use crate::permissions::{self, AuthorizationContext};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, StateHash, SubscriptionListener};
-use crate::{Fields, Message};
+use crate::{canonical_rfc3339, Fields, Message};
 
 use super::SubscribeReply;
 
@@ -98,9 +98,7 @@ pub(crate) fn messages_filter_to_filter_map(
     if let Some(message_timestamp) = filter.message_timestamp {
         map.insert(
             FilterKey::Index("messageTimestamp".to_string()),
-            Filter::Equal(crate::Value::String(
-                message_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
-            )),
+            Filter::Equal(crate::Value::String(canonical_rfc3339(message_timestamp))),
         );
     }
     map

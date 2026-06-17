@@ -16,6 +16,10 @@ pub enum URLError {
     InvalidScheme(String),
 }
 
+pub fn canonical_rfc3339(dt: chrono::DateTime<chrono::Utc>) -> String {
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
 pub fn normalize_url(url: &str) -> Result<String, URLError> {
     let mut url = Url::parse(url)?;
 
