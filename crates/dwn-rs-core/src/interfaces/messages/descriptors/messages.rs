@@ -237,18 +237,15 @@ pub struct SyncDescriptor {
 mod test {
     use std::str::FromStr;
 
+    use crate::canonical_rfc3339;
+
     use super::*;
-    use chrono::{DateTime, SecondsFormat, Utc};
+    use chrono::{DateTime, Utc};
     use serde_json::json;
 
     #[test]
     fn test_read_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         // new random DagCbor encoded CID
         let message_cid = Cid::new_v1(0x71, cid::multihash::Multihash::default());
@@ -272,12 +269,7 @@ mod test {
 
     #[test]
     fn test_query_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let filters = vec![MessagesFilter::default()];
         let cursor = Some(crate::Cursor::default());
@@ -302,12 +294,7 @@ mod test {
 
     #[test]
     fn test_subscribe_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let filters = vec![MessagesFilter::default()];
         let descriptor = SubscribeDescriptor {
@@ -331,12 +318,7 @@ mod test {
 
     #[test]
     fn test_sync_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let descriptor = SyncDescriptor {
             message_timestamp,

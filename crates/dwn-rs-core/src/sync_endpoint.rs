@@ -6,11 +6,12 @@ use std::sync::{Arc, OnceLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 
+use crate::canonical_rfc3339;
 use crate::desktop_server::{DwnProcessMessage, PROCESS_MESSAGE_METHOD};
 use crate::dwn::DwnReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
@@ -741,7 +742,7 @@ impl SyncRequestAuthorizer for JwsSyncAuthorizer {
                 permission_grant_id.as_deref(),
                 depth,
                 hashes.as_ref(),
-                &Self::timestamp().to_rfc3339_opts(SecondsFormat::Micros, true),
+                canonical_rfc3339(Self::timestamp()).as_str(),
             )?;
             sign_descriptor_message(&signer, descriptor, permission_grant_id.as_deref())
         })

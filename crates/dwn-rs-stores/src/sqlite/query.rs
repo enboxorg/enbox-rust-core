@@ -2,8 +2,8 @@ use std::ops::Bound;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use dwn_rs_core::{
-    Alias, Cursor, Directional, Filter, FilterError, FilterKey, FilterSet, Filters, Ordorable,
-    Query as CoreQuery, QueryError, RangeFilter, Value,
+    canonical_rfc3339, Alias, Cursor, Directional, Filter, FilterError, FilterKey, FilterSet,
+    Filters, Ordorable, Query as CoreQuery, QueryError, RangeFilter, Value,
 };
 use serde::de::DeserializeOwned;
 
@@ -381,7 +381,7 @@ impl From<&Value> for SqliteValue {
             Value::String(s) => R::Text(s.clone()),
             Value::Number(i) => R::Integer(*i),
             Value::Float(f) => R::Real(*f),
-            Value::DateTime(dt) => R::Text(dt.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)),
+            Value::DateTime(dt) => R::Text(canonical_rfc3339(*dt)),
             Value::Map(m) => R::Text(serde_json::to_string(m).unwrap_or_default()),
             Value::Array(a) => R::Text(serde_json::to_string(a).unwrap_or_default()),
             other => R::Text(other.to_string()),

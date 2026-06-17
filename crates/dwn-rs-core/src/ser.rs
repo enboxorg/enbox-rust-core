@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serializer};
 use std::str::FromStr;
 
+use crate::canonical_rfc3339;
+
 pub fn serialize_optional_datetime<S>(
     date: &Option<DateTime<Utc>>,
     serializer: S,
@@ -19,7 +21,7 @@ pub fn serialize_datetime<S>(date: &DateTime<Utc>, serializer: S) -> Result<S::O
 where
     S: Serializer,
 {
-    serializer.serialize_str(&date.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
+    serializer.serialize_str(&canonical_rfc3339(*date))
 }
 
 pub fn serialize_cid<S>(cid: &::cid::Cid, serializer: S) -> Result<S::Ok, S::Error>

@@ -15,8 +15,8 @@ use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition, RuleSet};
 use crate::interfaces::replies::Status;
-use crate::permissions;
 use crate::stores::KeyValues;
+use crate::{canonical_rfc3339, permissions};
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
 const PROTOCOLS_INTERFACE: &str = "Protocols";
@@ -132,11 +132,7 @@ pub(crate) fn configure_indexes(
     );
     indexes.insert(
         "messageTimestamp".to_string(),
-        Value::String(
-            descriptor
-                .message_timestamp
-                .to_rfc3339_opts(SecondsFormat::Micros, true),
-        ),
+        Value::String(canonical_rfc3339(descriptor.message_timestamp)),
     );
     indexes.insert(
         "protocol".to_string(),

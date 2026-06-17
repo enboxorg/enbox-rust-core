@@ -33,7 +33,7 @@ use crate::interfaces::messages::protocols::{
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
-use crate::{Message, MessageSort, Pagination, SortDirection, Value};
+use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
 use super::common::*;
 use super::{
@@ -580,8 +580,8 @@ where
         if descriptor.message_timestamp <= newest_timestamp {
             return Err(format!(
                 "ProtocolAuthorizationSquashBackstop: incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
-                descriptor.message_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
-                newest_timestamp.to_rfc3339_opts(SecondsFormat::Micros, true),
+                canonical_rfc3339(descriptor.message_timestamp),
+                canonical_rfc3339(newest_timestamp),
                 protocol_path
             ));
         }

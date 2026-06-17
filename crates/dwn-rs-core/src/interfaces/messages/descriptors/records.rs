@@ -577,18 +577,15 @@ pub struct DeleteDescriptor {
 mod test {
     use std::str::FromStr;
 
-    use chrono::{DateTime, SecondsFormat, Utc};
+    use chrono::{DateTime, Utc};
+
+    use crate::canonical_rfc3339;
 
     use super::*;
 
     #[tokio::test]
     async fn test_read_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let rp = ReadParameters {
             message_timestamp: Some(message_timestamp),
@@ -614,12 +611,7 @@ mod test {
 
     #[tokio::test]
     async fn test_query_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let qp = QueryParameters {
             message_timestamp: Some(message_timestamp),
@@ -647,12 +639,7 @@ mod test {
 
     #[tokio::test]
     async fn test_count_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let cp = CountParameters {
             message_timestamp: Some(message_timestamp),
@@ -676,12 +663,7 @@ mod test {
 
     #[tokio::test]
     async fn test_write_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let wd = WriteDescriptor {
             protocol: None,
@@ -781,12 +763,7 @@ mod test {
 
     #[test]
     fn test_subscribe_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let sd = SubscribeDescriptor {
             message_timestamp,
@@ -804,12 +781,7 @@ mod test {
 
     #[test]
     fn test_delete_descriptor() {
-        let message_timestamp = DateTime::from_str(
-            Utc::now()
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-                .as_str(),
-        )
-        .unwrap();
+        let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
         let dd = DeleteDescriptor {
             message_timestamp,
