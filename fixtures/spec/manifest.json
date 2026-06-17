@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "description": "External-spec conformance floor. Unlike fixtures/manifest.json (TS-parity oracle), every expected value here is derived from a published external specification or test vector, NOT from the enbox TypeScript implementation. These are genuine PASS/FAIL conformance checks against the spec.",
+  "sets": [
+    {
+      "id": "spec.records.descriptor-cid",
+      "path": "records/descriptor-cid.json",
+      "assertions": ["spec.descriptorCid"]
+    },
+    {
+      "id": "spec.cid.dag-cbor",
+      "path": "cid/dag-cbor.json",
+      "assertions": ["spec.cid.dagcbor"]
+    },
+    {
+      "id": "spec.did.did-key-ed25519",
+      "path": "did/did-key-ed25519.json",
+      "assertions": ["spec.did.resolve"]
+    },
+    {
+      "id": "spec.did.did-jwk",
+      "path": "did/did-jwk.json",
+      "assertions": ["spec.did.resolve"]
+    },
+    {
+      "id": "spec.crypto.jws-ed25519-rfc8037",
+      "path": "crypto/jws-ed25519-rfc8037.json",
+      "assertions": ["spec.jws.verify"]
+    }
+  ]
+}

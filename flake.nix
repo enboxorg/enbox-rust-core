@@ -210,6 +210,7 @@
               # Additional utilities
               jq
               curl
+              bun
             ]);
 
             shellHook = ''

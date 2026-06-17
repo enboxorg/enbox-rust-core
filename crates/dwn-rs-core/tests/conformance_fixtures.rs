@@ -6,7 +6,8 @@ use base64::Engine as _;
 use bytes::Bytes;
 use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
 use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
+    Jws, JwsPrivateJwk, JwsPublicJwk, JwsPublicKeyResolver, JwsSignature, PrivateJwkSigner,
+    StaticPublicKeyResolver, UniversalResolver,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -3063,4 +3064,632 @@ where
 {
     let typed: T = serde_json::from_value(descriptor.clone()).expect("descriptor must deserialize");
     serde_json::to_value(typed).expect("descriptor must serialize")
+}
+
+// ---------------------------------------------------------------------------
+// Track A: spec-conformance floor (fixtures/spec)
+//
+// This is a SEPARATE oracle from the TS-parity fixtures above. Spec fixtures
+// declare `oracle: "spec"` and carry their expected values from an external
+// published specification or test vector — never from the enbox TypeScript
+// implementation. They are intentionally NOT forced through `FixtureCase`.
+// ---------------------------------------------------------------------------
+
+const SPEC_DESCRIPTOR_CID_ASSERTION: &str = "spec.descriptorCid";
+const SPEC_CID_DAGCBOR_ASSERTION: &str = "spec.cid.dagcbor";
+const SPEC_DID_RESOLVE_ASSERTION: &str = "spec.did.resolve";
+const SPEC_JWS_VERIFY_ASSERTION: &str = "spec.jws.verify";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecFixtureManifest {
+    schema_version: u64,
+    oracle: String,
+    sets: Vec<SpecFixtureSetRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecFixtureSetRef {
+    id: String,
+    path: String,
+    assertions: Vec<String>,
+}
+
+#[derive(Debug)]
+struct LoadedSpecFixtureSet {
+    set_ref: SpecFixtureSetRef,
+    fixture_set: SpecFixtureSet,
+}
+
+impl LoadedSpecFixtureSet {
+    fn has_assertion(&self, assertion: &str) -> bool {
+        self.set_ref
+            .assertions
+            .iter()
+            .any(|candidate| candidate == assertion)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecFixtureSet {
+    schema_version: u64,
+    oracle: String,
+    source: SpecSource,
+    cases: Vec<SpecFixtureCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecSource {
+    spec: SpecReference,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecReference {
+    name: String,
+    url: String,
+    section: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecFixtureCase {
+    id: String,
+    #[serde(default)]
+    descriptor: Option<Value>,
+    #[serde(default)]
+    object: Option<Value>,
+    #[serde(default)]
+    did: Option<String>,
+    #[serde(default)]
+    jws: Option<SpecJwsInput>,
+    #[serde(default, rename = "publicJwk")]
+    public_jwk: Option<JwsPublicJwk>,
+    expected: SpecExpected,
+}
+
+/// Raw compact-JWS segments for a `spec.jws.verify` case: the base64url
+/// protected header, the base64url payload, and the base64url signature. The
+/// test reassembles these into a [`Jws`] and verifies it against `publicJwk`.
+#[derive(Debug, Deserialize)]
+struct SpecJwsInput {
+    protected: String,
+    payload: String,
+    signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecExpected {
+    #[serde(default)]
+    descriptor_cid: Option<String>,
+    #[serde(default)]
+    cid: Option<String>,
+    #[serde(default)]
+    public_key: Option<SpecExpectedPublicKey>,
+    #[serde(default)]
+    verify: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpecExpectedPublicKey {
+    kty: String,
+    crv: String,
+    x: String,
+    #[serde(default)]
+    y: Option<String>,
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    alg: Option<String>,
+}
+
+fn load_spec_fixture_sets() -> Vec<LoadedSpecFixtureSet> {
+    let root = fixtures_root().join("spec");
+    let manifest_path = root.join("manifest.json");
+    let manifest = read_json::<SpecFixtureManifest>(&manifest_path);
+
+    assert_eq!(
+        manifest.schema_version, 1,
+        "spec fixture manifest schema version"
+    );
+    assert_eq!(
+        manifest.oracle, "spec",
+        "spec fixture manifest must declare oracle=spec"
+    );
+
+    manifest
+        .sets
+        .into_iter()
+        .map(|set_ref| {
+            let fixture_path = root.join(&set_ref.path);
+            let fixture_set = read_json::<SpecFixtureSet>(&fixture_path);
+
+            assert_eq!(
+                fixture_set.schema_version, 1,
+                "{} spec set schema version",
+                set_ref.id
+            );
+            assert_eq!(
+                fixture_set.oracle, "spec",
+                "{} spec set must declare oracle=spec",
+                set_ref.id
+            );
+
+            LoadedSpecFixtureSet {
+                set_ref,
+                fixture_set,
+            }
+        })
+        .collect()
+}
+
+/// Track A conformance: the impl's DAG-CBOR CID of a RecordsWrite descriptor
+/// must equal the descriptorCid literal independently derived from the DWN
+/// spec's CIDv1/DAG-CBOR/sha2-256/base32 algorithm. The expected side is a
+/// hardcoded spec-derived literal — it is NOT recomputed by the impl, so this
+/// is a genuine spec assertion rather than a tautology.
+#[test]
+fn fixture_descriptor_cid_match_spec() {
+    let mut checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_DESCRIPTOR_CID_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
+
+        for case in &set.fixture_set.cases {
+            let descriptor = case.descriptor.as_ref().unwrap_or_else(|| {
+                panic!("{} descriptorCid case must include a descriptor", case.id)
+            });
+            let expected_cid = case.expected.descriptor_cid.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "{} descriptorCid case must include expected.descriptorCid",
+                    case.id
+                )
+            });
+            assert_eq!(
+                compute_cid(descriptor),
+                expected_cid,
+                "{} descriptorCid must match the spec-derived literal",
+                case.id
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec descriptorCid case must be checked"
+    );
+}
+
+/// Track A conformance: the impl's DAG-CBOR CIDv1 of an arbitrary IPLD map must
+/// equal the CID literal independently derived from the IPLD DAG-CBOR spec
+/// (length-first canonical map-key ordering, sha2-256, CIDv1, base32-lower). The
+/// expected side is a hardcoded spec-derived literal produced by a separate
+/// pure-Python encoder — NOT recomputed by the impl — so this is a genuine spec
+/// assertion, not a tautology.
+///
+/// The corpus deliberately includes ORDERING-DIVERGENT maps whose keys sort
+/// differently under length-first canonical ordering than under plain bytewise
+/// lexicographic ordering (e.g. `{"z":1,"aa":2}`: canonical "z" before "aa",
+/// lexicographic "aa" before "z"). These pin down that `serde_ipld_dagcbor`
+/// emits canonical length-first ordering even though the impl feeds it a Rust
+/// `BTreeMap` (byte-lexicographic). A regression to lexicographic encoding would
+/// flip these CIDs and fail loudly here.
+#[test]
+fn fixture_cid_dagcbor_match_spec() {
+    let mut checked = 0usize;
+    let mut divergent_checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_CID_DAGCBOR_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
+
+        for case in &set.fixture_set.cases {
+            let object = case
+                .object
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} dagcbor case must include an object", case.id));
+            let expected_cid =
+                case.expected.cid.as_deref().unwrap_or_else(|| {
+                    panic!("{} dagcbor case must include expected.cid", case.id)
+                });
+            assert_eq!(
+                compute_cid(object),
+                expected_cid,
+                "{} DAG-CBOR CIDv1 must match the spec-derived literal",
+                case.id
+            );
+            checked += 1;
+            if case.id.contains("divergent") {
+                divergent_checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec DAG-CBOR CID case must be checked"
+    );
+    assert!(
+        divergent_checked > 0,
+        "the DAG-CBOR corpus must include at least one ordering-divergent vector"
+    );
+}
+
+/// Track A conformance: the `UniversalResolver` must resolve a `did:key`
+/// (Ed25519) and a `did:jwk` DID to exactly the public-key JWK fixed by the
+/// respective external method specifications. The expected JWK material on each
+/// case is a hardcoded spec-vector literal (the did:key Ed25519/X25519 worked
+/// example from W3C-CCG, and the did:jwk Examples), NOT recomputed by the impl
+/// on the expected side — so this is a genuine spec assertion, not a tautology.
+#[test]
+fn fixture_did_resolution_match_spec() {
+    let resolver = UniversalResolver::new();
+    let mut checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_DID_RESOLVE_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
+
+        for case in &set.fixture_set.cases {
+            let did = case
+                .did
+                .as_deref()
+                .unwrap_or_else(|| panic!("{} DID resolution case must include a did", case.id));
+            let expected = case.expected.public_key.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "{} DID resolution case must include expected.publicKey",
+                    case.id
+                )
+            });
+
+            let expected_jwk = JwsPublicJwk {
+                kty: expected.kty.clone(),
+                crv: expected.crv.clone(),
+                x: expected.x.clone(),
+                y: expected.y.clone(),
+                kid: expected.kid.clone(),
+                alg: expected.alg.clone(),
+            };
+
+            let resolved = resolver
+                .resolve_public_jwk(did)
+                .unwrap_or_else(|| panic!("{} resolver yielded no key for {did}", case.id));
+
+            assert_eq!(
+                resolved, expected_jwk,
+                "{} resolved public key must match the spec-vector literal",
+                case.id
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec DID resolution case must be checked"
+    );
+}
+
+/// Track A conformance: `Jws::verify_signatures_public_jwk` must accept the
+/// Ed25519 (EdDSA) JWS example published in RFC 8037 Appendix A.4 and reject a
+/// one-character-tampered copy of its signature. The compact segments, the
+/// signature, and the public JWK (RFC 8037 A.2) are spec literals; the expected
+/// accept/reject boolean is fixed by the RFC, not computed by the impl on the
+/// expected side — so this is a genuine spec assertion, not a tautology.
+#[test]
+fn fixture_jws_ed25519_match_spec() {
+    let mut checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_JWS_VERIFY_ASSERTION) {
+            continue;
+        }
+
+        // Spec provenance must be present and meaningful.
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
+
+        for case in &set.fixture_set.cases {
+            let input = case
+                .jws
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} jws.verify case must include jws segments", case.id));
+            let public_jwk = case
+                .public_jwk
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} jws.verify case must include publicJwk", case.id));
+            let expected = case.expected.verify.unwrap_or_else(|| {
+                panic!("{} jws.verify case must include expected.verify", case.id)
+            });
+
+            let jws = Jws {
+                payload: Some(input.payload.clone()),
+                signatures: Some(vec![JwsSignature {
+                    protected: Some(input.protected.clone()),
+                    signature: Some(input.signature.clone()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            };
+
+            let verified = jws
+                .verify_signatures_public_jwk(public_jwk)
+                .unwrap_or_else(|err| {
+                    panic!("{} verify_signatures_public_jwk errored: {err:?}", case.id)
+                });
+            assert_eq!(
+                verified, expected,
+                "{} verification result must match the RFC 8037 expectation",
+                case.id
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec JWS verify case must be checked"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Track B: spec-vs-impl divergence ledger (fixtures/spec/divergence/ledger.json)
+//
+// The ledger catalogs places where the DIF DWN prose spec is wrong, silent, or
+// an explicit TODO and the impl is the de-facto truth. This test is a
+// REGRESSION MARKER, not a conformance test: for entries with an executable
+// proof it recomputes both the spec-prose-derived value and the impl value and
+// asserts they STILL differ. If upstream ever fixes the spec — or someone
+// "fixes" the impl to match the broken prose — these assertions FAIL LOUD,
+// forcing the ledger entry to be re-evaluated and the divergence retired.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DivergenceLedger {
+    schema_version: u64,
+    oracle: String,
+    entries: Vec<DivergenceEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DivergenceEntry {
+    id: String,
+    surface: String,
+    #[serde(rename = "impl")]
+    impl_side: DivergenceImpl,
+    spec: DivergenceSpec,
+    proof: DivergenceProof,
+    disposition: String,
+    upstream: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DivergenceImpl {
+    behavior: String,
+    #[allow(dead_code)]
+    #[serde(rename = "ref")]
+    reference: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DivergenceSpec {
+    says: String,
+    class: String,
+    #[allow(dead_code)]
+    #[serde(rename = "ref")]
+    reference: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DivergenceProof {
+    executable: bool,
+    // Populated only for executable proofs (e.g. recordId).
+    algorithm: Option<String>,
+    descriptor: Option<Value>,
+    author: Option<String>,
+    descriptor_cid: Option<String>,
+    impl_record_id: Option<String>,
+    spec_record_id: Option<String>,
+}
+
+fn load_divergence_ledger() -> DivergenceLedger {
+    let path = fixtures_root()
+        .join("spec")
+        .join("divergence")
+        .join("ledger.json");
+    let ledger = read_json::<DivergenceLedger>(&path);
+    assert_eq!(ledger.schema_version, 1, "divergence ledger schema version");
+    assert_eq!(
+        ledger.oracle, "spec",
+        "divergence ledger must declare oracle=spec"
+    );
+    ledger
+}
+
+#[test]
+fn ledger_divergences_still_hold() {
+    let ledger = load_divergence_ledger();
+
+    // Every seeded RecordsWrite-ID divergence must be present and well-formed.
+    // entryId is no longer a standalone entry: the spec DOES define it (by
+    // reference to the Record ID Generation Process), so it folds into the
+    // recordId entry. A new entry records the contextId protocol-guard
+    // impl/fork divergence.
+    let expected_ids = [
+        "records-write-recordid-author",
+        "records-write-contextid-todo",
+        "records-write-contextid-protocol-guard",
+    ];
+    let actual_ids = ledger
+        .entries
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for id in expected_ids {
+        assert!(
+            actual_ids.contains(id),
+            "divergence ledger must contain entry {id}"
+        );
+    }
+
+    let mut executable_checked = 0usize;
+    for entry in &ledger.entries {
+        assert!(!entry.surface.is_empty(), "{} surface", entry.id);
+        assert!(
+            !entry.impl_side.behavior.is_empty(),
+            "{} impl behavior",
+            entry.id
+        );
+        assert!(!entry.spec.says.is_empty(), "{} spec says", entry.id);
+        assert!(
+            matches!(
+                entry.spec.class.as_str(),
+                "spec-wrong" | "spec-silent" | "spec-todo" | "impl-extension"
+            ),
+            "{} spec class must be a known divergence class",
+            entry.id
+        );
+        // Spec-side entries are upstream-contribution backlog; the impl/fork
+        // divergence (impl-extension) awaits an owner decision instead.
+        let expected_disposition = if entry.spec.class == "impl-extension" {
+            "needs-owner-decision"
+        } else {
+            "contribute-upstream"
+        };
+        assert_eq!(
+            entry.disposition, expected_disposition,
+            "{} disposition",
+            entry.id
+        );
+        assert!(
+            entry.upstream.is_none(),
+            "{} upstream link should be null until contributed",
+            entry.id
+        );
+
+        if !entry.proof.executable {
+            // spec-silent / spec-todo: prose has no algorithm to recompute, so
+            // the ledger entry is documentation-only. Just assert it is intact.
+            assert!(
+                entry.proof.algorithm.is_none(),
+                "{} non-executable proof must not claim an algorithm",
+                entry.id
+            );
+            continue;
+        }
+
+        // Executable proof: recompute both sides with the IMPL's CID code and
+        // assert the divergence still holds, pinned to the recorded literals.
+        assert_eq!(
+            entry.proof.algorithm.as_deref(),
+            Some("recordId"),
+            "{} only the recordId algorithm is executable",
+            entry.id
+        );
+        let descriptor = entry
+            .proof
+            .descriptor
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} executable proof must include descriptor", entry.id));
+        let author = entry
+            .proof
+            .author
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} executable proof must include author", entry.id));
+        let descriptor_cid =
+            entry.proof.descriptor_cid.as_deref().unwrap_or_else(|| {
+                panic!("{} executable proof must include descriptorCid", entry.id)
+            });
+        let expected_impl =
+            entry.proof.impl_record_id.as_deref().unwrap_or_else(|| {
+                panic!("{} executable proof must include implRecordId", entry.id)
+            });
+        let expected_spec =
+            entry.proof.spec_record_id.as_deref().unwrap_or_else(|| {
+                panic!("{} executable proof must include specRecordId", entry.id)
+            });
+
+        // descriptorCid the proof carries must itself be correct per the impl.
+        assert_eq!(
+            compute_cid(descriptor),
+            descriptor_cid,
+            "{} proof descriptorCid",
+            entry.id
+        );
+
+        // impl recordId = CID({ ...descriptor, author }).
+        let mut impl_input = descriptor.clone();
+        impl_input
+            .as_object_mut()
+            .expect("descriptor must be an object")
+            .insert("author".to_string(), Value::String(author.to_string()));
+        let impl_record_id = compute_cid(&impl_input);
+
+        // spec-prose recordId = CID({ descriptorCid }) — author omitted (the bug).
+        let spec_input = serde_json::json!({ "descriptorCid": descriptor_cid });
+        let spec_record_id = compute_cid(&spec_input);
+
+        assert_eq!(
+            impl_record_id, expected_impl,
+            "{} impl recordId drifted from the recorded literal — update the ledger",
+            entry.id
+        );
+        assert_eq!(
+            spec_record_id, expected_spec,
+            "{} spec-prose recordId drifted from the recorded literal — update the ledger",
+            entry.id
+        );
+        // The whole point of the divergence: these must still differ. If this
+        // ever passes (impl == spec), upstream or the impl converged — retire it.
+        assert_ne!(
+            impl_record_id, spec_record_id,
+            "{} divergence resolved (impl recordId now equals spec-prose recordId) — retire the ledger entry",
+            entry.id
+        );
+        executable_checked += 1;
+    }
+
+    assert!(
+        executable_checked > 0,
+        "at least one executable divergence proof must be exercised"
+    );
 }

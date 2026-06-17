@@ -274,6 +274,34 @@ impl Jws {
 
         Ok(signers)
     }
+
+    pub fn verify_signatures_public_jwk(
+        &self,
+        public_jwk: &JwsPublicJwk,
+    ) -> Result<bool, JwsError> {
+        let payload = self.payload.as_deref().ok_or(JwsError::MissingPayload)?;
+        let signatures = self
+            .signatures
+            .as_deref()
+            .ok_or(JwsError::MissingSignatures)?;
+
+        for signature in signatures {
+            let protected_b64 = signature
+                .protected
+                .as_deref()
+                .ok_or(JwsError::MissingProtected)?;
+            let signature_b64 = signature
+                .signature
+                .as_deref()
+                .ok_or(JwsError::MissingSignature)?;
+
+            if !verify_jws_signature(payload, protected_b64, signature_b64, public_jwk)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
 }
 
 /// One signature entry inside a [`Jws`] (general or flattened serialization).
@@ -619,5 +647,64 @@ mod tests {
                 "protocolRole": "adminRole",
             })
         );
+    }
+
+    #[tokio::test]
+    async fn verify_signatures_public_jwk_accepts_valid_signature() {
+        let jwk = JWK::generate_secp256k1();
+        // Matching public JWK in this crate's shape, derived before signing.
+        let public_jwk: JwsPublicJwk =
+            serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
+
+        let jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
+            .await
+            .expect("could not create JWS");
+
+        assert!(jws
+            .verify_signatures_public_jwk(&public_jwk)
+            .expect("verification should not error"));
+    }
+
+    #[tokio::test]
+    async fn verify_signatures_public_jwk_rejects_tampered_signature() {
+        let jwk = JWK::generate_secp256k1();
+        let public_jwk: JwsPublicJwk =
+            serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
+
+        let mut jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
+            .await
+            .expect("could not create JWS");
+
+        // Flip the first signature char: same base64url length (still decodes),
+        // but no longer a valid signature.
+        let signature = jws.signatures.as_mut().unwrap()[0]
+            .signature
+            .as_mut()
+            .unwrap();
+        let first = signature.remove(0);
+        signature.insert(0, if first == 'A' { 'B' } else { 'A' });
+
+        assert!(!jws
+            .verify_signatures_public_jwk(&public_jwk)
+            .expect("verification should not error"));
+    }
+
+    #[tokio::test]
+    async fn verify_signatures_public_jwk_rejects_wrong_key() {
+        let jws = Jws::create(
+            b"hello world".to_vec(),
+            Some(vec![JWK::generate_secp256k1()]),
+        )
+        .await
+        .expect("could not create JWS");
+
+        // A different key must not verify the signature.
+        let other: JwsPublicJwk =
+            serde_json::from_value(serde_json::to_value(&JWK::generate_secp256k1()).unwrap())
+                .unwrap();
+
+        assert!(!jws
+            .verify_signatures_public_jwk(&other)
+            .expect("verification should not error"));
     }
 }
