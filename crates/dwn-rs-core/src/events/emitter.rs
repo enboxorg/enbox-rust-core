@@ -27,17 +27,6 @@ where
         Self(None)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    #[instrument]
-    pub async fn open(&mut self) {
-        trace!("opening EventStreamer (wasm)");
-        self.0 = Some(xtra::spawn_wasm_bindgen(
-            EventStream::new(),
-            Mailbox::unbounded(),
-        ));
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     #[instrument]
     pub async fn open(&mut self) {
         trace!("opening EventStreamer (tokio)");
