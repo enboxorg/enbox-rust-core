@@ -1294,7 +1294,9 @@ where
             let status_key = format!("{tenant}|{remote}");
             state.last_status.insert(status_key.clone(), status.clone());
             drop(state);
-            let _ = self.ledger.set_last_status(&status_key, status).await;
+            if let Err(error) = self.ledger.set_last_status(&status_key, status).await {
+                tracing::warn!(%error, %status_key, "failed to persist sync run status to ledger");
+            }
         }
     }
 
@@ -1334,7 +1336,9 @@ where
         checkpoint.updated_at = Utc::now();
         let checkpoint = checkpoint.clone();
         drop(state);
-        let _ = self.ledger.upsert_checkpoint(&checkpoint).await;
+        if let Err(error) = self.ledger.upsert_checkpoint(&checkpoint).await {
+            tracing::warn!(%error, key = %checkpoint.key, "failed to persist sync checkpoint to ledger");
+        }
         checkpoint
     }
 
@@ -1365,7 +1369,9 @@ where
             .await
             .dead_letters
             .push(dead_letter.clone());
-        let _ = self.ledger.insert_dead_letter(&dead_letter).await;
+        if let Err(error) = self.ledger.insert_dead_letter(&dead_letter).await {
+            tracing::warn!(%error, id = %dead_letter.id, "failed to persist dead-letter to ledger");
+        }
     }
 
     async fn update_dead_letter_failure(&self, id: &str, error: SyncError) {
@@ -1374,7 +1380,9 @@ where
             entry.error = error.clone();
             entry.attempts += 1;
             entry.last_attempt_at = Utc::now();
-            let _ = self.ledger.update_dead_letter(entry).await;
+            if let Err(error) = self.ledger.update_dead_letter(entry).await {
+                tracing::warn!(%error, id = %entry.id, "failed to update dead-letter in ledger");
+            }
         }
     }
 
@@ -1382,7 +1390,9 @@ where
         let key = echo_key(tenant, remote, message_cid);
         let now = Utc::now();
         self.state.write().await.echo_cache.insert(key.clone(), now);
-        let _ = self.ledger.remember_echo(&key, now).await;
+        if let Err(error) = self.ledger.remember_echo(&key, now).await {
+            tracing::warn!(%error, %key, "failed to persist echo marker to ledger");
+        }
     }
 
     async fn should_suppress_echo(&self, tenant: &str, remote: &str, message_cid: &str) -> bool {
