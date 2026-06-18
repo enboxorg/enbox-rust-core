@@ -16,8 +16,8 @@
     "basis": [
       "DIF DWN prose spec (spec.md) @ commit fbde42a6 (2024): Record ID Generation Process at spec.md:375 (anchor #recordid-generation); entryId defined-by-reference at spec.md:1186-1187 (anchor #record-entry-id); Computed Context IDs at spec.md:1174-1178, an empty '::: todo :::' (anchor #computed-context-ids); normative contextId presence rule at spec.md:1028.",
       "dwn-sdk-js @ main / @tbd54566975/dwn-sdk-js (2024): src/interfaces/records-write.ts getEntryId() = CID({ ...descriptor, author }); contextId computation and the root contextId==recordId integrity check are BOTH gated behind `descriptor.protocol !== undefined`.",
-      "enbox fork packages/dwn-sdk-js/src/interfaces/records-write.ts (read 2026-06-11): the protocol gate was removed in both the contextId computation ('compute contextId — all records belong to a protocol') and validateIntegrity (root check gated only on parentId === undefined).",
-      "Rust impl crates/dwn-rs-core/src/handlers/records/common.rs: entry_id() matches upstream getEntryId(); validate_records_write_integrity() mirrors the enbox fork (contextId mandatory, no protocol gate)."
+      "enbox fork packages/dwn-sdk-js/src/interfaces/records-write.ts (read 2026-06-11): the protocol gate was removed in the contextId computation ('compute contextId — all records belong to a protocol'); validateIntegrity gates the root contextId==recordId check on parentId === undefined and treats contextId as optional (consistency-checked against the signature payload).",
+      "Rust impl crates/dwn-rs-core/src/handlers/records/common.rs: entry_id() matches upstream getEntryId(); validate_records_write_integrity() was realigned to upstream — contextId is optional and consistency-checked, and the root contextId==recordId check is gated behind descriptor.protocol (resolving the former records-write-contextid-protocol-guard divergence)."
     ]
   },
   "entries": [
@@ -75,28 +75,6 @@
         "note": "The spec section is an empty TODO, so there is no prose algorithm to recompute. Documentation-only ledger entry: the impl is the de-facto definition."
       },
       "disposition": "contribute-upstream",
-      "upstream": null
-    },
-    {
-      "id": "records-write-contextid-protocol-guard",
-      "surface": "RecordsWrite.contextId (protocol guard)",
-      "origin": "impl",
-      "impl": {
-        "behavior": "validate_records_write_integrity requires a contextId on EVERY RecordsWrite (context_id(message).ok_or_else -> RecordsWriteValidateIntegrityContextIdMissing) and, for any parent-less initial write, enforces contextId == recordId with NO descriptor.protocol gate. This mirrors the enbox dwn-sdk-js fork, which removed upstream's protocol gate on the assumption that 'all records belong to a protocol'. Upstream @tbd54566975/dwn-sdk-js gates BOTH the contextId computation and the root contextId==recordId integrity check behind `descriptor.protocol !== undefined`, so a non-protocol record carries no contextId.",
-        "ref": "crates/dwn-rs-core/src/handlers/records/common.rs validate_records_write_integrity (~lines 151 and 180)"
-      },
-      "spec": {
-        "says": "spec.md:1028 (normative) states a record NOT attached to a Protocol MUST NOT have a contextId. Requiring a contextId on every record — and enforcing contextId == recordId for a non-protocol root — contradicts that rule. This is an OUR-SIDE / fork-inherited behavior, not an upstream spec defect: the spec text here is correct and the impl (via the enbox fork) is the side that diverges. Recorded as a contrast to the spec, but it is OUR impl that must change if non-protocol records are to be supported.",
-        "ref": "https://identity.foundation/decentralized-web-node/spec/#computed-context-ids",
-        "class": "impl-extension"
-      },
-      "finding": "REAL behavior, not gated away. Our Rust does not COMPUTE contextId, but validate_records_write_integrity makes it MANDATORY and applies the root-equals-recordId check unconditionally (no protocol check), exactly as the enbox fork does. Compared to upstream @tbd54566975/dwn-sdk-js (protocol-gated), this rejects any non-protocol record that omits contextId and rejects any non-protocol root whose contextId != recordId — contradicting spec.md:1028. Verdict: intentional fork-inherited extension ('all records are protocol-scoped'), surfaced here for an owner decision: keep it (document the enbox assumption) or restore upstream's `descriptor.protocol` gate to allow protocol-less records.",
-      "proposedFix": "Owner decision required. If protocol-less records are to be supported, restore upstream's gate: only require/validate contextId when descriptor.protocol is set, and skip the root contextId==recordId check otherwise. If the 'all records belong to a protocol' model is intentional, document it as an explicit enbox-ecosystem constraint.",
-      "proof": {
-        "executable": false,
-        "note": "Behavioral divergence verified by source comparison (Rust validate_records_write_integrity vs upstream/enbox records-write.ts), not by recomputing a CID. No spec-prose algorithm to contrast against."
-      },
-      "disposition": "needs-owner-decision",
       "upstream": null
     }
   ]
