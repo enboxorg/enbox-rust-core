@@ -49,7 +49,12 @@ Correctness in this crate is anchored in tiers, from strongest to weakest:
 | --- | --- | --- | --- | --- | --- |
 | `records-write-recordid-author` | `RecordsWrite.recordId` | `spec-wrong` | `recordId = CID({ ...descriptor, author })` — all descriptor fields inlined, author DID folded in (`handlers/records/common.rs` `entry_id()`). `entryId` uses the **same** process. | Record ID Generation computes `recordId = CID({ descriptorCid })`: a single-field `{ descriptorCid }` envelope that **omits the author** and **does not inline descriptor fields**. | contribute-upstream |
 | `records-write-contextid-todo` | `RecordsWrite.contextId` | `spec-todo` | When `protocol` is set: root `contextId = recordId`; non-root `contextId = parentContextId + "/" + recordId` (concatenates **recordId**, not entryId). | `Computed Context IDs` section is an empty **TODO**; `spec.md:1028` requires the *presence* rule but no algorithm. | contribute-upstream |
-| `records-write-contextid-protocol-guard` | `RecordsWrite.contextId` (protocol guard) | `impl-extension` | `validate_records_write_integrity` requires a `contextId` on **every** write and enforces `contextId == recordId` for any parent-less root — with **no `descriptor.protocol` gate** (mirrors the enbox fork). | `spec.md:1028`: a record **not** attached to a Protocol **MUST NOT** have a `contextId`. Upstream `dwn-sdk-js` gates both on `protocol !== undefined`. | needs-owner-decision |
+
+## Retired divergences
+
+| ID | Surface | Class | Resolution |
+| --- | --- | --- | --- |
+| `records-write-contextid-protocol-guard` | `RecordsWrite.contextId` (protocol guard) | `impl-extension` | **Resolved by realigning the impl.** `validate_records_write_integrity` previously required a `contextId` on every write and enforced `contextId == recordId` for any parent-less root with no protocol gate (inherited from the enbox fork). It now treats `contextId` as optional + consistency-checked and gates the root `contextId == recordId` check behind `descriptor.protocol` — matching upstream `@tbd54566975/dwn-sdk-js` and honoring `spec.md:1028` (a record not attached to a protocol MUST NOT have a contextId). No longer a divergence. |
 
 **entryId.** The spec *does* define `entryId` — `spec.md:1186-1187` derives it via the
 Record ID Generation Process and uses `entryId == recordId` as the initial-write
@@ -70,9 +75,8 @@ The two differ in both axes captured above (author present vs absent; descriptor
 fields inlined vs a single-field envelope). The regression marker pins both
 literals and asserts they remain distinct.
 
-The `contextId` entries have no executable proof: the generation algorithm is a
-TODO (nothing to recompute), and the protocol-guard divergence is a behavioral
-contrast against upstream source rather than a recomputable CID.
+The `contextId` generation entry has no executable proof: the algorithm is a
+spec TODO, so there is nothing to recompute.
 
 ## Upstream filing plan (not yet filed)
 
@@ -90,8 +94,6 @@ Nothing here has been filed upstream. When we do file, the plan is:
 - **No `dwn-sdk-js` artifact needed.** The reference impl is already correct
   (it is the de-facto standard); only the spec must catch up.
 - **Venue undecided — hold.** Confirm the right venue/maintainer before posting.
-- The `contextId` protocol-guard entry is an **our-side** matter
-  (`needs-owner-decision`), *not* part of any upstream filing.
 
 ## Verification basis
 
@@ -105,7 +107,10 @@ Reconciled against current DIF sources on **2026-06-11**:
   contextId computation and the root integrity check are both gated on
   `descriptor.protocol !== undefined`.
 - enbox fork `packages/dwn-sdk-js/src/interfaces/records-write.ts`: protocol gate
-  removed ("all records belong to a protocol").
+  removed in the contextId *computation* ("all records belong to a protocol");
+  `validateIntegrity` treats `contextId` as optional and gates the root check on
+  `parentId === undefined`.
 - Rust impl `crates/dwn-rs-core/src/handlers/records/common.rs`: `entry_id()`
-  matches upstream `getEntryId()`; `validate_records_write_integrity()` mirrors
-  the enbox fork.
+  matches upstream `getEntryId()`; `validate_records_write_integrity()` was
+  realigned to upstream (optional + consistency-checked `contextId`, root check
+  gated behind `descriptor.protocol`).

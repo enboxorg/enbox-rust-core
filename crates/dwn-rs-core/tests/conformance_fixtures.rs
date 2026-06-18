@@ -3552,12 +3552,13 @@ fn ledger_divergences_still_hold() {
     // Every seeded RecordsWrite-ID divergence must be present and well-formed.
     // entryId is no longer a standalone entry: the spec DOES define it (by
     // reference to the Record ID Generation Process), so it folds into the
-    // recordId entry. A new entry records the contextId protocol-guard
-    // impl/fork divergence.
+    // recordId entry. The former contextId protocol-guard entry
+    // (`records-write-contextid-protocol-guard`) was retired once the impl was
+    // realigned to upstream's `descriptor.protocol` gate — it is no longer a
+    // divergence.
     let expected_ids = [
         "records-write-recordid-author",
         "records-write-contextid-todo",
-        "records-write-contextid-protocol-guard",
     ];
     let actual_ids = ledger
         .entries

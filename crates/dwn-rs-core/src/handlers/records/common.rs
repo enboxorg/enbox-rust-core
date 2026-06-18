@@ -147,9 +147,6 @@ pub(crate) fn validate_records_write_integrity(
     let record_id = record_id(message).ok_or_else(|| {
         "RecordsWriteValidateIntegrityRecordIdMissing: recordId is required".to_string()
     })?;
-    let context_id = context_id(message).ok_or_else(|| {
-        "RecordsWriteValidateIntegrityContextIdMissing: contextId is required".to_string()
-    })?;
     if signature
         .payload
         .get("recordId")
@@ -158,12 +155,18 @@ pub(crate) fn validate_records_write_integrity(
     {
         return Err("RecordsWriteValidateIntegrityRecordIdUnauthorized: recordId in message does not match recordId in authorization".to_string());
     }
-    if signature
+
+    // `contextId` is a protocol-only surface: per DWN spec.md:1028 a record NOT
+    // attached to a protocol MUST NOT have a contextId, and upstream implementations
+    // including enbox's own dwn-sdk-js do not require a contextId for non-protocol records.
+    // `We therefore treat it as optional and only require the value to agree with the
+    // signature payload (both-absent is valid), matching upstream `validateIntegrity`.
+    let context_id = context_id(message);
+    let signature_context_id = signature
         .payload
         .get("contextId")
-        .and_then(JsonValue::as_str)
-        != Some(context_id.as_str())
-    {
+        .and_then(JsonValue::as_str);
+    if context_id.as_deref() != signature_context_id {
         return Err("RecordsWriteValidateIntegrityContextIdNotInSignerSignaturePayload: contextId in message does not match contextId in authorization".to_string());
     }
 
@@ -176,7 +179,14 @@ pub(crate) fn validate_records_write_integrity(
                 canonical_rfc3339(descriptor.date_created),
             ));
         }
-        if descriptor.parent_id.is_none() && context_id != record_id {
+        // Only a protocol-scoped root record carries the deterministic
+        // `contextId == recordId`. Upstream gates this check on
+        // `descriptor.protocol !== undefined`; a protocol-less record has no
+        // contextId to validate.
+        if descriptor.protocol.is_some()
+            && descriptor.parent_id.is_none()
+            && context_id.as_deref() != Some(record_id.as_str())
+        {
             return Err("RecordsWriteValidateIntegrityContextIdMismatch: root contextId must match recordId".to_string());
         }
     }
