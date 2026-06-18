@@ -276,7 +276,6 @@ pub struct Subscription {
     pub close: SubscriptionCloseHandle,
 }
 
-#[allow(dead_code)]
 #[instrument]
 fn make_close_task<D>(
     ns: String,
