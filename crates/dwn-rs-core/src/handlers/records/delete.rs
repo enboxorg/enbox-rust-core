@@ -1,43 +1,21 @@
+use serde_json::Value as JsonValue;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::ops::Bound;
-use std::pin::Pin;
-use std::sync::Arc;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use bytes::Bytes;
-use chrono::SecondsFormat;
-use futures_util::{stream, TryStreamExt};
-use serde_json::{json, Value as JsonValue};
+use crate::descriptors::Descriptor;
+use crate::dwn::DwnReply;
+use crate::handlers::records::common::{
+    accepted_reply, authorize_records_delete, can_perform_delete_against_record, compare_messages,
+    conflict_reply, delete_from_data_store_if_needed, extract_author, fetch_record_messages,
+    find_initial_write, is_initial_write, message_cid, newest_message, not_found_reply,
+    parse_message, purge_record_descendants, record_id, records_delete_descriptor,
+    records_delete_indexes, records_write_descriptor, records_write_indexes, set_encoded_data,
+    store_error_reply,
+};
+use crate::permissions::{self};
+use crate::Message;
 
-use crate::auth::JwsPublicKeyResolver;
-use crate::cid::{
-    generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_message_cid_from_json,
-};
-use crate::core_protocol::{CoreProtocolRegistry, CoreProtocolStores};
-use crate::descriptors::records::CountDescriptor;
-use crate::descriptors::{
-    DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,
-    RecordsWriteDescriptor, SubscribeDescriptor,
-};
-use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
-use crate::errors::EventLogError;
-use crate::fields::{Fields, WriteFields};
-use crate::filters::message_filters::Records as RecordsFilter;
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, Can, Definition, RuleSet, Who,
-};
-use crate::interfaces::replies::Status;
-use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
-use crate::{Message, MessageSort, Pagination, SortDirection, Value};
-
-use super::common::*;
 use super::write::perform_records_squash;
-use super::{RecordsAuthorizationKind, RecordsDeleteHandler};
+use super::RecordsDeleteHandler;
 
 impl<MessageStore, DataStore, StateIndex> RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
 where

@@ -204,8 +204,8 @@ impl ResumableTaskStore for SqliteResumableTaskStore {
     }
 
     async fn delete(&self, task_id: &str) -> Result<(), ResumableTaskStoreError> {
-        self.inner.delete(&task_id).await?;
-        self.delete_task(&task_id).await
+        self.inner.delete(task_id).await?;
+        self.delete_task(task_id).await
     }
 
     async fn clear(&self) -> Result<(), ResumableTaskStoreError> {

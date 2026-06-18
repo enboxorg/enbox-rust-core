@@ -1,44 +1,35 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::future::Future;
-use std::ops::Bound;
-use std::pin::Pin;
-use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use bytes::Bytes;
-use chrono::SecondsFormat;
-use futures_util::{stream, TryStreamExt};
-use serde_json::{json, Value as JsonValue};
+use futures_util::stream;
+use serde_json::Value as JsonValue;
 
-use crate::auth::JwsPublicKeyResolver;
-use crate::cid::{
-    generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_message_cid_from_json,
+use crate::cid::generate_dag_pb_cid_from_bytes;
+use crate::core_protocol::CoreProtocolStores;
+use crate::descriptors::Descriptor;
+use crate::dwn::DwnReply;
+use crate::filters::{Filter, FilterKey, Filters};
+use crate::handlers::records::common::{
+    accepted_reply, authorize_against_protocol, bool_filter, compare_messages, conflict_reply,
+    context_id, core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
+    event_log_error_reply, existing_initial_lacks_data, fetch_newest_write, filter_map,
+    find_initial_write, governing_timestamp, is_initial_write, message_as_write_descriptor,
+    message_cid, message_record_id, message_timestamp, newest_message, parent_context_id,
+    parse_message, purge_record_messages, record_id, records_delete_descriptor,
+    records_write_descriptor, records_write_event_log_indexes, records_write_indexes,
+    set_encoded_data, store_error_reply, string_filter, validate_data_integrity,
+    validate_records_write_integrity, verify_immutable_properties, write_fields,
 };
-use crate::core_protocol::{CoreProtocolRegistry, CoreProtocolStores};
-use crate::descriptors::records::CountDescriptor;
-use crate::descriptors::{
-    DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,
-    RecordsWriteDescriptor, SubscribeDescriptor,
-};
-use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
-use crate::errors::EventLogError;
-use crate::fields::{Fields, WriteFields};
-use crate::filters::message_filters::Records as RecordsFilter;
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, Can, Definition, RuleSet, Who,
-};
-use crate::interfaces::replies::Status;
+use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
-use super::common::*;
 use super::{
-    RecordsAuthorizationKind, RecordsSubscribeReply, RecordsWriteHandler, MAX_ENCODED_DATA_SIZE,
-    RECORDS_INTERFACE, WRITE_METHOD,
+    RecordsAuthorizationKind, RecordsWriteHandler, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE,
+    WRITE_METHOD,
 };
 
 impl<MessageStore, DataStore, StateIndex, EventLog>
@@ -456,7 +447,7 @@ where
                 "ProtocolAuthorizationParentContextMissing: parent contextId is required"
                     .to_string()
             })?;
-            let context_id = context_id(message).ok_or_else(|| {
+            let context_id = write_fields(message)?.context_id.clone().ok_or_else(|| {
                 "ProtocolAuthorizationContextMissing: contextId is required".to_string()
             })?;
             if !context_id.starts_with(&format!("{parent_context}/")) {

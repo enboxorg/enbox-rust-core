@@ -332,7 +332,7 @@ fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
 }
 
 fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
-    if plaintext.len() < 16 || plaintext.len() % 8 != 0 {
+    if plaintext.len() < 16 || !plaintext.len().is_multiple_of(8) {
         return Err(jwe_error(
             "AES-KW plaintext must be at least 16 bytes and 64-bit aligned",
         ));
@@ -374,7 +374,7 @@ fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 fn aes_key_unwrap(kek: &[u8], wrapped_key: &[u8]) -> Result<Vec<u8>, Error> {
-    if wrapped_key.len() < 24 || wrapped_key.len() % 8 != 0 {
+    if wrapped_key.len() < 24 || !wrapped_key.len().is_multiple_of(8) {
         return Err(jwe_error(
             "AES-KW ciphertext must be at least 24 bytes and 64-bit aligned",
         ));

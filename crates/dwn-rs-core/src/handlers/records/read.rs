@@ -1,42 +1,21 @@
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::ops::Bound;
-use std::pin::Pin;
-use std::sync::Arc;
-
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use bytes::Bytes;
-use chrono::SecondsFormat;
-use futures_util::{stream, TryStreamExt};
+use futures_util::TryStreamExt;
 use serde_json::{json, Value as JsonValue};
 
-use crate::auth::JwsPublicKeyResolver;
-use crate::cid::{
-    generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_message_cid_from_json,
+use crate::dwn::DwnReply;
+use crate::filters::{FilterKey, Filters};
+use crate::handlers::records::common::{
+    authorize_records_read, bool_filter, date_sort_to_message_sort, extract_author,
+    fetch_initial_write_message, fetch_newest_write, is_initial_write, message_record_id,
+    not_found_reply, parse_message, record_id, records_delete_descriptor,
+    records_filter_to_filter_map, records_read_descriptor, records_write_descriptor,
+    store_error_reply, string_filter, write_fields,
 };
-use crate::core_protocol::{CoreProtocolRegistry, CoreProtocolStores};
-use crate::descriptors::records::CountDescriptor;
-use crate::descriptors::{
-    DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,
-    RecordsWriteDescriptor, SubscribeDescriptor,
-};
-use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
-use crate::errors::EventLogError;
-use crate::fields::{Fields, WriteFields};
-use crate::filters::message_filters::Records as RecordsFilter;
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, Can, Definition, RuleSet, Who,
-};
-use crate::interfaces::replies::Status;
-use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
-use crate::{Message, MessageSort, Pagination, SortDirection, Value};
+use crate::permissions::{self};
+use crate::Pagination;
 
-use super::common::*;
-use super::{RecordsAuthorizationKind, RecordsReadHandler, RECORDS_INTERFACE};
+use super::{RecordsReadHandler, RECORDS_INTERFACE};
 
 impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore>
 where

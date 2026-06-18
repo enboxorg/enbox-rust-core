@@ -176,7 +176,7 @@ mod tests {
         }
 
         // Populate the vector with the test cases.
-        let tests = vec![TestCase {
+        let tests = [TestCase {
             fields: Fields::Write(WriteFields {
                 record_id: Some("record_id".to_string()),
                 context_id: Some("context_id".to_string()),

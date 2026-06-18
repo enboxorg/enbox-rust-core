@@ -342,7 +342,7 @@ where
             .await
             .map_err(|e| QueryError::DbError(e.to_string()))?;
 
-        let overflow = self.limit.map_or(false, |l| rows.len() as u64 > l);
+        let overflow = self.limit.map_or_else(|| false, |l| rows.len() as u64 > l);
         if let Some(l) = self.limit {
             rows.truncate(l as usize);
         }

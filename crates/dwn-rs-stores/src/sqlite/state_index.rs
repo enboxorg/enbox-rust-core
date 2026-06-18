@@ -166,9 +166,9 @@ impl StateIndex for SqliteStateIndex {
     ) -> Result<(), StoreError> {
         let tenant = tenant.to_string();
         self.inner
-            .insert(&tenant, &message_cid, indexes.clone())
+            .insert(&tenant, message_cid, indexes.clone())
             .await?;
-        self.persist_insert(&tenant, &message_cid, &indexes).await
+        self.persist_insert(&tenant, message_cid, &indexes).await
     }
 
     async fn delete(&self, tenant: &str, message_cids: &[String]) -> Result<(), StoreError> {

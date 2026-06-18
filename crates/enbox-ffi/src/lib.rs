@@ -318,6 +318,7 @@ struct FfiSyncOnceRequest {
 struct FfiSyncStatusQuery {
     tenant: String,
     remote: Option<String>,
+    #[allow(unused, dead_code)]
     protocol: Option<String>,
 }
 
@@ -1449,15 +1450,15 @@ fn sync_run_status_label(status: SyncRunStatus) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ProcessMessageSmokeRequest {
-    tenant: String,
-    message: serde_json::Value,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    struct ProcessMessageSmokeRequest {
+        tenant: String,
+        message: serde_json::Value,
+    }
 
     #[test]
     fn process_message_roundtrips_unsigned_records_query() {

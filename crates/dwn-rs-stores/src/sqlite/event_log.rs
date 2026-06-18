@@ -2,7 +2,6 @@
 //! [`ResumableTaskStore`].
 
 use std::collections::BTreeMap;
-use std::future::Future;
 
 use rusqlite::{params, OptionalExtension};
 
@@ -12,7 +11,7 @@ use dwn_rs_core::local::MemoryEventLog;
 use dwn_rs_core::stores::{
     EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues, ProgressToken,
-    ResumableTaskStore, StateIndex, SubscriptionListener,
+    SubscriptionListener,
 };
 use dwn_rs_core::{Descriptor, Value};
 
@@ -98,7 +97,7 @@ impl SqliteEventLog {
                     .map_err(sqlite_store_error)?;
                 for row in seq_rows {
                     let (tenant, next_seq) = row.map_err(sqlite_store_error)?;
-                    tenant_seqs.insert(tenant, next_seq as u64);
+                    tenant_seqs.insert(tenant, next_seq);
                 }
 
                 let mut statement = connection
@@ -127,7 +126,7 @@ impl SqliteEventLog {
                     let indexes: KeyValues =
                         serde_json::from_str(&indexes_json).map_err(json_store_error)?;
                     events_by_tenant.entry(tenant).or_default().push((
-                        seq as u64,
+                        seq,
                         event,
                         indexes,
                         message_cid,

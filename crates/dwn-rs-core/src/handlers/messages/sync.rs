@@ -1,33 +1,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use chrono::SecondsFormat;
 use futures_util::TryStreamExt;
-use k256::sha2::{Digest, Sha256};
 use serde_json::Value as JsonValue;
 
 use crate::auth::JwsPublicKeyResolver;
-use crate::cid::generate_cid_from_json;
-use crate::descriptors::{
-    Descriptor, Messages, MessagesSubscribeDescriptor, MessagesSyncDescriptor, Records,
-};
+use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
-use crate::errors::EventLogError;
-use crate::filters::message_filters::Messages as MessagesFilter;
-use crate::filters::{Filter, FilterKey, Filters};
-use crate::interfaces::messages::descriptors::messages::{ReadDescriptor, SyncAction};
-use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{EventLogSubscribeOptions, EventSubscription, StateHash, SubscriptionListener};
-use crate::{Fields, Message};
+use crate::interfaces::messages::descriptors::messages::SyncAction;
+use crate::permissions::{self};
+use crate::stores::StateHash;
+use crate::Message;
 
 const MAX_SYNC_DEPTH: usize = 256;
 const MAX_INLINE_DATA_SIZE: u64 = 30_000;
-
-static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 
 use super::common::*;
 use super::MessagesSyncHandler;
