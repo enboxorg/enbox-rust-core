@@ -8,16 +8,8 @@ description = "Core library components for dwn-rs"
 [lib]
 crate-type = ["rlib"]
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-xtra = { version = "0.6.0", features = [
-    "wasm_bindgen",
-    "sink",
-    "instrumentation",
-] }
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-xtra = { version = "0.6.0", features = ["tokio", "sink", "instrumentation"] }
-
 [dependencies]
+xtra = { version = "0.6.0", features = ["tokio", "sink", "instrumentation"] }
 chrono = { version = "0.4.30", features = ["serde"] }
 cid = { version = "0.11.1", features = ["serde"] }
 futures-util = "0.3.30"

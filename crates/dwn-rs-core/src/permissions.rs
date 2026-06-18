@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::ops::Bound;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -13,7 +12,7 @@ use crate::descriptors::{
 };
 use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
+use crate::filters::{Filter, FilterKey, Filters};
 use crate::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Size, Type, Who,
 };
@@ -1459,11 +1458,6 @@ fn filter_map<const N: usize>(
         .into_iter()
         .map(|(key, value)| (FilterKey::Index(key.to_string()), value))
         .collect()
-}
-
-#[allow(dead_code)]
-fn range_string_filter(lower: Bound<Value>, upper: Bound<Value>) -> Filter<Value> {
-    Filter::Range(RangeFilter::Numeric(lower, upper))
 }
 
 trait DescriptorMethod {

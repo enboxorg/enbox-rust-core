@@ -64,13 +64,6 @@ where
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub fn run(self) -> Address<Self> {
-        trace!("starting actor (wasm)");
-        xtra::spawn_wasm_bindgen(self, xtra::Mailbox::unbounded())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn run(self) -> Address<Self> {
         trace!("starting actor (tokio)");
         xtra::spawn_tokio(self, xtra::Mailbox::unbounded())
