@@ -37,147 +37,147 @@ static VALIDATORS: OnceLock<HashMap<String, Validator>> = OnceLock::new();
 const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
         "https://identity.foundation/dwn/json-schemas/authorization.json",
-        include_str!("../schemas/authorization.json"),
+        include_str!("../../schemas/authorization.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/authorization-delegated-grant.json",
-        include_str!("../schemas/authorization-delegated-grant.json"),
+        include_str!("../../schemas/authorization-delegated-grant.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/authorization-owner.json",
-        include_str!("../schemas/authorization-owner.json"),
+        include_str!("../../schemas/authorization-owner.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/defs.json",
-        include_str!("../schemas/definitions.json"),
+        include_str!("../../schemas/definitions.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/general-jws.json",
-        include_str!("../schemas/general-jws.json"),
+        include_str!("../../schemas/general-jws.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/jwk-verification-method.json",
-        include_str!("../schemas/jwk-verification-method.json"),
+        include_str!("../../schemas/jwk-verification-method.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/jwk/general-jwk.json",
-        include_str!("../schemas/jwk/general-jwk.json"),
+        include_str!("../../schemas/jwk/general-jwk.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/jwk/public-jwk.json",
-        include_str!("../schemas/jwk/public-jwk.json"),
+        include_str!("../../schemas/jwk/public-jwk.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/messages-filter.json",
-        include_str!("../schemas/interface-methods/messages-filter.json"),
+        include_str!("../../schemas/interface-methods/messages-filter.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/messages-read.json",
-        include_str!("../schemas/interface-methods/messages-read.json"),
+        include_str!("../../schemas/interface-methods/messages-read.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/messages-subscribe.json",
-        include_str!("../schemas/interface-methods/messages-subscribe.json"),
+        include_str!("../../schemas/interface-methods/messages-subscribe.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/messages-sync.json",
-        include_str!("../schemas/interface-methods/messages-sync.json"),
+        include_str!("../../schemas/interface-methods/messages-sync.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/number-range-filter.json",
-        include_str!("../schemas/interface-methods/number-range-filter.json"),
+        include_str!("../../schemas/interface-methods/number-range-filter.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/pagination-cursor.json",
-        include_str!("../schemas/interface-methods/pagination-cursor.json"),
+        include_str!("../../schemas/interface-methods/pagination-cursor.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/progress-token.json",
-        include_str!("../schemas/interface-methods/progress-token.json"),
+        include_str!("../../schemas/interface-methods/progress-token.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/protocol-definition.json",
-        include_str!("../schemas/interface-methods/protocol-definition.json"),
+        include_str!("../../schemas/interface-methods/protocol-definition.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/protocol-rule-set.json",
-        include_str!("../schemas/interface-methods/protocol-rule-set.json"),
+        include_str!("../../schemas/interface-methods/protocol-rule-set.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/protocols-configure.json",
-        include_str!("../schemas/interface-methods/protocols-configure.json"),
+        include_str!("../../schemas/interface-methods/protocols-configure.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/protocols-query.json",
-        include_str!("../schemas/interface-methods/protocols-query.json"),
+        include_str!("../../schemas/interface-methods/protocols-query.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-count.json",
-        include_str!("../schemas/interface-methods/records-count.json"),
+        include_str!("../../schemas/interface-methods/records-count.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-delete.json",
-        include_str!("../schemas/interface-methods/records-delete.json"),
+        include_str!("../../schemas/interface-methods/records-delete.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-filter.json",
-        include_str!("../schemas/interface-methods/records-filter.json"),
+        include_str!("../../schemas/interface-methods/records-filter.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-query.json",
-        include_str!("../schemas/interface-methods/records-query.json"),
+        include_str!("../../schemas/interface-methods/records-query.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-read.json",
-        include_str!("../schemas/interface-methods/records-read.json"),
+        include_str!("../../schemas/interface-methods/records-read.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-subscribe.json",
-        include_str!("../schemas/interface-methods/records-subscribe.json"),
+        include_str!("../../schemas/interface-methods/records-subscribe.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-write.json",
-        include_str!("../schemas/interface-methods/records-write.json"),
+        include_str!("../../schemas/interface-methods/records-write.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-write-data-encoded.json",
-        include_str!("../schemas/interface-methods/records-write-data-encoded.json"),
+        include_str!("../../schemas/interface-methods/records-write-data-encoded.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-write-unidentified.json",
-        include_str!("../schemas/interface-methods/records-write-unidentified.json"),
+        include_str!("../../schemas/interface-methods/records-write-unidentified.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/string-range-filter.json",
-        include_str!("../schemas/interface-methods/string-range-filter.json"),
+        include_str!("../../schemas/interface-methods/string-range-filter.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/generic-signature-payload.json",
-        include_str!("../schemas/signature-payloads/generic-signature-payload.json"),
+        include_str!("../../schemas/signature-payloads/generic-signature-payload.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/records-write-signature-payload.json",
-        include_str!("../schemas/signature-payloads/records-write-signature-payload.json"),
+        include_str!("../../schemas/signature-payloads/records-write-signature-payload.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/permissions/permission-grant-data.json",
-        include_str!("../schemas/permissions/permission-grant-data.json"),
+        include_str!("../../schemas/permissions/permission-grant-data.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/permissions/permission-request-data.json",
-        include_str!("../schemas/permissions/permission-request-data.json"),
+        include_str!("../../schemas/permissions/permission-request-data.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/permissions/permission-revocation-data.json",
-        include_str!("../schemas/permissions/permission-revocation-data.json"),
+        include_str!("../../schemas/permissions/permission-revocation-data.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/permissions/permissions-definitions.json",
-        include_str!("../schemas/permissions/permissions-definitions.json"),
+        include_str!("../../schemas/permissions/permissions-definitions.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/permissions/scopes.json",
-        include_str!("../schemas/permissions/scopes.json"),
+        include_str!("../../schemas/permissions/scopes.json"),
     ),
 ];
 

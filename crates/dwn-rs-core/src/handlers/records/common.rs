@@ -8,7 +8,7 @@ use bytes::Bytes;
 use serde_json::Value as JsonValue;
 
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
-use crate::core_protocol::CoreProtocolRegistry;
+use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::descriptors::records::CountDescriptor;
 use crate::descriptors::{
     DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,

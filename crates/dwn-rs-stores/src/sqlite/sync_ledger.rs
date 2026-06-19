@@ -10,7 +10,7 @@ use dwn_rs_core::sync::{
     DeadLetterCategory, DeadLetterEntry, SyncCheckpoint, SyncDirection, SyncError, SyncResult,
     SyncRunStatus,
 };
-use dwn_rs_core::sync_ledger::{SyncLedger, SyncLedgerSnapshot};
+use dwn_rs_core::sync::ledger::{SyncLedger, SyncLedgerSnapshot};
 use dwn_rs_core::utils::canonical_rfc3339;
 
 use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};

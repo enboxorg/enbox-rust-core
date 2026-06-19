@@ -12,7 +12,7 @@ use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 
 use crate::canonical_rfc3339;
-use crate::desktop_server::{DwnProcessMessage, PROCESS_MESSAGE_METHOD};
+use crate::runtime::desktop::server::{DwnProcessMessage, PROCESS_MESSAGE_METHOD};
 use crate::dwn::DwnReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::interfaces::replies::Status;

@@ -7,13 +7,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-use crate::agent::{
+use crate::identity::agent::{
     AgentIdentityError, AgentIdentityResult, AgentKeyManager, DidProvider, JsonWebKey, PortableDid,
     SecretStore,
 };
 use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::permissions::PermissionScope;
-use crate::setup::protocol_requires_encryption;
+use crate::identity::setup::protocol_requires_encryption;
 
 pub type ConnectFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
 
@@ -627,7 +627,7 @@ mod tests {
     use chrono::Duration;
 
     use super::*;
-    use crate::agent::{
+    use crate::identity::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryDidResolverCache, MemoryKeyManager, MemorySecretStore,
     };

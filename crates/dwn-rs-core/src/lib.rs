@@ -18,8 +18,8 @@
 //! - [`dwn::Dwn`] processes DWN messages and dispatches to method handlers.
 //! - [`interfaces::Message`] is the typed DWN message model.
 //! - [`stores`] defines the persistence traits a DWN engine requires.
-//! - [`agent`], [`connect`], [`setup`] cover identity, connect/delegate,
-//!   and tenant setup flows.
+//! - [`identity`] groups agent identity, connect/delegate, and tenant setup
+//!   flows ([`identity::agent`], [`identity::connect`], [`identity::setup`]).
 //! - [`sync`] covers the native `MessagesSync` engine and dead-letter
 //!   bookkeeping.
 //!
@@ -28,49 +28,36 @@
 //! All modules under `crate::` are public. Top-level re-exports are limited
 //! to the most commonly used types ([`dwn`], [`interfaces`], [`filters`],
 //! [`value`], [`utils`]) to keep the prelude small. Other modules
-//! (`agent`, `auth`, `connect`, `desktop`, `encryption`, `errors`, `events`,
-//! `handlers`, `local`, `mobile`, `permissions`, `setup`, `state_index`,
-//! `stores`, `sync`) are accessed via their qualified paths.
+//! (`auth`, `dwn`, `encryption`, `errors`, `events`, `handlers`, `identity`,
+//! `permissions`, `runtime`, `stores`, `sync`, `tasks`) are accessed via their
+//! qualified paths.
 #![doc(issue_tracker_base_url = "https://github.com/enboxorg/enbox-rust-core/issues/")]
-pub mod agent;
 pub mod auth;
-pub mod connect;
-pub mod core_protocol;
-pub mod desktop;
-pub mod desktop_server;
-pub mod desktop_ws;
 pub mod dwn;
 pub mod encryption;
 pub mod errors;
 pub mod events;
 pub mod filters;
 pub mod handlers;
+pub mod identity;
 pub mod interfaces;
-pub mod local;
-pub mod message_validation;
-pub mod mobile;
-pub mod native_dwn;
 pub mod permissions;
-pub mod resumable_task_manager;
+pub mod runtime;
 mod ser;
-pub mod setup;
-pub mod state_index;
-pub mod storage_controller;
 pub mod stores;
 pub mod sync;
-pub mod sync_endpoint;
-pub mod sync_ledger;
+pub mod tasks;
 pub mod value;
 
+pub use dwn::builder::{
+    build_native_dwn, build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig,
+    NativeDwnOpenError, NativeDwnStores,
+};
 pub use dwn::*;
 pub use errors::lock_error;
 pub use events::*;
 pub use filters::*;
 pub use interfaces::*;
-pub use native_dwn::{
-    build_native_dwn, build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig,
-    NativeDwnOpenError, NativeDwnStores,
-};
 pub use value::*;
 
 pub mod utils;

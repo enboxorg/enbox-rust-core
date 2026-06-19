@@ -95,12 +95,12 @@ where
     stores.event_log.open().await?;
     stores.resumable_task_store.open().await?;
 
-    let storage_controller = crate::storage_controller::StorageController::new(
+    let storage_controller = crate::tasks::controller::StorageController::new(
         stores.message_store.clone(),
         stores.data_store.clone(),
         stores.state_index.clone(),
     );
-    let task_manager = crate::resumable_task_manager::ResumableTaskManager::new(
+    let task_manager = crate::tasks::manager::ResumableTaskManager::new(
         stores.resumable_task_store.clone(),
         storage_controller,
     );

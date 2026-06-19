@@ -7,7 +7,7 @@ use std::future::Future;
 use rusqlite::params;
 
 use dwn_rs_core::errors::StoreError;
-use dwn_rs_core::state_index::MemoryStateIndex;
+use dwn_rs_core::stores::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::{KeyValues, StateHash, StateIndex};
 use dwn_rs_core::Value;
 

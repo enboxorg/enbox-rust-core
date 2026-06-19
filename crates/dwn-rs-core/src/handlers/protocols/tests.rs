@@ -17,7 +17,7 @@ use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, Type, Who,
 };
 use crate::protocols::RuleSet;
-use crate::state_index::MemoryStateIndex;
+use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::{KeyValues, MessageQueryResult, MessageStore, StateIndex};
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, Pagination, RangeFilter,

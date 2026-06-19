@@ -7,9 +7,9 @@
 //! **Not encryption at rest.** The host is still responsible for binding
 //! the underlying database file to a platform keychain / Secure Enclave /
 //! TPM. This impl provides durability across `open()` calls so a freshly
-//! restored agent can drive [`dwn_rs_core::agent::AgentIdentityService::stored_agent_did`].
+//! restored agent can drive [`dwn_rs_core::identity::agent::AgentIdentityService::stored_agent_did`].
 
-use dwn_rs_core::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore};
+use dwn_rs_core::identity::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore};
 use rusqlite::{params, OptionalExtension};
 
 use crate::sqlite::{sqlite_store_error, SqliteStore};
@@ -106,7 +106,7 @@ impl SecretStore for SqliteSecretStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dwn_rs_core::agent::{
+    use dwn_rs_core::identity::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryDidResolverCache, MemoryKeyManager, VAULT_PORTABLE_DID_KEY,
     };
@@ -182,7 +182,7 @@ mod tests {
             .await
             .expect("get vault did")
             .expect("vault did persisted");
-        let restored: dwn_rs_core::agent::PortableDid =
+        let restored: dwn_rs_core::identity::agent::PortableDid =
             serde_json::from_slice(&raw).expect("vault json");
         assert_eq!(restored.uri, first_did_uri);
     }

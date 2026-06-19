@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::errors::ResumableTaskStoreError;
-use crate::storage_controller::{
+use crate::tasks::controller::{
     ResumableRecordsDeleteData, ResumableRecordsSquashData, StorageController,
 };
 use crate::stores::{ManagedResumableTask, ResumableTaskStore};

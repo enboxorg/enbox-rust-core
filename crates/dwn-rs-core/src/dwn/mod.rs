@@ -1,3 +1,7 @@
+pub mod builder;
+pub mod core_protocol;
+pub mod validation;
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -10,7 +14,6 @@ use crate::interfaces::messages::descriptors::{
     CONFIGURE, COUNT, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, SUBSCRIBE, SYNC, WRITE,
 };
 use crate::interfaces::replies::Status;
-use crate::message_validation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantGateResult {
@@ -263,7 +266,7 @@ where
             }
         };
 
-        if let Err(error) = message_validation::validate_message(&raw_message) {
+        if let Err(error) = validation::validate_message(&raw_message) {
             return DwnReply::bad_request(error.to_string());
         }
 

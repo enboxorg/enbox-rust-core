@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use crate::agent::{
+use crate::identity::agent::{
     AgentIdentityError, AgentIdentityResult, AgentKeyManager, JsonWebKey, PortableDid, SecretStore,
 };
 use crate::interfaces::messages::protocols::{Definition, PathEncryption, RuleSet};
@@ -582,7 +582,7 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{
+    use crate::identity::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryDidResolverCache, MemoryKeyManager, MemorySecretStore,
     };

@@ -1,4 +1,4 @@
-//! Glue between [`dwn_rs_core::setup`] and the FFI surface.
+//! Glue between [`dwn_rs_core::identity::setup`] and the FFI surface.
 //!
 //! Exposes a local [`ProtocolEndpoint`] backed by [`SqliteNativeDwn`] plus
 //! the helpers needed to extract a `ProtocolsConfigure`/`ProtocolsQuery`
@@ -7,13 +7,13 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use dwn_rs_core::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
+use dwn_rs_core::identity::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
 use dwn_rs_core::auth::{Jws, JwsPrivateJwk, PrivateJwkSigner};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{ConfigureDescriptor, ProtocolQueryDescriptor};
 use dwn_rs_core::interfaces::messages::descriptors::protocols::QueryFilter;
 use dwn_rs_core::protocols::Definition;
-use dwn_rs_core::setup::{ProtocolEndpoint, SetupFuture};
+use dwn_rs_core::identity::setup::{ProtocolEndpoint, SetupFuture};
 use dwn_rs_stores::SqliteNativeDwn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -246,7 +246,7 @@ fn require_ok(reply: &JsonValue, error_code: &str) -> AgentIdentityResult<()> {
 ///
 /// Sends signed `ProtocolsQuery`/`ProtocolsConfigure` messages as JSON-RPC
 /// requests in the `dwn-request` header. Mirrors the transport used by
-/// [`dwn_rs_core::sync_endpoint::HttpSyncEndpoint`]: the response payload
+/// [`dwn_rs_core::sync::endpoint::HttpSyncEndpoint`]: the response payload
 /// is read from the `dwn-response` header when present, otherwise from
 /// the response body.
 #[derive(Clone)]

@@ -21,16 +21,16 @@ use serde_json::{json, Value as JsonValue};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::desktop::{
+use crate::runtime::desktop::{
     DesktopError, DesktopFuture, DesktopLocalServer, DesktopMessageProcessor,
     DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult, DesktopServerConfig,
     DesktopServerStatus, LOCAL_DWN_SERVER_NAME,
 };
-use crate::desktop_ws;
+use crate::runtime::desktop::ws as desktop_ws;
 use crate::dwn::{Dwn, TenantGate};
 
 pub const PROCESS_MESSAGE_METHOD: &str = "dwn.processMessage";
-pub use crate::desktop_ws::SharedDesktopSubscribeProcessor;
+pub use crate::runtime::desktop::ws::SharedDesktopSubscribeProcessor;
 
 type ProcessorFn = dyn Fn(
         DesktopProcessMessageRequest,
@@ -297,7 +297,7 @@ impl LoopbackDwnServer {
 impl DesktopLocalServer for LoopbackDwnServer {
     fn start<'a>(&'a self, config: DesktopServerConfig) -> DesktopFuture<'a, DesktopServerStatus> {
         Box::pin(async move {
-            if !super::desktop::is_loopback_host(&config.bind_host) {
+            if !super::is_loopback_host(&config.bind_host) {
                 return Err(DesktopError::new(
                     "DesktopLoopbackOnly",
                     format!(
@@ -340,10 +340,10 @@ impl DesktopLocalServer for LoopbackDwnServer {
                 })?
                 .port();
 
-            let endpoint = super::desktop::endpoint_url("http", &config.bind_host, bound_port);
+            let endpoint = super::endpoint_url("http", &config.bind_host, bound_port);
             let websocket_endpoint = config
                 .websocket_enabled
-                .then(|| super::desktop::endpoint_url("ws", &config.bind_host, bound_port));
+                .then(|| super::endpoint_url("ws", &config.bind_host, bound_port));
 
             let state = AppState {
                 processor: self.processor.clone(),

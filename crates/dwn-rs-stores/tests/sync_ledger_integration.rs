@@ -5,7 +5,7 @@ use dwn_rs_core::sync::{
     NativeSyncEngine, SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncProtocols,
     SyncRunStatus, SyncScope,
 };
-use dwn_rs_core::sync_ledger::SyncLedger;
+use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_stores::{SqliteStore, SqliteSyncLedger};
 
 mod mock_endpoint {

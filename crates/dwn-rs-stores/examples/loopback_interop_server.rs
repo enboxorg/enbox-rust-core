@@ -12,13 +12,13 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use dwn_rs_core::auth::{JwsPublicJwk, StaticPublicKeyResolver};
-use dwn_rs_core::desktop::{
+use dwn_rs_core::runtime::desktop::{
     DesktopLocalNode, DesktopNodeConfig, DesktopProcessMessageResult, DesktopServerConfig,
     DesktopStartMode, DesktopStartRequest, MemoryDesktopDeliveryQueue,
     MemoryDesktopDiscoveryRegistry, LOCAL_DWN_SERVER_NAME,
 };
-use dwn_rs_core::desktop_server::{LoopbackDwnServer, SharedDesktopMessageProcessor};
-use dwn_rs_core::desktop_ws::SharedDesktopSubscribeProcessor;
+use dwn_rs_core::runtime::desktop::server::{LoopbackDwnServer, SharedDesktopMessageProcessor};
+use dwn_rs_core::runtime::desktop::ws::SharedDesktopSubscribeProcessor;
 use dwn_rs_core::stores::SubscriptionListener;
 use dwn_rs_stores::SqliteNativeDwn;
 use tokio::sync::Mutex;
