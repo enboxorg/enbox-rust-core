@@ -23,7 +23,9 @@ impl DataStore for SqliteStore {
     }
 
     async fn close(&mut self) {
-        self.connection().await.ok().map(|conn| conn.close());
+        if let Ok(conn) = self.connection().await {
+            conn.close()
+        }
     }
 
     async fn put<T: Stream<Item = Bytes> + Send + Unpin>(

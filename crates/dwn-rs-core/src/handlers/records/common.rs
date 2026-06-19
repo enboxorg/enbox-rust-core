@@ -1,27 +1,20 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::ops::Bound;
-use std::pin::Pin;
-use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use bytes::Bytes;
-use futures_util::{stream, TryStreamExt};
-use serde_json::{json, Value as JsonValue};
+use serde_json::Value as JsonValue;
 
-use crate::auth::JwsPublicKeyResolver;
-use crate::cid::{
-    generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_message_cid_from_json,
-};
-use crate::core_protocol::{CoreProtocolRegistry, CoreProtocolStores};
+use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
+use crate::core_protocol::CoreProtocolRegistry;
 use crate::descriptors::records::CountDescriptor;
 use crate::descriptors::{
     DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,
     RecordsWriteDescriptor, SubscribeDescriptor,
 };
-use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
+use crate::dwn::DwnReply;
 use crate::errors::EventLogError;
 use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
@@ -31,7 +24,7 @@ use crate::interfaces::messages::protocols::{
 };
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
+use crate::stores::{EventSubscription, KeyValues};
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
 use super::{

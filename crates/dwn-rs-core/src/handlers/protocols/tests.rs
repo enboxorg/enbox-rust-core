@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ops::Bound;
 use std::sync::{Arc, RwLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -8,15 +9,20 @@ use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPubl
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
+    CONFIGURE, PROTOCOLS,
 };
 use crate::dwn::{Dwn, MessageKind};
 use crate::fields::WriteFields;
 use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, Type, Who,
 };
+use crate::protocols::RuleSet;
 use crate::state_index::MemoryStateIndex;
-use crate::stores::{MessageQueryResult, MessageStore, StateIndex};
-use crate::{Fields, MapValue, Message, Pagination, Value};
+use crate::stores::{KeyValues, MessageQueryResult, MessageStore, StateIndex};
+use crate::{
+    permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, Pagination, RangeFilter,
+    Value,
+};
 
 use super::common::*;
 use super::*;
@@ -296,7 +302,7 @@ async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
         "2025-01-01T00:00:00.000000Z",
     );
     message["descriptor"]["definition"]["protocol"] =
-        JsonValue::String("http://example.com/tampered".to_string());
+        serde_json::Value::String("http://example.com/tampered".to_string());
 
     let reply = handler
         .handle_configure("did:example:alice", &message)
@@ -459,7 +465,7 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
 
     let mut dwn = Dwn::default();
     dwn.register_handler(
-        MessageKind::new(PROTOCOLS_INTERFACE, CONFIGURE_METHOD),
+        MessageKind::new(PROTOCOLS, CONFIGURE),
         ProtocolsConfigureHandler::with_public_key_resolver(
             message_store.clone(),
             state_index,
@@ -467,7 +473,7 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
         ),
     );
     dwn.register_handler(
-        MessageKind::new(PROTOCOLS_INTERFACE, QUERY_METHOD_FOR_TESTS),
+        MessageKind::new(PROTOCOLS, QUERY_METHOD_FOR_TESTS),
         ProtocolsQueryHandler::new(message_store),
     );
 
@@ -630,7 +636,7 @@ impl MessageStore for TestMessageStore {
     }
 }
 
-fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> JsonValue {
+fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> serde_json::Value {
     signed_configure_message_with_signer(protocol, published, timestamp, test_signer())
 }
 
@@ -639,21 +645,21 @@ fn signed_configure_message_with_signer(
     published: bool,
     timestamp: &str,
     signer: PrivateJwkSigner,
-) -> JsonValue {
+) -> serde_json::Value {
     signed_configure_descriptor_with_signer(
         configure_descriptor(protocol, published, timestamp),
         signer,
     )
 }
 
-fn signed_configure_descriptor(descriptor: ConfigureDescriptor) -> JsonValue {
+fn signed_configure_descriptor(descriptor: ConfigureDescriptor) -> serde_json::Value {
     signed_configure_descriptor_with_signer(descriptor, test_signer())
 }
 
 fn signed_configure_descriptor_with_signer(
     descriptor: ConfigureDescriptor,
     signer: PrivateJwkSigner,
-) -> JsonValue {
+) -> serde_json::Value {
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let payload = serde_json::json!({
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
@@ -666,7 +672,7 @@ fn signed_configure_descriptor_with_signer(
     })
 }
 
-fn signed_query_message(protocol: Option<&str>, signer: PrivateJwkSigner) -> JsonValue {
+fn signed_query_message(protocol: Option<&str>, signer: PrivateJwkSigner) -> serde_json::Value {
     let descriptor = query_descriptor(protocol);
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let payload = serde_json::json!({
@@ -684,7 +690,7 @@ fn signed_query_message_with_grant(
     protocol: Option<&str>,
     signer: PrivateJwkSigner,
     permission_grant_id: &str,
-) -> JsonValue {
+) -> serde_json::Value {
     let mut descriptor = query_descriptor(protocol);
     descriptor.permission_grant_id = Some(permission_grant_id.to_string());
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
@@ -700,7 +706,7 @@ fn signed_query_message_with_grant(
     })
 }
 
-fn unsigned_query_message(protocol: Option<&str>) -> JsonValue {
+fn unsigned_query_message(protocol: Option<&str>) -> serde_json::Value {
     serde_json::json!({ "descriptor": query_descriptor(protocol) })
 }
 

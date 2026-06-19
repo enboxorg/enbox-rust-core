@@ -1,21 +1,36 @@
 use std::collections::BTreeMap;
+use std::ops::Bound;
 use std::sync::{Arc, RwLock};
 
-use futures_util::{Stream, StreamExt};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use bytes::Bytes;
+use futures_util::{stream, Stream, StreamExt};
+use serde_json::json;
 
 use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver};
-use crate::descriptors::{ConfigureDescriptor, Protocols as ProtocolsDescriptor};
+use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
+use crate::descriptors::{
+    ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor, Records,
+    RecordsWriteDescriptor, SubscribeDescriptor,
+};
 use crate::errors::{DataStoreError, MessageStoreError, StoreError};
 use crate::events::MessageEvent;
+use crate::fields::WriteFields;
+use crate::filters::Records as RecordsFilter;
 use crate::interfaces::messages::protocols::{ActionWho, Type};
 use crate::local::MemoryEventLog;
+use crate::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::state_index::MemoryStateIndex;
 use crate::stores::{
-    DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult, MessageStore,
-    StateIndex, SubscriptionMessage,
+    DataStore, DataStoreGetResult, DataStorePutResult, EventLog, KeyValues, MessageQueryResult,
+    MessageStore, StateIndex, SubscriptionMessage,
 };
-use crate::MapValue;
-use crate::Value;
+use crate::{
+    permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
+    RangeFilter, SortDirection,
+};
+use crate::{Descriptor, Value};
 
 use super::common::*;
 use super::*;
@@ -508,7 +523,7 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
         202
     );
     let mut delegated_grant = grant.clone();
-    delegated_grant["encodedData"] = JsonValue::String(URL_SAFE_NO_PAD.encode(&grant_data));
+    delegated_grant["encodedData"] = serde_json::Value::String(URL_SAFE_NO_PAD.encode(&grant_data));
 
     let note_data = Bytes::from_static(b"delegated note");
     let note = signed_write_message(WriteSpec {
@@ -899,7 +914,7 @@ impl WriteSpec {
     }
 }
 
-fn signed_write_message(spec: WriteSpec) -> JsonValue {
+fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
     let descriptor = RecordsWriteDescriptor {
         protocol: spec.protocol,
         protocol_path: spec.protocol_path,
@@ -940,10 +955,10 @@ fn signed_write_message(spec: WriteSpec) -> JsonValue {
 }
 
 fn with_author_delegated_grant(
-    mut message: JsonValue,
-    grant: &JsonValue,
+    mut message: serde_json::Value,
+    grant: &serde_json::Value,
     signer: PrivateJwkSigner,
-) -> JsonValue {
+) -> serde_json::Value {
     let grant_message: Message<Descriptor> = serde_json::from_value(grant.clone()).unwrap();
     let grant_cid = message_cid(&grant_message).unwrap();
     let descriptor_json = message["descriptor"].clone();
@@ -963,7 +978,7 @@ fn with_author_delegated_grant(
     message
 }
 
-fn signed_delete_message(record_id: &str, prune: bool, timestamp: &str) -> JsonValue {
+fn signed_delete_message(record_id: &str, prune: bool, timestamp: &str) -> serde_json::Value {
     let descriptor = DeleteDescriptor {
         message_timestamp: parse_time(timestamp),
         record_id: record_id.to_string(),
@@ -1001,7 +1016,7 @@ fn signed_records_subscribe_message(
     filter: RecordsFilter,
     cursor: Option<crate::stores::ProgressToken>,
     timestamp: &str,
-) -> JsonValue {
+) -> serde_json::Value {
     let descriptor = SubscribeDescriptor {
         message_timestamp: parse_time(timestamp),
         filter,
@@ -1017,7 +1032,7 @@ fn signed_records_subscribe_message(
     })
 }
 
-fn unsigned_query_message(filter: JsonValue) -> JsonValue {
+fn unsigned_query_message(filter: serde_json::Value) -> serde_json::Value {
     json!({
         "descriptor": {
             "interface": "Records",
@@ -1028,7 +1043,7 @@ fn unsigned_query_message(filter: JsonValue) -> JsonValue {
     })
 }
 
-fn unsigned_count_message(filter: JsonValue) -> JsonValue {
+fn unsigned_count_message(filter: serde_json::Value) -> serde_json::Value {
     json!({
         "descriptor": {
             "interface": "Records",
@@ -1039,7 +1054,7 @@ fn unsigned_count_message(filter: JsonValue) -> JsonValue {
     })
 }
 
-fn unsigned_read_message(filter: JsonValue) -> JsonValue {
+fn unsigned_read_message(filter: serde_json::Value) -> serde_json::Value {
     json!({
         "descriptor": {
             "interface": "Records",
@@ -1150,17 +1165,17 @@ async fn put_notes_protocol_without_actions(tenant: &str, message_store: &TestMe
 }
 
 fn signature_for_descriptor(
-    descriptor: &JsonValue,
-    extra_payload: JsonValue,
+    descriptor: &serde_json::Value,
+    extra_payload: serde_json::Value,
     signer: PrivateJwkSigner,
 ) -> Jws {
     let mut payload = extra_payload.as_object().cloned().unwrap_or_default();
     payload.insert(
         "descriptorCid".to_string(),
-        JsonValue::String(generate_cid_from_json(descriptor).unwrap().to_string()),
+        serde_json::Value::String(generate_cid_from_json(descriptor).unwrap().to_string()),
     );
     Jws::create_general(
-        serde_json::to_vec(&JsonValue::Object(payload))
+        serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),
         &[signer],
@@ -1172,24 +1187,24 @@ fn payload_with_permission_grant(
     record_id: &str,
     context_id: &str,
     permission_grant_id: Option<&str>,
-) -> JsonValue {
+) -> serde_json::Value {
     let mut payload = serde_json::Map::from_iter([
         (
             "recordId".to_string(),
-            JsonValue::String(record_id.to_string()),
+            serde_json::Value::String(record_id.to_string()),
         ),
         (
             "contextId".to_string(),
-            JsonValue::String(context_id.to_string()),
+            serde_json::Value::String(context_id.to_string()),
         ),
     ]);
     if let Some(permission_grant_id) = permission_grant_id {
         payload.insert(
             "permissionGrantId".to_string(),
-            JsonValue::String(permission_grant_id.to_string()),
+            serde_json::Value::String(permission_grant_id.to_string()),
         );
     }
-    JsonValue::Object(payload)
+    serde_json::Value::Object(payload)
 }
 
 fn parse_time(value: &str) -> chrono::DateTime<chrono::Utc> {

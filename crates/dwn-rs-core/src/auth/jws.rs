@@ -700,7 +700,7 @@ mod tests {
 
         // A different key must not verify the signature.
         let other: JwsPublicJwk =
-            serde_json::from_value(serde_json::to_value(&JWK::generate_secp256k1()).unwrap())
+            serde_json::from_value(serde_json::to_value(JWK::generate_secp256k1()).unwrap())
                 .unwrap();
 
         assert!(!jws

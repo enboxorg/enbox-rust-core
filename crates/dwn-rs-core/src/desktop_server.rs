@@ -185,22 +185,25 @@ where
     fn process_message(
         &self,
         tenant: &str,
-        message: JsonValue,
+        _message: JsonValue,
     ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
         let tenant = tenant.to_string();
         let dwn = Arc::clone(self);
-        Box::pin(async move { dwn.process_message(&tenant, message).await })
+        Box::pin(async move { dwn.process_message(&tenant, _message).await })
     }
 
     fn process_message_with_data(
         &self,
         tenant: &str,
-        message: JsonValue,
-        data: Option<bytes::Bytes>,
+        _message: JsonValue,
+        _data: Option<bytes::Bytes>,
     ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
         let tenant = tenant.to_string();
         let dwn = Arc::clone(self);
-        Box::pin(async move { dwn.process_message_with_data(&tenant, message, data).await })
+        Box::pin(async move {
+            dwn.process_message_with_data(&tenant, _message, _data)
+                .await
+        })
     }
 }
 

@@ -1,41 +1,14 @@
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::ops::Bound;
-use std::pin::Pin;
-use std::sync::Arc;
-
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use bytes::Bytes;
-use chrono::SecondsFormat;
-use futures_util::{stream, TryStreamExt};
 use serde_json::{json, Value as JsonValue};
 
-use crate::auth::JwsPublicKeyResolver;
-use crate::cid::{
-    generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_message_cid_from_json,
+use crate::dwn::DwnReply;
+use crate::filters::Filters;
+use crate::handlers::records::common::{
+    authorize_protocol_query_or_subscribe, filter_includes_published_records,
+    non_owner_records_filters, owner_records_filter, parse_message, published_records_filter,
+    records_count_descriptor, should_protocol_authorize, store_error_reply,
 };
-use crate::core_protocol::{CoreProtocolRegistry, CoreProtocolStores};
-use crate::descriptors::records::CountDescriptor;
-use crate::descriptors::{
-    DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,
-    RecordsWriteDescriptor, SubscribeDescriptor,
-};
-use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
-use crate::errors::EventLogError;
-use crate::fields::{Fields, WriteFields};
-use crate::filters::message_filters::Records as RecordsFilter;
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, Can, Definition, RuleSet, Who,
-};
-use crate::interfaces::replies::Status;
-use crate::permissions::{self, AuthorizationContext};
-use crate::stores::{EventLogSubscribeOptions, EventSubscription, KeyValues, SubscriptionListener};
-use crate::{Message, MessageSort, Pagination, SortDirection, Value};
+use crate::permissions::{self};
 
-use super::common::*;
 use super::{RecordsAuthorizationKind, RecordsCountHandler};
 
 impl<MessageStore> RecordsCountHandler<MessageStore>

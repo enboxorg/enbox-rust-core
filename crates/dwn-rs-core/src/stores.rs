@@ -349,30 +349,30 @@ pub trait ResumableTaskStore: Default {
 
 /// Placeholder [`EventLog`] for handlers that do not emit events.
 impl EventLog for () {
-    fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send {
-        async { Ok(()) }
+    async fn open(&mut self) -> Result<(), EventLogError> {
+        Ok(())
     }
 
-    fn close(&mut self) -> impl Future<Output = ()> + Send {
-        async {}
+    async fn close(&mut self) -> () {
+        // no-op
     }
 
-    fn emit(
+    async fn emit(
         &self,
         _tenant: &str,
         _event: MessageEvent<Descriptor>,
         _indexes: KeyValues,
         _message_cid: &str,
-    ) -> impl Future<Output = Result<Option<ProgressToken>, EventLogError>> + Send {
-        async { Ok(None) }
+    ) -> Result<Option<ProgressToken>, EventLogError> {
+        Ok(None)
     }
 
-    fn read(
+    async fn read(
         &self,
         _tenant: &str,
         _options: Option<EventLogReadOptions>,
-    ) -> impl Future<Output = Result<EventLogReadResult, EventLogError>> + Send {
-        async { Ok(EventLogReadResult::default()) }
+    ) -> Result<EventLogReadResult, EventLogError> {
+        Ok(EventLogReadResult::default())
     }
 
     fn subscribe(
@@ -391,19 +391,19 @@ impl EventLog for () {
         }
     }
 
-    fn get_replay_bounds(
+    async fn get_replay_bounds(
         &self,
         _tenant: &str,
-    ) -> impl Future<Output = Result<Option<EventLogReplayBounds>, EventLogError>> + Send {
-        async { Ok(None) }
+    ) -> Result<Option<EventLogReplayBounds>, EventLogError> {
+        Ok(None)
     }
 
-    fn trim(
+    async fn trim(
         &self,
         _tenant: &str,
         _older_than: EventLogTrimBound,
-    ) -> impl Future<Output = Result<(), EventLogError>> + Send {
-        async { Ok(()) }
+    ) -> Result<(), EventLogError> {
+        Ok(())
     }
 }
 

@@ -1,26 +1,12 @@
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use std::future::Future;
-use std::ops::Bound;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use chrono::SecondsFormat;
-use serde_json::Value as JsonValue;
-
 use crate::auth::JwsPublicKeyResolver;
 use crate::core_protocol::CoreProtocolRegistry;
-use crate::descriptors::{ConfigureDescriptor, Descriptor, Protocols};
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
-use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::interfaces::messages::protocols::{self as protocol_types, Definition, RuleSet};
-use crate::interfaces::replies::Status;
-use crate::permissions;
-use crate::stores::KeyValues;
-use crate::{Message, MessageSort, Pagination, SortDirection, Value};
-
-const PROTOCOLS_INTERFACE: &str = "Protocols";
-const CONFIGURE_METHOD: &str = "Configure";
+use crate::interfaces::messages::protocols::Definition;
+use crate::{MessageSort, Pagination, SortDirection};
 
 mod common;
 mod configure;

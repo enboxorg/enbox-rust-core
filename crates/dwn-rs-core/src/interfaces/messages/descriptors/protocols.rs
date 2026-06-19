@@ -132,7 +132,7 @@ mod test {
     use crate::{canonical_rfc3339, protocols::ActionWho};
 
     use super::*;
-    use chrono::{SecondsFormat, Utc};
+    use chrono::Utc;
     use serde_json::json;
     use ssi_jwk::JWK;
 

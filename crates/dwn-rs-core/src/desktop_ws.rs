@@ -25,17 +25,18 @@ const DEFAULT_MAX_IN_FLIGHT: usize = 32;
 
 type SharedSubscriptionListener = Arc<dyn Fn(SubscriptionMessage) + Send + Sync + 'static>;
 
+pub type SharedDesktopMessageProcessorFn = Arc<
+    dyn Fn(
+            DesktopProcessMessageRequest,
+            SharedSubscriptionListener,
+        ) -> Pin<Box<dyn Future<Output = DesktopResult<RecordsSubscribeReply>> + Send>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone)]
 pub struct SharedDesktopSubscribeProcessor {
-    inner: Arc<
-        dyn Fn(
-                DesktopProcessMessageRequest,
-                SharedSubscriptionListener,
-            )
-                -> Pin<Box<dyn Future<Output = DesktopResult<RecordsSubscribeReply>> + Send>>
-            + Send
-            + Sync,
-    >,
+    inner: SharedDesktopMessageProcessorFn,
 }
 
 impl SharedDesktopSubscribeProcessor {

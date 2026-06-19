@@ -5,8 +5,6 @@ use deadpool_sqlite::{Config, Hook, HookError, Pool, Runtime};
 use dwn_rs_core::errors::StoreError;
 use rusqlite::Connection;
 
-use super::store::SqliteStore;
-
 const BUSY_TIMEOUT_MS: isize = 5000;
 const READER_POOL_SIZE: usize = 10;
 

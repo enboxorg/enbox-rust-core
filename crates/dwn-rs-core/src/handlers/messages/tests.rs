@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use bytes::Bytes;
 use futures_util::stream;
 use serde_json::json;
@@ -19,9 +21,8 @@ use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult, MessageStore,
     StateIndex, SubscriptionMessage,
 };
-use crate::{MapValue, Value};
+use crate::{message_filters, permissions, Descriptor, MapValue, Message, Value};
 
-use super::common::*;
 use super::*;
 
 #[tokio::test]
@@ -181,7 +182,7 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
         test_resolver(),
     );
     let request = signed_subscribe_message(SubscribeSpec {
-        filters: vec![MessagesFilter {
+        filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),
             ..Default::default()
         }],
@@ -262,7 +263,7 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
         test_resolver(),
     );
     let request = signed_subscribe_message(SubscribeSpec {
-        filters: vec![MessagesFilter {
+        filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),
             ..Default::default()
         }],
@@ -384,7 +385,7 @@ fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<D
 #[derive(Clone)]
 struct SubscribeSpec {
     timestamp: String,
-    filters: Vec<MessagesFilter>,
+    filters: Vec<message_filters::Messages>,
     permission_grant_id: Option<String>,
     cursor: Option<crate::stores::ProgressToken>,
     signer: PrivateJwkSigner,
@@ -402,7 +403,7 @@ impl SubscribeSpec {
     }
 }
 
-fn signed_subscribe_message(spec: SubscribeSpec) -> JsonValue {
+fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
     let descriptor = MessagesSubscribeDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         filters: spec.filters,
@@ -412,7 +413,7 @@ fn signed_subscribe_message(spec: SubscribeSpec) -> JsonValue {
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let mut payload = serde_json::Map::from_iter([(
         "descriptorCid".to_string(),
-        JsonValue::String(
+        serde_json::Value::String(
             generate_cid_from_json(&descriptor_json)
                 .unwrap()
                 .to_string(),
@@ -421,11 +422,11 @@ fn signed_subscribe_message(spec: SubscribeSpec) -> JsonValue {
     if let Some(permission_grant_id) = spec.permission_grant_id {
         payload.insert(
             "permissionGrantId".to_string(),
-            JsonValue::String(permission_grant_id),
+            serde_json::Value::String(permission_grant_id),
         );
     }
     let signature = Jws::create_general(
-        serde_json::to_vec(&JsonValue::Object(payload))
+        serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),
         &[spec.signer],
@@ -464,7 +465,7 @@ impl SyncSpec {
     }
 }
 
-fn signed_sync_message(spec: SyncSpec) -> JsonValue {
+fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
     let descriptor = MessagesSyncDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         action: spec.action,
@@ -477,7 +478,7 @@ fn signed_sync_message(spec: SyncSpec) -> JsonValue {
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let mut payload = serde_json::Map::from_iter([(
         "descriptorCid".to_string(),
-        JsonValue::String(
+        serde_json::Value::String(
             generate_cid_from_json(&descriptor_json)
                 .unwrap()
                 .to_string(),
@@ -486,11 +487,11 @@ fn signed_sync_message(spec: SyncSpec) -> JsonValue {
     if let Some(permission_grant_id) = spec.permission_grant_id {
         payload.insert(
             "permissionGrantId".to_string(),
-            JsonValue::String(permission_grant_id),
+            serde_json::Value::String(permission_grant_id),
         );
     }
     let signature = Jws::create_general(
-        serde_json::to_vec(&JsonValue::Object(payload))
+        serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),
         &[spec.signer],
