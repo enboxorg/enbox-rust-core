@@ -19,8 +19,8 @@ use crate::events::MessageEvent;
 use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::interfaces::messages::protocols::{ActionWho, Type};
-use crate::stores::memory::MemoryEventLog;
 use crate::protocols::{Action, Can, Definition, RuleSet, Who};
+use crate::stores::memory::MemoryEventLog;
 use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, KeyValues, MessageQueryResult,

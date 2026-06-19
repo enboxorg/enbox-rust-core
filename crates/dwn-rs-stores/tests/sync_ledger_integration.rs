@@ -1,11 +1,11 @@
 //! Integration tests for durable sync ledger + engine persistence.
 
 use dwn_rs_core::stores::{ProgressToken, SubscriptionMessage};
+use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
     NativeSyncEngine, SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncProtocols,
     SyncRunStatus, SyncScope,
 };
-use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_stores::{SqliteStore, SqliteSyncLedger};
 
 mod mock_endpoint {

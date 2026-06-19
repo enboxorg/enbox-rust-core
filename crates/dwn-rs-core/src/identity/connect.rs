@@ -11,9 +11,9 @@ use crate::identity::agent::{
     AgentIdentityError, AgentIdentityResult, AgentKeyManager, DidProvider, JsonWebKey, PortableDid,
     SecretStore,
 };
+use crate::identity::setup::protocol_requires_encryption;
 use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::permissions::PermissionScope;
-use crate::identity::setup::protocol_requires_encryption;
 
 pub type ConnectFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
 

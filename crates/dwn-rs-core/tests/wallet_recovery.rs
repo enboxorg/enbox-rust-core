@@ -11,16 +11,16 @@ use dwn_rs_core::identity::connect::{
     create_delegate_grant, derive_delegate_keys, load_delegate_decryption_keys,
     save_delegate_decryption_keys, ConnectPermissionRequest,
 };
-use dwn_rs_core::interfaces::messages::protocols::{
-    Action, ActionWho, Can, Definition, RuleSet, Type, Who,
-};
-use dwn_rs_core::permissions::PermissionScope;
 use dwn_rs_core::identity::setup::{
     install_protocol_if_needed, register_with_dwn_endpoints, run_restore_flow, DwnServerInfo,
     MemoryProtocolEndpoint, RegistrationMethod, TenantRegistrationClient,
     TenantRegistrationRequest,
 };
 use dwn_rs_core::identity::setup::{RegistrationTokenData, SetupFuture};
+use dwn_rs_core::interfaces::messages::protocols::{
+    Action, ActionWho, Can, Definition, RuleSet, Type, Who,
+};
+use dwn_rs_core::permissions::PermissionScope;
 
 const RECOVERY_PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";

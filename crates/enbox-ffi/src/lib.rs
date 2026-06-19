@@ -6,29 +6,29 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::identity::agent::{
     derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
     DeterministicDidJwkProvider, MemoryDidResolverCache, MemoryKeyManager, PortableDid,
 };
-use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::identity::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
     derive_delegate_keys, load_delegate_context_keys, load_delegate_decryption_keys,
     save_delegate_context_keys, save_delegate_decryption_keys, DelegateContextKey,
     DelegateDecryptionKey,
 };
-use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
-use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::identity::setup::{
     inject_protocol_encryption, install_protocol_if_needed, push_protocol_if_needed,
     register_with_dwn_endpoints, run_restore_flow, TenantRegistrationRequest,
 };
+use dwn_rs_core::protocols::Definition;
+use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
+use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
+use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
     SyncCheckpoint, SyncConnectivity, SyncDirection, SyncIdentityOptions, SyncOnceRequest,
     SyncOnceResult, SyncRunStatus,
 };
-use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
-use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
 use serde::{Deserialize, Serialize};
 
@@ -1854,8 +1854,8 @@ mod tests {
     #[test]
     fn list_pending_scopes_surfaces_seeded_checkpoint_and_resume_drains_it_against_unreachable_remote(
     ) {
-        use dwn_rs_core::sync::{SyncCheckpoint, SyncDirection, SyncScope};
         use dwn_rs_core::sync::ledger::SyncLedger;
+        use dwn_rs_core::sync::{SyncCheckpoint, SyncDirection, SyncScope};
 
         let core = configured_sync_core();
 

@@ -18,11 +18,11 @@ use dwn_rs_core::descriptors::{
     RecordsCountDescriptor, RecordsQueryDescriptor, RecordsWriteDescriptor,
     SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
+use dwn_rs_core::dwn::validation as message_validation;
 use dwn_rs_core::dwn::{
     current_handler_kinds, Dwn, DwnReply, MessageKind, MethodHandler, MethodHandlerRequest,
 };
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
-use dwn_rs_core::dwn::validation as message_validation;
 use dwn_rs_core::stores::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
 use dwn_rs_stores::SqliteNativeDwn;

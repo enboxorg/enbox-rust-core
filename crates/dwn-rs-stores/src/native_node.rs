@@ -4,18 +4,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dwn_rs_core::auth::StaticPublicKeyResolver;
-use dwn_rs_core::dwn::Dwn;
-use dwn_rs_core::handlers::records::{RecordsEventLogSubscribeHandler, RecordsSubscribeReply};
 use dwn_rs_core::dwn::builder::{
     build_native_dwn_with_resolver, open_native_stores, NativeDwnConfig, NativeDwnOpenError,
     NativeDwnStores,
 };
+use dwn_rs_core::dwn::Dwn;
+use dwn_rs_core::handlers::records::{RecordsEventLogSubscribeHandler, RecordsSubscribeReply};
 use dwn_rs_core::stores::SubscriptionListener;
+use dwn_rs_core::sync::endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
 use dwn_rs_core::sync::{
     NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
     SyncRunStatus,
 };
-use dwn_rs_core::sync::endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
 use tokio::sync::RwLock;
 
 use crate::{
