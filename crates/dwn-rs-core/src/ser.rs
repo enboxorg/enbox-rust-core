@@ -31,6 +31,14 @@ where
     serializer.serialize_str(&cid.to_string())
 }
 
+pub fn deserialize_cid<'de, D>(deserializer: D) -> Result<::cid::Cid, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer)
+        .and_then(|cid| ::cid::Cid::from_str(&cid).map_err(serde::de::Error::custom))
+}
+
 pub mod optional_cid_string {
     use super::*;
 

@@ -101,9 +101,14 @@ pub type JWS = Jws;
 #[deprecated(since = "0.2.0", note = "use `Jws` instead")]
 pub type GeneralJws = Jws;
 
-#[derive(Serialize)]
-pub struct Payload {
-    #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericSignaturePayload {
+    #[serde(
+        rename = "descriptorCid",
+        serialize_with = "crate::ser::serialize_cid",
+        deserialize_with = "crate::ser::deserialize_cid"
+    )]
     pub descriptor_cid: Cid,
     #[serde(
         rename = "delegatedGrantId",
@@ -117,10 +122,73 @@ pub struct Payload {
     pub protocol_role: Option<String>,
 }
 
-impl JwsPayload for Payload {
+impl JwsPayload for GenericSignaturePayload {
     fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
         let payload = serde_json::to_vec(self).expect("JWS Payload serialization failed.");
         std::borrow::Cow::Owned(payload)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RecordsWriteSignaturePayload {
+    #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
+    pub descriptor_cid: Cid,
+    pub record_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::ser::optional_cid_string::serialize",
+        deserialize_with = "crate::ser::optional_cid_string::deserialize"
+    )]
+    pub attestation_cid: Option<Cid>,
+    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+    pub permission_grant_id: Option<String>,
+    #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
+    pub protocol_role: Option<String>,
+}
+
+impl JwsPayload for RecordsWriteSignaturePayload {
+    fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        let payload = serde_json::to_vec(self)
+            .expect("JWS RecordsWriteSignaturePayload serialization failed.");
+        std::borrow::Cow::Owned(payload)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum SignaturePayload {
+    Generic(GenericSignaturePayload),
+    RecordsWrite(RecordsWriteSignaturePayload),
+}
+
+impl SignaturePayload {
+    pub fn descriptor_cid(&self) -> &Cid {
+        match self {
+            Self::Generic(payload) => &payload.descriptor_cid,
+            Self::RecordsWrite(payload) => &payload.descriptor_cid,
+        }
+    }
+
+    pub fn permission_grant_id(&self) -> Option<&String> {
+        match self {
+            Self::Generic(payload) => payload.permission_grant_id.as_ref(),
+            Self::RecordsWrite(payload) => payload.permission_grant_id.as_ref(),
+        }
+    }
+
+    pub fn protocol_role(&self) -> Option<&String> {
+        match self {
+            Self::Generic(payload) => payload.protocol_role.as_ref(),
+            Self::RecordsWrite(payload) => payload.protocol_role.as_ref(),
+        }
+    }
+
+    pub fn delegated_grant_id(&self) -> Option<&Cid> {
+        match self {
+            Self::Generic(payload) => payload.delegated_grant_id.as_ref(),
+            Self::RecordsWrite(_) => None,
+        }
     }
 }
 
@@ -631,7 +699,7 @@ mod tests {
         let delegated_grant_id =
             Cid::from_str("bafyreia3vo2bkk4b4nshzup55wgkdgwpr5bsa474iyngfcegompdko6kt4").unwrap();
 
-        let payload = Payload {
+        let payload = GenericSignaturePayload {
             descriptor_cid,
             delegated_grant_id: Some(delegated_grant_id),
             permission_grant_id: Some("grant-123".to_string()),
