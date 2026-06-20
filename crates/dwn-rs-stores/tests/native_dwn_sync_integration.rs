@@ -11,10 +11,10 @@ use dwn_rs_core::interfaces::messages::descriptors::records::WriteDescriptor;
 use dwn_rs_core::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Type, Who,
 };
+use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
     SyncDirection, SyncIdentityOptions, SyncOnceRequest, SyncProtocols, SyncRunStatus,
 };
-use dwn_rs_core::sync_ledger::SyncLedger;
 use serde_json::{json, Value as JsonValue};
 
 use dwn_rs_stores::SqliteNativeDwn;

@@ -8,8 +8,8 @@ use futures_util::stream;
 use serde_json::Value as JsonValue;
 
 use crate::cid::generate_dag_pb_cid_from_bytes;
-use crate::core_protocol::CoreProtocolStores;
 use crate::descriptors::Descriptor;
+use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::DwnReply;
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::records::common::{

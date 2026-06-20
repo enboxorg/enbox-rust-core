@@ -8,7 +8,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 
 use dwn_rs_core::errors::{ResumableTaskStoreError, StoreError};
-use dwn_rs_core::local::MemoryResumableTaskStore;
+use dwn_rs_core::stores::memory::MemoryResumableTaskStore;
 use dwn_rs_core::stores::{ManagedResumableTask, ResumableTaskStore};
 
 use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};

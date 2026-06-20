@@ -2,25 +2,25 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use chrono::{Duration, Utc};
-use dwn_rs_core::agent::{
+use dwn_rs_core::identity::agent::{
     AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
     IdentityMetadata, MemoryDidResolverCache, MemoryKeyManager, MemorySecretStore,
     PortableIdentity,
 };
-use dwn_rs_core::connect::{
+use dwn_rs_core::identity::connect::{
     create_delegate_grant, derive_delegate_keys, load_delegate_decryption_keys,
     save_delegate_decryption_keys, ConnectPermissionRequest,
 };
-use dwn_rs_core::interfaces::messages::protocols::{
-    Action, ActionWho, Can, Definition, RuleSet, Type, Who,
-};
-use dwn_rs_core::permissions::PermissionScope;
-use dwn_rs_core::setup::{
+use dwn_rs_core::identity::setup::{
     install_protocol_if_needed, register_with_dwn_endpoints, run_restore_flow, DwnServerInfo,
     MemoryProtocolEndpoint, RegistrationMethod, TenantRegistrationClient,
     TenantRegistrationRequest,
 };
-use dwn_rs_core::setup::{RegistrationTokenData, SetupFuture};
+use dwn_rs_core::identity::setup::{RegistrationTokenData, SetupFuture};
+use dwn_rs_core::interfaces::messages::protocols::{
+    Action, ActionWho, Can, Definition, RuleSet, Type, Who,
+};
+use dwn_rs_core::permissions::PermissionScope;
 
 const RECOVERY_PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -160,7 +160,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
 }
 
 struct RecoveredAgent {
-    portable_did: dwn_rs_core::agent::PortableDid,
+    portable_did: dwn_rs_core::identity::agent::PortableDid,
     key_manager: MemoryKeyManager,
     secret_store: MemorySecretStore,
 }
@@ -274,7 +274,7 @@ impl TenantRegistrationClient for MockRegistrationClient {
         _refresh_token: &'a str,
     ) -> SetupFuture<'a, RegistrationTokenData> {
         Box::pin(async move {
-            Err(dwn_rs_core::agent::AgentIdentityError::new(
+            Err(dwn_rs_core::identity::agent::AgentIdentityError::new(
                 "UnexpectedRefresh",
                 "test does not use provider auth",
             ))

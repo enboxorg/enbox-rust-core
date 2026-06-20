@@ -1,3 +1,6 @@
+pub mod memory;
+pub mod state_index;
+
 use std::{fmt::Debug, future::Future, pin::Pin};
 
 use bytes::Bytes;

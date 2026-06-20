@@ -6,29 +6,29 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use dwn_rs_core::agent::{
+use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use dwn_rs_core::identity::agent::{
     derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
     DeterministicDidJwkProvider, MemoryDidResolverCache, MemoryKeyManager, PortableDid,
 };
-use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
-use dwn_rs_core::connect::{
+use dwn_rs_core::identity::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
     derive_delegate_keys, load_delegate_context_keys, load_delegate_decryption_keys,
     save_delegate_context_keys, save_delegate_decryption_keys, DelegateContextKey,
     DelegateDecryptionKey,
 };
-use dwn_rs_core::mobile::MobileInitializeRequest;
-use dwn_rs_core::protocols::Definition;
-use dwn_rs_core::setup::{
+use dwn_rs_core::identity::setup::{
     inject_protocol_encryption, install_protocol_if_needed, push_protocol_if_needed,
     register_with_dwn_endpoints, run_restore_flow, TenantRegistrationRequest,
 };
+use dwn_rs_core::protocols::Definition;
+use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
+use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
+use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
     SyncCheckpoint, SyncConnectivity, SyncDirection, SyncIdentityOptions, SyncOnceRequest,
     SyncOnceResult, SyncRunStatus,
 };
-use dwn_rs_core::sync_endpoint::JwsSyncAuthorizer;
-use dwn_rs_core::sync_ledger::SyncLedger;
 use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
 use serde::{Deserialize, Serialize};
 
@@ -99,8 +99,8 @@ pub enum EnboxError {
     DeadlineExceeded,
 }
 
-impl From<dwn_rs_core::agent::AgentIdentityError> for EnboxError {
-    fn from(err: dwn_rs_core::agent::AgentIdentityError) -> Self {
+impl From<dwn_rs_core::identity::agent::AgentIdentityError> for EnboxError {
+    fn from(err: dwn_rs_core::identity::agent::AgentIdentityError) -> Self {
         EnboxError::Agent {
             code: err.code,
             detail: err.detail,
@@ -382,7 +382,7 @@ impl EnboxCore {
     /// Record host-supplied runtime metadata (`device_id`, `app_group`,
     /// optional override `database_path`, and `background_refresh_enabled`).
     ///
-    /// `request_json` must match [`dwn_rs_core::mobile::MobileInitializeRequest`]
+    /// `request_json` must match [`dwn_rs_core::runtime::mobile::MobileInitializeRequest`]
     /// (camelCase: `deviceId`, `appGroup`, `databasePath`,
     /// `backgroundRefreshEnabled`). Calling this does **not** open or
     /// migrate the SQLite database — use [`Self::open`] for that.
@@ -831,7 +831,7 @@ impl EnboxCore {
     /// When `persistTokens: true`, the agent secret store is read first
     /// (overriding any inline `registrationTokens`) and written back at
     /// the end with any refreshed tokens, matching
-    /// `dwn_rs_core::setup::register_with_dwn_endpoints`.
+    /// `dwn_rs_core::identity::setup::register_with_dwn_endpoints`.
     ///
     /// Returns the JSON-serialized `TenantRegistrationResult` (per-endpoint
     /// `records` and the final `registrationTokens` map).
@@ -894,7 +894,7 @@ impl EnboxCore {
     ///
     /// Returns the JSON-serialized `RestoreFlowResult` (ordered `steps`,
     /// `localInstalls`, `remotePushes`). Identity tenant restoration is
-    /// out of scope (see `dwn_rs_core::setup::run_restore_flow` docs).
+    /// out of scope (see `dwn_rs_core::identity::setup::run_restore_flow` docs).
     pub fn run_restore_flow(&self, request_json: String) -> Result<String, EnboxError> {
         let input: setup::RunRestoreFlowInput =
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
@@ -1354,8 +1354,8 @@ impl EnboxCore {
 pub(crate) async fn import_existing_identity(
     service: &AgentService,
     portable_did: &PortableDid,
-) -> Result<(), dwn_rs_core::agent::AgentIdentityError> {
-    use dwn_rs_core::agent::{DidProvider, DidResolverCache};
+) -> Result<(), dwn_rs_core::identity::agent::AgentIdentityError> {
+    use dwn_rs_core::identity::agent::{DidProvider, DidResolverCache};
     service
         .did_provider()
         .import_did(portable_did.clone())
@@ -1370,8 +1370,8 @@ pub(crate) async fn import_existing_identity(
 pub(crate) async fn import_private_keys(
     key_manager: &MemoryKeyManager,
     portable_did: &PortableDid,
-) -> Result<(), dwn_rs_core::agent::AgentIdentityError> {
-    use dwn_rs_core::agent::AgentKeyManager;
+) -> Result<(), dwn_rs_core::identity::agent::AgentIdentityError> {
+    use dwn_rs_core::identity::agent::AgentKeyManager;
     for jwk in &portable_did.private_keys {
         key_manager.import_private_jwk(jwk.clone()).await?;
     }
@@ -1854,8 +1854,8 @@ mod tests {
     #[test]
     fn list_pending_scopes_surfaces_seeded_checkpoint_and_resume_drains_it_against_unreachable_remote(
     ) {
+        use dwn_rs_core::sync::ledger::SyncLedger;
         use dwn_rs_core::sync::{SyncCheckpoint, SyncDirection, SyncScope};
-        use dwn_rs_core::sync_ledger::SyncLedger;
 
         let core = configured_sync_core();
 

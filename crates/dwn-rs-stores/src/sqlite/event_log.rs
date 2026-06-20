@@ -7,7 +7,7 @@ use rusqlite::{params, OptionalExtension};
 
 use dwn_rs_core::errors::{EventLogError, StoreError};
 use dwn_rs_core::events::MessageEvent;
-use dwn_rs_core::local::MemoryEventLog;
+use dwn_rs_core::stores::memory::MemoryEventLog;
 use dwn_rs_core::stores::{
     EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues, ProgressToken,

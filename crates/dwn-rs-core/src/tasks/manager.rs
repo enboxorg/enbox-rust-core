@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::errors::ResumableTaskStoreError;
-use crate::storage_controller::{
+use crate::stores::{ManagedResumableTask, ResumableTaskStore};
+use crate::tasks::controller::{
     ResumableRecordsDeleteData, ResumableRecordsSquashData, StorageController,
 };
-use crate::stores::{ManagedResumableTask, ResumableTaskStore};
 
 pub const TIMEOUT_EXTENSION_FREQUENCY_SECONDS: u64 = 30;
 

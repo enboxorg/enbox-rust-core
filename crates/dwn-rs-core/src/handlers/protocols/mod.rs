@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::auth::JwsPublicKeyResolver;
-use crate::core_protocol::CoreProtocolRegistry;
+use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
 use crate::interfaces::messages::protocols::Definition;
 use crate::{MessageSort, Pagination, SortDirection};

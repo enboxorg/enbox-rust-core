@@ -1,13 +1,13 @@
 //! Integration tests for the loopback desktop HTTP server.
 
-use dwn_rs_core::desktop::DesktopProcessMessageResult;
-use dwn_rs_core::desktop::{
+use dwn_rs_core::runtime::desktop::server::{
+    LoopbackDwnServer, SharedDesktopMessageProcessor, PROCESS_MESSAGE_METHOD,
+};
+use dwn_rs_core::runtime::desktop::DesktopProcessMessageResult;
+use dwn_rs_core::runtime::desktop::{
     DesktopLocalNode, DesktopNodeConfig, DesktopServerConfig, DesktopStartMode,
     DesktopStartRequest, MemoryDesktopDeliveryQueue, MemoryDesktopDiscoveryRegistry,
     LOCAL_DWN_SERVER_NAME,
-};
-use dwn_rs_core::desktop_server::{
-    LoopbackDwnServer, SharedDesktopMessageProcessor, PROCESS_MESSAGE_METHOD,
 };
 use serde_json::json;
 

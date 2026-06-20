@@ -1,4 +1,4 @@
-//! FFI request/response shapes for [`dwn_rs_core::connect`] flows.
+//! FFI request/response shapes for [`dwn_rs_core::identity::connect`] flows.
 //!
 //! The pure constructor functions (`create_permission_request`,
 //! `create_delegate_grant`, `create_grant_revocation`) and the key
@@ -7,8 +7,8 @@
 //! DWeb Connect flow without a JS runtime.
 
 use chrono::{DateTime, Utc};
-use dwn_rs_core::agent::PortableDid;
-use dwn_rs_core::connect::{ConnectPermissionRequest, DelegateGrant};
+use dwn_rs_core::identity::agent::PortableDid;
+use dwn_rs_core::identity::connect::{ConnectPermissionRequest, DelegateGrant};
 use dwn_rs_core::permissions::PermissionScope;
 use serde::{Deserialize, Serialize};
 

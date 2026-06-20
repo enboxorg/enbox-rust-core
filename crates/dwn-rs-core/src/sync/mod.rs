@@ -1,3 +1,6 @@
+pub mod endpoint;
+pub mod ledger;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -16,7 +19,7 @@ use ulid::Ulid;
 use crate::dwn::DwnReply;
 use crate::events::MessageEvent;
 use crate::stores::{ProgressToken, SubscriptionMessage};
-use crate::sync_ledger::{MemorySyncLedger, SyncLedger};
+use crate::sync::ledger::{MemorySyncLedger, SyncLedger};
 use crate::Descriptor;
 
 pub type SyncResult<T> = Result<T, SyncError>;

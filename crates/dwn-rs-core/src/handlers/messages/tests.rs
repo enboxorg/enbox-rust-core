@@ -15,8 +15,8 @@ use crate::descriptors::{
 use crate::errors::{DataStoreError, MessageStoreError};
 use crate::events::MessageEvent;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
-use crate::local::MemoryEventLog;
-use crate::state_index::MemoryStateIndex;
+use crate::stores::memory::MemoryEventLog;
+use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult, MessageStore,
     StateIndex, SubscriptionMessage,
