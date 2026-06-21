@@ -120,7 +120,7 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
     let output = quote_spanned! { ast.span() =>
         #[serde_with::skip_serializing_none]
         #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Clone)]
-        #[serde(into = #intofrom, from = #intofrom)]
+        #[serde(into = #intofrom, try_from = #intofrom)]
         #items
 
         #[derive(serde::Deserialize, serde::Serialize, Clone)]
@@ -136,11 +136,19 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
             }
         }
 
-        impl From<#item_ser_ident> for #ident {
-            fn from(internal: #item_ser_ident) -> Self {
-                #ident {
-                    #from_idents
+        impl core::convert::TryFrom<#item_ser_ident> for #ident {
+            type Error = String;
+
+            fn try_from(internal: #item_ser_ident) -> core::result::Result<Self, Self::Error> {
+                if internal.interface != #interface || internal.method != #method {
+                    return Err(format!(
+                        "Expected interface '{}' and method '{}', found interface '{}' and method '{}'",
+                        #interface, #method, internal.interface, internal.method
+                    ));
                 }
+                Ok(#ident {
+                    #from_idents
+                })
             }
         }
 
@@ -174,10 +182,11 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
             where
                 Des: serde::Deserializer<'de>,
             {
-                // Deserialize the internal struct
+                // `interface`/`method` validation happens in the descriptor's
+                // `TryFrom<#item_ser_ident>` impl (via `#[serde(try_from)]`), so a
+                // mismatched descriptor is rejected here too — no JSON buffering needed.
                 let inner: #deserialize_message_ident<#ident> = serde::Deserialize::deserialize(deserializer)?;
 
-                // Return the message
                 Ok(crate::Message {
                     descriptor: inner.descriptor,
                     fields: inner.fields,
