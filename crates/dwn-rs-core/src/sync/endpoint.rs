@@ -592,7 +592,7 @@ async fn external_inline_data<DS: DataStore>(
     tenant: &str,
     message: &crate::Message<crate::Descriptor>,
 ) -> Result<Option<String>, String> {
-    use crate::interfaces::messages::descriptors::general::Records as RecordsDescriptor;
+    use crate::interfaces::messages::descriptors::Records as RecordsDescriptor;
     use crate::Descriptor;
     use crate::Fields;
 

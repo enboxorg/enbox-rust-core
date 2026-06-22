@@ -13,7 +13,7 @@ pub use messages::{
 pub use protocols::{ConfigureDescriptor, QueryDescriptor as ProtocolQueryDescriptor};
 pub use records::{
     CountDescriptor as RecordsCountDescriptor, DeleteDescriptor,
-    QueryDescriptor as RecordsQueryDescriptor, ReadDescriptor, SubscribeDescriptor,
+    QueryDescriptor as RecordsQueryDescriptor, ReadDescriptor, Records, SubscribeDescriptor,
     WriteDescriptor as RecordsWriteDescriptor,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
