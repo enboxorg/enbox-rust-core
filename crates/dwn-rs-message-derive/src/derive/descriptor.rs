@@ -152,17 +152,23 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
             }
         }
 
+        impl #generics ConcreteDescriptor for #ident #generics #where_clause
+        {
+            const INTERFACE: &'static str = #interface;
+            const METHOD: &'static str = #method;
+        }
+
         impl #generics MessageDescriptor for #ident #generics #where_clause
         {
             type Fields = #fields;
             type Parameters = #parameters;
 
             fn interface(&self) -> &'static str {
-                #interface
+                <Self as ConcreteDescriptor>::INTERFACE
             }
 
             fn method(&self) -> &'static str {
-                #method
+                <Self as ConcreteDescriptor>::METHOD
             }
         }
 

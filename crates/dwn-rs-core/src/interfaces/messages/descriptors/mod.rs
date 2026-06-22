@@ -71,6 +71,16 @@ impl MessageParameters for () {
     type Fields = Fields;
 }
 
+// ConcreteDescriptor is a trait that all concrete message descriptors must implement. It
+// is normally implemented by the derive macro for concrete message descriptors. It provides the
+// interface and method for the concrete message descriptor. The generic `Descriptor` implements
+// the `MessageDescriptor` trait for use when the concrete type is not known. Concrete Descriptor types
+// implement this trait directly (or use the derive macro).
+pub trait ConcreteDescriptor: MessageDescriptor + Serialize + DeserializeOwned + PartialEq {
+    const INTERFACE: &'static str;
+    const METHOD: &'static str;
+}
+
 /// MessageDescriptor is a trait that all message descriptors must implement.
 /// It provides the interface and method for the message descriptor. The generic `Descriptor`
 /// implements this trait for use when the concrete type is not known. Concrete Descriptor types
