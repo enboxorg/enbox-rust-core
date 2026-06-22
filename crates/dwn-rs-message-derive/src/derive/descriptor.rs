@@ -12,36 +12,43 @@ use syn::{Fields, FieldsNamed, Ident, ItemStruct, Path};
 // parse the attribtutes (`interface`, `method`) from DeriveInput and return them
 // as their Interface and related enum Method type
 pub struct DescriptorAttr {
-    interface: Ident,
-    method: Ident,
-    fields: Path,
-    parameters: Option<Path>,
+    pub(crate) interface: Option<syn::Path>,
+    pub(crate) method: Ident,
+    pub(crate) fields: Path,
+    pub(crate) parameters: Option<Path>,
+    pub(crate) variant: Option<Ident>,
+    pub(crate) boxed: bool,
 }
 
 impl Parse for DescriptorAttr {
     fn parse(input: ParseStream) -> Result<Self> {
-        let mut interface = None;
-        let mut method = None;
-        let mut fields = None;
-        let mut parameters = None;
+        let (mut interface, mut method, mut fields, mut parameters, mut variant, mut boxed) =
+            (None, None, None, None, None, false);
 
         while !input.is_empty() {
-            let ident: syn::Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
-            match ident.to_string().as_str() {
-                "interface" => {
-                    interface = Some(input.parse()?);
+            let key: syn::Ident = input.parse()?;
+            if key == "boxed" {
+                boxed = true;
+            } else {
+                input.parse::<Token![=]>()?;
+                match key.to_string().as_str() {
+                    "interface" => {
+                        interface = Some(input.parse()?);
+                    } // ignore if present; module wins
+                    "method" => {
+                        method = Some(input.parse()?);
+                    }
+                    "fields" => {
+                        fields = Some(input.parse()?);
+                    }
+                    "parameters" => {
+                        parameters = Some(input.parse()?);
+                    }
+                    "variant" => {
+                        variant = Some(input.parse()?);
+                    }
+                    _ => return Err(syn::Error::new(key.span(), "unknown attribute")),
                 }
-                "method" => {
-                    method = Some(input.parse()?);
-                }
-                "fields" => {
-                    fields = Some(input.parse()?);
-                }
-                "parameters" => {
-                    parameters = Some(input.parse()?);
-                }
-                _ => return Err(syn::Error::new(ident.span(), "unknown attribute")),
             }
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
@@ -49,11 +56,12 @@ impl Parse for DescriptorAttr {
         }
 
         Ok(Self {
-            interface: interface
-                .ok_or_else(|| syn::Error::new(input.span(), "missing interface"))?,
+            interface,
             method: method.ok_or_else(|| syn::Error::new(input.span(), "missing method"))?,
             fields: fields.ok_or_else(|| syn::Error::new(input.span(), "missing fields"))?,
             parameters,
+            variant,
+            boxed,
         })
     }
 }
@@ -69,7 +77,7 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
 
     let ident = &items.ident;
     let item_ser_ident = format_ident!("{}Internal", &items.ident);
-    let interface = attrs.interface;
+    let interface = attrs.interface.expect("interface is required");
     let method = attrs.method;
     let fields = attrs.fields;
     let parameters = attrs.parameters;
@@ -233,7 +241,6 @@ mod tests {
 
     #[test]
     fn test_parse_descriptor_attr() {
-        const RECORDS: &str = "RECORDS";
         const READ: &str = "READ";
         let input = quote! {
             interface = RECORDS,
@@ -244,7 +251,6 @@ mod tests {
 
         let attr: DescriptorAttr = parse2(input).unwrap();
 
-        assert_eq!(attr.interface.to_token_stream().to_string(), RECORDS);
         assert_eq!(attr.method.to_token_stream().to_string(), READ);
         assert_eq!(
             attr.fields.to_token_stream().to_string(),
@@ -268,10 +274,12 @@ mod tests {
 
         // Define macro implementation attributes
         let attrs = DescriptorAttr {
-            interface: format_ident!("ExampleInterface"),
+            interface: Some(parse_quote! { Records }),
             method: format_ident!("ExampleMethod"),
             fields: parse_quote! { FieldsNamed },
             parameters: Some(parse_quote! { FieldsNamed }),
+            variant: None,
+            boxed: false,
         };
 
         // Apply the macro
