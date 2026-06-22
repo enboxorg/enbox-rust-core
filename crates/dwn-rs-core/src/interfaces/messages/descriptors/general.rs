@@ -4,12 +4,13 @@ use crate::Fields;
 
 use super::{
     super::descriptors::{
-        ConfigureDescriptor, MessagesQueryDescriptor, MessagesReadDescriptor,
-        MessagesSubscribeDescriptor, MessagesSyncDescriptor, ProtocolQueryDescriptor,
+        MessagesQueryDescriptor, MessagesReadDescriptor, MessagesSubscribeDescriptor,
+        MessagesSyncDescriptor,
     },
+    protocols::Protocols,
     records::Records,
-    MessageDescriptor, MessageValidator, ValidationError, CONFIGURE, MESSAGES, PROTOCOLS, QUERY,
-    READ, RECORDS, SUBSCRIBE, SYNC,
+    MessageDescriptor, MessageValidator, ValidationError, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS,
+    SUBSCRIBE, SYNC,
 };
 
 /// Interfaces represent the different Decentralized Web Node message interface types.
@@ -49,72 +50,6 @@ impl MessageDescriptor for Descriptor {
             Descriptor::Records(records) => records.method(),
             Descriptor::Protocols(protocols) => protocols.method(),
             Descriptor::Messages(messages) => messages.method(),
-        }
-    }
-}
-
-#[derive(Serialize, Debug, PartialEq, Clone)]
-#[serde(untagged)]
-pub enum Protocols {
-    Configure(ConfigureDescriptor),
-    Query(ProtocolQueryDescriptor),
-}
-
-impl<'de> Deserialize<'de> for Protocols {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let interface = value
-            .get("interface")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| serde::de::Error::custom("Protocols descriptor missing interface"))?;
-        if interface != PROTOCOLS {
-            return Err(serde::de::Error::custom(format!(
-                "expected Protocols interface, found {interface}"
-            )));
-        }
-        let method = value
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| serde::de::Error::custom("Protocols descriptor missing method"))?;
-
-        match method {
-            CONFIGURE => serde_json::from_value(value)
-                .map(Protocols::Configure)
-                .map_err(serde::de::Error::custom),
-            QUERY => serde_json::from_value(value)
-                .map(Protocols::Query)
-                .map_err(serde::de::Error::custom),
-            method => Err(serde::de::Error::custom(format!(
-                "unsupported Protocols method {method}"
-            ))),
-        }
-    }
-}
-
-impl MessageValidator for Protocols {
-    fn validate(&self) -> Result<(), ValidationError> {
-        match self {
-            Protocols::Configure(_) => Ok(()),
-            Protocols::Query(_) => Ok(()),
-        }
-    }
-}
-
-impl MessageDescriptor for Protocols {
-    type Fields = Fields;
-    type Parameters = ();
-
-    fn interface(&self) -> &'static str {
-        PROTOCOLS
-    }
-
-    fn method(&self) -> &'static str {
-        match self {
-            Protocols::Configure(_) => CONFIGURE,
-            Protocols::Query(_) => QUERY,
         }
     }
 }

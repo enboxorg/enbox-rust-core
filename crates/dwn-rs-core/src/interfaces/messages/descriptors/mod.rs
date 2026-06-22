@@ -10,7 +10,7 @@ pub use messages::{
     QueryDescriptor as MessagesQueryDescriptor, ReadDescriptor as MessagesReadDescriptor,
     SubscribeDescriptor as MessagesSubscribeDescriptor, SyncDescriptor as MessagesSyncDescriptor,
 };
-pub use protocols::{ConfigureDescriptor, QueryDescriptor as ProtocolQueryDescriptor};
+pub use protocols::{ConfigureDescriptor, Protocols, QueryDescriptor as ProtocolQueryDescriptor};
 pub use records::{
     CountDescriptor as RecordsCountDescriptor, DeleteDescriptor,
     QueryDescriptor as RecordsQueryDescriptor, ReadDescriptor, Records, SubscribeDescriptor,
