@@ -3,14 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::Fields;
 
 use super::{
-    super::descriptors::{
-        MessagesQueryDescriptor, MessagesReadDescriptor, MessagesSubscribeDescriptor,
-        MessagesSyncDescriptor,
-    },
-    protocols::Protocols,
-    records::Records,
-    MessageDescriptor, MessageValidator, ValidationError, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS,
-    SUBSCRIBE, SYNC,
+    messages::Messages, protocols::Protocols, records::Records, MessageDescriptor,
+    MessageValidator, ValidationError, MESSAGES, PROTOCOLS, RECORDS,
 };
 
 /// Interfaces represent the different Decentralized Web Node message interface types.
@@ -54,89 +48,11 @@ impl MessageDescriptor for Descriptor {
     }
 }
 
-#[derive(Serialize, Debug, PartialEq, Clone)]
-#[serde(untagged)]
-pub enum Messages {
-    Read(MessagesReadDescriptor),
-    Query(MessagesQueryDescriptor),
-    Subscribe(MessagesSubscribeDescriptor),
-    Sync(MessagesSyncDescriptor),
-}
-
-impl<'de> Deserialize<'de> for Messages {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let interface = value
-            .get("interface")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| serde::de::Error::custom("Messages descriptor missing interface"))?;
-        if interface != MESSAGES {
-            return Err(serde::de::Error::custom(format!(
-                "expected Messages interface, found {interface}"
-            )));
-        }
-        let method = value
-            .get("method")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| serde::de::Error::custom("Messages descriptor missing method"))?;
-
-        match method {
-            READ => serde_json::from_value(value)
-                .map(Messages::Read)
-                .map_err(serde::de::Error::custom),
-            QUERY => serde_json::from_value(value)
-                .map(Messages::Query)
-                .map_err(serde::de::Error::custom),
-            SUBSCRIBE => serde_json::from_value(value)
-                .map(Messages::Subscribe)
-                .map_err(serde::de::Error::custom),
-            SYNC => serde_json::from_value(value)
-                .map(Messages::Sync)
-                .map_err(serde::de::Error::custom),
-            method => Err(serde::de::Error::custom(format!(
-                "unsupported Messages method {method}"
-            ))),
-        }
-    }
-}
-
-impl MessageValidator for Messages {
-    fn validate(&self) -> Result<(), ValidationError> {
-        match self {
-            Messages::Read(_) => Ok(()),
-            Messages::Query(_) => Ok(()),
-            Messages::Subscribe(_) => Ok(()),
-            Messages::Sync(_) => Ok(()),
-        }
-    }
-}
-
-impl MessageDescriptor for Messages {
-    type Fields = Fields;
-    type Parameters = ();
-
-    fn interface(&self) -> &'static str {
-        MESSAGES
-    }
-
-    fn method(&self) -> &'static str {
-        match self {
-            Messages::Read(_) => READ,
-            Messages::Query(_) => QUERY,
-            Messages::Subscribe(_) => SUBSCRIBE,
-            Messages::Sync(_) => SYNC,
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use serde_json::json;
 
-    use crate::descriptors::ReadDescriptor;
+    use crate::descriptors::{ReadDescriptor, READ};
     use crate::{canonical_rfc3339, filters::Records as RecordsFilter};
 
     #[test]

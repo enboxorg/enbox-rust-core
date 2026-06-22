@@ -7,7 +7,7 @@ pub use general::*;
 
 use crate::cid::generate_cid_from_serialized;
 pub use messages::{
-    QueryDescriptor as MessagesQueryDescriptor, ReadDescriptor as MessagesReadDescriptor,
+    Messages, QueryDescriptor as MessagesQueryDescriptor, ReadDescriptor as MessagesReadDescriptor,
     SubscribeDescriptor as MessagesSubscribeDescriptor, SyncDescriptor as MessagesSyncDescriptor,
 };
 pub use protocols::{ConfigureDescriptor, Protocols, QueryDescriptor as ProtocolQueryDescriptor};
