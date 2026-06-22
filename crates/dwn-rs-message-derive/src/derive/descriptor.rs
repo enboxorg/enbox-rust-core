@@ -126,11 +126,14 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
     let intofrom = format!("{}", &item_ser_ident);
 
     let output = quote_spanned! { ast.span() =>
-        #[serde_with::skip_serializing_none]
         #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Clone)]
         #[serde(into = #intofrom, try_from = #intofrom)]
         #items
 
+        // `skip_serializing_none` belongs on the `Internal` struct: that's the type
+        // actually serialized (the public struct uses `#[serde(into)]`). Placing it here
+        // omits `None` fields on the wire regardless of macro expansion order.
+        #[serde_with::skip_serializing_none]
         #[derive(serde::Deserialize, serde::Serialize, Clone)]
         #item_ser
 
