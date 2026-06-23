@@ -10,9 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::interfaces::messages::descriptors::{
-    CONFIGURE, COUNT, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, SUBSCRIBE, SYNC, WRITE,
-};
+use crate::interfaces::messages::descriptors::{InterfaceUnion, Messages, Protocols, Records};
 use crate::interfaces::replies::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,20 +309,20 @@ pub fn default_method_handlers() -> MethodHandlerMap {
         .collect()
 }
 
+/// The set of `(interface, method)` kinds this node dispatches handlers for.
+///
+/// Derived from the descriptor declarations: each interface union (`Records`/`Protocols`/
+/// `Messages`) reports its kinds via [`InterfaceUnion::KINDS`], and descriptors marked
+/// `no_handler` (e.g. `MessagesQuery`) are filtered out. Adding a handler-backed descriptor in a
+/// `#[interface]` module registers it here automatically — no hand-maintained list to keep in sync.
 pub fn current_handler_kinds() -> Vec<MessageKind> {
-    vec![
-        MessageKind::new(MESSAGES, READ),
-        MessageKind::new(MESSAGES, SUBSCRIBE),
-        MessageKind::new(MESSAGES, SYNC),
-        MessageKind::new(PROTOCOLS, CONFIGURE),
-        MessageKind::new(PROTOCOLS, QUERY),
-        MessageKind::new(RECORDS, COUNT),
-        MessageKind::new(RECORDS, DELETE),
-        MessageKind::new(RECORDS, QUERY),
-        MessageKind::new(RECORDS, READ),
-        MessageKind::new(RECORDS, SUBSCRIBE),
-        MessageKind::new(RECORDS, WRITE),
-    ]
+    Records::KINDS
+        .iter()
+        .chain(Messages::KINDS)
+        .chain(Protocols::KINDS)
+        .filter(|kind| kind.2)
+        .map(|&(interface, method, _)| MessageKind::new(interface, method))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -363,6 +361,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::interfaces::messages::descriptors::{MESSAGES, QUERY, READ, RECORDS};
 
     #[tokio::test]
     async fn process_message_rejects_inactive_tenant_before_dispatch() {
@@ -485,6 +484,18 @@ mod tests {
             reply.status.detail,
             "RecordsQuery handler is not implemented"
         );
+    }
+
+    #[tokio::test]
+    async fn current_handler_kinds_excludes_no_handler_descriptors() {
+        let kinds = current_handler_kinds();
+
+        // `MessagesQuery` is a deserializable descriptor variant on the `Messages` union...
+        assert!(Messages::KINDS.iter().any(|&(_, method, _)| method == QUERY));
+        // ...but it is marked `no_handler`, so it is excluded from the dispatch set.
+        assert!(!kinds.contains(&MessageKind::new(MESSAGES, QUERY)));
+        // The other Messages methods remain handler-backed.
+        assert!(kinds.contains(&MessageKind::new(MESSAGES, READ)));
     }
 
     #[derive(Clone)]
