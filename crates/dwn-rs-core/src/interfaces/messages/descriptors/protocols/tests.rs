@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
+use crate::canonical_rfc3339;
 use crate::interfaces::messages::descriptors::{CONFIGURE, PROTOCOLS};
 use crate::protocols::{self, ActionWho};
-use crate::canonical_rfc3339;
 
 use super::*;
 use chrono::Utc;
