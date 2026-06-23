@@ -10,7 +10,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::interfaces::messages::descriptors::{InterfaceUnion, Messages, Protocols, Records};
+use crate::interfaces::messages::descriptors::{
+    ConcreteDescriptor, InterfaceUnion, Messages, Protocols, Records,
+};
 use crate::interfaces::replies::Status;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +68,12 @@ impl MessageKind {
             interface: interface.into(),
             method: method.into(),
         }
+    }
+
+    /// The kind for a concrete descriptor type, derived from its
+    /// [`ConcreteDescriptor::INTERFACE`]/[`ConcreteDescriptor::METHOD`] constants.
+    pub fn of<D: ConcreteDescriptor>() -> Self {
+        Self::new(D::INTERFACE, D::METHOD)
     }
 
     pub fn from_message(message: &Value) -> Result<Self, DwnValidationError> {
@@ -151,6 +159,13 @@ pub trait MethodHandler: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
 }
 
+/// Associates a method handler with the concrete descriptor it serves, so its dispatch
+/// [`MessageKind`] can be derived via [`MessageKind::of`] / [`Dwn::register`] instead of being
+/// hand-specified at the registration site.
+pub trait HandlesDescriptor {
+    type Descriptor: ConcreteDescriptor;
+}
+
 pub type MethodHandlerMap = BTreeMap<MessageKind, Arc<dyn MethodHandler>>;
 
 pub struct DwnConfig<
@@ -234,6 +249,15 @@ where
 
     pub fn register_handler(&mut self, kind: MessageKind, handler: impl MethodHandler + 'static) {
         self.config.handlers.insert(kind, Arc::new(handler));
+    }
+
+    /// Register a handler, deriving its [`MessageKind`] from the descriptor it handles
+    /// ([`HandlesDescriptor`]) — no need to restate the interface/method at the call site.
+    pub fn register<H>(&mut self, handler: H)
+    where
+        H: MethodHandler + HandlesDescriptor + 'static,
+    {
+        self.register_handler(MessageKind::of::<H::Descriptor>(), handler);
     }
 
     pub fn handlers(&self) -> &MethodHandlerMap {
@@ -491,7 +515,9 @@ mod tests {
         let kinds = current_handler_kinds();
 
         // `MessagesQuery` is a deserializable descriptor variant on the `Messages` union...
-        assert!(Messages::KINDS.iter().any(|&(_, method, _)| method == QUERY));
+        assert!(Messages::KINDS
+            .iter()
+            .any(|&(_, method, _)| method == QUERY));
         // ...but it is marked `no_handler`, so it is excluded from the dispatch set.
         assert!(!kinds.contains(&MessageKind::new(MESSAGES, QUERY)));
         // The other Messages methods remain handler-backed.
