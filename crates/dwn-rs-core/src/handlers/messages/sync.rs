@@ -10,17 +10,31 @@ use serde_json::Value as JsonValue;
 
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
-use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions::{self};
 use crate::stores::StateHash;
 use crate::Message;
 
+use super::common::*;
+
 const MAX_SYNC_DEPTH: usize = 256;
 const MAX_INLINE_DATA_SIZE: u64 = 30_000;
 
-use super::common::*;
-use super::MessagesSyncHandler;
+#[derive(Clone)]
+pub struct MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
+    message_store: MessageStore,
+    data_store: DataStore,
+    state_index: StateIndex,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore, DataStore, StateIndex> HandlesDescriptor
+    for MessagesSyncHandler<MessageStore, DataStore, StateIndex>
+{
+    type Descriptor = MessagesSyncDescriptor;
+}
+
 impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
     pub fn new(
         message_store: MessageStore,

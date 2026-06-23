@@ -11,11 +11,10 @@ use crate::dwn::DwnReply;
 use crate::errors::EventLogError;
 use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::filters::{Filter, FilterKey, Filters};
+use crate::handlers::messages::subscribe::SubscribeReply;
 use crate::interfaces::messages::descriptors::messages::{ReadDescriptor, SyncAction};
 use crate::stores::{EventSubscription, StateHash};
 use crate::{canonical_rfc3339, Fields, Message};
-
-use super::SubscribeReply;
 
 const MAX_SYNC_DEPTH: usize = 256;
 
