@@ -184,11 +184,12 @@ where
     }
 }
 
-// This is a custom deserializer for the Message struct. It is necessary because the Message
-// struct has a generic type parameter that is not known at compile time. This deserializer
-// is the generalized version, which can deserialize any descriptor type. Individual
-// Descriptor types still implement their own typed deserializers via the
-// `#[descriptor]` macro.
+// Custom deserializer for the untyped `Message<Descriptor>`. The `Descriptor` union dispatches
+// on the `interface`/`method` fields (via the generated `Records`/`Protocols`/`Messages` enums)
+// to pick the concrete descriptor when the type is not known at compile time. Concrete
+// `Message<D>` deserializers are generated instead by the `#[descriptor]` macro (and, for the
+// interface unions, by `#[interface]`), each validating `interface`/`method` against the
+// descriptor's `ConcreteDescriptor` consts.
 impl<'de> Deserialize<'de> for Message<Descriptor> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -222,6 +223,11 @@ where
     /// caller wants the strongly-typed descriptor variant rather than the
     /// untyped [`Descriptor`] union. Use [`Message::deserialize`] (via
     /// `serde_json::from_str`) when reading from a string slice.
+    ///
+    /// This is type-safe: the descriptor's `#[serde(try_from)]` impl rejects a
+    /// value whose `interface`/`method` do not match `D`, so deserializing a
+    /// message of the wrong kind into `Message<D>` returns an error rather than
+    /// silently producing a mismatched value.
     pub fn from_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
         serde_json::from_value(value)
     }
@@ -231,7 +237,7 @@ where
 mod test {
 
     use chrono::Utc;
-    use descriptors::{ReadDescriptor, Records};
+    use descriptors::{ReadDescriptor, Records, RecordsWriteDescriptor};
     use dwn_rs_message_derive::descriptor;
     use fields::MessageFields;
     use serde_json::json;
@@ -352,5 +358,48 @@ mod test {
         let recovered = Message::<TestDescriptor>::from_value(value).unwrap();
 
         assert_eq!(recovered, original);
+    }
+
+    #[test]
+    fn typed_from_value_rejects_wrong_method() {
+        // Structurally valid for `TestDescriptor`, but `method` does not match — the
+        // descriptor's `try_from` (via `#[serde(try_from)]`) must reject it.
+        let value = json!({
+            "descriptor": {"data": "test", "interface": "interface", "method": "wrong"},
+            "field1": "test",
+            "field2": 42,
+        });
+
+        assert!(Message::<TestDescriptor>::from_value(value).is_err());
+    }
+
+    #[test]
+    fn typed_from_value_rejects_wrong_interface() {
+        let value = json!({
+            "descriptor": {"data": "test", "interface": "wrong", "method": "method"},
+            "field1": "test",
+            "field2": 42,
+        });
+
+        assert!(Message::<TestDescriptor>::from_value(value).is_err());
+    }
+
+    #[test]
+    fn typed_from_value_rejects_mismatched_descriptor_kind() {
+        // A real RecordsRead message must not deserialize into a RecordsWrite-typed `Message`.
+        let now = Utc::now();
+        let read = Message::new(
+            Descriptor::Records(Box::new(Records::Read(Box::new(ReadDescriptor {
+                message_timestamp: now,
+                filter: crate::filters::Records::default(),
+                permission_grant_id: None,
+                date_sort: None,
+            })))),
+            Fields::Authorization(Authorization::default()),
+        )
+        .unwrap();
+        let value = serde_json::to_value(&read).unwrap();
+
+        assert!(Message::<RecordsWriteDescriptor>::from_value(value).is_err());
     }
 }
