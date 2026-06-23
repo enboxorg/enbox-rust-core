@@ -2,8 +2,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use futures_util::TryStreamExt;
 use serde_json::{json, Value as JsonValue};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
-use crate::dwn::DwnReply;
+use crate::auth::JwsPublicKeyResolver;
+use crate::descriptors::ReadDescriptor;
+use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
 use crate::filters::{FilterKey, Filters};
 use crate::handlers::records::common::{
     authorize_records_read, bool_filter, date_sort_to_message_sort, extract_author,
@@ -15,7 +20,65 @@ use crate::handlers::records::common::{
 use crate::permissions::{self};
 use crate::Pagination;
 
-use super::{RecordsReadHandler, RECORDS_INTERFACE};
+use super::RECORDS_INTERFACE;
+
+#[derive(Clone)]
+pub struct RecordsReadHandler<MessageStore, DataStore> {
+    message_store: MessageStore,
+    data_store: DataStore,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore, DataStore> HandlesDescriptor for RecordsReadHandler<MessageStore, DataStore> {
+    type Descriptor = ReadDescriptor;
+}
+
+impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore> {
+    pub fn new(message_store: MessageStore, data_store: DataStore) -> Self {
+        Self {
+            message_store,
+            data_store,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            public_key_resolver,
+        }
+    }
+}
+
+impl<MessageStore, DataStore> MethodHandler for RecordsReadHandler<MessageStore, DataStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_read(request.tenant, request.message).await })
+    }
+}
 
 impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore>
 where

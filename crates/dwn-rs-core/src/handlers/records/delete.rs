@@ -1,8 +1,13 @@
 use serde_json::Value as JsonValue;
 use std::cmp::Ordering;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
+use crate::auth::JwsPublicKeyResolver;
+use crate::descriptors::DeleteDescriptor;
 use crate::descriptors::Descriptor;
-use crate::dwn::DwnReply;
+use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
 use crate::handlers::records::common::{
     accepted_reply, authorize_records_delete, can_perform_delete_against_record, compare_messages,
     conflict_reply, delete_from_data_store_if_needed, extract_author, fetch_record_messages,
@@ -15,7 +20,80 @@ use crate::permissions::{self};
 use crate::Message;
 
 use super::write::perform_records_squash;
-use super::RecordsDeleteHandler;
+
+#[derive(Clone)]
+pub struct RecordsDeleteHandler<MessageStore, DataStore, StateIndex> {
+    message_store: MessageStore,
+    data_store: DataStore,
+    state_index: StateIndex,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore, DataStore, StateIndex> HandlesDescriptor
+    for RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
+{
+    type Descriptor = DeleteDescriptor;
+}
+
+impl<MessageStore, DataStore, StateIndex>
+    RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
+{
+    pub fn new(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            public_key_resolver,
+        }
+    }
+}
+
+impl<MessageStore, DataStore, StateIndex> MethodHandler
+    for RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_delete(request.tenant, request.message).await })
+    }
+}
 
 impl<MessageStore, DataStore, StateIndex> RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
 where

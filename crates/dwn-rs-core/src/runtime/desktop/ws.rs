@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use tokio::sync::mpsc;
 
-use crate::handlers::records::RecordsSubscribeReply;
+use crate::handlers::records::subscribe::RecordsSubscribeReply;
 use crate::runtime::desktop::server::{SharedDesktopMessageProcessor, PROCESS_MESSAGE_METHOD};
 use crate::runtime::desktop::{
     DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult,

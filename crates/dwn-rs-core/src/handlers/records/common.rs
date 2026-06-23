@@ -20,6 +20,7 @@ use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::handlers::configure::fetch_protocol_definition;
+use crate::handlers::records::subscribe::RecordsSubscribeReply;
 use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, Can, Definition, RuleSet, Who,
 };
@@ -28,10 +29,7 @@ use crate::permissions::{self, AuthorizationContext};
 use crate::stores::{EventSubscription, KeyValues};
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
-use super::{
-    RecordsAuthorizationKind, RecordsSubscribeReply, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE,
-    WRITE_METHOD,
-};
+use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum QueryAuthorizationResult {
