@@ -77,7 +77,17 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
 
     let ident = &items.ident;
     let item_ser_ident = format_ident!("{}Internal", &items.ident);
-    let interface = attrs.interface.expect("interface is required");
+    let interface = match attrs.interface {
+        Some(interface) => interface,
+        None => {
+            return syn::Error::new(
+                ast.span(),
+                "`#[descriptor]` requires `interface = <CONST>` \
+                 (inside `#[interface]` modules it is supplied by the module header)",
+            )
+            .to_compile_error();
+        }
+    };
     let method = attrs.method;
     let fields = attrs.fields;
     let parameters = attrs.parameters;
@@ -140,8 +150,8 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
         impl From<#ident> for #item_ser_ident {
             fn from(from: #ident) -> Self {
                 #item_ser_ident {
-                    interface: from.interface().to_string(),
-                    method: from.method().to_string(),
+                    interface: <#ident as crate::interfaces::messages::descriptors::ConcreteDescriptor>::INTERFACE.to_string(),
+                    method: <#ident as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD.to_string(),
                     #into_idents
                 }
             }
@@ -163,23 +173,23 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
             }
         }
 
-        impl #generics ConcreteDescriptor for #ident #generics #where_clause
+        impl #generics crate::interfaces::messages::descriptors::ConcreteDescriptor for #ident #generics #where_clause
         {
             const INTERFACE: &'static str = #interface;
             const METHOD: &'static str = #method;
         }
 
-        impl #generics MessageDescriptor for #ident #generics #where_clause
+        impl #generics crate::interfaces::messages::descriptors::MessageDescriptor for #ident #generics #where_clause
         {
             type Fields = #fields;
             type Parameters = #parameters;
 
             fn interface(&self) -> &'static str {
-                <Self as ConcreteDescriptor>::INTERFACE
+                <Self as crate::interfaces::messages::descriptors::ConcreteDescriptor>::INTERFACE
             }
 
             fn method(&self) -> &'static str {
-                <Self as ConcreteDescriptor>::METHOD
+                <Self as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD
             }
         }
 
@@ -290,8 +300,12 @@ mod tests {
 
         // Check for key elements in the generated code
         assert!(output.to_string().contains("ExampleInternal"));
+        // Trait paths are fully qualified so consumers don't need a `use`.
         assert!(output
             .to_string()
-            .contains("impl MessageDescriptor for Example"));
+            .contains("MessageDescriptor for Example"));
+        assert!(output
+            .to_string()
+            .contains("ConcreteDescriptor for Example"));
     }
 }

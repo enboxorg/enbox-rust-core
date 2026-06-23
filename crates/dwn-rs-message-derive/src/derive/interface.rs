@@ -107,7 +107,7 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         .fields
         .clone()
         .map(|p| quote!(#p))
-        .unwrap_or_else(|| quote!(Fields));
+        .unwrap_or_else(|| quote!(crate::Fields));
     let uparams = args
         .parameters
         .clone()
@@ -131,7 +131,7 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             quote!()
         };
         quote! {
-            if method == <#ty as ConcreteDescriptor>::METHOD {
+            if method == <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD {
                 return serde_json::from_value::<#ty>(value)
                     #cons
                     .map(#name::#vn)
@@ -142,7 +142,7 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
 
     let method_arms = variants.iter().map(|v| {
         let (vn, ty) = (&v.variant, &v.ty);
-        quote!(#name::#vn(_) => <#ty as ConcreteDescriptor>::METHOD)
+        quote!(#name::#vn(_) => <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD)
     });
     let validate_arms = variants.iter().map(|v| {
         let vn = &v.variant;
@@ -185,7 +185,7 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             }
         }
 
-        impl MessageDescriptor for #name {
+        impl crate::interfaces::messages::descriptors::MessageDescriptor for #name {
             type Fields = #ufields;
             type Parameters = #uparams;
             fn interface(&self) -> &'static str { #iface }
@@ -194,8 +194,10 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             }
         }
 
-        impl MessageValidator for #name {
-            fn validate(&self) -> core::result::Result<(), ValidationError> {
+        impl crate::interfaces::messages::descriptors::MessageValidator for #name {
+            fn validate(
+                &self,
+            ) -> core::result::Result<(), crate::interfaces::messages::descriptors::ValidationError> {
                 match self { #(#validate_arms),* }
             }
         }

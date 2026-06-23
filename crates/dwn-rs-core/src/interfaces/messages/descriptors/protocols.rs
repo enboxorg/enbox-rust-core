@@ -14,11 +14,8 @@ pub use inner::*;
 #[interface(PROTOCOLS, union = Protocols)]
 mod inner {
     use super::QueryFilter;
-    use crate::descriptors::{
-        ConcreteDescriptor, MessageDescriptor, MessageValidator, ValidationError,
-    };
     use crate::interfaces::messages::descriptors::{CONFIGURE, PROTOCOLS, QUERY};
-    use crate::{protocols, Fields};
+    use crate::protocols;
 
     /// ConfigureDescriptor represents the ProtocolsConfigure interface method for configuring a
     /// protocol on the DWN.

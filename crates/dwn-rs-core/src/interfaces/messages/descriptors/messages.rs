@@ -13,12 +13,9 @@ pub use inner::*;
 #[interface(MESSAGES, union = Messages)]
 mod inner {
     use super::SyncAction;
-    use crate::descriptors::{
-        ConcreteDescriptor, MessageDescriptor, MessageValidator, ValidationError,
-    };
     use crate::filters::message_filters::Messages as MessagesFilter;
     use crate::interfaces::messages::descriptors::{MESSAGES, QUERY, READ, SUBSCRIBE, SYNC};
-    use crate::{Cursor, Fields};
+    use crate::Cursor;
     use cid::Cid;
     use std::collections::BTreeMap;
 
