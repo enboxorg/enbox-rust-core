@@ -12,36 +12,43 @@ use syn::{Fields, FieldsNamed, Ident, ItemStruct, Path};
 // parse the attribtutes (`interface`, `method`) from DeriveInput and return them
 // as their Interface and related enum Method type
 pub struct DescriptorAttr {
-    interface: Ident,
-    method: Ident,
-    fields: Path,
-    parameters: Option<Path>,
+    pub(crate) interface: Option<syn::Path>,
+    pub(crate) method: Ident,
+    pub(crate) fields: Path,
+    pub(crate) parameters: Option<Path>,
+    pub(crate) variant: Option<Ident>,
+    pub(crate) boxed: bool,
 }
 
 impl Parse for DescriptorAttr {
     fn parse(input: ParseStream) -> Result<Self> {
-        let mut interface = None;
-        let mut method = None;
-        let mut fields = None;
-        let mut parameters = None;
+        let (mut interface, mut method, mut fields, mut parameters, mut variant, mut boxed) =
+            (None, None, None, None, None, false);
 
         while !input.is_empty() {
-            let ident: syn::Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
-            match ident.to_string().as_str() {
-                "interface" => {
-                    interface = Some(input.parse()?);
+            let key: syn::Ident = input.parse()?;
+            if key == "boxed" {
+                boxed = true;
+            } else {
+                input.parse::<Token![=]>()?;
+                match key.to_string().as_str() {
+                    "interface" => {
+                        interface = Some(input.parse()?);
+                    } // ignore if present; module wins
+                    "method" => {
+                        method = Some(input.parse()?);
+                    }
+                    "fields" => {
+                        fields = Some(input.parse()?);
+                    }
+                    "parameters" => {
+                        parameters = Some(input.parse()?);
+                    }
+                    "variant" => {
+                        variant = Some(input.parse()?);
+                    }
+                    _ => return Err(syn::Error::new(key.span(), "unknown attribute")),
                 }
-                "method" => {
-                    method = Some(input.parse()?);
-                }
-                "fields" => {
-                    fields = Some(input.parse()?);
-                }
-                "parameters" => {
-                    parameters = Some(input.parse()?);
-                }
-                _ => return Err(syn::Error::new(ident.span(), "unknown attribute")),
             }
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
@@ -49,11 +56,12 @@ impl Parse for DescriptorAttr {
         }
 
         Ok(Self {
-            interface: interface
-                .ok_or_else(|| syn::Error::new(input.span(), "missing interface"))?,
+            interface,
             method: method.ok_or_else(|| syn::Error::new(input.span(), "missing method"))?,
             fields: fields.ok_or_else(|| syn::Error::new(input.span(), "missing fields"))?,
             parameters,
+            variant,
+            boxed,
         })
     }
 }
@@ -69,7 +77,17 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
 
     let ident = &items.ident;
     let item_ser_ident = format_ident!("{}Internal", &items.ident);
-    let interface = attrs.interface;
+    let interface = match attrs.interface {
+        Some(interface) => interface,
+        None => {
+            return syn::Error::new(
+                ast.span(),
+                "`#[descriptor]` requires `interface = <CONST>` \
+                 (inside `#[interface]` modules it is supplied by the module header)",
+            )
+            .to_compile_error();
+        }
+    };
     let method = attrs.method;
     let fields = attrs.fields;
     let parameters = attrs.parameters;
@@ -118,43 +136,60 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
     let intofrom = format!("{}", &item_ser_ident);
 
     let output = quote_spanned! { ast.span() =>
-        #[serde_with::skip_serializing_none]
         #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Clone)]
-        #[serde(into = #intofrom, from = #intofrom)]
+        #[serde(into = #intofrom, try_from = #intofrom)]
         #items
 
+        // `skip_serializing_none` belongs on the `Internal` struct: that's the type
+        // actually serialized (the public struct uses `#[serde(into)]`). Placing it here
+        // omits `None` fields on the wire regardless of macro expansion order.
+        #[serde_with::skip_serializing_none]
         #[derive(serde::Deserialize, serde::Serialize, Clone)]
         #item_ser
 
         impl From<#ident> for #item_ser_ident {
             fn from(from: #ident) -> Self {
                 #item_ser_ident {
-                    interface: from.interface().to_string(),
-                    method: from.method().to_string(),
+                    interface: <#ident as crate::interfaces::messages::descriptors::ConcreteDescriptor>::INTERFACE.to_string(),
+                    method: <#ident as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD.to_string(),
                     #into_idents
                 }
             }
         }
 
-        impl From<#item_ser_ident> for #ident {
-            fn from(internal: #item_ser_ident) -> Self {
-                #ident {
-                    #from_idents
+        impl core::convert::TryFrom<#item_ser_ident> for #ident {
+            type Error = String;
+
+            fn try_from(internal: #item_ser_ident) -> core::result::Result<Self, Self::Error> {
+                if internal.interface != #interface || internal.method != #method {
+                    return Err(format!(
+                        "Expected interface '{}' and method '{}', found interface '{}' and method '{}'",
+                        #interface, #method, internal.interface, internal.method
+                    ));
                 }
+                Ok(#ident {
+                    #from_idents
+                })
             }
         }
 
-        impl #generics MessageDescriptor for #ident #generics #where_clause
+        impl #generics crate::interfaces::messages::descriptors::ConcreteDescriptor for #ident #generics #where_clause
+        {
+            const INTERFACE: &'static str = #interface;
+            const METHOD: &'static str = #method;
+        }
+
+        impl #generics crate::interfaces::messages::descriptors::MessageDescriptor for #ident #generics #where_clause
         {
             type Fields = #fields;
             type Parameters = #parameters;
 
             fn interface(&self) -> &'static str {
-                #interface
+                <Self as crate::interfaces::messages::descriptors::ConcreteDescriptor>::INTERFACE
             }
 
             fn method(&self) -> &'static str {
-                #method
+                <Self as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD
             }
         }
 
@@ -174,10 +209,11 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
             where
                 Des: serde::Deserializer<'de>,
             {
-                // Deserialize the internal struct
+                // `interface`/`method` validation happens in the descriptor's
+                // `TryFrom<#item_ser_ident>` impl (via `#[serde(try_from)]`), so a
+                // mismatched descriptor is rejected here too — no JSON buffering needed.
                 let inner: #deserialize_message_ident<#ident> = serde::Deserialize::deserialize(deserializer)?;
 
-                // Return the message
                 Ok(crate::Message {
                     descriptor: inner.descriptor,
                     fields: inner.fields,
@@ -218,7 +254,6 @@ mod tests {
 
     #[test]
     fn test_parse_descriptor_attr() {
-        const RECORDS: &str = "RECORDS";
         const READ: &str = "READ";
         let input = quote! {
             interface = RECORDS,
@@ -229,7 +264,6 @@ mod tests {
 
         let attr: DescriptorAttr = parse2(input).unwrap();
 
-        assert_eq!(attr.interface.to_token_stream().to_string(), RECORDS);
         assert_eq!(attr.method.to_token_stream().to_string(), READ);
         assert_eq!(
             attr.fields.to_token_stream().to_string(),
@@ -253,10 +287,12 @@ mod tests {
 
         // Define macro implementation attributes
         let attrs = DescriptorAttr {
-            interface: format_ident!("ExampleInterface"),
+            interface: Some(parse_quote! { Records }),
             method: format_ident!("ExampleMethod"),
             fields: parse_quote! { FieldsNamed },
             parameters: Some(parse_quote! { FieldsNamed }),
+            variant: None,
+            boxed: false,
         };
 
         // Apply the macro
@@ -264,8 +300,10 @@ mod tests {
 
         // Check for key elements in the generated code
         assert!(output.to_string().contains("ExampleInternal"));
+        // Trait paths are fully qualified so consumers don't need a `use`.
+        assert!(output.to_string().contains("MessageDescriptor for Example"));
         assert!(output
             .to_string()
-            .contains("impl MessageDescriptor for Example"));
+            .contains("ConcreteDescriptor for Example"));
     }
 }

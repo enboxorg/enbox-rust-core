@@ -3,12 +3,58 @@ use serde_with::skip_serializing_none;
 use ssi_dids_core::DIDBuf;
 
 use crate::auth::Authorization;
-use crate::descriptors::MessageDescriptor;
-use crate::interfaces::messages::descriptors::{CONFIGURE, PROTOCOLS, QUERY};
 use crate::{protocols, Message};
-use dwn_rs_message_derive::descriptor;
+
+use dwn_rs_message_derive::interface;
 
 use super::{MessageParameters, MessageValidator, RecordsWriteDescriptor};
+
+pub use inner::*;
+
+#[interface(PROTOCOLS, union = Protocols)]
+mod inner {
+    use super::QueryFilter;
+    use crate::interfaces::messages::descriptors::{CONFIGURE, PROTOCOLS, QUERY};
+    use crate::protocols;
+
+    /// ConfigureDescriptor represents the ProtocolsConfigure interface method for configuring a
+    /// protocol on the DWN.
+    #[descriptor(
+        method = CONFIGURE,
+        variant = Configure,
+        fields = crate::auth::Authorization,
+        parameters = super::ConfigureParameters
+    )]
+    pub struct ConfigureDescriptor {
+        #[serde(
+            rename = "messageTimestamp",
+            serialize_with = "crate::ser::serialize_datetime"
+        )]
+        pub message_timestamp: chrono::DateTime<chrono::Utc>,
+        pub definition: protocols::Definition,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
+    }
+
+    /// QueryDescriptor represents the ProtocolsQuery interface method for querying protocols.
+    #[descriptor(
+        method = QUERY,
+        variant = Query,
+        fields = crate::auth::Authorization,
+        parameters = super::QueryParameters
+    )]
+    pub struct QueryDescriptor {
+        #[serde(
+            rename = "messageTimestamp",
+            serialize_with = "crate::ser::serialize_datetime"
+        )]
+        pub message_timestamp: chrono::DateTime<chrono::Utc>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub filter: Option<QueryFilter>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ConfigureParameters {
@@ -53,18 +99,6 @@ impl MessageParameters for ConfigureParameters {
     }
 }
 
-#[descriptor(interface = PROTOCOLS, method = CONFIGURE, fields = crate::auth::Authorization, parameters = ConfigureParameters)]
-pub struct ConfigureDescriptor {
-    #[serde(
-        rename = "messageTimestamp",
-        serialize_with = "crate::ser::serialize_datetime"
-    )]
-    pub message_timestamp: chrono::DateTime<chrono::Utc>,
-    pub definition: protocols::Definition,
-    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
-    pub permission_grant_id: Option<String>,
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct QueryParameters {
     pub filter: Option<QueryFilterParameters>,
@@ -100,19 +134,6 @@ impl MessageParameters for QueryParameters {
     }
 }
 
-#[descriptor(interface = PROTOCOLS , method = QUERY, fields = crate::auth::Authorization, parameters = QueryParameters)]
-pub struct QueryDescriptor {
-    #[serde(
-        rename = "messageTimestamp",
-        serialize_with = "crate::ser::serialize_datetime"
-    )]
-    pub message_timestamp: chrono::DateTime<chrono::Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub filter: Option<QueryFilter>,
-    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
-    pub permission_grant_id: Option<String>,
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct QueryFilterParameters {
     pub protocol: String,
@@ -129,6 +150,7 @@ pub struct QueryFilter {
 mod test {
     use std::collections::BTreeMap;
 
+    use crate::interfaces::messages::descriptors::{CONFIGURE, PROTOCOLS};
     use crate::{canonical_rfc3339, protocols::ActionWho};
 
     use super::*;

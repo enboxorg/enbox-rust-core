@@ -11,3 +11,13 @@ pub fn descriptor(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     impl_descriptor_macro_attr(attr, item).into()
 }
+
+#[proc_macro_attribute]
+pub fn interface(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as derive::interface::InterfaceArgs);
+    let module = parse_macro_input!(item as syn::ItemMod);
+
+    derive::interface::expand_interface(args, module)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

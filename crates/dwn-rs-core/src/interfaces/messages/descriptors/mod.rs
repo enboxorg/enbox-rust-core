@@ -7,13 +7,13 @@ pub use general::*;
 
 use crate::cid::generate_cid_from_serialized;
 pub use messages::{
-    QueryDescriptor as MessagesQueryDescriptor, ReadDescriptor as MessagesReadDescriptor,
+    Messages, QueryDescriptor as MessagesQueryDescriptor, ReadDescriptor as MessagesReadDescriptor,
     SubscribeDescriptor as MessagesSubscribeDescriptor, SyncDescriptor as MessagesSyncDescriptor,
 };
-pub use protocols::{ConfigureDescriptor, QueryDescriptor as ProtocolQueryDescriptor};
+pub use protocols::{ConfigureDescriptor, Protocols, QueryDescriptor as ProtocolQueryDescriptor};
 pub use records::{
     CountDescriptor as RecordsCountDescriptor, DeleteDescriptor,
-    QueryDescriptor as RecordsQueryDescriptor, ReadDescriptor, SubscribeDescriptor,
+    QueryDescriptor as RecordsQueryDescriptor, ReadDescriptor, Records, SubscribeDescriptor,
     WriteDescriptor as RecordsWriteDescriptor,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -69,6 +69,16 @@ pub trait MessageParameters {
 impl MessageParameters for () {
     type Descriptor = Descriptor;
     type Fields = Fields;
+}
+
+// ConcreteDescriptor is a trait that all concrete message descriptors must implement. It
+// is normally implemented by the derive macro for concrete message descriptors. It provides the
+// interface and method for the concrete message descriptor. The generic `Descriptor` implements
+// the `MessageDescriptor` trait for use when the concrete type is not known. Concrete Descriptor types
+// implement this trait directly (or use the derive macro).
+pub trait ConcreteDescriptor: MessageDescriptor + Serialize + DeserializeOwned + PartialEq {
+    const INTERFACE: &'static str;
+    const METHOD: &'static str;
 }
 
 /// MessageDescriptor is a trait that all message descriptors must implement.
