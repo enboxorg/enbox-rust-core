@@ -41,9 +41,13 @@ mod inner {
     }
 
     /// QueryDescriptor represents the MessagesQuery interface method for querying messages.
+    ///
+    /// `no_handler`: deserializable for spec parity, but this implementation has no MessagesQuery
+    /// request handler, so it is excluded from `current_handler_kinds()`.
     #[descriptor(
         method = QUERY,
         variant = Query,
+        no_handler,
         fields = crate::auth::Authorization,
         parameters = super::QueryParameters
     )]
