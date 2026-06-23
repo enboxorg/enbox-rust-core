@@ -143,7 +143,25 @@ where
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        event_log: EventLog,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            event_log: Some(event_log),
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            public_key_resolver,
+        }
+    }
 }
+
 
 impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore> {
     pub fn new(message_store: MessageStore, data_store: DataStore) -> Self {
@@ -165,6 +183,18 @@ impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore> {
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            public_key_resolver,
+        }
+    }
 }
 
 impl<MessageStore> RecordsQueryHandler<MessageStore> {
@@ -184,6 +214,16 @@ impl<MessageStore> RecordsQueryHandler<MessageStore> {
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver,
+        }
+    }
 }
 
 impl<MessageStore> RecordsCountHandler<MessageStore> {
@@ -201,6 +241,16 @@ impl<MessageStore> RecordsCountHandler<MessageStore> {
         Self {
             message_store,
             public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver,
         }
     }
 }
@@ -234,6 +284,20 @@ impl<MessageStore, DataStore, StateIndex>
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            public_key_resolver,
+        }
+    }
 }
 
 impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
@@ -251,6 +315,16 @@ impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
         Self {
             message_store,
             public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver,
         }
     }
 }

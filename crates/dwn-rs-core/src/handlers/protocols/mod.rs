@@ -58,6 +58,19 @@ impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateInde
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        state_index: StateIndex,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            state_index,
+            public_key_resolver,
+        }
+    }
+}
 }
 
 impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
@@ -77,6 +90,17 @@ impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver,
+        }
+    }
+}
 }
 
 pub async fn fetch_protocol_definition<MessageStore>(

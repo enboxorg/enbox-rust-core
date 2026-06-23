@@ -35,6 +35,18 @@ impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        event_log: EventLog,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver,
+        }
+    }
 }
 
 impl<MessageStore, EventLog> MethodHandler for MessagesSubscribeHandler<MessageStore, EventLog>

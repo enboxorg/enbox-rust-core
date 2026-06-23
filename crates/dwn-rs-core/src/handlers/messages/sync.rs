@@ -48,6 +48,20 @@ impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, Data
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
     }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            public_key_resolver,
+        }
+    }
 }
 
 impl<MessageStore, DataStore, StateIndex> MethodHandler
