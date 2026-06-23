@@ -301,9 +301,7 @@ mod tests {
         // Check for key elements in the generated code
         assert!(output.to_string().contains("ExampleInternal"));
         // Trait paths are fully qualified so consumers don't need a `use`.
-        assert!(output
-            .to_string()
-            .contains("MessageDescriptor for Example"));
+        assert!(output.to_string().contains("MessageDescriptor for Example"));
         assert!(output
             .to_string()
             .contains("ConcreteDescriptor for Example"));
