@@ -403,7 +403,7 @@ where
         })?;
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
-        let definition = crate::handlers::protocols::fetch_protocol_definition(
+        let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
             protocol,
             &self.message_store,
@@ -515,7 +515,7 @@ where
         else {
             return Ok(());
         };
-        let definition = match crate::handlers::protocols::fetch_protocol_definition(
+        let definition = match crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
             protocol,
             &self.message_store,
