@@ -14,6 +14,8 @@ use crate::descriptors::{
 };
 use crate::errors::{DataStoreError, MessageStoreError};
 use crate::events::MessageEvent;
+use crate::handlers::messages::subscribe::MessagesSubscribeHandler;
+use crate::handlers::messages::sync::MessagesSyncHandler;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::stores::memory::MemoryEventLog;
 use crate::stores::state_index::MemoryStateIndex;
@@ -22,8 +24,6 @@ use crate::stores::{
     StateIndex, SubscriptionMessage,
 };
 use crate::{message_filters, permissions, Descriptor, MapValue, Message, Value};
-
-use super::*;
 
 #[tokio::test]
 async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
