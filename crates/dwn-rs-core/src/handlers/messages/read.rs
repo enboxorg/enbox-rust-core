@@ -9,8 +9,9 @@ use std::sync::Arc;
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::Descriptor;
 use crate::descriptors::MessagesReadDescriptor;
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, MethodHandlerRequest};
 use crate::permissions::{self, AuthorizationContext};
+use crate::Handler;
 use crate::Message;
 
 use super::common::*;
@@ -22,6 +23,21 @@ pub struct MessagesReadHandler<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MS, DS> Handler for MessagesReadHandler<MS, DS>
+where
+    MS: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DS: crate::stores::DataStore + Clone + Send + Sync + 'static,
+{
+    type Descriptor = MessagesReadDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_read(request.tenant, request.message).await })
+    }
 }
 
 impl<MessageStore, DataStore> MessagesReadHandler<MessageStore, DataStore> {
@@ -55,23 +71,6 @@ impl<MessageStore, DataStore> MessagesReadHandler<MessageStore, DataStore> {
             data_store,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore, DataStore> HandlesDescriptor for MessagesReadHandler<MessageStore, DataStore> {
-    type Descriptor = MessagesReadDescriptor;
-}
-
-impl<MessageStore, DataStore> MethodHandler for MessagesReadHandler<MessageStore, DataStore>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_read(request.tenant, request.message).await })
     }
 }
 

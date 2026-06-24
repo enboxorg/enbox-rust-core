@@ -9,7 +9,7 @@ use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsQueryDescriptor;
 use crate::dwn::DwnReply;
-use crate::dwn::{HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{Handler, MethodHandlerRequest};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
@@ -26,8 +26,18 @@ pub struct RecordsQueryHandler<MessageStore> {
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore> HandlesDescriptor for RecordsQueryHandler<MessageStore> {
+impl<MessageStore> Handler for RecordsQueryHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
     type Descriptor = RecordsQueryDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_query(request.tenant, request.message).await })
+    }
 }
 
 impl<MessageStore> RecordsQueryHandler<MessageStore> {
@@ -56,18 +66,6 @@ impl<MessageStore> RecordsQueryHandler<MessageStore> {
             message_store,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore> MethodHandler for RecordsQueryHandler<MessageStore>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_query(request.tenant, request.message).await })
     }
 }
 

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::DeleteDescriptor;
 use crate::descriptors::Descriptor;
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, Handler, MethodHandlerRequest};
 use crate::handlers::records::common::{
     accepted_reply, authorize_records_delete, can_perform_delete_against_record, compare_messages,
     conflict_reply, delete_from_data_store_if_needed, extract_author, fetch_record_messages,
@@ -29,10 +29,21 @@ pub struct RecordsDeleteHandler<MessageStore, DataStore, StateIndex> {
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore, DataStore, StateIndex> HandlesDescriptor
+impl<MessageStore, DataStore, StateIndex> Handler
     for RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     type Descriptor = DeleteDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_delete(request.tenant, request.message).await })
+    }
 }
 
 impl<MessageStore, DataStore, StateIndex>
@@ -77,21 +88,6 @@ impl<MessageStore, DataStore, StateIndex>
             state_index,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore, DataStore, StateIndex> MethodHandler
-    for RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_delete(request.tenant, request.message).await })
     }
 }
 

@@ -10,10 +10,11 @@ use serde_json::Value as JsonValue;
 
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, MethodHandlerRequest};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions::{self};
 use crate::stores::StateHash;
+use crate::Handler;
 use crate::Message;
 
 use super::common::*;
@@ -29,10 +30,21 @@ pub struct MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore, DataStore, StateIndex> HandlesDescriptor
+impl<MessageStore, DataStore, StateIndex> Handler
     for MessagesSyncHandler<MessageStore, DataStore, StateIndex>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     type Descriptor = MessagesSyncDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_sync(request.tenant, request.message).await })
+    }
 }
 
 impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
@@ -75,21 +87,6 @@ impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, Data
             state_index,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore, DataStore, StateIndex> MethodHandler
-    for MessagesSyncHandler<MessageStore, DataStore, StateIndex>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_sync(request.tenant, request.message).await })
     }
 }
 

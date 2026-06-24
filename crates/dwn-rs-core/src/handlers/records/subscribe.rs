@@ -7,7 +7,7 @@ use serde_json::Value as JsonValue;
 use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, SubscribeDescriptor};
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, Handler, MethodHandler, MethodHandlerRequest};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
@@ -29,25 +29,23 @@ pub struct RecordsSubscribeHandler<MessageStore> {
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore> HandlesDescriptor for RecordsSubscribeHandler<MessageStore> {
-    type Descriptor = SubscribeDescriptor;
-}
-
-pub struct RecordsSubscribeReply {
-    pub reply: DwnReply,
-    pub subscription: Option<EventSubscription>,
-}
-
-impl<MessageStore> MethodHandler for RecordsSubscribeHandler<MessageStore>
+impl<MessageStore> Handler for RecordsSubscribeHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
-    fn handle<'a>(
+    type Descriptor = SubscribeDescriptor;
+
+    fn run<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
         Box::pin(async move { self.handle_subscribe(request.tenant, request.message).await })
     }
+}
+
+pub struct RecordsSubscribeReply {
+    pub reply: DwnReply,
+    pub subscription: Option<EventSubscription>,
 }
 
 impl<MessageStore> RecordsSubscribeHandler<MessageStore> {

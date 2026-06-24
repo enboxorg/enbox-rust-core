@@ -8,10 +8,13 @@ use serde_json::Value as JsonValue;
 use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, MethodHandlerRequest};
 use crate::permissions::{self};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
+use crate::Handler;
 use crate::Message;
+
+use super::common::*;
 
 #[derive(Clone)]
 pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
@@ -25,13 +28,24 @@ pub struct SubscribeReply {
     pub subscription: Option<EventSubscription>,
 }
 
-impl<MessageStore, EventLog> HandlesDescriptor
-    for MessagesSubscribeHandler<MessageStore, EventLog>
+impl<MessageStore, EventLog> Handler for MessagesSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     type Descriptor = MessagesSubscribeDescriptor;
-}
 
-use super::common::*;
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move {
+            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
+                .await
+                .reply
+        })
+    }
+}
 
 impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
     pub fn new(message_store: MessageStore, event_log: EventLog) -> Self {
@@ -64,23 +78,6 @@ impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
             event_log,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore, EventLog> MethodHandler for MessagesSubscribeHandler<MessageStore, EventLog>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
-            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
-                .await
-                .reply
-        })
     }
 }
 

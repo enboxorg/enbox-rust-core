@@ -11,7 +11,7 @@ use crate::core_protocol::CoreProtocolRegistry;
 use crate::descriptors::ConfigureDescriptor;
 use crate::dwn::DwnReply;
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition};
-use crate::{permissions, HandlesDescriptor, MethodHandler, MethodHandlerRequest, Pagination};
+use crate::{permissions, Handler, MethodHandlerRequest, Pagination};
 use crate::{MessageSort, SortDirection};
 
 use super::common::*;
@@ -57,18 +57,14 @@ impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateInde
     }
 }
 
-impl<MessageStore, StateIndex> HandlesDescriptor
-    for ProtocolsConfigureHandler<MessageStore, StateIndex>
-{
-    type Descriptor = ConfigureDescriptor;
-}
-
-impl<MessageStore, StateIndex> MethodHandler for ProtocolsConfigureHandler<MessageStore, StateIndex>
+impl<MessageStore, StateIndex> Handler for ProtocolsConfigureHandler<MessageStore, StateIndex>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    fn handle<'a>(
+    type Descriptor = ConfigureDescriptor;
+
+    fn run<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {

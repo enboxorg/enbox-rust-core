@@ -10,9 +10,8 @@ use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPubl
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
-    CONFIGURE, PROTOCOLS,
 };
-use crate::dwn::{Dwn, MessageKind};
+use crate::dwn::Dwn;
 use crate::fields::WriteFields;
 use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
 use crate::handlers::query::ProtocolsQueryHandler;
@@ -28,8 +27,6 @@ use crate::{
 };
 
 use super::common::*;
-
-const QUERY_METHOD_FOR_TESTS: &str = "Query";
 
 #[tokio::test]
 async fn protocols_configure_stores_latest_base_state() {
@@ -466,18 +463,12 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
     state_index.open().await.unwrap();
 
     let mut dwn = Dwn::default();
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, CONFIGURE),
-        ProtocolsConfigureHandler::with_public_key_resolver(
-            message_store.clone(),
-            state_index,
-            test_resolver(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, QUERY_METHOD_FOR_TESTS),
-        ProtocolsQueryHandler::new(message_store),
-    );
+    dwn.register(ProtocolsConfigureHandler::with_public_key_resolver(
+        message_store.clone(),
+        state_index,
+        test_resolver(),
+    ));
+    dwn.register(ProtocolsQueryHandler::new(message_store));
 
     let configure = signed_configure_message(
         "http://example.com/dispatch",

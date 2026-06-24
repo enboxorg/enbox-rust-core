@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::ReadDescriptor;
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, Handler, MethodHandlerRequest};
 use crate::filters::{FilterKey, Filters};
 use crate::handlers::records::common::{
     authorize_records_read, bool_filter, date_sort_to_message_sort, extract_author,
@@ -29,8 +29,19 @@ pub struct RecordsReadHandler<MessageStore, DataStore> {
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore, DataStore> HandlesDescriptor for RecordsReadHandler<MessageStore, DataStore> {
+impl<MessageStore, DataStore> Handler for RecordsReadHandler<MessageStore, DataStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+{
     type Descriptor = ReadDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_read(request.tenant, request.message).await })
+    }
 }
 
 impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore> {
@@ -64,19 +75,6 @@ impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore> {
             data_store,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore, DataStore> MethodHandler for RecordsReadHandler<MessageStore, DataStore>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_read(request.tenant, request.message).await })
     }
 }
 

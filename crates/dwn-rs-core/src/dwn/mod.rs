@@ -144,6 +144,26 @@ impl DwnReply {
     }
 }
 
+pub trait Handler: Send + Sync {
+    type Descriptor: ConcreteDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
+}
+
+pub(crate) struct HandlerAdapter<H: Handler>(pub H);
+
+impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        self.0.run(request)
+    }
+}
+
 #[derive(Clone)]
 pub struct MethodHandlerRequest<'a> {
     pub tenant: &'a str,
@@ -157,13 +177,6 @@ pub trait MethodHandler: Send + Sync {
         &'a self,
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
-}
-
-/// Associates a method handler with the concrete descriptor it serves, so its dispatch
-/// [`MessageKind`] can be derived via [`MessageKind::of`] / [`Dwn::register`] instead of being
-/// hand-specified at the registration site.
-pub trait HandlesDescriptor {
-    type Descriptor: ConcreteDescriptor;
 }
 
 pub type MethodHandlerMap = BTreeMap<MessageKind, Arc<dyn MethodHandler>>;
@@ -251,13 +264,13 @@ where
         self.config.handlers.insert(kind, Arc::new(handler));
     }
 
-    /// Register a handler, deriving its [`MessageKind`] from the descriptor it handles
-    /// ([`HandlesDescriptor`]) — no need to restate the interface/method at the call site.
+    /// Register a [`Handler`], deriving its [`MessageKind`] from the descriptor it serves
+    /// ([`Handler::Descriptor`]) — no need to restate the interface/method at the call site.
     pub fn register<H>(&mut self, handler: H)
     where
-        H: MethodHandler + HandlesDescriptor + 'static,
+        H: Handler + 'static,
     {
-        self.register_handler(MessageKind::of::<H::Descriptor>(), handler);
+        self.register_handler(MessageKind::of::<H::Descriptor>(), HandlerAdapter(handler));
     }
 
     pub fn handlers(&self) -> &MethodHandlerMap {

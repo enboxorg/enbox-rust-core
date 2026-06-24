@@ -6,7 +6,7 @@ use serde_json::{json, Value as JsonValue};
 
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::RecordsCountDescriptor;
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, Handler, MethodHandlerRequest};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     authorize_protocol_query_or_subscribe, filter_includes_published_records,
@@ -23,8 +23,18 @@ pub struct RecordsCountHandler<MessageStore> {
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore> HandlesDescriptor for RecordsCountHandler<MessageStore> {
+impl<MessageStore> Handler for RecordsCountHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
     type Descriptor = RecordsCountDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_count(request.tenant, request.message).await })
+    }
 }
 
 impl<MessageStore> RecordsCountHandler<MessageStore> {
@@ -53,18 +63,6 @@ impl<MessageStore> RecordsCountHandler<MessageStore> {
             message_store,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore> MethodHandler for RecordsCountHandler<MessageStore>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_count(request.tenant, request.message).await })
     }
 }
 

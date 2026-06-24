@@ -7,9 +7,9 @@ use serde_json::Value as JsonValue;
 
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::ProtocolQueryDescriptor;
-use crate::dwn::{DwnReply, HandlesDescriptor};
+use crate::dwn::DwnReply;
 use crate::filters::{Filter, FilterKey, Filters};
-use crate::{permissions, MethodHandler, MethodHandlerRequest};
+use crate::{permissions, Handler, MethodHandlerRequest};
 use crate::{MessageSort, SortDirection, Value};
 
 const PROTOCOLS_INTERFACE: &str = "Protocols";
@@ -50,15 +50,13 @@ impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
     }
 }
 
-impl<MessageStore> HandlesDescriptor for ProtocolsQueryHandler<MessageStore> {
-    type Descriptor = ProtocolQueryDescriptor;
-}
-
-impl<MessageStore> MethodHandler for ProtocolsQueryHandler<MessageStore>
+impl<MessageStore> Handler for ProtocolsQueryHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
-    fn handle<'a>(
+    type Descriptor = ProtocolQueryDescriptor;
+
+    fn run<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {

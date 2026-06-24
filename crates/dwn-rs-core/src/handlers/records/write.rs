@@ -16,7 +16,7 @@ use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsWriteDescriptor;
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, Handler, MethodHandlerRequest};
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::records::common::{
     accepted_reply, authorize_against_protocol, bool_filter, compare_messages, conflict_reply,
@@ -45,10 +45,25 @@ pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog = (
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore, DataStore, StateIndex, EventLog> HandlesDescriptor
+impl<MessageStore, DataStore, StateIndex, EventLog> Handler
     for RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     type Descriptor = RecordsWriteDescriptor;
+
+    fn run<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move {
+            self.handle_write(request.tenant, request.message, request.data.clone())
+                .await
+        })
+    }
 }
 
 impl<MessageStore, DataStore, StateIndex, EventLog>
@@ -123,25 +138,6 @@ impl<MessageStore, DataStore, StateIndex, EventLog>
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             public_key_resolver: Some(Arc::new(public_key_resolver)),
         }
-    }
-}
-
-impl<MessageStore, DataStore, StateIndex, EventLog> MethodHandler
-    for RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
-    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
-            self.handle_write(request.tenant, request.message, request.data.clone())
-                .await
-        })
     }
 }
 
