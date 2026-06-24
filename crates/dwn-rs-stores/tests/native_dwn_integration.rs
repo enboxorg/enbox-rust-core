@@ -22,18 +22,17 @@ use dwn_rs_stores::SqliteNativeDwn;
 const TENANT: &str = "did:example:alice";
 
 #[tokio::test]
-async fn native_dwn_registers_all_current_handlers() {
+async fn native_dwn_registers_exactly_the_current_handler_kinds() {
     let node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
-    for kind in current_handler_kinds() {
-        assert!(
-            node.dwn().handlers().contains_key(&kind),
-            "missing handler for {}",
-            kind.handler_key()
-        );
-    }
+    // The registered dispatch set must match the descriptor-derived handler set exactly —
+    // no missing kinds, and no handler wired for a kind outside `current_handler_kinds()`.
+    let registered: std::collections::BTreeSet<_> = node.dwn().handlers().keys().cloned().collect();
+    let expected: std::collections::BTreeSet<_> = current_handler_kinds().into_iter().collect();
+
+    assert_eq!(registered, expected);
 }
 
 #[tokio::test]

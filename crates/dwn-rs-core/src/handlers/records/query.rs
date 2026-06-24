@@ -1,7 +1,15 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use serde_json::Value as JsonValue;
 
-use crate::descriptors::{Descriptor, RecordsQueryDescriptor};
+use super::RecordsAuthorizationKind;
+use crate::auth::JwsPublicKeyResolver;
+use crate::descriptors::Descriptor;
+use crate::descriptors::RecordsQueryDescriptor;
 use crate::dwn::DwnReply;
+use crate::dwn::{HandlesDescriptor, MethodHandler, MethodHandlerRequest};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
@@ -12,7 +20,56 @@ use crate::handlers::records::common::{
 use crate::permissions::{self, AuthorizationContext};
 use crate::Message;
 
-use super::{RecordsAuthorizationKind, RecordsQueryHandler};
+#[derive(Clone)]
+pub struct RecordsQueryHandler<MessageStore> {
+    message_store: MessageStore,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore> HandlesDescriptor for RecordsQueryHandler<MessageStore> {
+    type Descriptor = RecordsQueryDescriptor;
+}
+
+impl<MessageStore> RecordsQueryHandler<MessageStore> {
+    pub fn new(message_store: MessageStore) -> Self {
+        Self {
+            message_store,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver,
+        }
+    }
+}
+
+impl<MessageStore> MethodHandler for RecordsQueryHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_query(request.tenant, request.message).await })
+    }
+}
 
 impl<MessageStore> RecordsQueryHandler<MessageStore>
 where

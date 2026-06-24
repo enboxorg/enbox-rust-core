@@ -3,21 +3,22 @@
 //! This mirrors TypeScript `Dwn.create()` handler registration while leaving
 //! store selection to the caller (in-memory scaffolds, SQLite, etc.).
 
+use std::sync::Arc;
+
 use crate::auth::{JwsPublicKeyResolver, UniversalResolver};
-use crate::descriptors::{
-    CONFIGURE, COUNT, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, SUBSCRIBE, SYNC, WRITE,
-};
-use crate::dwn::{AllowAllTenantGate, Dwn, DwnConfig, MessageKind, TenantGate};
+use crate::dwn::{AllowAllTenantGate, Dwn, DwnConfig, TenantGate};
 use crate::errors::{
     DataStoreError, EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError,
 };
-use crate::handlers::records::{
-    RecordsCountHandler, RecordsDeleteHandler, RecordsQueryHandler, RecordsReadHandler,
-    RecordsSubscribeHandler, RecordsWriteHandler,
-};
 use crate::handlers::{
-    MessagesReadHandler, MessagesSubscribeHandler, MessagesSyncHandler, ProtocolsConfigureHandler,
-    ProtocolsQueryHandler,
+    messages::{
+        read::MessagesReadHandler, subscribe::MessagesSubscribeHandler, sync::MessagesSyncHandler,
+    },
+    protocols::{configure::ProtocolsConfigureHandler, query::ProtocolsQueryHandler},
+    records::{
+        count::RecordsCountHandler, delete::RecordsDeleteHandler, query::RecordsQueryHandler,
+        read::RecordsReadHandler, subscribe::RecordsSubscribeHandler, write::RecordsWriteHandler,
+    },
 };
 use crate::stores::{
     DataStore as DataStoreTrait, EventLog as EventLogTrait, MessageStore as MessageStoreTrait,
@@ -137,7 +138,7 @@ where
         handlers: crate::dwn::default_method_handlers(),
     });
 
-    register_native_handlers_without_resolver(&mut dwn, stores);
+    register_native_handlers(&mut dwn, stores, None);
     dwn
 }
 
@@ -168,14 +169,18 @@ where
         handlers: crate::dwn::default_method_handlers(),
     });
 
-    let universal_resolver = UniversalResolver::with_fallback(public_key_resolver);
-    register_native_handlers_with_resolver(&mut dwn, stores, universal_resolver);
+    let resolver: Arc<dyn JwsPublicKeyResolver + Send + Sync> =
+        Arc::new(UniversalResolver::with_fallback(public_key_resolver));
+    register_native_handlers(&mut dwn, stores, Some(resolver));
     dwn
 }
 
-fn register_native_handlers_without_resolver<MS, DS, SI, EL, RTS, Gate>(
+/// Register every native handler, deriving each dispatch kind from the handler's descriptor
+/// (`Dwn::register`). `resolver` is wired into all handlers (`None` disables JWS verification).
+fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
     dwn: &mut Dwn<MS, DS, SI, EL, RTS, (), Gate>,
     stores: NativeDwnStores<MS, DS, SI, EL, RTS>,
+    resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 ) where
     MS: MessageStoreTrait + Clone + Send + Sync + 'static,
     DS: DataStoreTrait + Clone + Send + Sync + 'static,
@@ -184,161 +189,67 @@ fn register_native_handlers_without_resolver<MS, DS, SI, EL, RTS, Gate>(
     RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
     Gate: TenantGate + 'static,
 {
-    let message_store = stores.message_store;
-    let data_store = stores.data_store;
-    let state_index = stores.state_index;
-    let event_log = stores.event_log;
+    let NativeDwnStores {
+        message_store,
+        data_store,
+        state_index,
+        event_log,
+        resumable_task_store: _,
+    } = stores;
 
-    dwn.register_handler(
-        MessageKind::new(MESSAGES, READ),
-        MessagesReadHandler::new(message_store.clone(), data_store.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(MESSAGES, SUBSCRIBE),
-        MessagesSubscribeHandler::new(message_store.clone(), event_log.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(MESSAGES, SYNC),
-        MessagesSyncHandler::new(
-            message_store.clone(),
-            data_store.clone(),
-            state_index.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, CONFIGURE),
-        ProtocolsConfigureHandler::new(message_store.clone(), state_index.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, QUERY),
-        ProtocolsQueryHandler::new(message_store.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, WRITE),
-        RecordsWriteHandler::<MS, DS, SI, ()>::new(
-            message_store.clone(),
-            data_store.clone(),
-            state_index.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, READ),
-        RecordsReadHandler::new(message_store.clone(), data_store.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, QUERY),
-        RecordsQueryHandler::new(message_store.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, COUNT),
-        RecordsCountHandler::new(message_store.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, DELETE),
-        RecordsDeleteHandler::new(
-            message_store.clone(),
-            data_store.clone(),
-            state_index.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, SUBSCRIBE),
-        RecordsSubscribeHandler::new(message_store),
-    );
-}
-
-fn register_native_handlers_with_resolver<MS, DS, SI, EL, RTS, Gate, R>(
-    dwn: &mut Dwn<MS, DS, SI, EL, RTS, (), Gate>,
-    stores: NativeDwnStores<MS, DS, SI, EL, RTS>,
-    resolver: R,
-) where
-    MS: MessageStoreTrait + Clone + Send + Sync + 'static,
-    DS: DataStoreTrait + Clone + Send + Sync + 'static,
-    SI: StateIndexTrait + Clone + Send + Sync + 'static,
-    EL: EventLogTrait + Clone + Send + Sync + 'static,
-    RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
-    Gate: TenantGate + 'static,
-    R: JwsPublicKeyResolver + Send + Sync + Clone + 'static,
-{
-    let message_store = stores.message_store;
-    let data_store = stores.data_store;
-    let state_index = stores.state_index;
-    let event_log = stores.event_log;
-
-    dwn.register_handler(
-        MessageKind::new(MESSAGES, READ),
-        MessagesReadHandler::with_public_key_resolver(
-            message_store.clone(),
-            data_store.clone(),
-            resolver.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(MESSAGES, SUBSCRIBE),
-        MessagesSubscribeHandler::with_public_key_resolver(
-            message_store.clone(),
-            event_log.clone(),
-            resolver.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(MESSAGES, SYNC),
-        MessagesSyncHandler::with_public_key_resolver(
-            message_store.clone(),
-            data_store.clone(),
-            state_index.clone(),
-            resolver.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, CONFIGURE),
-        ProtocolsConfigureHandler::with_public_key_resolver(
-            message_store.clone(),
-            state_index.clone(),
-            resolver.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, QUERY),
-        ProtocolsQueryHandler::with_public_key_resolver(message_store.clone(), resolver.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, WRITE),
-        RecordsWriteHandler::with_public_key_resolver_and_event_log(
-            message_store.clone(),
-            data_store.clone(),
-            state_index.clone(),
-            event_log.clone(),
-            resolver.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, READ),
-        RecordsReadHandler::with_public_key_resolver(
-            message_store.clone(),
-            data_store.clone(),
-            resolver.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, QUERY),
-        RecordsQueryHandler::with_public_key_resolver(message_store.clone(), resolver.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, COUNT),
-        RecordsCountHandler::with_public_key_resolver(message_store.clone(), resolver.clone()),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, DELETE),
-        RecordsDeleteHandler::with_public_key_resolver(
-            message_store.clone(),
-            data_store.clone(),
-            state_index.clone(),
-            resolver.clone(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(RECORDS, SUBSCRIBE),
-        RecordsSubscribeHandler::with_public_key_resolver(message_store, resolver),
-    );
+    dwn.register(MessagesReadHandler::with_optional_resolver(
+        message_store.clone(),
+        data_store.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(MessagesSubscribeHandler::with_optional_resolver(
+        message_store.clone(),
+        event_log.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(MessagesSyncHandler::with_optional_resolver(
+        message_store.clone(),
+        data_store.clone(),
+        state_index.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(ProtocolsConfigureHandler::with_optional_resolver(
+        message_store.clone(),
+        state_index.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(ProtocolsQueryHandler::with_optional_resolver(
+        message_store.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(RecordsWriteHandler::with_optional_resolver(
+        message_store.clone(),
+        data_store.clone(),
+        state_index.clone(),
+        event_log.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(RecordsReadHandler::with_optional_resolver(
+        message_store.clone(),
+        data_store.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(RecordsQueryHandler::with_optional_resolver(
+        message_store.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(RecordsCountHandler::with_optional_resolver(
+        message_store.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(RecordsDeleteHandler::with_optional_resolver(
+        message_store.clone(),
+        data_store.clone(),
+        state_index.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(RecordsSubscribeHandler::with_optional_resolver(
+        message_store,
+        resolver,
+    ));
 }

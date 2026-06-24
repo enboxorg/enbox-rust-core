@@ -8,13 +8,31 @@ use serde_json::Value as JsonValue;
 use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
-use crate::dwn::{DwnReply, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
 use crate::permissions::{self};
-use crate::stores::{EventLogSubscribeOptions, SubscriptionListener};
+use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
 use crate::Message;
 
+#[derive(Clone)]
+pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
+    message_store: MessageStore,
+    event_log: EventLog,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+pub struct SubscribeReply {
+    pub reply: DwnReply,
+    pub subscription: Option<EventSubscription>,
+}
+
+impl<MessageStore, EventLog> HandlesDescriptor
+    for MessagesSubscribeHandler<MessageStore, EventLog>
+{
+    type Descriptor = MessagesSubscribeDescriptor;
+}
+
 use super::common::*;
-use super::{MessagesSubscribeHandler, SubscribeReply};
+
 impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
     pub fn new(message_store: MessageStore, event_log: EventLog) -> Self {
         Self {
@@ -33,6 +51,18 @@ impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
             message_store,
             event_log,
             public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        event_log: EventLog,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver,
         }
     }
 }

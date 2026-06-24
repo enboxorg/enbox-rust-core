@@ -1,5 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -7,10 +10,13 @@ use bytes::Bytes;
 use futures_util::stream;
 use serde_json::Value as JsonValue;
 
+use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_dag_pb_cid_from_bytes;
 use crate::descriptors::Descriptor;
+use crate::descriptors::RecordsWriteDescriptor;
+use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
-use crate::dwn::DwnReply;
+use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::records::common::{
     accepted_reply, authorize_against_protocol, bool_filter, compare_messages, conflict_reply,
@@ -27,10 +33,117 @@ use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
-use super::{
-    RecordsAuthorizationKind, RecordsWriteHandler, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE,
-    WRITE_METHOD,
-};
+use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
+
+#[derive(Clone)]
+pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog = ()> {
+    message_store: MessageStore,
+    data_store: DataStore,
+    state_index: StateIndex,
+    event_log: Option<EventLog>,
+    core_protocol_registry: CoreProtocolRegistry,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore, DataStore, StateIndex, EventLog> HandlesDescriptor
+    for RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+{
+    type Descriptor = RecordsWriteDescriptor;
+}
+
+impl<MessageStore, DataStore, StateIndex, EventLog>
+    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+where
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
+{
+    pub fn with_public_key_resolver_and_event_log(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        event_log: EventLog,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            event_log: Some(event_log),
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        event_log: EventLog,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            event_log: Some(event_log),
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            public_key_resolver,
+        }
+    }
+}
+
+impl<MessageStore, DataStore, StateIndex, EventLog>
+    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+{
+    pub fn new(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            event_log: None,
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        data_store: DataStore,
+        state_index: StateIndex,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            data_store,
+            state_index,
+            event_log: None,
+            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+}
+
+impl<MessageStore, DataStore, StateIndex, EventLog> MethodHandler
+    for RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
+    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move {
+            self.handle_write(request.tenant, request.message, request.data.clone())
+                .await
+        })
+    }
+}
 
 impl<MessageStore, DataStore, StateIndex, EventLog>
     RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
@@ -403,7 +516,7 @@ where
         })?;
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
-        let definition = crate::handlers::protocols::fetch_protocol_definition(
+        let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
             protocol,
             &self.message_store,
@@ -515,7 +628,7 @@ where
         else {
             return Ok(());
         };
-        let definition = match crate::handlers::protocols::fetch_protocol_definition(
+        let definition = match crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
             protocol,
             &self.message_store,

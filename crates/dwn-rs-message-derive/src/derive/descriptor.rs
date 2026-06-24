@@ -18,17 +18,27 @@ pub struct DescriptorAttr {
     pub(crate) parameters: Option<Path>,
     pub(crate) variant: Option<Ident>,
     pub(crate) boxed: bool,
+    pub(crate) no_handler: bool,
 }
 
 impl Parse for DescriptorAttr {
     fn parse(input: ParseStream) -> Result<Self> {
-        let (mut interface, mut method, mut fields, mut parameters, mut variant, mut boxed) =
-            (None, None, None, None, None, false);
+        let (
+            mut interface,
+            mut method,
+            mut fields,
+            mut parameters,
+            mut variant,
+            mut boxed,
+            mut no_handler,
+        ) = (None, None, None, None, None, false, false);
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
             if key == "boxed" {
                 boxed = true;
+            } else if key == "no_handler" {
+                no_handler = true;
             } else {
                 input.parse::<Token![=]>()?;
                 match key.to_string().as_str() {
@@ -62,6 +72,7 @@ impl Parse for DescriptorAttr {
             parameters,
             variant,
             boxed,
+            no_handler,
         })
     }
 }
@@ -293,6 +304,7 @@ mod tests {
             parameters: Some(parse_quote! { FieldsNamed }),
             variant: None,
             boxed: false,
+            no_handler: false,
         };
 
         // Apply the macro

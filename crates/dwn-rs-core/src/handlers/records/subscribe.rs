@@ -1,8 +1,13 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use serde_json::Value as JsonValue;
 
+use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, SubscribeDescriptor};
-use crate::dwn::DwnReply;
+use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
@@ -12,13 +17,67 @@ use crate::handlers::records::common::{
     records_subscribe_reply, should_protocol_authorize, store_error_reply,
 };
 use crate::permissions::{self, AuthorizationContext};
+use crate::stores::EventSubscription;
 use crate::stores::{EventLogSubscribeOptions, SubscriptionListener};
 use crate::Message;
 
-use super::{
-    RecordsAuthorizationKind, RecordsEventLogSubscribeHandler, RecordsSubscribeHandler,
-    RecordsSubscribeReply,
-};
+use super::RecordsAuthorizationKind;
+
+#[derive(Clone)]
+pub struct RecordsSubscribeHandler<MessageStore> {
+    message_store: MessageStore,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore> HandlesDescriptor for RecordsSubscribeHandler<MessageStore> {
+    type Descriptor = SubscribeDescriptor;
+}
+
+pub struct RecordsSubscribeReply {
+    pub reply: DwnReply,
+    pub subscription: Option<EventSubscription>,
+}
+
+impl<MessageStore> MethodHandler for RecordsSubscribeHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_subscribe(request.tenant, request.message).await })
+    }
+}
+
+impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
+    pub fn new(message_store: MessageStore) -> Self {
+        Self {
+            message_store,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver,
+        }
+    }
+}
 
 impl<MessageStore> RecordsSubscribeHandler<MessageStore>
 where
@@ -136,6 +195,53 @@ where
                 "cursor",
                 serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
             )
+    }
+}
+
+#[derive(Clone)]
+pub struct RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
+    message_store: MessageStore,
+    event_log: EventLog,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore, EventLog> MethodHandler
+    for RecordsEventLogSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move {
+            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
+                .await
+                .reply
+        })
+    }
+}
+
+impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
+    pub fn new(message_store: MessageStore, event_log: EventLog) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        event_log: EventLog,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            event_log,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
     }
 }
 

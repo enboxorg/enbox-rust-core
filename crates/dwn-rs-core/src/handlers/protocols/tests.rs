@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::ops::Bound;
 use std::sync::{Arc, RwLock};
 
@@ -13,6 +14,8 @@ use crate::descriptors::{
 };
 use crate::dwn::{Dwn, MessageKind};
 use crate::fields::WriteFields;
+use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
+use crate::handlers::query::ProtocolsQueryHandler;
 use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, Type, Who,
 };
@@ -20,12 +23,11 @@ use crate::protocols::RuleSet;
 use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::{KeyValues, MessageQueryResult, MessageStore, StateIndex};
 use crate::{
-    permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, Pagination, RangeFilter,
-    Value,
+    permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
+    RangeFilter, SortDirection, Value,
 };
 
 use super::common::*;
-use super::*;
 
 const QUERY_METHOD_FOR_TESTS: &str = "Query";
 

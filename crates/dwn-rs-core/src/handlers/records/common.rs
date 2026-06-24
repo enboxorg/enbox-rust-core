@@ -19,6 +19,8 @@ use crate::errors::EventLogError;
 use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
+use crate::handlers::configure::fetch_protocol_definition;
+use crate::handlers::records::subscribe::RecordsSubscribeReply;
 use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, Can, Definition, RuleSet, Who,
 };
@@ -27,10 +29,7 @@ use crate::permissions::{self, AuthorizationContext};
 use crate::stores::{EventSubscription, KeyValues};
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
-use super::{
-    RecordsAuthorizationKind, RecordsSubscribeReply, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE,
-    WRITE_METHOD,
-};
+use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum QueryAuthorizationResult {
@@ -912,7 +911,7 @@ where
     let protocol_path = filter.protocol_path.as_deref().ok_or_else(|| {
         "ProtocolAuthorizationMissingProtocolPath: role-authorized query must include protocolPath".to_string()
     })?;
-    let definition = crate::handlers::protocols::fetch_protocol_definition(
+    let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
         tenant,
         protocol,
         message_store,
@@ -961,14 +960,10 @@ where
         "ProtocolAuthorizationMissingProtocolPath: protocolPath is required".to_string()
     })?;
     let governing_timestamp = governing_timestamp(tenant, message, message_store, author).await?;
-    let definition = crate::handlers::protocols::fetch_protocol_definition(
-        tenant,
-        protocol,
-        message_store,
-        Some(&governing_timestamp),
-    )
-    .await
-    .map_err(|err| err.to_string())?;
+    let definition =
+        fetch_protocol_definition(tenant, protocol, message_store, Some(&governing_timestamp))
+            .await
+            .map_err(|err| err.to_string())?;
     let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
         .ok_or_else(|| {
             format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")

@@ -47,6 +47,7 @@ struct VariantEntry {
     variant: syn::Ident,
     ty: syn::Ident,
     boxed: bool,
+    has_handler: bool,
 }
 
 pub fn expand_interface(args: InterfaceArgs, module: syn::ItemMod) -> syn::Result<TokenStream> {
@@ -71,11 +72,13 @@ pub fn expand_interface(args: InterfaceArgs, module: syn::ItemMod) -> syn::Resul
                             )
                         })?;
                         let boxed = da.boxed;
+                        let has_handler = !da.no_handler;
                         da.interface = Some(args.interface.clone());
                         variants.push(VariantEntry {
                             variant,
                             ty: s.ident.clone(),
                             boxed,
+                            has_handler,
                         });
                         out.push(impl_descriptor_macro_attr(da, quote!(#s)));
                     }
@@ -149,6 +152,15 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         quote!(#name::#vn(_) => Ok(()))
     });
 
+    let kinds = variants.iter().map(|v| {
+        let (ty, has_handler) = (&v.ty, v.has_handler);
+        quote!((
+            #iface,
+            <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD,
+            #has_handler
+        ))
+    });
+
     let missing_iface = format!("{} descriptor missing interface", name);
     let missing_method = format!("{} descriptor missing method", name);
 
@@ -200,6 +212,13 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             ) -> core::result::Result<(), crate::interfaces::messages::descriptors::ValidationError> {
                 match self { #(#validate_arms),* }
             }
+        }
+
+        impl crate::interfaces::messages::descriptors::InterfaceUnion for #name {
+            const INTERFACE: &'static str = #iface;
+            const KINDS: &'static [(&'static str, &'static str, bool)] = &[
+                #(#kinds),*
+            ];
         }
     }
 }

@@ -1,17 +1,72 @@
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
 
-use crate::dwn::DwnReply;
+use crate::auth::JwsPublicKeyResolver;
+use crate::descriptors::ProtocolQueryDescriptor;
+use crate::dwn::{DwnReply, HandlesDescriptor};
 use crate::filters::{Filter, FilterKey, Filters};
-use crate::permissions;
+use crate::{permissions, MethodHandler, MethodHandlerRequest};
 use crate::{MessageSort, SortDirection, Value};
 
 const PROTOCOLS_INTERFACE: &str = "Protocols";
 const CONFIGURE_METHOD: &str = "Configure";
 
+#[derive(Clone)]
+pub struct ProtocolsQueryHandler<MessageStore> {
+    message_store: MessageStore,
+    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+}
+
+impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
+    pub fn new(message_store: MessageStore) -> Self {
+        Self {
+            message_store,
+            public_key_resolver: None,
+        }
+    }
+
+    pub fn with_public_key_resolver(
+        message_store: MessageStore,
+        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver: Some(Arc::new(public_key_resolver)),
+        }
+    }
+
+    pub fn with_optional_resolver(
+        message_store: MessageStore,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message_store,
+            public_key_resolver,
+        }
+    }
+}
+
+impl<MessageStore> HandlesDescriptor for ProtocolsQueryHandler<MessageStore> {
+    type Descriptor = ProtocolQueryDescriptor;
+}
+
+impl<MessageStore> MethodHandler for ProtocolsQueryHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
+    fn handle<'a>(
+        &'a self,
+        request: MethodHandlerRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move { self.handle_query(request.tenant, request.message).await })
+    }
+}
+
 use super::common::*;
-use super::ProtocolsQueryHandler;
 impl<MessageStore> ProtocolsQueryHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
