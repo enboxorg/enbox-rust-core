@@ -143,33 +143,6 @@ impl<MessageStore, DataStore, StateIndex>
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
-    ) -> Self {
-        Self {
-            message_store,
-            data_store,
-            state_index,
-            public_key_resolver: None,
-        }
-    }
-
-    pub fn with_public_key_resolver(
-        message_store: MessageStore,
-        data_store: DataStore,
-        state_index: StateIndex,
-        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            message_store,
-            data_store,
-            state_index,
-            public_key_resolver: Some(Arc::new(public_key_resolver)),
-        }
-    }
-
-    pub fn with_optional_resolver(
-        message_store: MessageStore,
-        data_store: DataStore,
-        state_index: StateIndex,
         public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
     ) -> Self {
         Self {

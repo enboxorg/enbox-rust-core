@@ -313,24 +313,7 @@ impl<MessageStore, DataStore, StateIndex, EventLog>
 where
     EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
-    pub fn with_public_key_resolver_and_event_log(
-        message_store: MessageStore,
-        data_store: DataStore,
-        state_index: StateIndex,
-        event_log: EventLog,
-        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            message_store,
-            data_store,
-            state_index,
-            event_log: Some(event_log),
-            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
-            public_key_resolver: Some(Arc::new(public_key_resolver)),
-        }
-    }
-
-    pub fn with_optional_resolver(
+    pub fn with_event_log(
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
@@ -351,10 +334,15 @@ where
 impl<MessageStore, DataStore, StateIndex, EventLog>
     RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
 {
+    /// Construct a handler with no event log (`event_log: None`). Used by tests that exercise the
+    /// write path without event logging; the native builder always wires an event log via
+    /// [`RecordsWriteHandler::with_event_log`], so this is unused outside `#[cfg(test)]`.
+    #[allow(dead_code)]
     pub fn new(
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
+        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
     ) -> Self {
         Self {
             message_store,
@@ -362,23 +350,7 @@ impl<MessageStore, DataStore, StateIndex, EventLog>
             state_index,
             event_log: None,
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
-            public_key_resolver: None,
-        }
-    }
-
-    pub fn with_public_key_resolver(
-        message_store: MessageStore,
-        data_store: DataStore,
-        state_index: StateIndex,
-        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            message_store,
-            data_store,
-            state_index,
-            event_log: None,
-            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
-            public_key_resolver: Some(Arc::new(public_key_resolver)),
+            public_key_resolver,
         }
     }
 }

@@ -103,24 +103,7 @@ where
 }
 
 impl<MessageStore> RecordsQueryHandler<MessageStore> {
-    pub fn new(message_store: MessageStore) -> Self {
-        Self {
-            message_store,
-            public_key_resolver: None,
-        }
-    }
-
-    pub fn with_public_key_resolver(
-        message_store: MessageStore,
-        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            message_store,
-            public_key_resolver: Some(Arc::new(public_key_resolver)),
-        }
-    }
-
-    pub fn with_optional_resolver(
+    pub fn new(
         message_store: MessageStore,
         public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
     ) -> Self {

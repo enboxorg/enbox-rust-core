@@ -51,11 +51,11 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
         .await
         .unwrap();
 
-    let handler = MessagesSyncHandler::with_public_key_resolver(
+    let handler = MessagesSyncHandler::new(
         message_store,
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Diff,
@@ -96,11 +96,11 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
     message_store
         .insert("did:example:alice", "grant-sync-1", grant)
         .await;
-    let handler = MessagesSyncHandler::with_public_key_resolver(
+    let handler = MessagesSyncHandler::new(
         message_store,
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Root,
@@ -134,11 +134,11 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
     message_store
         .insert("did:example:alice", "grant-sync-2", grant)
         .await;
-    let handler = MessagesSyncHandler::with_public_key_resolver(
+    let handler = MessagesSyncHandler::new(
         message_store,
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Root,
@@ -195,11 +195,8 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
-    let handler = MessagesSubscribeHandler::with_public_key_resolver(
-        message_store,
-        event_log,
-        test_resolver(),
-    );
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),
@@ -276,11 +273,8 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
         .await
         .unwrap();
 
-    let handler = MessagesSubscribeHandler::with_public_key_resolver(
-        message_store,
-        event_log,
-        test_resolver(),
-    );
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),

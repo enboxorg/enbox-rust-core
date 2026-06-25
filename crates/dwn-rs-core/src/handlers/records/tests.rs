@@ -46,15 +46,15 @@ async fn records_write_read_query_and_count_published_inline_data() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
 
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone());
-    let query_handler = RecordsQueryHandler::new(message_store.clone());
-    let count_handler = RecordsCountHandler::new(message_store.clone());
+    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
+    let query_handler = RecordsQueryHandler::new(message_store.clone(), None);
+    let count_handler = RecordsCountHandler::new(message_store.clone(), None);
 
     let data = Bytes::from_static(b"hello world");
     let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
@@ -113,11 +113,11 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let data = Bytes::from_static(b"version one");
@@ -185,11 +185,11 @@ async fn records_write_rejects_older_conflicting_write() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let data = Bytes::from_static(b"newest");
@@ -242,13 +242,13 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone());
+    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
 
     let data = Bytes::from(vec![7u8; (MAX_ENCODED_DATA_SIZE + 1) as usize]);
     let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
@@ -294,17 +294,17 @@ async fn records_delete_prune_purges_descendant_records() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let delete_handler = RecordsDeleteHandler::with_public_key_resolver(
+    let delete_handler = RecordsDeleteHandler::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let data = Bytes::from_static(b"parent");
@@ -380,11 +380,11 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_squash_protocol("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let old_data = Bytes::from_static(b"old note");
@@ -468,11 +468,11 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"conditions":{"publication":"Required"}}"#);
@@ -558,11 +558,11 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#);
@@ -625,11 +625,11 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
@@ -757,10 +757,10 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
-    let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+    let handler = RecordsEventLogSubscribeHandler::new(
         message_store,
         event_log,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
@@ -840,10 +840,10 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
         .await
         .unwrap();
 
-    let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+    let handler = RecordsEventLogSubscribeHandler::new(
         message_store,
         event_log,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
@@ -879,10 +879,10 @@ async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_su
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
-    let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+    let handler = RecordsEventLogSubscribeHandler::new(
         message_store,
         event_log.clone(),
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
