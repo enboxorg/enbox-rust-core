@@ -12,7 +12,7 @@ use crate::errors::EventLogError;
 use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::messages::subscribe::SubscribeReply;
-use crate::interfaces::messages::descriptors::messages::{ReadDescriptor, SyncAction};
+use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::stores::{EventSubscription, StateHash};
 use crate::{canonical_rfc3339, Fields, Message};
 
@@ -38,30 +38,6 @@ pub(crate) fn messages_subscribe_descriptor(
             ),
         },
         _ => Err("MessagesSubscribeParseFailed: expected MessagesSubscribe descriptor".to_string()),
-    }
-}
-
-pub(crate) fn messages_read_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&ReadDescriptor, String> {
-    match &message.descriptor {
-        Descriptor::Messages(messages) => match messages.as_ref() {
-            Messages::Read(descriptor) => Ok(descriptor),
-            _ => Err("MessagesReadParseFailed: expected MessagesRead descriptor".to_string()),
-        },
-        _ => Err("MessagesReadParseFailed: expected MessagesRead descriptor".to_string()),
-    }
-}
-
-pub(crate) fn messages_sync_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&MessagesSyncDescriptor, String> {
-    match &message.descriptor {
-        Descriptor::Messages(messages) => match messages.as_ref() {
-            Messages::Sync(descriptor) => Ok(descriptor),
-            _ => Err("MessagesSyncParseFailed: expected MessagesSync descriptor".to_string()),
-        },
-        _ => Err("MessagesSyncParseFailed: expected MessagesSync descriptor".to_string()),
     }
 }
 

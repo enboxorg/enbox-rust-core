@@ -2,8 +2,6 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use serde_json::Value as JsonValue;
-
 use crate::descriptors::{ConfigureDescriptor, Descriptor, Protocols};
 use crate::dwn::DwnReply;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
@@ -16,10 +14,6 @@ use crate::{Message, Value};
 const PROTOCOLS_INTERFACE: &str = "Protocols";
 const CONFIGURE_METHOD: &str = "Configure";
 
-pub(crate) fn parse_message(raw_message: &JsonValue) -> Result<Message<Descriptor>, String> {
-    serde_json::from_value(raw_message.clone()).map_err(|err| err.to_string())
-}
-
 pub(crate) fn protocols_configure_descriptor(
     message: &Message<Descriptor>,
 ) -> Result<&ConfigureDescriptor, String> {
@@ -29,18 +23,6 @@ pub(crate) fn protocols_configure_descriptor(
             _ => Err("expected ProtocolsConfigure message".to_string()),
         },
         _ => Err("expected ProtocolsConfigure message".to_string()),
-    }
-}
-
-pub(crate) fn protocols_query_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&crate::descriptors::ProtocolQueryDescriptor, String> {
-    match &message.descriptor {
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            Protocols::Query(descriptor) => Ok(descriptor),
-            _ => Err("expected ProtocolsQuery message".to_string()),
-        },
-        _ => Err("expected ProtocolsQuery message".to_string()),
     }
 }
 
