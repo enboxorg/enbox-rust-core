@@ -197,59 +197,56 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
         resumable_task_store: _,
     } = stores;
 
-    dwn.register(MessagesReadHandler::with_optional_resolver(
+    dwn.register(MessagesReadHandler::new(
         message_store.clone(),
         data_store.clone(),
         resolver.clone(),
     ));
-    dwn.register(MessagesSubscribeHandler::with_optional_resolver(
+    dwn.register(MessagesSubscribeHandler::new(
         message_store.clone(),
         event_log.clone(),
         resolver.clone(),
     ));
-    dwn.register(MessagesSyncHandler::with_optional_resolver(
+    dwn.register(MessagesSyncHandler::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
         resolver.clone(),
     ));
-    dwn.register(ProtocolsConfigureHandler::with_optional_resolver(
+    dwn.register(ProtocolsConfigureHandler::new(
         message_store.clone(),
         state_index.clone(),
         resolver.clone(),
     ));
-    dwn.register(ProtocolsQueryHandler::with_optional_resolver(
+    dwn.register(ProtocolsQueryHandler::new(
         message_store.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsWriteHandler::with_optional_resolver(
+    dwn.register(RecordsWriteHandler::with_event_log(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
         event_log.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsReadHandler::with_optional_resolver(
+    dwn.register(RecordsReadHandler::new(
         message_store.clone(),
         data_store.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsQueryHandler::with_optional_resolver(
+    dwn.register(RecordsQueryHandler::new(
         message_store.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsCountHandler::with_optional_resolver(
+    dwn.register(RecordsCountHandler::new(
         message_store.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsDeleteHandler::with_optional_resolver(
+    dwn.register(RecordsDeleteHandler::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsSubscribeHandler::with_optional_resolver(
-        message_store,
-        resolver,
-    ));
+    dwn.register(RecordsSubscribeHandler::new(message_store, resolver));
 }

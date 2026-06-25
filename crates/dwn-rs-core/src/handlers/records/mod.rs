@@ -25,13 +25,17 @@ pub enum RecordsAuthorizationKind {
 
 pub(crate) use delete::{resume_records_delete_from_task, resume_records_squash_from_task};
 
-// Handler types live in their per-method submodules; re-export them at the `records` level so
-// internal callers (builder, tests) and external store backends use a stable path.
+// The unit tests reference the per-method handler types by short name via `super::*`; the
+// builder uses their full submodule paths, so these re-exports are only needed under `test`.
+#[cfg(test)]
 pub(crate) use count::RecordsCountHandler;
+#[cfg(test)]
 pub(crate) use delete::RecordsDeleteHandler;
+#[cfg(test)]
 pub(crate) use query::RecordsQueryHandler;
+#[cfg(test)]
 pub(crate) use read::RecordsReadHandler;
-pub(crate) use subscribe::RecordsSubscribeHandler;
+#[cfg(test)]
 pub(crate) use write::RecordsWriteHandler;
 
 // Re-exported for external store backends (e.g. `dwn-rs-stores`) that drive a long-lived

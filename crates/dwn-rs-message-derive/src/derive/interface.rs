@@ -161,6 +161,38 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         ))
     });
 
+    // For each concrete descriptor, generate a `FromDescriptor` impl that downcasts a borrowed
+    // `Descriptor` union to `&Self`. The top-level `Descriptor::#name` variant is always boxed; the
+    // inner `#name::#variant` payload is dereferenced according to `boxed`.
+    let from_descriptor_impls = variants.iter().map(|v| {
+        let (vn, ty) = (&v.variant, &v.ty);
+        let deref = if v.boxed {
+            quote!(value.as_ref())
+        } else {
+            quote!(value)
+        };
+        quote! {
+            impl crate::interfaces::messages::descriptors::FromDescriptor for #ty {
+                fn from_descriptor(
+                    descriptor: &crate::interfaces::messages::descriptors::Descriptor,
+                ) -> core::result::Result<&Self, crate::interfaces::messages::descriptors::ValidationError> {
+                    if let crate::interfaces::messages::descriptors::Descriptor::#name(inner) = descriptor {
+                        if let #name::#vn(value) = inner.as_ref() {
+                            return Ok(#deref);
+                        }
+                    }
+                    Err(crate::interfaces::messages::descriptors::ValidationError {
+                        message: format!(
+                            "expected {} {} descriptor",
+                            #iface,
+                            <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD
+                        ),
+                    })
+                }
+            }
+        }
+    });
+
     let missing_iface = format!("{} descriptor missing interface", name);
     let missing_method = format!("{} descriptor missing method", name);
 
@@ -220,6 +252,8 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
                 #(#kinds),*
             ];
         }
+
+        #(#from_descriptor_impls)*
     }
 }
 

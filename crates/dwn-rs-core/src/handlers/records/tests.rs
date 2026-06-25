@@ -15,6 +15,7 @@ use crate::descriptors::{
     ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor, Records,
     RecordsWriteDescriptor, SubscribeDescriptor,
 };
+use crate::dwn::{Handler, MethodHandlerRequest};
 use crate::errors::{DataStoreError, MessageStoreError, StoreError};
 use crate::events::MessageEvent;
 use crate::fields::WriteFields;
@@ -45,15 +46,15 @@ async fn records_write_read_query_and_count_published_inline_data() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
 
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone());
-    let query_handler = RecordsQueryHandler::new(message_store.clone());
-    let count_handler = RecordsCountHandler::new(message_store.clone());
+    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
+    let query_handler = RecordsQueryHandler::new(message_store.clone(), None);
+    let count_handler = RecordsCountHandler::new(message_store.clone(), None);
 
     let data = Bytes::from_static(b"hello world");
     let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
@@ -66,13 +67,17 @@ async fn records_write_read_query_and_count_published_inline_data() {
     let record_id = write["recordId"].as_str().unwrap().to_string();
 
     let reply = write_handler
-        .handle_write("did:example:alice", &write, Some(data.clone()))
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &write,
+            Some(data.clone()),
+        ))
         .await;
     assert_eq!(reply.status.code, 202);
 
     let query = unsigned_query_message(json!({ "published": true }));
     let reply = query_handler
-        .handle_query("did:example:alice", &query)
+        .run(MethodHandlerRequest::new("did:example:alice", &query, None))
         .await;
     assert_eq!(reply.status.code, 200);
     let entries = reply.body["entries"].as_array().unwrap();
@@ -84,13 +89,15 @@ async fn records_write_read_query_and_count_published_inline_data() {
 
     let count = unsigned_count_message(json!({ "published": true }));
     let reply = count_handler
-        .handle_count("did:example:alice", &count)
+        .run(MethodHandlerRequest::new("did:example:alice", &count, None))
         .await;
     assert_eq!(reply.status.code, 200);
     assert_eq!(reply.body["count"], json!(1));
 
     let read = unsigned_read_message(json!({ "recordId": record_id }));
-    let reply = read_handler.handle_read("did:example:alice", &read).await;
+    let reply = read_handler
+        .run(MethodHandlerRequest::new("did:example:alice", &read, None))
+        .await;
     assert_eq!(reply.status.code, 200);
     assert_eq!(
         reply.body["entry"]["encodedData"].as_str(),
@@ -106,11 +113,11 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let data = Bytes::from_static(b"version one");
@@ -125,7 +132,11 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     let context_id = initial["contextId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &initial, Some(data.clone()))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &initial,
+                Some(data.clone())
+            ))
             .await
             .status
             .code,
@@ -142,7 +153,11 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
     });
     let reply = handler
-        .handle_write("did:example:alice", &update, None)
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &update,
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 202);
 
@@ -170,11 +185,11 @@ async fn records_write_rejects_older_conflicting_write() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let data = Bytes::from_static(b"newest");
@@ -189,7 +204,11 @@ async fn records_write_rejects_older_conflicting_write() {
     let context_id = initial["contextId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &initial, Some(data.clone()))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &initial,
+                Some(data.clone())
+            ))
             .await
             .status
             .code,
@@ -206,7 +225,11 @@ async fn records_write_rejects_older_conflicting_write() {
         ..WriteSpec::new("2025-01-01T00:09:00.000000Z")
     });
     let reply = handler
-        .handle_write("did:example:alice", &older, Some(data))
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &older,
+            Some(data),
+        ))
         .await;
     assert_eq!(reply.status.code, 409);
 }
@@ -219,13 +242,13 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone());
+    let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
 
     let data = Bytes::from(vec![7u8; (MAX_ENCODED_DATA_SIZE + 1) as usize]);
     let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
@@ -238,7 +261,11 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     let record_id = write["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &write, Some(data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &write,
+                Some(data)
+            ))
             .await
             .status
             .code,
@@ -250,10 +277,11 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
         .unwrap();
 
     let reply = read_handler
-        .handle_read(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &unsigned_read_message(json!({ "recordId": record_id })),
-        )
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 410);
 }
@@ -266,17 +294,17 @@ async fn records_delete_prune_purges_descendant_records() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let delete_handler = RecordsDeleteHandler::with_public_key_resolver(
+    let delete_handler = RecordsDeleteHandler::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let data = Bytes::from_static(b"parent");
@@ -291,7 +319,11 @@ async fn records_delete_prune_purges_descendant_records() {
     let parent_context_id = parent["contextId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
-            .handle_write("did:example:alice", &parent, Some(data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &parent,
+                Some(data)
+            ))
             .await
             .status
             .code,
@@ -311,7 +343,11 @@ async fn records_delete_prune_purges_descendant_records() {
     let child_record_id = child["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
-            .handle_write("did:example:alice", &child, Some(child_data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &child,
+                Some(child_data)
+            ))
             .await
             .status
             .code,
@@ -320,7 +356,11 @@ async fn records_delete_prune_purges_descendant_records() {
 
     let delete = signed_delete_message(&parent_record_id, true, "2025-01-01T00:02:00.000000Z");
     let reply = delete_handler
-        .handle_delete("did:example:alice", &delete)
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &delete,
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 202);
 
@@ -340,11 +380,11 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_squash_protocol("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let old_data = Bytes::from_static(b"old note");
@@ -359,7 +399,11 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     let old_record_id = old["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &old, Some(old_data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &old,
+                Some(old_data)
+            ))
             .await
             .status
             .code,
@@ -378,7 +422,11 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     });
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &squash, Some(squash_data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &squash,
+                Some(squash_data)
+            ))
             .await
             .status
             .code,
@@ -401,7 +449,11 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
         ..WriteSpec::new("2025-01-01T00:00:30.000000Z")
     });
     let reply = handler
-        .handle_write("did:example:alice", &late_old, Some(late_old_data))
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &late_old,
+            Some(late_old_data),
+        ))
         .await;
     assert_eq!(reply.status.code, 409);
 }
@@ -416,11 +468,11 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"conditions":{"publication":"Required"}}"#);
@@ -440,7 +492,11 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &grant, Some(grant_data.clone()))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &grant,
+                Some(grant_data.clone())
+            ))
             .await
             .status
             .code,
@@ -458,7 +514,11 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
     });
     let reply = handler
-        .handle_write("did:example:alice", &unpublished, Some(unpublished_data))
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &unpublished,
+            Some(unpublished_data),
+        ))
         .await;
     assert_eq!(reply.status.code, 401);
     assert!(reply
@@ -479,7 +539,11 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
     });
     let reply = handler
-        .handle_write("did:example:alice", &published, Some(published_data))
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &published,
+            Some(published_data),
+        ))
         .await;
     assert_eq!(reply.status.code, 202);
 }
@@ -494,11 +558,11 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#);
@@ -517,7 +581,11 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     });
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &grant, Some(grant_data.clone()))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &grant,
+                Some(grant_data.clone())
+            ))
             .await
             .status
             .code,
@@ -538,7 +606,11 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     });
     let note = with_author_delegated_grant(note, &delegated_grant, bob_signer());
     let reply = handler
-        .handle_write("did:example:alice", &note, Some(note_data))
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &note,
+            Some(note_data),
+        ))
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
@@ -553,11 +625,11 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::with_public_key_resolver(
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
@@ -577,7 +649,11 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &grant, Some(grant_data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &grant,
+                Some(grant_data)
+            ))
             .await
             .status
             .code,
@@ -598,7 +674,11 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     let note_record_id = note["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &note, Some(note_data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &note,
+                Some(note_data)
+            ))
             .await
             .status
             .code,
@@ -622,7 +702,11 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     });
     assert_eq!(
         handler
-            .handle_write("did:example:alice", &revocation, Some(revoke_data))
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &revocation,
+                Some(revoke_data)
+            ))
             .await
             .status
             .code,
@@ -673,10 +757,10 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
-    let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+    let handler = RecordsEventLogSubscribeHandler::new(
         message_store,
         event_log,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
@@ -756,10 +840,10 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
         .await
         .unwrap();
 
-    let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+    let handler = RecordsEventLogSubscribeHandler::new(
         message_store,
         event_log,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
@@ -795,10 +879,10 @@ async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_su
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
-    let handler = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+    let handler = RecordsEventLogSubscribeHandler::new(
         message_store,
         event_log.clone(),
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {

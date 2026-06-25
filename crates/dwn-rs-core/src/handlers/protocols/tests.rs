@@ -10,9 +10,8 @@ use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPubl
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
-    CONFIGURE, PROTOCOLS,
 };
-use crate::dwn::{Dwn, MessageKind};
+use crate::dwn::{Dwn, Handler, MethodHandlerRequest};
 use crate::fields::WriteFields;
 use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
 use crate::handlers::query::ProtocolsQueryHandler;
@@ -29,18 +28,16 @@ use crate::{
 
 use super::common::*;
 
-const QUERY_METHOD_FOR_TESTS: &str = "Query";
-
 #[tokio::test]
 async fn protocols_configure_stores_latest_base_state() {
     let mut message_store = TestMessageStore::default();
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::with_public_key_resolver(
+    let handler = ProtocolsConfigureHandler::new(
         message_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let older = signed_configure_message(
         "http://example.com/protocol",
@@ -55,7 +52,7 @@ async fn protocols_configure_stores_latest_base_state() {
 
     assert_eq!(
         handler
-            .handle_configure("did:example:alice", &older)
+            .run(MethodHandlerRequest::new("did:example:alice", &older, None))
             .await
             .status
             .code,
@@ -63,7 +60,7 @@ async fn protocols_configure_stores_latest_base_state() {
     );
     assert_eq!(
         handler
-            .handle_configure("did:example:alice", &newer)
+            .run(MethodHandlerRequest::new("did:example:alice", &newer, None))
             .await
             .status
             .code,
@@ -71,7 +68,7 @@ async fn protocols_configure_stores_latest_base_state() {
     );
     assert_eq!(
         handler
-            .handle_configure("did:example:alice", &newer)
+            .run(MethodHandlerRequest::new("did:example:alice", &newer, None))
             .await
             .status
             .code,
@@ -102,36 +99,42 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::with_public_key_resolver(
+    let configure_handler = ProtocolsConfigureHandler::new(
         message_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let query_handler = ProtocolsQueryHandler::new(message_store.clone());
+    let query_handler = ProtocolsQueryHandler::new(message_store.clone(), None);
 
     configure_handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/public",
                 true,
                 "2025-01-01T00:00:00.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
     configure_handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:01.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
 
     let reply = query_handler
-        .handle_query("did:example:alice", &unsigned_query_message(None))
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &unsigned_query_message(None),
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 200);
     let entries = reply.body["entries"].as_array().unwrap();
@@ -148,30 +151,32 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::with_public_key_resolver(
+    let configure_handler = ProtocolsConfigureHandler::new(
         message_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let query_handler =
-        ProtocolsQueryHandler::with_public_key_resolver(message_store.clone(), test_resolver());
+        ProtocolsQueryHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     configure_handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:00.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
 
     let reply = query_handler
-        .handle_query(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_query_message(None, test_signer_with_key_id("did:example:alice#key1")),
-        )
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 200);
     let entries = reply.body["entries"].as_array().unwrap();
@@ -188,42 +193,45 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::with_public_key_resolver(
+    let configure_handler = ProtocolsConfigureHandler::new(
         message_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let query_handler = ProtocolsQueryHandler::with_public_key_resolver(
+    let query_handler = ProtocolsQueryHandler::new(
         message_store.clone(),
-        test_resolver_with_bob(),
+        Some(Arc::new(test_resolver_with_bob())),
     );
 
     configure_handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/public",
                 true,
                 "2025-01-01T00:00:00.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
     configure_handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:01.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
 
     let reply = query_handler
-        .handle_query(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_query_message(None, test_signer_with_key_id("did:example:bob#key1")),
-        )
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 200);
     let entries = reply.body["entries"].as_array().unwrap();
@@ -240,25 +248,26 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::with_public_key_resolver(
+    let configure_handler = ProtocolsConfigureHandler::new(
         message_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
-    let query_handler = ProtocolsQueryHandler::with_public_key_resolver(
+    let query_handler = ProtocolsQueryHandler::new(
         message_store.clone(),
-        test_resolver_with_bob(),
+        Some(Arc::new(test_resolver_with_bob())),
     );
 
     configure_handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:00.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
     put_protocols_query_grant(
         "did:example:alice",
@@ -269,14 +278,15 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
     .await;
 
     let reply = query_handler
-        .handle_query(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_query_message_with_grant(
                 Some("http://example.com/private"),
                 test_signer_with_key_id("did:example:bob#key1"),
                 "grant-protocols-query",
             ),
-        )
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 200);
     let entries = reply.body["entries"].as_array().unwrap();
@@ -293,11 +303,8 @@ async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::with_public_key_resolver(
-        message_store,
-        state_index,
-        test_resolver(),
-    );
+    let handler =
+        ProtocolsConfigureHandler::new(message_store, state_index, Some(Arc::new(test_resolver())));
     let mut message = signed_configure_message(
         "http://example.com/original",
         true,
@@ -307,7 +314,11 @@ async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
         serde_json::Value::String("http://example.com/tampered".to_string());
 
     let reply = handler
-        .handle_configure("did:example:alice", &message)
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &message,
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 400);
 }
@@ -318,14 +329,14 @@ async fn protocols_configure_rejects_non_tenant_signer() {
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::with_public_key_resolver(
+    let handler = ProtocolsConfigureHandler::new(
         message_store,
         state_index,
-        test_resolver_with_bob(),
+        Some(Arc::new(test_resolver_with_bob())),
     );
 
     let reply = handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message_with_signer(
                 "http://example.com/protocol",
@@ -333,7 +344,8 @@ async fn protocols_configure_rejects_non_tenant_signer() {
                 "2025-01-01T00:00:00.000000Z",
                 test_signer_with_key_id("did:example:bob#key1"),
             ),
-        )
+            None,
+        ))
         .await;
     assert_eq!(reply.status.code, 401);
 }
@@ -344,31 +356,33 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::with_public_key_resolver(
+    let handler = ProtocolsConfigureHandler::new(
         message_store.clone(),
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
 
     handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/versioned",
                 true,
                 "2025-01-01T00:00:00.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
     handler
-        .handle_configure(
+        .run(MethodHandlerRequest::new(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/versioned",
                 false,
                 "2025-01-01T00:10:00.000000Z",
             ),
-        )
+            None,
+        ))
         .await;
 
     let historical = fetch_protocol_definition(
@@ -398,11 +412,8 @@ async fn protocols_configure_validates_composition_dependencies() {
     let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::with_public_key_resolver(
-        message_store,
-        state_index,
-        test_resolver(),
-    );
+    let handler =
+        ProtocolsConfigureHandler::new(message_store, state_index, Some(Arc::new(test_resolver())));
 
     let missing_dependency = signed_configure_descriptor(composed_descriptor(
         "http://example.com/composed-missing",
@@ -410,7 +421,11 @@ async fn protocols_configure_validates_composition_dependencies() {
     ));
     assert_eq!(
         handler
-            .handle_configure("did:example:alice", &missing_dependency)
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &missing_dependency,
+                None
+            ))
             .await
             .status
             .code,
@@ -419,10 +434,11 @@ async fn protocols_configure_validates_composition_dependencies() {
 
     assert_eq!(
         handler
-            .handle_configure(
+            .run(MethodHandlerRequest::new(
                 "did:example:alice",
                 &signed_configure_descriptor(base_thread_descriptor()),
-            )
+                None,
+            ))
             .await
             .status
             .code,
@@ -430,13 +446,14 @@ async fn protocols_configure_validates_composition_dependencies() {
     );
     assert_eq!(
         handler
-            .handle_configure(
+            .run(MethodHandlerRequest::new(
                 "did:example:alice",
                 &signed_configure_descriptor(composed_descriptor(
                     "http://example.com/composed",
                     "threads:thread/participant",
                 )),
-            )
+                None,
+            ))
             .await
             .status
             .code,
@@ -444,13 +461,14 @@ async fn protocols_configure_validates_composition_dependencies() {
     );
     assert_eq!(
         handler
-            .handle_configure(
+            .run(MethodHandlerRequest::new(
                 "did:example:alice",
                 &signed_configure_descriptor(composed_descriptor(
                     "http://example.com/composed-invalid-role",
                     "threads:thread/missing",
                 )),
-            )
+                None,
+            ))
             .await
             .status
             .code,
@@ -466,18 +484,12 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
     state_index.open().await.unwrap();
 
     let mut dwn = Dwn::default();
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, CONFIGURE),
-        ProtocolsConfigureHandler::with_public_key_resolver(
-            message_store.clone(),
-            state_index,
-            test_resolver(),
-        ),
-    );
-    dwn.register_handler(
-        MessageKind::new(PROTOCOLS, QUERY_METHOD_FOR_TESTS),
-        ProtocolsQueryHandler::new(message_store),
-    );
+    dwn.register(ProtocolsConfigureHandler::new(
+        message_store.clone(),
+        state_index,
+        Some(Arc::new(test_resolver())),
+    ));
+    dwn.register(ProtocolsQueryHandler::new(message_store, None));
 
     let configure = signed_configure_message(
         "http://example.com/dispatch",

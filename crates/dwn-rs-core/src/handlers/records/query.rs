@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
@@ -9,13 +8,13 @@ use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsQueryDescriptor;
 use crate::dwn::DwnReply;
-use crate::dwn::{HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{Handler, HandlerContext};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
     filter_includes_published_records, non_owner_records_filters, owner_records_filter,
-    parse_message, published_records_filter, records_query_descriptor, should_protocol_authorize,
-    store_error_reply, QueryAuthorizationResult,
+    published_records_filter, should_protocol_authorize, store_error_reply,
+    QueryAuthorizationResult,
 };
 use crate::permissions::{self, AuthorizationContext};
 use crate::Message;
@@ -26,29 +25,84 @@ pub struct RecordsQueryHandler<MessageStore> {
     public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
 }
 
-impl<MessageStore> HandlesDescriptor for RecordsQueryHandler<MessageStore> {
+impl<MessageStore> Handler for RecordsQueryHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
     type Descriptor = RecordsQueryDescriptor;
+
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send {
+        async move {
+            let HandlerContext {
+                tenant,
+                raw_message,
+                message,
+                descriptor,
+                ..
+            } = ctx;
+
+            let signature = match permissions::validate_authorization_signature(
+                raw_message,
+                self.public_key_resolver.as_deref(),
+                false,
+            ) {
+                Ok(signature) => signature,
+                Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
+                    return DwnReply::bad_request(detail)
+                }
+                Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
+                    return DwnReply::unauthorized(detail)
+                }
+            };
+
+            let (filters, author) = match self
+                .query_filters(tenant, &message, &descriptor, signature.as_ref())
+                .await
+            {
+                Ok(result) => result,
+                Err(QueryAuthorizationResult::Unauthorized(detail)) => {
+                    return DwnReply::unauthorized(detail)
+                }
+            };
+            let result = match self
+                .message_store
+                .query(
+                    tenant,
+                    filters,
+                    Some(date_sort_to_message_sort(
+                        descriptor.date_sort.as_ref(),
+                        false,
+                    )),
+                    descriptor.pagination.clone(),
+                )
+                .await
+            {
+                Ok(result) => result,
+                Err(err) => return store_error_reply(err.to_string()),
+            };
+
+            let entries = attach_initial_writes(
+                tenant,
+                result.messages,
+                &self.message_store,
+                author.as_deref(),
+            )
+            .await;
+            DwnReply::ok()
+                .with_body("entries", JsonValue::Array(entries))
+                .with_body(
+                    "cursor",
+                    serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
+                )
+        }
+    }
 }
 
 impl<MessageStore> RecordsQueryHandler<MessageStore> {
-    pub fn new(message_store: MessageStore) -> Self {
-        Self {
-            message_store,
-            public_key_resolver: None,
-        }
-    }
-
-    pub fn with_public_key_resolver(
-        message_store: MessageStore,
-        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            message_store,
-            public_key_resolver: Some(Arc::new(public_key_resolver)),
-        }
-    }
-
-    pub fn with_optional_resolver(
+    pub fn new(
         message_store: MessageStore,
         public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
     ) -> Self {
@@ -59,86 +113,10 @@ impl<MessageStore> RecordsQueryHandler<MessageStore> {
     }
 }
 
-impl<MessageStore> MethodHandler for RecordsQueryHandler<MessageStore>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_query(request.tenant, request.message).await })
-    }
-}
-
 impl<MessageStore> RecordsQueryHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
-    pub async fn handle_query(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
-        let message = match parse_message(raw_message) {
-            Ok(message) => message,
-            Err(detail) => return DwnReply::bad_request(detail),
-        };
-        let descriptor = match records_query_descriptor(&message) {
-            Ok(descriptor) => descriptor.clone(),
-            Err(detail) => return DwnReply::bad_request(detail),
-        };
-        let signature = match permissions::validate_authorization_signature(
-            raw_message,
-            self.public_key_resolver.as_deref(),
-            false,
-        ) {
-            Ok(signature) => signature,
-            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                return DwnReply::bad_request(detail)
-            }
-            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                return DwnReply::unauthorized(detail)
-            }
-        };
-
-        let (filters, author) = match self
-            .query_filters(tenant, &message, &descriptor, signature.as_ref())
-            .await
-        {
-            Ok(result) => result,
-            Err(QueryAuthorizationResult::Unauthorized(detail)) => {
-                return DwnReply::unauthorized(detail)
-            }
-        };
-        let result = match self
-            .message_store
-            .query(
-                tenant,
-                filters,
-                Some(date_sort_to_message_sort(
-                    descriptor.date_sort.as_ref(),
-                    false,
-                )),
-                descriptor.pagination.clone(),
-            )
-            .await
-        {
-            Ok(result) => result,
-            Err(err) => return store_error_reply(err.to_string()),
-        };
-
-        let entries = attach_initial_writes(
-            tenant,
-            result.messages,
-            &self.message_store,
-            author.as_deref(),
-        )
-        .await;
-        DwnReply::ok()
-            .with_body("entries", JsonValue::Array(entries))
-            .with_body(
-                "cursor",
-                serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
-            )
-    }
-
     async fn query_filters(
         &self,
         tenant: &str,

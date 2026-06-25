@@ -87,10 +87,10 @@ impl SqliteNativeDwn {
             },
             public_key_resolver.clone(),
         ));
-        let records_subscribe = RecordsEventLogSubscribeHandler::with_public_key_resolver(
+        let records_subscribe = RecordsEventLogSubscribeHandler::new(
             store.clone(),
             stores.event_log,
-            public_key_resolver,
+            Some(Arc::new(public_key_resolver)),
         );
 
         Ok(Self {

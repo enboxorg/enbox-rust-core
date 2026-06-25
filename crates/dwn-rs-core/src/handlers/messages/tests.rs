@@ -12,6 +12,7 @@ use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     MessagesSubscribeDescriptor, MessagesSyncDescriptor, RecordsWriteDescriptor,
 };
+use crate::dwn::{Handler, MethodHandlerRequest};
 use crate::errors::{DataStoreError, MessageStoreError};
 use crate::events::MessageEvent;
 use crate::handlers::messages::subscribe::MessagesSubscribeHandler;
@@ -50,11 +51,11 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
         .await
         .unwrap();
 
-    let handler = MessagesSyncHandler::with_public_key_resolver(
+    let handler = MessagesSyncHandler::new(
         message_store,
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Diff,
@@ -66,7 +67,13 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     });
 
-    let reply = handler.handle_sync("did:example:alice", &request).await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &request,
+            None,
+        ))
+        .await;
     assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
     let only_remote = reply.body["onlyRemote"].as_array().unwrap();
     assert_eq!(only_remote.len(), 1);
@@ -89,11 +96,11 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
     message_store
         .insert("did:example:alice", "grant-sync-1", grant)
         .await;
-    let handler = MessagesSyncHandler::with_public_key_resolver(
+    let handler = MessagesSyncHandler::new(
         message_store,
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Root,
@@ -103,7 +110,13 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     });
 
-    let reply = handler.handle_sync("did:example:alice", &request).await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &request,
+            None,
+        ))
+        .await;
     assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
     assert!(reply.body["root"].as_str().is_some());
 }
@@ -121,11 +134,11 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
     message_store
         .insert("did:example:alice", "grant-sync-2", grant)
         .await;
-    let handler = MessagesSyncHandler::with_public_key_resolver(
+    let handler = MessagesSyncHandler::new(
         message_store,
         data_store,
         state_index,
-        test_resolver(),
+        Some(Arc::new(test_resolver())),
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Root,
@@ -134,7 +147,13 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     });
 
-    let reply = handler.handle_sync("did:example:alice", &request).await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &request,
+            None,
+        ))
+        .await;
     assert_eq!(reply.status.code, 401);
     assert!(reply
         .status
@@ -176,11 +195,8 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
-    let handler = MessagesSubscribeHandler::with_public_key_resolver(
-        message_store,
-        event_log,
-        test_resolver(),
-    );
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),
@@ -257,11 +273,8 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
         .await
         .unwrap();
 
-    let handler = MessagesSubscribeHandler::with_public_key_resolver(
-        message_store,
-        event_log,
-        test_resolver(),
-    );
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),

@@ -8,10 +8,8 @@ use bytes::Bytes;
 use serde_json::Value as JsonValue;
 
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
-use crate::descriptors::records::CountDescriptor;
 use crate::descriptors::{
-    DeleteDescriptor, Descriptor, ReadDescriptor, Records, RecordsQueryDescriptor,
-    RecordsWriteDescriptor, SubscribeDescriptor,
+    DeleteDescriptor, Descriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::DwnReply;
@@ -49,42 +47,6 @@ pub(crate) fn records_write_descriptor(
             _ => Err("RecordsWriteDescriptorExpected: message is not RecordsWrite".to_string()),
         },
         _ => Err("RecordsWriteDescriptorExpected: message is not RecordsWrite".to_string()),
-    }
-}
-
-pub(crate) fn records_read_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&ReadDescriptor, String> {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Read(descriptor) => Ok(descriptor),
-            _ => Err("RecordsReadDescriptorExpected: message is not RecordsRead".to_string()),
-        },
-        _ => Err("RecordsReadDescriptorExpected: message is not RecordsRead".to_string()),
-    }
-}
-
-pub(crate) fn records_query_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&RecordsQueryDescriptor, String> {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Query(descriptor) => Ok(descriptor),
-            _ => Err("RecordsQueryDescriptorExpected: message is not RecordsQuery".to_string()),
-        },
-        _ => Err("RecordsQueryDescriptorExpected: message is not RecordsQuery".to_string()),
-    }
-}
-
-pub(crate) fn records_count_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&CountDescriptor, String> {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Count(descriptor) => Ok(descriptor),
-            _ => Err("RecordsCountDescriptorExpected: message is not RecordsCount".to_string()),
-        },
-        _ => Err("RecordsCountDescriptorExpected: message is not RecordsCount".to_string()),
     }
 }
 

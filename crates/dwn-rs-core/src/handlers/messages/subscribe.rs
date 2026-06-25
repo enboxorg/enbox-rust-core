@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
@@ -8,10 +7,13 @@ use serde_json::Value as JsonValue;
 use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
-use crate::dwn::{DwnReply, HandlesDescriptor, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, HandlerContext};
 use crate::permissions::{self};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
+use crate::Handler;
 use crate::Message;
+
+use super::common::*;
 
 #[derive(Clone)]
 pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
@@ -22,39 +24,38 @@ pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
 
 pub struct SubscribeReply {
     pub reply: DwnReply,
+    /// The live subscription handle from the store-driven path. The one-shot request handler reads
+    /// only `reply`, so this is unread within the lib build (it is exercised by tests and mirrors
+    /// [`super::super::records::RecordsSubscribeReply`], whose handle is consumed by the desktop
+    /// websocket runtime).
+    #[allow(dead_code)]
     pub subscription: Option<EventSubscription>,
 }
 
-impl<MessageStore, EventLog> HandlesDescriptor
-    for MessagesSubscribeHandler<MessageStore, EventLog>
+impl<MessageStore, EventLog> Handler for MessagesSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     type Descriptor = MessagesSubscribeDescriptor;
+
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send {
+        // `handle_subscribe` is shared with the store-driven subscription path (which supplies a
+        // real listener), so it stays an inherent method and re-parses internally. Here we drive it
+        // with a no-op listener for the one-shot request path.
+        async move {
+            self.handle_subscribe(ctx.tenant, ctx.raw_message, Box::new(|_| {}))
+                .await
+                .reply
+        }
+    }
 }
 
-use super::common::*;
-
 impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
-    pub fn new(message_store: MessageStore, event_log: EventLog) -> Self {
-        Self {
-            message_store,
-            event_log,
-            public_key_resolver: None,
-        }
-    }
-
-    pub fn with_public_key_resolver(
-        message_store: MessageStore,
-        event_log: EventLog,
-        public_key_resolver: impl JwsPublicKeyResolver + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            message_store,
-            event_log,
-            public_key_resolver: Some(Arc::new(public_key_resolver)),
-        }
-    }
-
-    pub fn with_optional_resolver(
+    pub fn new(
         message_store: MessageStore,
         event_log: EventLog,
         public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
@@ -64,23 +65,6 @@ impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
             event_log,
             public_key_resolver,
         }
-    }
-}
-
-impl<MessageStore, EventLog> MethodHandler for MessagesSubscribeHandler<MessageStore, EventLog>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
-            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
-                .await
-                .reply
-        })
     }
 }
 
