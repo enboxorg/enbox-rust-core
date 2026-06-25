@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::interfaces::messages::descriptors::{
-    ConcreteDescriptor, InterfaceUnion, Messages, Protocols, Records,
+    ConcreteDescriptor, FromDescriptor, InterfaceUnion, Messages, Protocols, Records,
 };
 use crate::interfaces::replies::Status;
+use crate::{Descriptor, Message};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantGateResult {
@@ -145,15 +146,58 @@ impl DwnReply {
 }
 
 pub trait Handler: Send + Sync {
-    type Descriptor: ConcreteDescriptor;
+    type Descriptor: ConcreteDescriptor + FromDescriptor + Clone;
+
+    fn handle<'a>(
+        &'a self,
+        ctx: HandlerContext<'a, Self::Descriptor>,
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
 
     fn run<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        Box::pin(async move {
+            let message: Message<Descriptor> = match serde_json::from_value(request.message.clone())
+            {
+                Ok(message) => message,
+                Err(error) => {
+                    return DwnReply::bad_request(format!("Failed to parse message: {error}"))
+                }
+            };
+
+            let descriptor = match Self::Descriptor::from_descriptor(&message.descriptor) {
+                Ok(descriptor) => descriptor.clone(),
+                Err(error) => {
+                    return DwnReply::bad_request(format!("Failed to parse descriptor: {error}"))
+                }
+            };
+
+            self.handle(HandlerContext {
+                tenant: request.tenant,
+                raw_message: request.message,
+                message,
+                descriptor,
+                data: request.data,
+            })
+            .await
+        })
+    }
 }
 
-pub(crate) struct HandlerAdapter<H: Handler>(pub H);
+pub struct HandlerAdapter<H: Handler>(pub H);
+
+pub struct HandlerContext<'a, D> {
+    pub tenant: &'a str,
+    pub raw_message: &'a Value,
+    /// The parsed, untyped message — handlers still pass this to the permissions/store layer,
+    /// which is `Message<Descriptor>`-based. Owned so handlers (e.g. records/write) can mutate it.
+    pub message: Message<Descriptor>,
+    /// The concrete descriptor, downcast from `message.descriptor`. Owned (cloned in `run`) so it
+    /// doesn't borrow `message` — `message` then moves into the context alongside it.
+    pub descriptor: D,
+    pub data: Option<bytes::Bytes>,
+}
 
 impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
     fn handle<'a>(
@@ -170,6 +214,21 @@ pub struct MethodHandlerRequest<'a> {
     pub message: &'a Value,
     pub kind: MessageKind,
     pub data: Option<bytes::Bytes>,
+}
+
+impl<'a> MethodHandlerRequest<'a> {
+    /// Build a request, deriving `kind` from the message. Convenient for driving a handler's
+    /// [`Handler::run`] directly (e.g. in tests); `kind` is informational for dispatch and is not
+    /// consulted by `run` itself, so a malformed message falls back to an empty kind.
+    pub fn new(tenant: &'a str, message: &'a Value, data: Option<bytes::Bytes>) -> Self {
+        let kind = MessageKind::from_message(message).unwrap_or_else(|_| MessageKind::new("", ""));
+        Self {
+            tenant,
+            message,
+            kind,
+            data,
+        }
+    }
 }
 
 pub trait MethodHandler: Send + Sync {
