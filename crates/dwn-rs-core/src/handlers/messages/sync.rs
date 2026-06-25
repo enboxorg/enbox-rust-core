@@ -10,7 +10,7 @@ use serde_json::Value as JsonValue;
 
 use crate::auth::JwsPublicKeyResolver;
 use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
-use crate::dwn::{DwnReply, MethodHandlerRequest};
+use crate::dwn::{DwnReply, HandlerContext};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions::{self};
 use crate::stores::StateHash;
@@ -39,11 +39,56 @@ where
 {
     type Descriptor = MessagesSyncDescriptor;
 
-    fn run<'a>(
+    fn handle<'a>(
         &'a self,
-        request: MethodHandlerRequest<'a>,
+        ctx: HandlerContext<'a, Self::Descriptor>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move { self.handle_sync(request.tenant, request.message).await })
+        Box::pin(async move {
+            let HandlerContext {
+                tenant,
+                raw_message,
+                message,
+                descriptor,
+                ..
+            } = ctx;
+
+            if let Err(detail) = validate_sync_descriptor(&descriptor) {
+                return DwnReply::bad_request(detail);
+            }
+
+            let authorization = match permissions::validate_authorization_signature(
+                raw_message,
+                self.public_key_resolver.as_deref(),
+                true,
+            ) {
+                Ok(Some(authorization)) => authorization,
+                Ok(None) => {
+                    return DwnReply::unauthorized(
+                        "MessagesSyncAuthorizationFailed: message failed authorization",
+                    )
+                }
+                Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
+                    return DwnReply::bad_request(detail)
+                }
+                Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
+                    return DwnReply::unauthorized(detail)
+                }
+            };
+
+            if let Err(detail) = self
+                .authorize_messages_sync(tenant, &message, &descriptor, &authorization)
+                .await
+            {
+                return DwnReply::unauthorized(detail);
+            }
+
+            match descriptor.action {
+                SyncAction::Root => self.handle_root(tenant, &descriptor).await,
+                SyncAction::Subtree => self.handle_subtree(tenant, &descriptor).await,
+                SyncAction::Leaves => self.handle_leaves(tenant, &descriptor).await,
+                SyncAction::Diff => self.handle_diff(tenant, &descriptor).await,
+            }
+        })
     }
 }
 
@@ -96,54 +141,6 @@ where
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    pub async fn handle_sync(&self, tenant: &str, raw_message: &JsonValue) -> DwnReply {
-        let message = match parse_message(raw_message, "MessagesSyncParseFailed") {
-            Ok(message) => message,
-            Err(detail) => return DwnReply::bad_request(detail),
-        };
-        let descriptor = match messages_sync_descriptor(&message) {
-            Ok(descriptor) => descriptor,
-            Err(detail) => return DwnReply::bad_request(detail),
-        };
-
-        if let Err(detail) = validate_sync_descriptor(descriptor) {
-            return DwnReply::bad_request(detail);
-        }
-
-        let authorization = match permissions::validate_authorization_signature(
-            raw_message,
-            self.public_key_resolver.as_deref(),
-            true,
-        ) {
-            Ok(Some(authorization)) => authorization,
-            Ok(None) => {
-                return DwnReply::unauthorized(
-                    "MessagesSyncAuthorizationFailed: message failed authorization",
-                )
-            }
-            Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                return DwnReply::bad_request(detail)
-            }
-            Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                return DwnReply::unauthorized(detail)
-            }
-        };
-
-        if let Err(detail) = self
-            .authorize_messages_sync(tenant, &message, descriptor, &authorization)
-            .await
-        {
-            return DwnReply::unauthorized(detail);
-        }
-
-        match descriptor.action {
-            SyncAction::Root => self.handle_root(tenant, descriptor).await,
-            SyncAction::Subtree => self.handle_subtree(tenant, descriptor).await,
-            SyncAction::Leaves => self.handle_leaves(tenant, descriptor).await,
-            SyncAction::Diff => self.handle_diff(tenant, descriptor).await,
-        }
-    }
-
     async fn authorize_messages_sync(
         &self,
         tenant: &str,

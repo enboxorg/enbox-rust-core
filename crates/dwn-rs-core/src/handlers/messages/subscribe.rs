@@ -8,7 +8,7 @@ use serde_json::Value as JsonValue;
 use crate::auth::JwsPublicKeyResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
-use crate::dwn::{DwnReply, MethodHandlerRequest};
+use crate::dwn::{DwnReply, HandlerContext};
 use crate::permissions::{self};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
 use crate::Handler;
@@ -35,12 +35,15 @@ where
 {
     type Descriptor = MessagesSubscribeDescriptor;
 
-    fn run<'a>(
+    fn handle<'a>(
         &'a self,
-        request: MethodHandlerRequest<'a>,
+        ctx: HandlerContext<'a, Self::Descriptor>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        // `handle_subscribe` is shared with the store-driven subscription path (which supplies a
+        // real listener), so it stays an inherent method and re-parses internally. Here we drive it
+        // with a no-op listener for the one-shot request path.
         Box::pin(async move {
-            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
+            self.handle_subscribe(ctx.tenant, ctx.raw_message, Box::new(|_| {}))
                 .await
                 .reply
         })
