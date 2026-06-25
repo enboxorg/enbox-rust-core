@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -39,11 +38,11 @@ where
 {
     type Descriptor = MessagesSyncDescriptor;
 
-    fn handle<'a>(
-        &'a self,
-        ctx: HandlerContext<'a, Self::Descriptor>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send {
+        async move {
             let HandlerContext {
                 tenant,
                 raw_message,
@@ -88,7 +87,7 @@ where
                 SyncAction::Leaves => self.handle_leaves(tenant, &descriptor).await,
                 SyncAction::Diff => self.handle_diff(tenant, &descriptor).await,
             }
-        })
+        }
     }
 }
 

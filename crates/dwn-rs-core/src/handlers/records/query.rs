@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
@@ -32,11 +31,11 @@ where
 {
     type Descriptor = RecordsQueryDescriptor;
 
-    fn handle<'a>(
-        &'a self,
-        ctx: HandlerContext<'a, Self::Descriptor>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send {
+        async move {
             let HandlerContext {
                 tenant,
                 raw_message,
@@ -98,7 +97,7 @@ where
                     "cursor",
                     serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
                 )
-        })
+        }
     }
 }
 

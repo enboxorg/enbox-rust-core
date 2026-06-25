@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
@@ -25,6 +24,11 @@ pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
 
 pub struct SubscribeReply {
     pub reply: DwnReply,
+    /// The live subscription handle from the store-driven path. The one-shot request handler reads
+    /// only `reply`, so this is unread within the lib build (it is exercised by tests and mirrors
+    /// [`super::super::records::RecordsSubscribeReply`], whose handle is consumed by the desktop
+    /// websocket runtime).
+    #[allow(dead_code)]
     pub subscription: Option<EventSubscription>,
 }
 
@@ -35,18 +39,18 @@ where
 {
     type Descriptor = MessagesSubscribeDescriptor;
 
-    fn handle<'a>(
-        &'a self,
-        ctx: HandlerContext<'a, Self::Descriptor>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send {
         // `handle_subscribe` is shared with the store-driven subscription path (which supplies a
         // real listener), so it stays an inherent method and re-parses internally. Here we drive it
         // with a no-op listener for the one-shot request path.
-        Box::pin(async move {
+        async move {
             self.handle_subscribe(ctx.tenant, ctx.raw_message, Box::new(|_| {}))
                 .await
                 .reply
-        })
+        }
     }
 }
 

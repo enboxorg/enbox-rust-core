@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::auth::JwsPublicKeyResolver;
@@ -37,11 +36,11 @@ where
 {
     type Descriptor = ProtocolQueryDescriptor;
 
-    fn handle<'a>(
-        &'a self,
-        ctx: HandlerContext<'a, Self::Descriptor>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send {
+        async move {
             let HandlerContext {
                 tenant,
                 raw_message,
@@ -128,7 +127,7 @@ where
                 Err(err) => return DwnReply::bad_request(err.to_string()),
             };
             DwnReply::new(200, "OK").with_body("entries", entries)
-        })
+        }
     }
 }
 

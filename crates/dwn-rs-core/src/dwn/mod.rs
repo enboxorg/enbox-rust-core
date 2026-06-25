@@ -148,16 +148,13 @@ impl DwnReply {
 pub trait Handler: Send + Sync {
     type Descriptor: ConcreteDescriptor + FromDescriptor + Clone;
 
-    fn handle<'a>(
-        &'a self,
-        ctx: HandlerContext<'a, Self::Descriptor>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send;
 
-    fn run<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
+    fn run(&self, request: MethodHandlerRequest<'_>) -> impl Future<Output = DwnReply> + Send {
+        async move {
             let message: Message<Descriptor> = match serde_json::from_value(request.message.clone())
             {
                 Ok(message) => message,
@@ -181,7 +178,7 @@ pub trait Handler: Send + Sync {
                 data: request.data,
             })
             .await
-        })
+        }
     }
 }
 
@@ -204,7 +201,9 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
         &'a self,
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        self.0.run(request)
+        // The dispatch registry is `Arc<dyn MethodHandler>`, so this is the single boundary where
+        // the handler's `impl Future` is boxed into a `Send` trait object.
+        Box::pin(self.0.run(request))
     }
 }
 

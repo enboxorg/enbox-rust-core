@@ -3,7 +3,6 @@ use base64::Engine as _;
 use futures_util::TryStreamExt;
 use serde_json::{json, Value as JsonValue};
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::auth::JwsPublicKeyResolver;
@@ -35,11 +34,11 @@ where
 {
     type Descriptor = ReadDescriptor;
 
-    fn handle<'a>(
-        &'a self,
-        ctx: HandlerContext<'a, Self::Descriptor>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
+    fn handle(
+        &self,
+        ctx: HandlerContext<'_, Self::Descriptor>,
+    ) -> impl Future<Output = DwnReply> + Send {
+        async move {
             let HandlerContext {
                 tenant,
                 raw_message,
@@ -207,7 +206,7 @@ where
             }
 
             DwnReply::ok().with_body("entry", JsonValue::Object(entry))
-        })
+        }
     }
 }
 
