@@ -49,6 +49,10 @@ impl MessageParameters for () {
 pub trait ConcreteDescriptor: MessageDescriptor + Serialize + DeserializeOwned + PartialEq {
     const INTERFACE: &'static str;
     const METHOD: &'static str;
+    /// The concatenated `INTERFACE`+`METHOD` handler key (e.g. `RecordsWrite`), built at compile
+    /// time by the `#[descriptor]` macro. Backs [`MessageKind::as_str`](super::MessageKind::as_str)
+    /// without a runtime allocation.
+    const KEY: &'static str;
 }
 
 /// FromDescriptor is implemented by every concrete message descriptor (normally via the

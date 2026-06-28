@@ -10,6 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use crate::descriptors::MessageKind;
 use crate::interfaces::messages::descriptors::{
     ConcreteDescriptor, FromDescriptor, InterfaceUnion, Messages, Protocols, Records,
 };
@@ -57,26 +58,7 @@ impl TenantGate for AllowAllTenantGate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct MessageKind {
-    pub interface: String,
-    pub method: String,
-}
-
 impl MessageKind {
-    pub fn new(interface: impl Into<String>, method: impl Into<String>) -> Self {
-        Self {
-            interface: interface.into(),
-            method: method.into(),
-        }
-    }
-
-    /// The kind for a concrete descriptor type, derived from its
-    /// [`ConcreteDescriptor::INTERFACE`]/[`ConcreteDescriptor::METHOD`] constants.
-    pub fn of<D: ConcreteDescriptor>() -> Self {
-        Self::new(D::INTERFACE, D::METHOD)
-    }
-
     pub fn from_message(message: &Value) -> Result<Self, DwnValidationError> {
         let descriptor = message.get("descriptor").and_then(Value::as_object);
         let interface = descriptor
@@ -87,22 +69,23 @@ impl MessageKind {
             .and_then(Value::as_str);
 
         match (interface, method) {
-            (Some(interface), Some(method)) => Ok(Self::new(interface, method)),
+            (Some(interface), Some(method)) => MessageKind::from_parts(interface, method)
+                .ok_or_else(|| DwnValidationError::UnknownInterfaceMethod {
+                    interface: interface.to_string(),
+                    method: method.to_string(),
+                }),
             _ => Err(DwnValidationError::MissingInterfaceMethod {
-                interface: descriptor_field_detail(descriptor, "interface"),
-                method: descriptor_field_detail(descriptor, "method"),
+                interface: interface.unwrap_or("undefined").to_string(),
+                method: method.unwrap_or("undefined").to_string(),
             }),
         }
-    }
-
-    pub fn handler_key(&self) -> String {
-        format!("{}{}", self.interface, self.method)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DwnValidationError {
     MissingInterfaceMethod { interface: String, method: String },
+    UnknownInterfaceMethod { interface: String, method: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,7 +194,7 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
 pub struct MethodHandlerRequest<'a> {
     pub tenant: &'a str,
     pub message: &'a Value,
-    pub kind: MessageKind,
+    pub kind: Option<MessageKind>,
     pub data: Option<bytes::Bytes>,
 }
 
@@ -220,7 +203,7 @@ impl<'a> MethodHandlerRequest<'a> {
     /// [`Handler::run`] directly (e.g. in tests); `kind` is informational for dispatch and is not
     /// consulted by `run` itself, so a malformed message falls back to an empty kind.
     pub fn new(tenant: &'a str, message: &'a Value, data: Option<bytes::Bytes>) -> Self {
-        let kind = MessageKind::from_message(message).unwrap_or_else(|_| MessageKind::new("", ""));
+        let kind = MessageKind::from_message(message).ok();
         Self {
             tenant,
             message,
@@ -357,6 +340,11 @@ where
                     "Both interface and method must be present, interface: {interface}, method: {method}"
                 ));
             }
+            Err(DwnValidationError::UnknownInterfaceMethod { interface, method }) => {
+                return DwnReply::bad_request(format!(
+                    "Unknown interface/method combination, interface: {interface}, method: {method}"
+                ));
+            }
         };
 
         if let Err(error) = validation::validate_message(&raw_message) {
@@ -364,17 +352,14 @@ where
         }
 
         let Some(handler) = self.config.handlers.get(&kind) else {
-            return DwnReply::not_implemented(format!(
-                "No handler registered for {}",
-                kind.handler_key()
-            ));
+            return DwnReply::not_implemented(format!("No handler registered for {}", kind.as_str()));
         };
 
         handler
             .handle(MethodHandlerRequest {
                 tenant,
                 message: &raw_message,
-                kind,
+                kind: Some(kind),
                 data,
             })
             .await
@@ -415,8 +400,8 @@ pub fn current_handler_kinds() -> Vec<MessageKind> {
         .iter()
         .chain(Messages::KINDS)
         .chain(Protocols::KINDS)
-        .filter(|kind| kind.2)
-        .map(|&(interface, method, _)| MessageKind::new(interface, method))
+        .filter(|&&(_, _, has_handler)| has_handler)
+        .filter_map(|&(i, m, _)| MessageKind::from_parts(i, m))
         .collect()
 }
 
@@ -431,21 +416,9 @@ impl MethodHandler for NotImplementedHandler {
         Box::pin(async move {
             DwnReply::not_implemented(format!(
                 "{} handler is not implemented",
-                request.kind.handler_key()
+                request.kind.as_ref().map(MessageKind::as_str).unwrap_or_default()
             ))
         })
-    }
-}
-
-fn descriptor_field_detail(
-    descriptor: Option<&serde_json::Map<String, Value>>,
-    field: &str,
-) -> String {
-    match descriptor.and_then(|descriptor| descriptor.get(field)) {
-        Some(Value::String(value)) => value.clone(),
-        Some(Value::Null) => "null".to_string(),
-        Some(value) => value.to_string(),
-        None => "undefined".to_string(),
     }
 }
 
@@ -456,7 +429,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::interfaces::messages::descriptors::{MESSAGES, QUERY, READ, RECORDS};
+    use crate::descriptors::{messages::MessagesMethod, records::RecordsMethod};
+    use crate::interfaces::messages::descriptors::QUERY;
 
     #[tokio::test]
     async fn process_message_rejects_inactive_tenant_before_dispatch() {
@@ -472,7 +446,7 @@ mod tests {
         });
         let handler = RecordingHandler::default();
         let calls = handler.calls.clone();
-        dwn.register_handler(MessageKind::new(RECORDS, QUERY), handler);
+        dwn.register_handler(MessageKind::Records(RecordsMethod::Query), handler);
 
         let reply = dwn
             .process_message(
@@ -514,11 +488,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_message_rejects_unknown_interface_method() {
+        let dwn = Dwn::default();
+
+        // Both fields present but the method is not a known kind: the typed `MessageKind` can't be
+        // built, so dispatch short-circuits to `bad_request` (preserving the pre-enum status, where
+        // an unrecognized kind fell through to a schema-not-found `bad_request`).
+        let reply = dwn
+            .process_message(
+                "did:example:alice",
+                json!({
+                    "descriptor": {
+                        "interface": "Records",
+                        "method": "Bogus"
+                    }
+                }),
+            )
+            .await;
+
+        assert_eq!(reply.status.code, 400);
+        assert_eq!(
+            reply.status.detail,
+            "Unknown interface/method combination, interface: Records, method: Bogus"
+        );
+    }
+
+    #[tokio::test]
     async fn process_message_dispatches_by_interface_and_method() {
         let mut dwn = Dwn::default();
         let handler = RecordingHandler::default();
         let calls = handler.calls.clone();
-        dwn.register_handler(MessageKind::new(RECORDS, QUERY), handler);
+        dwn.register_handler(MessageKind::Records(RecordsMethod::Query), handler);
 
         let reply = dwn
             .process_message(
@@ -542,7 +542,7 @@ mod tests {
             calls.lock().unwrap().as_slice(),
             &[(
                 "did:example:alice".to_string(),
-                MessageKind::new(RECORDS, QUERY)
+                MessageKind::Records(RecordsMethod::Query)
             )]
         );
     }
@@ -555,7 +555,7 @@ mod tests {
             assert!(
                 dwn.handlers().contains_key(&kind),
                 "missing default handler for {}",
-                kind.handler_key()
+                kind.as_str()
             );
         }
 
@@ -590,9 +590,9 @@ mod tests {
             .iter()
             .any(|&(_, method, _)| method == QUERY));
         // ...but it is marked `no_handler`, so it is excluded from the dispatch set.
-        assert!(!kinds.contains(&MessageKind::new(MESSAGES, QUERY)));
+        assert!(!kinds.contains(&MessageKind::Messages(MessagesMethod::Query)));
         // The other Messages methods remain handler-backed.
-        assert!(kinds.contains(&MessageKind::new(MESSAGES, READ)));
+        assert!(kinds.contains(&MessageKind::Messages(MessagesMethod::Read)));
     }
 
     #[derive(Clone)]
@@ -620,11 +620,14 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
             let calls = self.calls.clone();
             let tenant = request.tenant.to_string();
-            let kind = request.kind.clone();
+            let kind = request
+                .kind
+                .clone()
+                .expect("dispatched request has a known kind");
 
             Box::pin(async move {
                 calls.lock().unwrap().push((tenant, kind.clone()));
-                DwnReply::ok().with_body("handler", json!(kind.handler_key()))
+                DwnReply::ok().with_body("handler", json!(kind.as_str()))
             })
         }
     }
