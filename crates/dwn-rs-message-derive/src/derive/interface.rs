@@ -217,6 +217,10 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             }
         }
     });
+    let method_key_arms = variants.iter().map(|v| {
+        let (vn, ty) = (&v.variant, &v.ty);
+        quote!(#method_enum::#vn => <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::KEY)
+    });
 
     let missing_iface = format!("{} descriptor missing interface", name);
     let missing_method = format!("{} descriptor missing method", name);
@@ -237,6 +241,12 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             pub fn from_str_opt(s: &str) -> Option<Self> {
                 #(#method_from_str_arms)*
                 None
+            }
+
+            /// The concatenated `interface`+`method` handler key for this method (e.g. `RecordsWrite`),
+            /// from `ConcreteDescriptor::KEY`. Zero-allocation; backs `MessageKind::as_str`.
+            pub fn key(&self) -> &'static str {
+                match self { #(#method_key_arms),* }
             }
         }
 

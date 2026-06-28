@@ -188,6 +188,16 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
         {
             const INTERFACE: &'static str = #interface;
             const METHOD: &'static str = #method;
+            const KEY: &'static str = {
+                // Concatenate INTERFACE+METHOD at compile time. The byte buffer is a named const so
+                // the borrow promotes to `'static`; its length is fixed from the two consts' lengths.
+                const KEY_BYTES: [u8; #interface.len() + #method.len()] =
+                    crate::interfaces::messages::descriptors::concat_key(#interface, #method);
+                match core::str::from_utf8(&KEY_BYTES) {
+                    Ok(key) => key,
+                    Err(_) => panic!("message key is not valid UTF-8"),
+                }
+            };
         }
 
         impl #generics crate::interfaces::messages::descriptors::MessageDescriptor for #ident #generics #where_clause
