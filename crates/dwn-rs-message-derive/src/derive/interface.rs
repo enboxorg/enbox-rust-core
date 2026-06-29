@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 
 use crate::{derive::descriptor::DescriptorAttr, impl_descriptor_macro_attr};
 
@@ -193,10 +193,63 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         }
     });
 
+    // A fieldless method discriminant for this interface (e.g. `RecordsMethod`), generated from the
+    // same variant entries that back the payload union. Unlike the union, it carries no descriptor
+    // payload, so it is usable as a map key / embedded discriminant. `as_str`/`from_str_opt` route
+    // through each descriptor's `ConcreteDescriptor::METHOD` const — the single source of truth for
+    // the wire string.
+    let method_enum = format_ident!("{}Method", name);
+    let method_variant_defs = variants.iter().map(|v| {
+        let vn = &v.variant;
+        quote!(#vn)
+    });
+    let method_as_str_arms = variants.iter().map(|v| {
+        let (vn, ty) = (&v.variant, &v.ty);
+        quote!(#method_enum::#vn => <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD)
+    });
+    // if-chain rather than a `match` with const patterns: `&str` associated consts are not usable as
+    // match patterns.
+    let method_from_str_arms = variants.iter().map(|v| {
+        let (vn, ty) = (&v.variant, &v.ty);
+        quote! {
+            if s == <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD {
+                return Some(#method_enum::#vn);
+            }
+        }
+    });
+    let method_key_arms = variants.iter().map(|v| {
+        let (vn, ty) = (&v.variant, &v.ty);
+        quote!(#method_enum::#vn => <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::KEY)
+    });
+
     let missing_iface = format!("{} descriptor missing interface", name);
     let missing_method = format!("{} descriptor missing method", name);
 
     quote! {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum #method_enum {
+            #(#method_variant_defs),*
+        }
+
+        impl #method_enum {
+            /// The on-the-wire method string for this variant (from `ConcreteDescriptor::METHOD`).
+            pub fn as_str(&self) -> &'static str {
+                match self { #(#method_as_str_arms),* }
+            }
+
+            /// Parse a wire method string into this interface's method discriminant, if recognized.
+            pub fn from_str_opt(s: &str) -> Option<Self> {
+                #(#method_from_str_arms)*
+                None
+            }
+
+            /// The concatenated `interface`+`method` handler key for this method (e.g. `RecordsWrite`),
+            /// from `ConcreteDescriptor::KEY`. Zero-allocation; backs `MessageKind::as_str`.
+            pub fn key(&self) -> &'static str {
+                match self { #(#method_key_arms),* }
+            }
+        }
+
         #[derive(serde::Serialize, Debug, PartialEq, Clone)]
         #[serde(untagged)]
         pub enum #name {
@@ -324,6 +377,10 @@ mod tests {
         assert!(out.contains("unsupported"));
         // leaf codegen still runs (per-struct internal types)
         assert!(out.contains("ReadDescriptorInternal"));
+        // fieldless method discriminant enum is generated alongside the payload union
+        assert!(out.contains("enum RecordsMethod"));
+        assert!(out.contains("fn as_str"));
+        assert!(out.contains("fn from_str_opt"));
     }
 
     #[test]

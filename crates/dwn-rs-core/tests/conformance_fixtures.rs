@@ -440,7 +440,7 @@ async fn fixture_messages_route_through_dwn_dispatch() {
             assert_eq!(reply.status.code, 200, "{} route status", case.id);
             assert_eq!(
                 reply.body.get("handler"),
-                Some(&Value::String(kind.handler_key())),
+                Some(&Value::String(kind.as_str().to_string())),
                 "{} route handler",
                 case.id
             );
@@ -794,7 +794,12 @@ impl MethodHandler for RouteEchoHandler {
         &'a self,
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        let handler_key = request.kind.handler_key();
+        let handler_key = request
+            .kind
+            .as_ref()
+            .map(MessageKind::as_str)
+            .unwrap_or_default()
+            .to_string();
         Box::pin(async move { DwnReply::ok().with_body("handler", Value::String(handler_key)) })
     }
 }
@@ -889,12 +894,7 @@ async fn assert_message_process_reply(case: &FixtureCase) {
             )
         });
         if let Some(handler) = &process.handler {
-            assert_eq!(
-                kind.handler_key(),
-                *handler,
-                "{} process handler key",
-                case.id
-            );
+            assert_eq!(kind.as_str(), *handler, "{} process handler key", case.id);
         }
         node.dwn_mut().register_handler(
             kind,
@@ -942,7 +942,7 @@ fn assert_handler_coverage(
 fn current_handler_keys() -> BTreeSet<String> {
     current_handler_kinds()
         .into_iter()
-        .map(|kind| kind.handler_key())
+        .map(|kind| kind.as_str().to_string())
         .collect()
 }
 

@@ -48,8 +48,8 @@ async fn native_dwn_handlers_do_not_return_not_implemented() {
                 TENANT,
                 json!({
                     "descriptor": {
-                        "interface": kind.interface,
-                        "method": kind.method,
+                        "interface": kind.interface().as_str(),
+                        "method": kind.method(),
                     }
                 }),
             )
@@ -58,7 +58,7 @@ async fn native_dwn_handlers_do_not_return_not_implemented() {
             reply.status.code,
             501,
             "{} should be registered",
-            kind.handler_key()
+            kind.as_str()
         );
     }
 }

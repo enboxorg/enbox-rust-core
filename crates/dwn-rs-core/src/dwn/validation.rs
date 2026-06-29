@@ -214,7 +214,7 @@ fn validators() -> &'static HashMap<String, Validator> {
 }
 
 fn schema_id_for_kind(kind: &MessageKind) -> Option<&'static str> {
-    match (kind.interface.as_str(), kind.method.as_str()) {
+    match (kind.interface().as_str(), kind.method()) {
         ("Messages", "Read") => {
             Some("https://identity.foundation/dwn/json-schemas/messages-read.json")
         }
@@ -258,18 +258,25 @@ pub fn validate_message(raw_message: &Value) -> Result<(), MessageValidationErro
             MessageValidationError::new(format!(
                 "Both interface and method must be present, interface: {interface}, method: {method}"
             ))
+        },
+        crate::dwn::DwnValidationError::UnknownInterfaceMethod{ interface, method } => {
+            MessageValidationError::new(format!(
+                "Invalid interface or method, interface: {interface}, method: {method}"
+            ))
         }
     })?;
     let Some(schema_id) = schema_id_for_kind(&kind) else {
         return Err(MessageValidationError::new(format!(
             "SchemaValidatorSchemaNotFound: schema for {}{} not found",
-            kind.interface, kind.method
+            kind.interface().as_str(),
+            kind.method(),
         )));
     };
     let validator = validators().get(schema_id).ok_or_else(|| {
         MessageValidationError::new(format!(
             "SchemaValidatorSchemaNotFound: schema for {}{} not found",
-            kind.interface, kind.method
+            kind.interface().as_str(),
+            kind.method(),
         ))
     })?;
     if let Some(error) = validator.iter_errors(raw_message).next() {
