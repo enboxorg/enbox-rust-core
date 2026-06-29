@@ -200,8 +200,16 @@ mod tests {
         // One representative kind per interface, including the `no_handler` MessagesQuery.
         let cases = [
             (RECORDS, WRITE, MessageKind::Records(RecordsMethod::Write)),
-            (PROTOCOLS, CONFIGURE, MessageKind::Protocols(ProtocolsMethod::Configure)),
-            (MESSAGES, QUERY, MessageKind::Messages(MessagesMethod::Query)),
+            (
+                PROTOCOLS,
+                CONFIGURE,
+                MessageKind::Protocols(ProtocolsMethod::Configure),
+            ),
+            (
+                MESSAGES,
+                QUERY,
+                MessageKind::Messages(MessagesMethod::Query),
+            ),
         ];
 
         for (interface, method, expected) in cases {

@@ -352,7 +352,10 @@ where
         }
 
         let Some(handler) = self.config.handlers.get(&kind) else {
-            return DwnReply::not_implemented(format!("No handler registered for {}", kind.as_str()));
+            return DwnReply::not_implemented(format!(
+                "No handler registered for {}",
+                kind.as_str()
+            ));
         };
 
         handler
@@ -416,7 +419,11 @@ impl MethodHandler for NotImplementedHandler {
         Box::pin(async move {
             DwnReply::not_implemented(format!(
                 "{} handler is not implemented",
-                request.kind.as_ref().map(MessageKind::as_str).unwrap_or_default()
+                request
+                    .kind
+                    .as_ref()
+                    .map(MessageKind::as_str)
+                    .unwrap_or_default()
             ))
         })
     }

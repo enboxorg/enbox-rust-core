@@ -794,7 +794,12 @@ impl MethodHandler for RouteEchoHandler {
         &'a self,
         request: MethodHandlerRequest<'a>,
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        let handler_key = request.kind.as_ref().map(MessageKind::as_str).unwrap_or_default().to_string();
+        let handler_key = request
+            .kind
+            .as_ref()
+            .map(MessageKind::as_str)
+            .unwrap_or_default()
+            .to_string();
         Box::pin(async move { DwnReply::ok().with_body("handler", Value::String(handler_key)) })
     }
 }
@@ -889,12 +894,7 @@ async fn assert_message_process_reply(case: &FixtureCase) {
             )
         });
         if let Some(handler) = &process.handler {
-            assert_eq!(
-                kind.as_str(),
-                *handler,
-                "{} process handler key",
-                case.id
-            );
+            assert_eq!(kind.as_str(), *handler, "{} process handler key", case.id);
         }
         node.dwn_mut().register_handler(
             kind,
