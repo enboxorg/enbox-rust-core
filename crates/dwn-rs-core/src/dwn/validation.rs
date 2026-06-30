@@ -10,6 +10,11 @@ use jsonschema::{Draft, Registry, Resource, Validator};
 use serde_json::Value;
 
 use crate::dwn::MessageKind;
+use crate::interfaces::messages::descriptors::{
+    MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA,
+    PROTOCOLS_CONFIGURE_SCHEMA, PROTOCOLS_QUERY_SCHEMA, RECORDS_COUNT_SCHEMA, RECORDS_DELETE_SCHEMA,
+    RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA, RECORDS_WRITE_SCHEMA,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageValidationError {
@@ -72,15 +77,15 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
         include_str!("../../schemas/interface-methods/messages-filter.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/messages-read.json",
+        MESSAGES_READ_SCHEMA,
         include_str!("../../schemas/interface-methods/messages-read.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/messages-subscribe.json",
+        MESSAGES_SUBSCRIBE_SCHEMA,
         include_str!("../../schemas/interface-methods/messages-subscribe.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/messages-sync.json",
+        MESSAGES_SYNC_SCHEMA,
         include_str!("../../schemas/interface-methods/messages-sync.json"),
     ),
     (
@@ -104,19 +109,19 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
         include_str!("../../schemas/interface-methods/protocol-rule-set.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/protocols-configure.json",
+        PROTOCOLS_CONFIGURE_SCHEMA,
         include_str!("../../schemas/interface-methods/protocols-configure.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/protocols-query.json",
+        PROTOCOLS_QUERY_SCHEMA,
         include_str!("../../schemas/interface-methods/protocols-query.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/records-count.json",
+        RECORDS_COUNT_SCHEMA,
         include_str!("../../schemas/interface-methods/records-count.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/records-delete.json",
+        RECORDS_DELETE_SCHEMA,
         include_str!("../../schemas/interface-methods/records-delete.json"),
     ),
     (
@@ -124,19 +129,19 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
         include_str!("../../schemas/interface-methods/records-filter.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/records-query.json",
+        RECORDS_QUERY_SCHEMA,
         include_str!("../../schemas/interface-methods/records-query.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/records-read.json",
+        RECORDS_READ_SCHEMA,
         include_str!("../../schemas/interface-methods/records-read.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/records-subscribe.json",
+        RECORDS_SUBSCRIBE_SCHEMA,
         include_str!("../../schemas/interface-methods/records-subscribe.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/records-write.json",
+        RECORDS_WRITE_SCHEMA,
         include_str!("../../schemas/interface-methods/records-write.json"),
     ),
     (
