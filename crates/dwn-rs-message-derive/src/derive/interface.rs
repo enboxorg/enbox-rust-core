@@ -221,6 +221,10 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         let (vn, ty) = (&v.variant, &v.ty);
         quote!(#method_enum::#vn => <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::KEY)
     });
+    let method_schema_id_arms = variants.iter().map(|v| {
+        let (vn, ty) = (&v.variant, &v.ty);
+        quote!(#method_enum::#vn => <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::SCHEMA_ID)
+    });
 
     let missing_iface = format!("{} descriptor missing interface", name);
     let missing_method = format!("{} descriptor missing method", name);
@@ -247,6 +251,12 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             /// from `ConcreteDescriptor::KEY`. Zero-allocation; backs `MessageKind::as_str`.
             pub fn key(&self) -> &'static str {
                 match self { #(#method_key_arms),* }
+            }
+
+            /// The JSON-schema identifier for this method (from `ConcreteDescriptor::SCHEMA_ID`), or
+            /// `None` for a method with no published schema. Backs `MessageKind::schema_id`.
+            pub fn schema_id(&self) -> Option<&'static str> {
+                match self { #(#method_schema_id_arms),* }
             }
         }
 
@@ -381,6 +391,8 @@ mod tests {
         assert!(out.contains("enum RecordsMethod"));
         assert!(out.contains("fn as_str"));
         assert!(out.contains("fn from_str_opt"));
+        assert!(out.contains("fn key"));
+        assert!(out.contains("fn schema_id"));
     }
 
     #[test]

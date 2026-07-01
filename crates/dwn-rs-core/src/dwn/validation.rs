@@ -12,8 +12,9 @@ use serde_json::Value;
 use crate::dwn::MessageKind;
 use crate::interfaces::messages::descriptors::{
     MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA,
-    PROTOCOLS_CONFIGURE_SCHEMA, PROTOCOLS_QUERY_SCHEMA, RECORDS_COUNT_SCHEMA, RECORDS_DELETE_SCHEMA,
-    RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA, RECORDS_WRITE_SCHEMA,
+    PROTOCOLS_CONFIGURE_SCHEMA, PROTOCOLS_QUERY_SCHEMA, RECORDS_COUNT_SCHEMA,
+    RECORDS_DELETE_SCHEMA, RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA,
+    RECORDS_WRITE_SCHEMA,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,45 +219,6 @@ fn validators() -> &'static HashMap<String, Validator> {
     })
 }
 
-fn schema_id_for_kind(kind: &MessageKind) -> Option<&'static str> {
-    match (kind.interface().as_str(), kind.method()) {
-        ("Messages", "Read") => {
-            Some("https://identity.foundation/dwn/json-schemas/messages-read.json")
-        }
-        ("Messages", "Subscribe") => {
-            Some("https://identity.foundation/dwn/json-schemas/messages-subscribe.json")
-        }
-        ("Messages", "Sync") => {
-            Some("https://identity.foundation/dwn/json-schemas/messages-sync.json")
-        }
-        ("Protocols", "Configure") => {
-            Some("https://identity.foundation/dwn/json-schemas/protocols-configure.json")
-        }
-        ("Protocols", "Query") => {
-            Some("https://identity.foundation/dwn/json-schemas/protocols-query.json")
-        }
-        ("Records", "Count") => {
-            Some("https://identity.foundation/dwn/json-schemas/records-count.json")
-        }
-        ("Records", "Delete") => {
-            Some("https://identity.foundation/dwn/json-schemas/records-delete.json")
-        }
-        ("Records", "Query") => {
-            Some("https://identity.foundation/dwn/json-schemas/records-query.json")
-        }
-        ("Records", "Read") => {
-            Some("https://identity.foundation/dwn/json-schemas/records-read.json")
-        }
-        ("Records", "Subscribe") => {
-            Some("https://identity.foundation/dwn/json-schemas/records-subscribe.json")
-        }
-        ("Records", "Write") => {
-            Some("https://identity.foundation/dwn/json-schemas/records-write.json")
-        }
-        _ => None,
-    }
-}
-
 pub fn validate_message(raw_message: &Value) -> Result<(), MessageValidationError> {
     let kind = MessageKind::from_message(raw_message).map_err(|err| match err {
         crate::dwn::DwnValidationError::MissingInterfaceMethod { interface, method } => {
@@ -270,13 +232,13 @@ pub fn validate_message(raw_message: &Value) -> Result<(), MessageValidationErro
             ))
         }
     })?;
-    let Some(schema_id) = schema_id_for_kind(&kind) else {
-        return Err(MessageValidationError::new(format!(
+    let schema_id = kind.schema_id().ok_or_else(|| {
+        MessageValidationError::new(format!(
             "SchemaValidatorSchemaNotFound: schema for {}{} not found",
             kind.interface().as_str(),
             kind.method(),
-        )));
-    };
+        ))
+    })?;
     let validator = validators().get(schema_id).ok_or_else(|| {
         MessageValidationError::new(format!(
             "SchemaValidatorSchemaNotFound: schema for {}{} not found",
@@ -290,4 +252,29 @@ pub fn validate_message(raw_message: &Value) -> Result<(), MessageValidationErro
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dwn::current_handler_kinds;
+
+    /// Completeness guard for the descriptor-derived schema lookup: every handler-backed kind must
+    /// declare a `schema_id` that resolves to an embedded validator. Catches a future
+    /// `#[descriptor]` that forgets `schema_id = …` (→ `None`) or points at a URL missing from
+    /// `SCHEMA_SOURCES` — failures the old hand-maintained `schema_id_for_kind` match would have
+    /// surfaced only at runtime on a live message.
+    #[test]
+    fn every_handler_kind_has_an_embedded_schema() {
+        for kind in current_handler_kinds() {
+            let schema_id = kind.schema_id().unwrap_or_else(|| {
+                panic!("handler kind {} has no schema_id", kind.as_str());
+            });
+            assert!(
+                validators().contains_key(schema_id),
+                "handler kind {} declares schema {schema_id}, which is not embedded in SCHEMA_SOURCES",
+                kind.as_str(),
+            );
+        }
+    }
 }
