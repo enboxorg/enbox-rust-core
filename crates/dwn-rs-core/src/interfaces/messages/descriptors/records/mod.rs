@@ -14,7 +14,9 @@ mod inner {
     use super::DateSort;
     use crate::filters::message_filters::Records as RecordsFilter;
     use crate::interfaces::messages::descriptors::{
-        COUNT, DELETE, QUERY, READ, RECORDS, SUBSCRIBE, WRITE,
+        COUNT, DELETE, QUERY, READ, RECORDS, RECORDS_COUNT_SCHEMA, RECORDS_DELETE_SCHEMA,
+        RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA, RECORDS_WRITE_SCHEMA,
+        SUBSCRIBE, WRITE,
     };
     use crate::{MapValue, Pagination};
 
@@ -23,6 +25,7 @@ mod inner {
     #[descriptor(
         method = READ,
         variant = Read,
+        schema_id = RECORDS_READ_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
         parameters = super::ReadParameters
@@ -44,6 +47,7 @@ mod inner {
     #[descriptor(
         method = COUNT,
         variant = Count,
+        schema_id = RECORDS_COUNT_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
         parameters = super::CountParameters
@@ -61,6 +65,7 @@ mod inner {
     #[descriptor(
         method = QUERY,
         variant = Query,
+        schema_id = RECORDS_QUERY_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
         parameters = super::QueryParameters
@@ -83,6 +88,7 @@ mod inner {
     #[descriptor(
         method = WRITE,
         variant = Write,
+        schema_id = RECORDS_WRITE_SCHEMA,
         boxed,
         fields = crate::fields::WriteFields,
         parameters = super::WriteParameters
@@ -128,6 +134,7 @@ mod inner {
     #[descriptor(
         method = SUBSCRIBE,
         variant = Subscribe,
+        schema_id = RECORDS_SUBSCRIBE_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
         parameters = super::SubscribeParameters
@@ -151,6 +158,7 @@ mod inner {
     #[descriptor(
         method = DELETE,
         variant = Delete,
+        schema_id = RECORDS_DELETE_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
         parameters = super::DeleteParameters

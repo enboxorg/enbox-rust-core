@@ -11,7 +11,10 @@ use dwn_rs_message_derive::interface;
 mod inner {
     use super::SyncAction;
     use crate::filters::message_filters::Messages as MessagesFilter;
-    use crate::interfaces::messages::descriptors::{MESSAGES, QUERY, READ, SUBSCRIBE, SYNC};
+    use crate::interfaces::messages::descriptors::{
+        MESSAGES, MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA, QUERY,
+        READ, SUBSCRIBE, SYNC,
+    };
     use crate::Cursor;
     use cid::Cid;
     use std::collections::BTreeMap;
@@ -20,6 +23,7 @@ mod inner {
     #[descriptor(
         method = READ,
         variant = Read,
+        schema_id = MESSAGES_READ_SCHEMA,
         fields = crate::auth::Authorization,
         parameters = super::ReadParameters
     )]
@@ -68,6 +72,7 @@ mod inner {
     #[descriptor(
         method = SUBSCRIBE,
         variant = Subscribe,
+        schema_id = MESSAGES_SUBSCRIBE_SCHEMA,
         fields = crate::auth::Authorization,
         parameters = super::SubscribeParameters
     )]
@@ -89,6 +94,7 @@ mod inner {
     #[descriptor(
         method = SYNC,
         variant = Sync,
+        schema_id = MESSAGES_SYNC_SCHEMA,
         fields = crate::auth::Authorization,
         parameters = super::SyncParameters
     )]

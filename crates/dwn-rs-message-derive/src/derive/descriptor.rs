@@ -16,6 +16,7 @@ pub struct DescriptorAttr {
     pub(crate) method: Ident,
     pub(crate) fields: Path,
     pub(crate) parameters: Option<Path>,
+    pub(crate) schema_id: Option<Path>,
     pub(crate) variant: Option<Ident>,
     pub(crate) boxed: bool,
     pub(crate) no_handler: bool,
@@ -28,10 +29,11 @@ impl Parse for DescriptorAttr {
             mut method,
             mut fields,
             mut parameters,
+            mut schema_id,
             mut variant,
             mut boxed,
             mut no_handler,
-        ) = (None, None, None, None, None, false, false);
+        ) = (None, None, None, None, None, None, false, false);
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -54,6 +56,9 @@ impl Parse for DescriptorAttr {
                     "parameters" => {
                         parameters = Some(input.parse()?);
                     }
+                    "schema_id" => {
+                        schema_id = Some(input.parse()?);
+                    }
                     "variant" => {
                         variant = Some(input.parse()?);
                     }
@@ -70,6 +75,7 @@ impl Parse for DescriptorAttr {
             method: method.ok_or_else(|| syn::Error::new(input.span(), "missing method"))?,
             fields: fields.ok_or_else(|| syn::Error::new(input.span(), "missing fields"))?,
             parameters,
+            schema_id,
             variant,
             boxed,
             no_handler,
@@ -102,6 +108,14 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
     let method = attrs.method;
     let fields = attrs.fields;
     let parameters = attrs.parameters;
+    // Build the `SCHEMA_ID` const expression: `Some(<PATH>)` when a `schema_id = …` is given,
+    // `None` otherwise (e.g. the `no_handler` MessagesQuery, which has no published schema). A bare
+    // `#schema_id` would expand an `Option<Path>` to either bare path tokens (a `&str`, not
+    // `Option<&str>`) or nothing at all, so wrap it explicitly.
+    let schema_id = match attrs.schema_id {
+        Some(path) => quote!(Some(#path)),
+        None => quote!(None),
+    };
 
     let deserialize_message_ident = format_ident!("{}MessageInternal", ident);
 
@@ -198,6 +212,7 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
                     Err(_) => panic!("message key is not valid UTF-8"),
                 }
             };
+            const SCHEMA_ID: Option<&'static str> = #schema_id;
         }
 
         impl #generics crate::interfaces::messages::descriptors::MessageDescriptor for #ident #generics #where_clause
@@ -315,6 +330,7 @@ mod tests {
             variant: None,
             boxed: false,
             no_handler: false,
+            schema_id: None,
         };
 
         // Apply the macro

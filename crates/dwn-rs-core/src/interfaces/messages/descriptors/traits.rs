@@ -53,6 +53,11 @@ pub trait ConcreteDescriptor: MessageDescriptor + Serialize + DeserializeOwned +
     /// time by the `#[descriptor]` macro. Backs [`MessageKind::as_str`](super::MessageKind::as_str)
     /// without a runtime allocation.
     const KEY: &'static str;
+    /// The JSON-schema identifier validating this descriptor's messages, or `None` for descriptors
+    /// with no published schema (the `no_handler`, spec-parity-only `MessagesQuery`). Set via the
+    /// `#[descriptor(schema_id = …)]` attribute; backs the descriptor-derived schema lookup in
+    /// `dwn::validation`.
+    const SCHEMA_ID: Option<&'static str>;
 }
 
 /// FromDescriptor is implemented by every concrete message descriptor (normally via the
