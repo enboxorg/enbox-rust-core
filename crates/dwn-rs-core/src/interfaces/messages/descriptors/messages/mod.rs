@@ -12,8 +12,8 @@ mod inner {
     use super::SyncAction;
     use crate::filters::message_filters::Messages as MessagesFilter;
     use crate::interfaces::messages::descriptors::{
-        MESSAGES, MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA, QUERY, READ,
-        SUBSCRIBE, SYNC,
+        MESSAGES, MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA, QUERY,
+        READ, SUBSCRIBE, SYNC,
     };
     use crate::Cursor;
     use cid::Cid;

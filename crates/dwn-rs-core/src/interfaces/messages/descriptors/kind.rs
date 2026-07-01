@@ -264,6 +264,9 @@ mod tests {
         // `MessagesQuery` is `no_handler` and has no published schema — the case that distinguishes
         // the descriptor-derived lookup from a total match, so `validate_message` still yields
         // "schema not found" for it rather than dispatching.
-        assert_eq!(MessageKind::Messages(MessagesMethod::Query).schema_id(), None);
+        assert_eq!(
+            MessageKind::Messages(MessagesMethod::Query).schema_id(),
+            None
+        );
     }
 }
