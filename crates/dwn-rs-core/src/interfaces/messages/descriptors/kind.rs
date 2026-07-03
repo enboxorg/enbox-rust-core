@@ -80,6 +80,16 @@ impl MessageKind {
         }
     }
 
+    /// schema_id is the JSON-schema identifier validating this message kind, or `None` for kinds with no
+    /// published schema.
+    pub fn schema_id(&self) -> Option<&'static str> {
+        match self {
+            MessageKind::Records(method) => method.schema_id(),
+            MessageKind::Protocols(method) => method.schema_id(),
+            MessageKind::Messages(method) => method.schema_id(),
+        }
+    }
+
     /// The concatenated `interface`+`method` handler key (e.g. `RecordsQuery`). This is the DWN
     /// spec's handler identifier and must stay in the concatenated form the conformance fixtures
     /// (`fixtures/`) compare against — not a separator-delimited form.
@@ -231,5 +241,32 @@ mod tests {
         assert_eq!(MessageKind::from_parts(RECORDS, CONFIGURE), None);
         // Known interface, unknown method.
         assert_eq!(MessageKind::from_parts(MESSAGES, "Bogus"), None);
+    }
+
+    #[test]
+    fn message_kind_schema_id_maps_each_kind_to_its_schema() {
+        // Handler-backed kinds resolve to their `<method>.json` schema id (from the descriptor's
+        // `SCHEMA_ID`, plumbed through the generated method enum).
+        let read = MessageKind::Records(RecordsMethod::Read);
+        assert_eq!(
+            read.schema_id(),
+            Some("https://identity.foundation/dwn/json-schemas/records-read.json")
+        );
+        assert_eq!(
+            MessageKind::Protocols(ProtocolsMethod::Configure).schema_id(),
+            Some("https://identity.foundation/dwn/json-schemas/protocols-configure.json")
+        );
+        assert_eq!(
+            MessageKind::Messages(MessagesMethod::Sync).schema_id(),
+            Some("https://identity.foundation/dwn/json-schemas/messages-sync.json")
+        );
+
+        // `MessagesQuery` is `no_handler` and has no published schema — the case that distinguishes
+        // the descriptor-derived lookup from a total match, so `validate_message` still yields
+        // "schema not found" for it rather than dispatching.
+        assert_eq!(
+            MessageKind::Messages(MessagesMethod::Query).schema_id(),
+            None
+        );
     }
 }
