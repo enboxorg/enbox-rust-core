@@ -36,7 +36,7 @@ pub fn generate_cid_from_serialized<T: serde::Serialize>(
 
 /// Generates a DAG-CBOR CID from JSON using IPLD numeric semantics.
 pub fn generate_cid_from_json(value: &Value) -> Result<Cid, EncodeError<TryReserveError>> {
-    generate_cid_from_serialized(json_value_to_ipld(value))
+    generate_cid_from_serialized(json_value_to_ipld(value)?)
 }
 
 /// Generates a message CID matching TypeScript `Message.getCid`.
@@ -86,8 +86,8 @@ where
 }
 
 /// Converts JSON into IPLD before DAG-CBOR serialization.
-pub fn json_value_to_ipld(value: &Value) -> Ipld {
-    match value {
+pub fn json_value_to_ipld(value: &Value) -> Result<Ipld, EncodeError<TryReserveError>> {
+    Ok(match value {
         Value::Null => Ipld::Null,
         Value::Bool(value) => Ipld::Bool(*value),
         Value::Number(value) => {
@@ -96,18 +96,26 @@ pub fn json_value_to_ipld(value: &Value) -> Ipld {
             } else if let Some(value) = value.as_u64() {
                 Ipld::Integer(value.into())
             } else {
-                Ipld::Float(value.as_f64().expect("JSON number must be finite"))
+                let value = value.as_f64().ok_or_else(|| {
+                    EncodeError::Msg(format!("JSON number is not representable as f64: {value}"))
+                })?;
+                Ipld::Float(value)
             }
         }
         Value::String(value) => Ipld::String(value.clone()),
-        Value::Array(values) => Ipld::List(values.iter().map(json_value_to_ipld).collect()),
+        Value::Array(values) => Ipld::List(
+            values
+                .iter()
+                .map(json_value_to_ipld)
+                .collect::<Result<_, _>>()?,
+        ),
         Value::Object(values) => Ipld::Map(
             values
                 .iter()
-                .map(|(key, value)| (key.clone(), json_value_to_ipld(value)))
-                .collect::<BTreeMap<_, _>>(),
+                .map(|(key, value)| Ok((key.clone(), json_value_to_ipld(value)?)))
+                .collect::<Result<BTreeMap<_, _>, EncodeError<TryReserveError>>>()?,
         ),
-    }
+    })
 }
 
 pub async fn generate_cid_from_stream<S: TryStream<Ok = Bytes> + Unpin>(
@@ -141,8 +149,7 @@ where
         .take(1024 * 1024)
         .read_to_end(&mut buf)
         .await
-        .map_err(EncodeError::Write)
-        .unwrap();
+        .map_err(|err| EncodeError::Msg(err.to_string()))?;
 
     let mh = Code::Sha2_256.digest(&buf);
     let cid = Cid::new_v1(DAG_CBOR_CODEC, mh);
@@ -255,7 +262,7 @@ mod tests {
             "list": [true, null, "value"],
         });
 
-        let converted = json_value_to_ipld(&data);
+        let converted = json_value_to_ipld(&data).unwrap();
         let expected = Ipld::Map(BTreeMap::from([
             ("float".to_string(), Ipld::Float(1.5)),
             ("integer".to_string(), Ipld::Integer(1.into())),

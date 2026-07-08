@@ -52,8 +52,8 @@ impl PublicKey {
 
     pub fn decapsulate(self, sk: secretkey::SecretKey) -> Result<Vec<u8>, Error> {
         match self {
-            PublicKey::Secp256k1(pk) => pk.decapsulate(sk.into()).map(|ga| ga.to_vec()),
-            PublicKey::X25519(pk) => pk.decapsulate(sk.into()).map(|ga| ga.to_vec()),
+            PublicKey::Secp256k1(pk) => pk.decapsulate(sk.try_into()?).map(|ga| ga.to_vec()),
+            PublicKey::X25519(pk) => pk.decapsulate(sk.try_into()?).map(|ga| ga.to_vec()),
         }
     }
 

@@ -62,7 +62,7 @@ impl MessageStore for MemoryMessageStore {
         canonical.fields.encoded_data();
         let cid = canonical.cid()?.to_string();
 
-        let mut rows = self.messages.write().expect("MessageStore lock poisoned");
+        let mut rows = self.messages.write().map_err(message_lock_error)?;
         rows.retain(|row| !(row.tenant == tenant && row.cid == cid));
         rows.push(MessageRow {
             tenant: tenant.to_string(),
@@ -79,7 +79,7 @@ impl MessageStore for MemoryMessageStore {
         tenant: &str,
         cid: &str,
     ) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
-        let rows = self.messages.read().expect("MessageStore lock poisoned");
+        let rows = self.messages.read().map_err(message_lock_error)?;
         Ok(rows
             .iter()
             .find(|row| row.tenant == tenant && row.cid == cid)
@@ -89,7 +89,7 @@ impl MessageStore for MemoryMessageStore {
     async fn delete(&self, tenant: &str, cid: &str) -> Result<(), MessageStoreError> {
         self.messages
             .write()
-            .expect("MessageStore lock poisoned")
+            .map_err(message_lock_error)?
             .retain(|row| !(row.tenant == tenant && row.cid == cid));
         Ok(())
     }
@@ -97,7 +97,7 @@ impl MessageStore for MemoryMessageStore {
     async fn clear(&self) -> Result<(), MessageStoreError> {
         self.messages
             .write()
-            .expect("MessageStore lock poisoned")
+            .map_err(message_lock_error)?
             .clear();
         Ok(())
     }
@@ -119,7 +119,7 @@ impl MessageStore for MemoryMessageStore {
         let (property, direction) = sort_property(sort.unwrap_or_default());
 
         let mut rows: Vec<MessageRow> = {
-            let g = self.messages.read().expect("MessageStore lock poisoned");
+            let g = self.messages.read().map_err(message_lock_error)?;
             g.iter()
                 .filter(|row| row.tenant == tenant && matches_filters(&row.indexes, Some(&filters)))
                 .cloned()
@@ -143,9 +143,11 @@ impl MessageStore for MemoryMessageStore {
         let cursor = match pagination.and_then(|p| p.limit) {
             Some(limit) if (page.len() as u64) > limit => {
                 page.truncate(limit as usize);
-                let last = page
-                    .last()
-                    .expect("page must have at least one entry after truncation");
+                let last = page.last().ok_or_else(|| {
+                    MessageStoreError::StoreError(StoreError::InternalException(
+                        "page must have at least one entry after truncation".to_string(),
+                    ))
+                })?;
                 Some(Cursor {
                     cursor: last
                         .cid
@@ -170,7 +172,7 @@ impl MessageStore for MemoryMessageStore {
         sort: Option<crate::MessageSort>,
     ) -> Result<u64, MessageStoreError> {
         let property = Some(sort_property(sort.unwrap_or_default()).0);
-        let guard = self.messages.read().expect("MessageStore lock poisoned");
+        let guard = self.messages.read().map_err(message_lock_error)?;
 
         Ok(guard
             .iter()
@@ -918,6 +920,12 @@ fn invalid_cursor_position(position: &str) -> EventLogError {
 fn event_lock_error<T>(_: T) -> EventLogError {
     EventLogError::StoreError(StoreError::InternalException(
         "EventLog lock poisoned".to_string(),
+    ))
+}
+
+fn message_lock_error<T>(_: T) -> MessageStoreError {
+    MessageStoreError::StoreError(StoreError::InternalException(
+        "MessageStore lock poisoned".to_string(),
     ))
 }
 

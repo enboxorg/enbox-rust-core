@@ -101,40 +101,75 @@ pub type JWS = Jws;
 #[deprecated(since = "0.2.0", note = "use `Jws` instead")]
 pub type GeneralJws = Jws;
 
-#[derive(Serialize)]
+/// Pre-serialized JWS payload for a `RecordsWrite`/`ProtocolsConfigure`-style authorization
+/// signature. Serialization happens once in [`Payload::new`], which is fallible, so
+/// [`JwsPayload::payload_bytes`] (an infallible trait method defined upstream) never needs to
+/// panic on a serialization failure.
+#[derive(Clone)]
 pub struct Payload {
-    #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
-    pub descriptor_cid: Cid,
-    #[serde(
-        rename = "delegatedGrantId",
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::ser::optional_cid_string::serialize"
-    )]
-    pub delegated_grant_id: Option<Cid>,
-    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
-    pub permission_grant_id: Option<String>,
-    #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
-    pub protocol_role: Option<String>,
+    bytes: Vec<u8>,
+}
+
+impl Payload {
+    pub fn new(
+        descriptor_cid: Cid,
+        delegated_grant_id: Option<Cid>,
+        permission_grant_id: Option<String>,
+        protocol_role: Option<String>,
+    ) -> Result<Self, JwsError> {
+        #[derive(Serialize)]
+        struct Repr {
+            #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
+            descriptor_cid: Cid,
+            #[serde(
+                rename = "delegatedGrantId",
+                skip_serializing_if = "Option::is_none",
+                serialize_with = "crate::ser::optional_cid_string::serialize"
+            )]
+            delegated_grant_id: Option<Cid>,
+            #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+            permission_grant_id: Option<String>,
+            #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
+            protocol_role: Option<String>,
+        }
+        let bytes = serde_json::to_vec(&Repr {
+            descriptor_cid,
+            delegated_grant_id,
+            permission_grant_id,
+            protocol_role,
+        })?;
+        Ok(Self { bytes })
+    }
 }
 
 impl JwsPayload for Payload {
     fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
-        let payload = serde_json::to_vec(self).expect("JWS Payload serialization failed.");
-        std::borrow::Cow::Owned(payload)
+        std::borrow::Cow::Borrowed(&self.bytes)
     }
 }
 
-#[derive(Serialize)]
+/// Pre-serialized JWS payload for a `RecordsWrite` attestation signature. See [`Payload`] for why
+/// serialization is fallible at construction rather than inside the infallible trait method.
+#[derive(Clone)]
 pub struct AttestationPayload {
-    #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
-    pub descriptor_cid: Cid,
+    bytes: Vec<u8>,
+}
+
+impl AttestationPayload {
+    pub fn new(descriptor_cid: Cid) -> Result<Self, JwsError> {
+        #[derive(Serialize)]
+        struct Repr {
+            #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
+            descriptor_cid: Cid,
+        }
+        let bytes = serde_json::to_vec(&Repr { descriptor_cid })?;
+        Ok(Self { bytes })
+    }
 }
 
 impl JwsPayload for AttestationPayload {
     fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
-        let payload =
-            serde_json::to_vec(self).expect("JWS AttestationPayload serialization failed.");
-        std::borrow::Cow::Owned(payload)
+        std::borrow::Cow::Borrowed(&self.bytes)
     }
 }
 
@@ -631,15 +666,17 @@ mod tests {
         let delegated_grant_id =
             Cid::from_str("bafyreia3vo2bkk4b4nshzup55wgkdgwpr5bsa474iyngfcegompdko6kt4").unwrap();
 
-        let payload = Payload {
+        let payload = Payload::new(
             descriptor_cid,
-            delegated_grant_id: Some(delegated_grant_id),
-            permission_grant_id: Some("grant-123".to_string()),
-            protocol_role: Some("adminRole".to_string()),
-        };
+            Some(delegated_grant_id),
+            Some("grant-123".to_string()),
+            Some("adminRole".to_string()),
+        )
+        .unwrap();
 
+        let value: serde_json::Value = serde_json::from_slice(&payload.payload_bytes()).unwrap();
         assert_eq!(
-            serde_json::to_value(payload).unwrap(),
+            value,
             json!({
                 "descriptorCid": descriptor_cid.to_string(),
                 "delegatedGrantId": delegated_grant_id.to_string(),
