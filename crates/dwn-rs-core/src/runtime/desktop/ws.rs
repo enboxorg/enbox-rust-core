@@ -327,7 +327,10 @@ async fn handle_close(request: &JsonRpcRequest, connection: &Arc<Mutex<WsConnect
     };
 
     let close = match connection.lock() {
-        Ok(mut guard) => guard.subscriptions.remove(subscription_id).map(|active| active.close),
+        Ok(mut guard) => guard
+            .subscriptions
+            .remove(subscription_id)
+            .map(|active| active.close),
         Err(err) => return lock_poisoned_response(request_id, err),
     };
     match close {

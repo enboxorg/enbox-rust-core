@@ -95,10 +95,7 @@ impl MessageStore for MemoryMessageStore {
     }
 
     async fn clear(&self) -> Result<(), MessageStoreError> {
-        self.messages
-            .write()
-            .map_err(message_lock_error)?
-            .clear();
+        self.messages.write().map_err(message_lock_error)?.clear();
         Ok(())
     }
 

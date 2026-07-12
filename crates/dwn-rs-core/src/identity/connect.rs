@@ -468,7 +468,10 @@ impl DelegateSessionCache {
         grant_id: &str,
         revocation_grant_id: &str,
     ) -> AgentIdentityResult<bool> {
-        let mut state = self.state.write().map_err(AgentIdentityError::lock_poisoned)?;
+        let mut state = self
+            .state
+            .write()
+            .map_err(AgentIdentityError::lock_poisoned)?;
         let Some(grant) = state.grants.remove(grant_id) else {
             return Ok(false);
         };

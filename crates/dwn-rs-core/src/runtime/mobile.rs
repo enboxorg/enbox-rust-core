@@ -202,7 +202,10 @@ where
         }
     }
 
-    pub fn initialize(&self, request: MobileInitializeRequest) -> MobileResult<MobileRuntimeStatus> {
+    pub fn initialize(
+        &self,
+        request: MobileInitializeRequest,
+    ) -> MobileResult<MobileRuntimeStatus> {
         let mut state = self.state.write().map_err(MobileError::lock_poisoned)?;
         state.initialized = true;
         state.device_id = Some(request.device_id);
