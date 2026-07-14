@@ -37,7 +37,10 @@ impl Message<RecordsWriteDescriptor> {
     pub async fn attest<S: JwsSigner>(&mut self, signers: Vec<S>) -> Result<(), ValidationError> {
         let descriptor_cid = self.descriptor.cid();
 
-        let payload = jws::AttestationPayload { descriptor_cid };
+        let payload =
+            jws::AttestationPayload::new(descriptor_cid).map_err(|e| ValidationError {
+                message: e.to_string(),
+            })?;
 
         let signature = jws::Jws::create(payload, Some(signers))
             .await
@@ -143,12 +146,15 @@ where
     ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
-        let payload = jws::Payload {
+        let payload = jws::Payload::new(
             descriptor_cid,
             delegated_grant_id,
             permission_grant_id,
             protocol_role,
-        };
+        )
+        .map_err(|e| ValidationError {
+            message: e.to_string(),
+        })?;
 
         let signature = jws::Jws::create(payload, Some(vec![signer]))
             .await

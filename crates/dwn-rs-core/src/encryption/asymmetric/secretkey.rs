@@ -68,20 +68,26 @@ impl SecretKey {
     }
 }
 
-impl From<SecretKey> for secp256k1::SecretKey {
-    fn from(sk: SecretKey) -> Self {
+impl TryFrom<SecretKey> for secp256k1::SecretKey {
+    type Error = Error;
+    fn try_from(sk: SecretKey) -> Result<Self, Self::Error> {
         match sk {
-            SecretKey::Secp256k1(sk) => sk,
-            _ => panic!("Invalid conversion"),
+            SecretKey::Secp256k1(sk) => Ok(sk),
+            _ => Err(Error::SecretKeyError(
+                "cannot convert non-secp256k1 SecretKey into secp256k1::SecretKey".to_string(),
+            )),
         }
     }
 }
 
-impl From<SecretKey> for x25519::SecretKey {
-    fn from(sk: SecretKey) -> Self {
+impl TryFrom<SecretKey> for x25519::SecretKey {
+    type Error = Error;
+    fn try_from(sk: SecretKey) -> Result<Self, Self::Error> {
         match sk {
-            SecretKey::X25519(sk) => sk,
-            _ => panic!("Invalid conversion"),
+            SecretKey::X25519(sk) => Ok(sk),
+            _ => Err(Error::SecretKeyError(
+                "cannot convert non-x25519 SecretKey into x25519::SecretKey".to_string(),
+            )),
         }
     }
 }
@@ -153,18 +159,18 @@ mod test {
         let sk: secp256k1::SecretKey = k256::SecretKey::random(&mut rand::thread_rng()).into();
         let jwk: JWK = sk.jwk().unwrap();
         let sk2: SecretKey = jwk.try_into().unwrap();
-        assert_eq!(sk, sk2.into());
+        assert_eq!(sk, sk2.try_into().unwrap());
 
         let sk: x25519::SecretKey =
             x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng()).into();
         let jwk: JWK = sk.jwk().unwrap();
         let sk2: SecretKey = jwk.try_into().unwrap();
-        assert_eq!(sk, sk2.into());
+        assert_eq!(sk, sk2.try_into().unwrap());
 
         let sk: x25519::SecretKey =
             ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).into();
         let jwk: JWK = sk.jwk().unwrap();
         let sk2: SecretKey = jwk.try_into().unwrap();
-        assert_eq!(sk, sk2.into());
+        assert_eq!(sk, sk2.try_into().unwrap());
     }
 }

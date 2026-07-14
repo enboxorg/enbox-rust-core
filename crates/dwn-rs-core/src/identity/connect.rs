@@ -412,58 +412,68 @@ struct DelegateSessionState {
 }
 
 impl DelegateSessionCache {
-    pub fn insert_grant(&self, grant: DelegateGrant) {
+    pub fn insert_grant(&self, grant: DelegateGrant) -> AgentIdentityResult<()> {
         self.state
             .write()
-            .expect("DelegateSessionCache lock poisoned")
+            .map_err(AgentIdentityError::lock_poisoned)?
             .grants
             .insert(grant.id.clone(), grant);
+        Ok(())
     }
 
-    pub fn set_decryption_keys(&self, keys: Vec<DelegateDecryptionKey>) {
+    pub fn set_decryption_keys(&self, keys: Vec<DelegateDecryptionKey>) -> AgentIdentityResult<()> {
         self.state
             .write()
-            .expect("DelegateSessionCache lock poisoned")
+            .map_err(AgentIdentityError::lock_poisoned)?
             .decryption_keys = keys;
+        Ok(())
     }
 
-    pub fn set_context_keys(&self, keys: Vec<DelegateContextKey>) {
+    pub fn set_context_keys(&self, keys: Vec<DelegateContextKey>) -> AgentIdentityResult<()> {
         self.state
             .write()
-            .expect("DelegateSessionCache lock poisoned")
+            .map_err(AgentIdentityError::lock_poisoned)?
             .context_keys = keys;
+        Ok(())
     }
 
-    pub fn set_multi_party_protocols(&self, protocols: Vec<String>) {
+    pub fn set_multi_party_protocols(&self, protocols: Vec<String>) -> AgentIdentityResult<()> {
         self.state
             .write()
-            .expect("DelegateSessionCache lock poisoned")
+            .map_err(AgentIdentityError::lock_poisoned)?
             .multi_party_protocols = protocols.into_iter().collect();
+        Ok(())
     }
 
-    pub fn decryption_keys(&self) -> Vec<DelegateDecryptionKey> {
-        self.state
+    pub fn decryption_keys(&self) -> AgentIdentityResult<Vec<DelegateDecryptionKey>> {
+        Ok(self
+            .state
             .read()
-            .expect("DelegateSessionCache lock poisoned")
+            .map_err(AgentIdentityError::lock_poisoned)?
             .decryption_keys
-            .clone()
+            .clone())
     }
 
-    pub fn context_keys(&self) -> Vec<DelegateContextKey> {
-        self.state
+    pub fn context_keys(&self) -> AgentIdentityResult<Vec<DelegateContextKey>> {
+        Ok(self
+            .state
             .read()
-            .expect("DelegateSessionCache lock poisoned")
+            .map_err(AgentIdentityError::lock_poisoned)?
             .context_keys
-            .clone()
+            .clone())
     }
 
-    pub fn revoke_grant(&self, grant_id: &str, revocation_grant_id: &str) -> bool {
+    pub fn revoke_grant(
+        &self,
+        grant_id: &str,
+        revocation_grant_id: &str,
+    ) -> AgentIdentityResult<bool> {
         let mut state = self
             .state
             .write()
-            .expect("DelegateSessionCache lock poisoned");
+            .map_err(AgentIdentityError::lock_poisoned)?;
         let Some(grant) = state.grants.remove(grant_id) else {
-            return false;
+            return Ok(false);
         };
         let revoked_protocol = grant.scope.protocol.clone();
         state.decryption_keys.retain(|key| {
@@ -484,7 +494,7 @@ impl DelegateSessionCache {
         state
             .revocations
             .push(create_grant_revocation(&grant, revocation_grant_id));
-        true
+        Ok(true)
     }
 }
 
@@ -722,16 +732,20 @@ mod tests {
             None,
         );
         let protocol = grant.scope.protocol.clone().unwrap();
-        cache.insert_grant(grant.clone());
-        cache.set_decryption_keys(vec![sample_decryption_key(&protocol)]);
-        cache.set_context_keys(vec![sample_context_key(&protocol)]);
-        cache.set_multi_party_protocols(vec![protocol]);
+        cache.insert_grant(grant.clone()).unwrap();
+        cache
+            .set_decryption_keys(vec![sample_decryption_key(&protocol)])
+            .unwrap();
+        cache
+            .set_context_keys(vec![sample_context_key(&protocol)])
+            .unwrap();
+        cache.set_multi_party_protocols(vec![protocol]).unwrap();
 
-        assert!(cache.revoke_grant(&grant.id, "revocation-grant"));
+        assert!(cache.revoke_grant(&grant.id, "revocation-grant").unwrap());
 
-        assert!(cache.decryption_keys().is_empty());
-        assert!(cache.context_keys().is_empty());
-        assert!(!cache.revoke_grant(&grant.id, "revocation-grant"));
+        assert!(cache.decryption_keys().unwrap().is_empty());
+        assert!(cache.context_keys().unwrap().is_empty());
+        assert!(!cache.revoke_grant(&grant.id, "revocation-grant").unwrap());
     }
 
     #[tokio::test]

@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use crate::handlers::records::subscribe::RecordsSubscribeReply;
 use crate::runtime::desktop::server::{SharedDesktopMessageProcessor, PROCESS_MESSAGE_METHOD};
 use crate::runtime::desktop::{
-    DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult,
+    DesktopError, DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult,
 };
 use crate::stores::{ProgressToken, SubscriptionMessage};
 
@@ -188,12 +188,11 @@ async fn handle_process_message(
             ))
             .unwrap_or_default();
         };
-        if connection
-            .lock()
-            .unwrap()
-            .subscriptions
-            .contains_key(&subscription_id)
-        {
+        let contains_subscription = match connection.lock() {
+            Ok(guard) => guard.subscriptions.contains_key(&subscription_id),
+            Err(err) => return lock_poisoned_response(request_id, err),
+        };
+        if contains_subscription {
             return serde_json::to_string(&json_rpc_error(
                 request_id,
                 -32602,
@@ -202,7 +201,10 @@ async fn handle_process_message(
             .unwrap_or_default();
         }
 
-        let max_in_flight = connection.lock().unwrap().max_in_flight;
+        let max_in_flight = match connection.lock() {
+            Ok(guard) => guard.max_in_flight,
+            Err(err) => return lock_poisoned_response(request_id, err),
+        };
         let flow = FlowController::new(subscription_id.clone(), tx.clone(), max_in_flight);
         let flow_for_listener = flow.clone();
         let listener: SharedSubscriptionListener = Arc::new(move |message| {
@@ -223,7 +225,11 @@ async fn handle_process_message(
         match result {
             Ok(subscribe_reply) => {
                 if let Some(subscription) = subscribe_reply.subscription {
-                    connection.lock().unwrap().subscriptions.insert(
+                    let mut guard = match connection.lock() {
+                        Ok(guard) => guard,
+                        Err(err) => return lock_poisoned_response(request_id, err),
+                    };
+                    guard.subscriptions.insert(
                         subscription_id.clone(),
                         ActiveSubscription {
                             flow,
@@ -289,12 +295,14 @@ fn handle_ack(request: &JsonRpcRequest, connection: &Arc<Mutex<WsConnection>>) {
     else {
         return;
     };
-    if let Some(active) = connection
-        .lock()
-        .unwrap()
-        .subscriptions
-        .get(subscription_id)
-    {
+    let guard = match connection.lock() {
+        Ok(guard) => guard,
+        Err(err) => {
+            tracing::error!("{}", DesktopError::lock_poisoned(err));
+            return;
+        }
+    };
+    if let Some(active) = guard.subscriptions.get(subscription_id) {
         active.flow.ack(&cursor);
     }
 }
@@ -318,12 +326,13 @@ async fn handle_close(request: &JsonRpcRequest, connection: &Arc<Mutex<WsConnect
         .unwrap_or_default();
     };
 
-    let close = connection
-        .lock()
-        .unwrap()
-        .subscriptions
-        .remove(subscription_id)
-        .map(|active| active.close);
+    let close = match connection.lock() {
+        Ok(mut guard) => guard
+            .subscriptions
+            .remove(subscription_id)
+            .map(|active| active.close),
+        Err(err) => return lock_poisoned_response(request_id, err),
+    };
     match close {
         Some(close) => {
             let _ = (close)().await;
@@ -340,6 +349,15 @@ async fn handle_close(request: &JsonRpcRequest, connection: &Arc<Mutex<WsConnect
         ))
         .unwrap_or_default(),
     }
+}
+
+fn lock_poisoned_response(request_id: JsonValue, err: impl std::fmt::Display) -> String {
+    serde_json::to_string(&json_rpc_error(
+        request_id,
+        -32603,
+        DesktopError::lock_poisoned(err).to_string(),
+    ))
+    .unwrap_or_default()
 }
 
 struct WsConnection {
@@ -387,7 +405,13 @@ impl FlowController {
             SubscriptionMessage::Event { cursor, .. } => cursor.clone(),
             SubscriptionMessage::Eose { cursor } => cursor.clone(),
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::error!("{}", DesktopError::lock_poisoned(err));
+                return;
+            }
+        };
         if state.unacked.len() < state.max_in_flight {
             drop(state);
             self.send_message(message, cursor);
@@ -397,7 +421,13 @@ impl FlowController {
     }
 
     fn ack(&self, cursor: &ProgressToken) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::error!("{}", DesktopError::lock_poisoned(err));
+                return;
+            }
+        };
         let Some(index) = state.unacked.iter().position(|token| {
             token.stream_id == cursor.stream_id
                 && token.epoch == cursor.epoch
@@ -418,7 +448,13 @@ impl FlowController {
             };
             drop(state);
             self.send_message(message, cursor);
-            state = self.state.lock().unwrap();
+            state = match self.state.lock() {
+                Ok(state) => state,
+                Err(err) => {
+                    tracing::error!("{}", DesktopError::lock_poisoned(err));
+                    return;
+                }
+            };
         }
     }
 
@@ -431,7 +467,10 @@ impl FlowController {
         if let Ok(text) = serde_json::to_string(&response) {
             let _ = self.tx.send(text);
         }
-        self.state.lock().unwrap().unacked.push(cursor);
+        match self.state.lock() {
+            Ok(mut state) => state.unacked.push(cursor),
+            Err(err) => tracing::error!("{}", DesktopError::lock_poisoned(err)),
+        }
     }
 }
 

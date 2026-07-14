@@ -38,7 +38,8 @@ impl std::fmt::Display for MessageValidationError {
 
 impl std::error::Error for MessageValidationError {}
 
-static VALIDATORS: OnceLock<HashMap<String, Validator>> = OnceLock::new();
+static VALIDATORS: OnceLock<Result<HashMap<String, Validator>, MessageValidationError>> =
+    OnceLock::new();
 
 const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
@@ -187,36 +188,48 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
     ),
 ];
 
-fn validators() -> &'static HashMap<String, Validator> {
-    VALIDATORS.get_or_init(|| {
-        let resources = SCHEMA_SOURCES
-            .iter()
-            .map(|(id, source)| {
-                let schema: Value = serde_json::from_str(source)
-                    .unwrap_or_else(|err| panic!("invalid embedded schema {id}: {err}"));
-                let resource = Resource::from_contents(schema)
-                    .unwrap_or_else(|err| panic!("invalid embedded resource {id}: {err}"));
-                ((*id).to_string(), resource)
-            })
-            .collect::<Vec<_>>();
-        let registry = Registry::options()
-            .draft(Draft::Draft202012)
-            .build(resources)
-            .expect("schema registry must compile");
-        SCHEMA_SOURCES
-            .iter()
-            .map(|(id, source)| {
-                let schema: Value = serde_json::from_str(source)
-                    .unwrap_or_else(|err| panic!("invalid embedded schema {id}: {err}"));
-                let validator = jsonschema::options()
-                    .with_draft(Draft::Draft202012)
-                    .with_registry(registry.clone())
-                    .build(&schema)
-                    .unwrap_or_else(|err| panic!("validator for {id} must compile: {err}"));
-                (id.to_string(), validator)
-            })
-            .collect()
-    })
+fn build_validators() -> Result<HashMap<String, Validator>, MessageValidationError> {
+    let resources = SCHEMA_SOURCES
+        .iter()
+        .map(|(id, source)| {
+            let schema: Value = serde_json::from_str(source).map_err(|err| {
+                MessageValidationError::new(format!("invalid embedded schema {id}: {err}"))
+            })?;
+            let resource = Resource::from_contents(schema).map_err(|err| {
+                MessageValidationError::new(format!("invalid embedded resource {id}: {err}"))
+            })?;
+            Ok(((*id).to_string(), resource))
+        })
+        .collect::<Result<Vec<_>, MessageValidationError>>()?;
+    let registry = Registry::options()
+        .draft(Draft::Draft202012)
+        .build(resources)
+        .map_err(|err| {
+            MessageValidationError::new(format!("schema registry must compile: {err}"))
+        })?;
+    SCHEMA_SOURCES
+        .iter()
+        .map(|(id, source)| {
+            let schema: Value = serde_json::from_str(source).map_err(|err| {
+                MessageValidationError::new(format!("invalid embedded schema {id}: {err}"))
+            })?;
+            let validator = jsonschema::options()
+                .with_draft(Draft::Draft202012)
+                .with_registry(registry.clone())
+                .build(&schema)
+                .map_err(|err| {
+                    MessageValidationError::new(format!("validator for {id} must compile: {err}"))
+                })?;
+            Ok((id.to_string(), validator))
+        })
+        .collect()
+}
+
+fn validators() -> Result<&'static HashMap<String, Validator>, MessageValidationError> {
+    VALIDATORS
+        .get_or_init(build_validators)
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 pub fn validate_message(raw_message: &Value) -> Result<(), MessageValidationError> {
@@ -239,7 +252,7 @@ pub fn validate_message(raw_message: &Value) -> Result<(), MessageValidationErro
             kind.method(),
         ))
     })?;
-    let validator = validators().get(schema_id).ok_or_else(|| {
+    let validator = validators()?.get(schema_id).ok_or_else(|| {
         MessageValidationError::new(format!(
             "SchemaValidatorSchemaNotFound: schema for {}{} not found",
             kind.interface().as_str(),
@@ -271,7 +284,7 @@ mod tests {
                 panic!("handler kind {} has no schema_id", kind.as_str());
             });
             assert!(
-                validators().contains_key(schema_id),
+                validators().unwrap().contains_key(schema_id),
                 "handler kind {} declares schema {schema_id}, which is not embedded in SCHEMA_SOURCES",
                 kind.as_str(),
             );

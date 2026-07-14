@@ -125,7 +125,7 @@ pub struct MobileBackgroundSyncRequest {
 pub trait MobileBiometricVault: Clone + Send + Sync + 'static {
     fn unlock<'a>(&'a self, reason: &'a str) -> MobileFuture<'a, ()>;
     fn lock<'a>(&'a self) -> MobileFuture<'a, ()>;
-    fn is_unlocked(&self) -> bool;
+    fn is_unlocked(&self) -> MobileResult<bool>;
 }
 
 pub trait MobileSecureStorage: Clone + Send + Sync + 'static {
@@ -202,8 +202,11 @@ where
         }
     }
 
-    pub fn initialize(&self, request: MobileInitializeRequest) -> MobileRuntimeStatus {
-        let mut state = self.state.write().expect("MobileCore state lock poisoned");
+    pub fn initialize(
+        &self,
+        request: MobileInitializeRequest,
+    ) -> MobileResult<MobileRuntimeStatus> {
+        let mut state = self.state.write().map_err(MobileError::lock_poisoned)?;
         state.initialized = true;
         state.device_id = Some(request.device_id);
         state.app_group = request.app_group;
@@ -219,13 +222,13 @@ where
     pub async fn unlock(&self, reason: &str) -> MobileResult<MobileRuntimeStatus> {
         self.ensure_initialized()?;
         self.vault.unlock(reason).await?;
-        Ok(self.status())
+        self.status()
     }
 
     pub async fn lock(&self) -> MobileResult<MobileRuntimeStatus> {
         self.ensure_initialized()?;
         self.vault.lock().await?;
-        Ok(self.status())
+        self.status()
     }
 
     pub async fn process_message(
@@ -249,37 +252,37 @@ where
         if !request.network_available {
             return Ok(sync_result(SyncRunStatus::NoConnectivity));
         }
-        let _guard = self.track_background_task(request.task_id.clone());
+        let _guard = self.track_background_task(request.task_id.clone())?;
         self.sync.background_sync(request).await
     }
 
-    fn track_background_task(&self, task_id: String) -> BackgroundTaskGuard {
+    fn track_background_task(&self, task_id: String) -> MobileResult<BackgroundTaskGuard> {
         self.state
             .write()
-            .expect("MobileCore state lock poisoned")
+            .map_err(MobileError::lock_poisoned)?
             .active_background_tasks
             .insert(task_id.clone());
-        BackgroundTaskGuard {
+        Ok(BackgroundTaskGuard {
             state: Arc::clone(&self.state),
             task_id,
-        }
+        })
     }
 
-    pub fn status(&self) -> MobileRuntimeStatus {
-        let state = self.state.read().expect("MobileCore state lock poisoned");
+    pub fn status(&self) -> MobileResult<MobileRuntimeStatus> {
+        let state = self.state.read().map_err(MobileError::lock_poisoned)?;
         self.status_with_state(&state)
     }
 
-    fn status_with_state(&self, state: &MobileRuntimeState) -> MobileRuntimeStatus {
-        MobileRuntimeStatus {
+    fn status_with_state(&self, state: &MobileRuntimeState) -> MobileResult<MobileRuntimeStatus> {
+        Ok(MobileRuntimeStatus {
             initialized: state.initialized,
-            locked: !self.vault.is_unlocked(),
+            locked: !self.vault.is_unlocked()?,
             device_id: state.device_id.clone(),
             app_group: state.app_group.clone(),
             database_path: state.database_path.clone(),
             background_refresh_enabled: state.background_refresh_enabled,
             active_background_tasks: state.active_background_tasks.iter().cloned().collect(),
-        }
+        })
     }
 
     fn ensure_initialized(&self) -> MobileResult<()> {
@@ -296,7 +299,7 @@ where
 
     fn ensure_ready(&self) -> MobileResult<()> {
         self.ensure_initialized()?;
-        if !self.vault.is_unlocked() {
+        if !self.vault.is_unlocked()? {
             return Err(MobileError::locked());
         }
         Ok(())
@@ -327,11 +330,8 @@ impl MobileBiometricVault for MemoryBiometricVault {
         })
     }
 
-    fn is_unlocked(&self) -> bool {
-        *self
-            .unlocked
-            .read()
-            .expect("MemoryBiometricVault lock poisoned")
+    fn is_unlocked(&self) -> MobileResult<bool> {
+        Ok(*self.unlocked.read().map_err(MobileError::lock_poisoned)?)
     }
 }
 
@@ -436,12 +436,14 @@ mod tests {
     #[tokio::test]
     async fn mobile_runtime_exposes_initialize_lock_process_and_sync() {
         let core = test_core();
-        let status = core.initialize(MobileInitializeRequest {
-            device_id: "ios-device".to_string(),
-            app_group: Some("group.enbox".to_string()),
-            database_path: Some("/tmp/enbox.sqlite".to_string()),
-            background_refresh_enabled: true,
-        });
+        let status = core
+            .initialize(MobileInitializeRequest {
+                device_id: "ios-device".to_string(),
+                app_group: Some("group.enbox".to_string()),
+                database_path: Some("/tmp/enbox.sqlite".to_string()),
+                background_refresh_enabled: true,
+            })
+            .unwrap();
         assert!(status.initialized);
         assert!(status.locked);
         assert_eq!(status.app_group.as_deref(), Some("group.enbox"));
@@ -504,7 +506,8 @@ mod tests {
             app_group: None,
             database_path: None,
             background_refresh_enabled: true,
-        });
+        })
+        .unwrap();
 
         let offline = core
             .background_sync(MobileBackgroundSyncRequest {
@@ -529,7 +532,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(online.status, SyncRunStatus::Completed);
-        assert!(core.status().active_background_tasks.is_empty());
+        assert!(core.status().unwrap().active_background_tasks.is_empty());
     }
 
     fn test_core() -> MobileCore<
