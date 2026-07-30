@@ -300,7 +300,7 @@ pub trait DesktopMessageProcessor: Clone + Send + Sync + 'static {
 pub trait DesktopLocalServer: Clone + Send + Sync + 'static {
     fn start<'a>(&'a self, config: DesktopServerConfig) -> DesktopFuture<'a, DesktopServerStatus>;
     fn stop<'a>(&'a self) -> DesktopFuture<'a, ()>;
-    fn status(&self) -> DesktopServerStatus;
+    fn status(&self) -> DesktopResult<DesktopServerStatus>;
 }
 
 pub trait DesktopDiscoveryRegistry: Clone + Send + Sync + 'static {
@@ -463,7 +463,7 @@ where
         Ok(DesktopRuntimeStatus {
             running: state.running,
             mode: state.mode,
-            server: self.server.status(),
+            server: self.server.status()?,
             advert: state.advert.clone(),
         })
     }
@@ -548,11 +548,12 @@ impl DesktopLocalServer for MemoryDesktopLocalServer {
         })
     }
 
-    fn status(&self) -> DesktopServerStatus {
-        self.status
+    fn status(&self) -> DesktopResult<DesktopServerStatus> {
+        Ok(self
+            .status
             .read()
-            .expect("MemoryDesktopLocalServer status lock poisoned")
-            .clone()
+            .map_err(DesktopError::lock_poisoned)?
+            .clone())
     }
 }
 

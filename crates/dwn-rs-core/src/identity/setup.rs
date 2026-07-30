@@ -536,12 +536,17 @@ pub struct MemoryProtocolEndpoint {
 }
 
 impl MemoryProtocolEndpoint {
-    pub fn protocol(&self, tenant: &str, protocol: &str) -> Option<Definition> {
-        self.protocols
+    pub fn protocol(
+        &self,
+        tenant: &str,
+        protocol: &str,
+    ) -> AgentIdentityResult<Option<Definition>> {
+        Ok(self
+            .protocols
             .read()
-            .expect("MemoryProtocolEndpoint lock poisoned")
+            .map_err(AgentIdentityError::lock_poisoned)?
             .get(&(tenant.to_string(), protocol.to_string()))
-            .cloned()
+            .cloned())
     }
 }
 
@@ -697,7 +702,8 @@ mod tests {
         assert!(result.remote_pushes[0].installed);
         let installed = local
             .protocol(&agent_did.uri, &definition.protocol)
-            .unwrap();
+            .unwrap()
+            .expect("installed protocol");
         let rule = installed.structure.get("note").unwrap();
         let encryption = rule.encryption.as_ref().unwrap();
         assert!(encryption.root_key_id.ends_with("#enc"));
@@ -707,6 +713,7 @@ mod tests {
         );
         assert!(remote
             .protocol(&agent_did.uri, &definition.protocol)
+            .unwrap()
             .is_some());
     }
 

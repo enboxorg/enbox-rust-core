@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let endpoint = local_node
-        .status()
+        .status()?
         .server
         .endpoint
         .clone()
