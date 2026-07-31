@@ -56,7 +56,8 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
     assert_eq!(setup.remote_pushes.len(), 1);
     let installed = local
         .protocol(&original.portable_did.uri, &protocol.protocol)
-        .unwrap();
+        .unwrap()
+        .expect("installed protocol");
     assert!(installed.structure["note"].encryption.is_some());
 
     let delegate_read = derive_delegate_keys(
@@ -119,7 +120,8 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
 
     let pulled_remote_protocol = remote
         .protocol(&restored.portable_did.uri, &protocol.protocol)
-        .unwrap();
+        .unwrap()
+        .expect("pulled remote protocol");
     assert!(pulled_remote_protocol.structure["note"]
         .encryption
         .is_some());

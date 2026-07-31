@@ -48,6 +48,7 @@ async fn loopback_server_exposes_info_and_processes_json_rpc() {
 
     let endpoint = node
         .status()
+        .expect("node status")
         .server
         .endpoint
         .clone()

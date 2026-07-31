@@ -397,11 +397,12 @@ impl DesktopLocalServer for LoopbackDwnServer {
         })
     }
 
-    fn status(&self) -> DesktopServerStatus {
-        self.status
+    fn status(&self) -> DesktopResult<DesktopServerStatus> {
+        Ok(self
+            .status
             .try_lock()
             .map(|status| status.clone())
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 }
 

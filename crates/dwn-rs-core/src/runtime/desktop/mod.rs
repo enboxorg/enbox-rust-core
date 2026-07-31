@@ -300,7 +300,7 @@ pub trait DesktopMessageProcessor: Clone + Send + Sync + 'static {
 pub trait DesktopLocalServer: Clone + Send + Sync + 'static {
     fn start<'a>(&'a self, config: DesktopServerConfig) -> DesktopFuture<'a, DesktopServerStatus>;
     fn stop<'a>(&'a self) -> DesktopFuture<'a, ()>;
-    fn status(&self) -> DesktopServerStatus;
+    fn status(&self) -> DesktopResult<DesktopServerStatus>;
 }
 
 pub trait DesktopDiscoveryRegistry: Clone + Send + Sync + 'static {
@@ -396,7 +396,7 @@ where
             state.advert = Some(advert);
         }
 
-        Ok(self.status())
+        self.status()
     }
 
     pub async fn stop(&self) -> DesktopResult<DesktopRuntimeStatus> {
@@ -411,7 +411,7 @@ where
             state.mode = None;
             state.advert = None;
         }
-        Ok(self.status())
+        self.status()
     }
 
     pub async fn process_message(
@@ -458,17 +458,14 @@ where
         self.discovery.list().await
     }
 
-    pub fn status(&self) -> DesktopRuntimeStatus {
-        let state = self
-            .state
-            .read()
-            .expect("DesktopLocalNode state lock poisoned");
-        DesktopRuntimeStatus {
+    pub fn status(&self) -> DesktopResult<DesktopRuntimeStatus> {
+        let state = self.state.read().map_err(DesktopError::lock_poisoned)?;
+        Ok(DesktopRuntimeStatus {
             running: state.running,
             mode: state.mode,
-            server: self.server.status(),
+            server: self.server.status()?,
             advert: state.advert.clone(),
-        }
+        })
     }
 
     fn build_advert(
@@ -551,11 +548,12 @@ impl DesktopLocalServer for MemoryDesktopLocalServer {
         })
     }
 
-    fn status(&self) -> DesktopServerStatus {
-        self.status
+    fn status(&self) -> DesktopResult<DesktopServerStatus> {
+        Ok(self
+            .status
             .read()
-            .expect("MemoryDesktopLocalServer status lock poisoned")
-            .clone()
+            .map_err(DesktopError::lock_poisoned)?
+            .clone())
     }
 }
 

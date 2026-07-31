@@ -411,6 +411,7 @@ async fn start_loopback_peer_server(resolver: StaticPublicKeyResolver) -> Loopba
     .expect("start loopback peer server");
     let endpoint = node
         .status()
+        .expect("node status")
         .server
         .endpoint
         .clone()
