@@ -15,6 +15,8 @@ use p256::ecdsa::{
 };
 use serde::{Deserialize, Serialize};
 use ssi_claims_core::SignatureError;
+pub use ssi_jwk::JWK;
+use ssi_jwk::{ECParams, OctetParams, Params};
 use ssi_jws::{JwsPayload, JwsSigner};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -310,10 +312,7 @@ impl Jws {
         Ok(signers)
     }
 
-    pub fn verify_signatures_public_jwk(
-        &self,
-        public_jwk: &JwsPublicJwk,
-    ) -> Result<bool, JwsError> {
+    pub fn verify_signatures_public_jwk(&self, public_jwk: &JWK) -> Result<bool, JwsError> {
         let payload = self.payload.as_deref().ok_or(JwsError::MissingPayload)?;
         let signatures = self
             .signatures
@@ -358,44 +357,45 @@ pub type SignatureEntry = JwsSignature;
 #[deprecated(since = "0.2.0", note = "use `JwsSignature` instead")]
 pub type GeneralJwsSignature = JwsSignature;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct JwsPublicJwk {
-    pub kty: String,
-    pub crv: String,
-    pub x: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alg: Option<String>,
+/// Compatibility alias for the SSI JWK type used by signature verification.
+#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
+pub type JwsPublicJwk = JWK;
+
+#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
+pub type GeneralJwsPublicJwk = JWK;
+
+/// Compatibility alias for the SSI JWK type used by local signing.
+#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
+pub type JwsPrivateJwk = JWK;
+
+/// Build an SSI Ed25519 JWK from base64url key material.
+pub fn ed25519_jwk(
+    public_key: &str,
+    private_key: Option<&str>,
+    key_id: Option<&str>,
+) -> Result<JWK, JwsError> {
+    let mut jwk = JWK::from(Params::OKP(OctetParams {
+        curve: "Ed25519".to_string(),
+        public_key: ssi_jwk::Base64urlUInt(decode_base64url(public_key, "Ed25519 public key")?),
+        private_key: private_key
+            .map(|private_key| {
+                decode_base64url(private_key, "Ed25519 private key").map(ssi_jwk::Base64urlUInt)
+            })
+            .transpose()?,
+    }));
+    jwk.key_id = key_id.map(ToString::to_string);
+    jwk.algorithm = Some(ssi_jwk::Algorithm::EdDSA);
+    Ok(jwk)
 }
 
-#[deprecated(since = "0.2.0", note = "use `JwsPublicJwk` instead")]
-pub type GeneralJwsPublicJwk = JwsPublicJwk;
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct JwsPrivateJwk {
-    pub kty: String,
-    pub crv: String,
-    pub d: String,
-    pub x: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alg: Option<String>,
-}
-
-#[deprecated(since = "0.2.0", note = "use `JwsPrivateJwk` instead")]
-pub type GeneralJwsPrivateJwk = JwsPrivateJwk;
+#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
+pub type GeneralJwsPrivateJwk = JWK;
 
 #[derive(Debug, Clone)]
 pub struct PrivateJwkSigner {
     key_id: String,
     algorithm: String,
-    private_jwk: JwsPrivateJwk,
+    private_jwk: JWK,
 }
 
 /// Local synchronous signer abstraction backed by a private JWK.
@@ -410,7 +410,7 @@ pub use JwkSigner as GeneralJwsSigner;
 
 /// Resolves a `kid` to a public JWK (used for signature verification).
 pub trait JwsPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<JwsPublicJwk>;
+    fn resolve_public_jwk(&self, kid: &str) -> Option<JWK>;
 }
 
 #[deprecated(since = "0.2.0", note = "use `JwsPublicKeyResolver` instead")]
@@ -418,7 +418,7 @@ pub use JwsPublicKeyResolver as GeneralJwsPublicKeyResolver;
 
 #[derive(Debug, Default, Clone)]
 pub struct StaticPublicKeyResolver {
-    public_keys: BTreeMap<String, JwsPublicJwk>,
+    public_keys: BTreeMap<String, JWK>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -428,11 +428,7 @@ struct JwsProtectedHeader {
 }
 
 impl PrivateJwkSigner {
-    pub fn new(
-        key_id: impl Into<String>,
-        algorithm: impl Into<String>,
-        private_jwk: JwsPrivateJwk,
-    ) -> Self {
+    pub fn new(key_id: impl Into<String>, algorithm: impl Into<String>, private_jwk: JWK) -> Self {
         Self {
             key_id: key_id.into(),
             algorithm: algorithm.into(),
@@ -456,17 +452,17 @@ impl JwkSigner for PrivateJwkSigner {
 }
 
 impl StaticPublicKeyResolver {
-    pub fn new(public_keys: BTreeMap<String, JwsPublicJwk>) -> Self {
+    pub fn new(public_keys: BTreeMap<String, JWK>) -> Self {
         Self { public_keys }
     }
 
-    pub fn insert(&mut self, kid: impl Into<String>, public_jwk: JwsPublicJwk) {
+    pub fn insert(&mut self, kid: impl Into<String>, public_jwk: JWK) {
         self.public_keys.insert(kid.into(), public_jwk);
     }
 }
 
 impl JwsPublicKeyResolver for StaticPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<JwsPublicJwk> {
+    fn resolve_public_jwk(&self, kid: &str) -> Option<JWK> {
         self.public_keys.get(kid).cloned()
     }
 }
@@ -478,10 +474,10 @@ fn decode_protected_header(protected: &str) -> Result<JwsProtectedHeader, JwsErr
 
 fn sign_jws_content(
     algorithm: &str,
-    private_jwk: &JwsPrivateJwk,
+    private_jwk: &JWK,
     content: &[u8],
 ) -> Result<Vec<u8>, JwsError> {
-    match (algorithm, private_jwk.crv.as_str()) {
+    match (algorithm, jwk_curve(private_jwk)?) {
         ("EdDSA", "Ed25519") => Ok(ed25519_signing_key(private_jwk)?
             .sign(content)
             .to_bytes()
@@ -502,12 +498,12 @@ fn verify_jws_signature(
     base64url_payload: &str,
     protected_b64: &str,
     signature_b64: &str,
-    public_jwk: &JwsPublicJwk,
+    public_jwk: &JWK,
 ) -> Result<bool, JwsError> {
     let signing_input = format!("{}.{}", protected_b64, base64url_payload);
     let signature_bytes = decode_base64url(signature_b64, "signature")?;
 
-    match public_jwk.crv.as_str() {
+    match jwk_curve(public_jwk)? {
         "Ed25519" => {
             let signature = Ed25519Signature::from_slice(&signature_bytes)
                 .map_err(|err| JwsError::InvalidKey(err.to_string()))?;
@@ -533,53 +529,70 @@ fn verify_jws_signature(
     }
 }
 
-fn ed25519_signing_key(jwk: &JwsPrivateJwk) -> Result<Ed25519SigningKey, JwsError> {
-    let private_key = decode_base64url(&jwk.d, "Ed25519 private key")?;
+fn ed25519_signing_key(jwk: &JWK) -> Result<Ed25519SigningKey, JwsError> {
+    let private_key = okp_params(jwk)?
+        .private_key
+        .as_ref()
+        .ok_or_else(|| JwsError::InvalidKey("Ed25519 private key missing d".to_string()))?
+        .0
+        .clone();
     Ok(Ed25519SigningKey::from_bytes(&fixed_32_bytes(
         private_key,
         "Ed25519 private key",
     )?))
 }
 
-fn ed25519_verifying_key(jwk: &JwsPublicJwk) -> Result<Ed25519VerifyingKey, JwsError> {
-    let public_key = decode_base64url(&jwk.x, "Ed25519 public key")?;
+fn ed25519_verifying_key(jwk: &JWK) -> Result<Ed25519VerifyingKey, JwsError> {
+    let public_key = okp_params(jwk)?.public_key.0.clone();
     Ed25519VerifyingKey::from_bytes(&fixed_32_bytes(public_key, "Ed25519 public key")?)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn secp256k1_signing_key(jwk: &JwsPrivateJwk) -> Result<Secp256k1SigningKey, JwsError> {
-    let private_key = decode_base64url(&jwk.d, "secp256k1 private key")?;
-    Secp256k1SigningKey::from_slice(&private_key)
+fn secp256k1_signing_key(jwk: &JWK) -> Result<Secp256k1SigningKey, JwsError> {
+    let private_key = ec_params(jwk)?
+        .ecc_private_key
+        .as_ref()
+        .ok_or_else(|| JwsError::InvalidKey("secp256k1 private key missing d".to_string()))?;
+    Secp256k1SigningKey::from_slice(&private_key.0)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn secp256k1_verifying_key(jwk: &JwsPublicJwk) -> Result<Secp256k1VerifyingKey, JwsError> {
+fn secp256k1_verifying_key(jwk: &JWK) -> Result<Secp256k1VerifyingKey, JwsError> {
     Secp256k1VerifyingKey::from_sec1_bytes(&ec_public_key_sec1(jwk)?)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn p256_signing_key(jwk: &JwsPrivateJwk) -> Result<P256SigningKey, JwsError> {
-    let private_key = decode_base64url(&jwk.d, "P-256 private key")?;
-    P256SigningKey::from_slice(&private_key).map_err(|err| JwsError::InvalidKey(err.to_string()))
+fn p256_signing_key(jwk: &JWK) -> Result<P256SigningKey, JwsError> {
+    let private_key = ec_params(jwk)?
+        .ecc_private_key
+        .as_ref()
+        .ok_or_else(|| JwsError::InvalidKey("P-256 private key missing d".to_string()))?;
+    P256SigningKey::from_slice(&private_key.0).map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn p256_verifying_key(jwk: &JwsPublicJwk) -> Result<P256VerifyingKey, JwsError> {
+fn p256_verifying_key(jwk: &JWK) -> Result<P256VerifyingKey, JwsError> {
     P256VerifyingKey::from_sec1_bytes(&ec_public_key_sec1(jwk)?)
         .map_err(|err| JwsError::InvalidKey(err.to_string()))
 }
 
-fn ec_public_key_sec1(jwk: &JwsPublicJwk) -> Result<Vec<u8>, JwsError> {
+fn ec_public_key_sec1(jwk: &JWK) -> Result<Vec<u8>, JwsError> {
+    let params = ec_params(jwk)?;
     let x = fixed_32_bytes(
-        decode_base64url(&jwk.x, "EC public key x")?,
+        params
+            .x_coordinate
+            .as_ref()
+            .ok_or_else(|| JwsError::InvalidKey("EC public key missing x".to_string()))?
+            .0
+            .clone(),
         "EC public key x",
     )?;
     let y = fixed_32_bytes(
-        decode_base64url(
-            jwk.y
-                .as_deref()
-                .ok_or_else(|| JwsError::InvalidKey("EC public key missing y".to_string()))?,
-            "EC public key y",
-        )?,
+        params
+            .y_coordinate
+            .as_ref()
+            .ok_or_else(|| JwsError::InvalidKey("EC public key missing y".to_string()))?
+            .0
+            .clone(),
         "EC public key y",
     )?;
     let mut public_key = Vec::with_capacity(65);
@@ -588,6 +601,35 @@ fn ec_public_key_sec1(jwk: &JwsPublicJwk) -> Result<Vec<u8>, JwsError> {
     public_key.extend_from_slice(&y);
 
     Ok(public_key)
+}
+
+pub(crate) fn jwk_curve(jwk: &JWK) -> Result<&str, JwsError> {
+    match &jwk.params {
+        Params::OKP(params) => Ok(&params.curve),
+        Params::EC(params) => params
+            .curve
+            .as_deref()
+            .ok_or_else(|| JwsError::InvalidKey("EC key missing crv".to_string())),
+        _ => Err(JwsError::InvalidKey(
+            "JWS key must be an EC or octet key pair".to_string(),
+        )),
+    }
+}
+
+pub(crate) fn okp_params(jwk: &JWK) -> Result<&OctetParams, JwsError> {
+    match &jwk.params {
+        Params::OKP(params) => Ok(params),
+        _ => Err(JwsError::InvalidKey(
+            "JWS key is not an octet key pair".to_string(),
+        )),
+    }
+}
+
+fn ec_params(jwk: &JWK) -> Result<&ECParams, JwsError> {
+    match &jwk.params {
+        Params::EC(params) => Ok(params),
+        _ => Err(JwsError::InvalidKey("JWS key is not an EC key".to_string())),
+    }
 }
 
 fn fixed_32_bytes(value: Vec<u8>, label: &str) -> Result<[u8; 32], JwsError> {
@@ -614,10 +656,7 @@ pub struct NoSigner {}
 #[cfg(test)]
 impl JwsSigner for NoSigner {
     async fn fetch_info(&self) -> Result<ssi_jws::JwsSignerInfo, ssi_claims_core::SignatureError> {
-        Ok(ssi_jws::JwsSignerInfo {
-            key_id: None,
-            algorithm: ssi_jwk::Algorithm::None,
-        })
+        Ok(ssi_jws::JwsSignerInfo::new(None, ssi_jwk::Algorithm::None))
     }
 
     async fn sign_bytes(
@@ -690,8 +729,7 @@ mod tests {
     async fn verify_signatures_public_jwk_accepts_valid_signature() {
         let jwk = JWK::generate_secp256k1();
         // Matching public JWK in this crate's shape, derived before signing.
-        let public_jwk: JwsPublicJwk =
-            serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
+        let public_jwk: JWK = serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
 
         let jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
             .await
@@ -705,8 +743,7 @@ mod tests {
     #[tokio::test]
     async fn verify_signatures_public_jwk_rejects_tampered_signature() {
         let jwk = JWK::generate_secp256k1();
-        let public_jwk: JwsPublicJwk =
-            serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
+        let public_jwk: JWK = serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
 
         let mut jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
             .await
@@ -736,7 +773,7 @@ mod tests {
         .expect("could not create JWS");
 
         // A different key must not verify the signature.
-        let other: JwsPublicJwk =
+        let other: JWK =
             serde_json::from_value(serde_json::to_value(JWK::generate_secp256k1()).unwrap())
                 .unwrap();
 

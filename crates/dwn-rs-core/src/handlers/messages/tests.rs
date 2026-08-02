@@ -7,7 +7,7 @@ use bytes::Bytes;
 use futures_util::stream;
 use serde_json::json;
 
-use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     MessagesSubscribeDescriptor, MessagesSyncDescriptor, RecordsWriteDescriptor,
@@ -535,15 +535,12 @@ fn signer_for(did: &str) -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         &key_id,
         "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some(key_id.clone()),
-            alg: Some("EdDSA".to_string()),
-        },
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some(&key_id),
+        )
+        .unwrap(),
     )
 }
 
@@ -560,15 +557,13 @@ fn test_resolver() -> StaticPublicKeyResolver {
     ]))
 }
 
-fn test_public_jwk(key_id: &str) -> JwsPublicJwk {
-    JwsPublicJwk {
-        kty: "OKP".to_string(),
-        crv: "Ed25519".to_string(),
-        x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-        y: None,
-        kid: Some(key_id.to_string()),
-        alg: Some("EdDSA".to_string()),
-    }
+fn test_public_jwk(key_id: &str) -> JWK {
+    ed25519_jwk(
+        "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+        None,
+        Some(key_id),
+    )
+    .unwrap()
 }
 
 #[derive(Clone, Default)]

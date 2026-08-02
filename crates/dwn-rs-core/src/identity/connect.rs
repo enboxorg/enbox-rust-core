@@ -8,12 +8,13 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::identity::agent::{
-    AgentIdentityError, AgentIdentityResult, AgentKeyManager, DidProvider, JsonWebKey, PortableDid,
-    SecretStore,
+    jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
+    AgentKeyManager, DidProvider, PortableDid, SecretStore,
 };
 use crate::identity::setup::protocol_requires_encryption;
 use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::permissions::PermissionScope;
+use ssi_jwk::JWK;
 
 pub type ConnectFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
 
@@ -74,7 +75,7 @@ pub struct DerivedPrivateJwk {
     pub derivation_scheme: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derivation_path: Vec<String>,
-    pub derived_private_key: JsonWebKey,
+    pub derived_private_key: JWK,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -592,7 +593,12 @@ fn rule_set_has_multi_party_access(rule_set: &RuleSet, current_path: Option<&str
 }
 
 fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<String> {
-    let Some(root_key_id) = tenant_did.document.key_agreement.first() else {
+    let Some(root_key) = tenant_did
+        .document
+        .verification_relationships
+        .key_agreement
+        .first()
+    else {
         return Err(AgentIdentityError::new(
             "DelegateKeyMissingKeyAgreement",
             format!(
@@ -601,33 +607,34 @@ fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<St
             ),
         ));
     };
+    let root_key_id = relationship_id(&tenant_did.document, root_key);
     let method = tenant_did
         .document
         .verification_method
         .iter()
-        .find(|method| method.id == *root_key_id)
+        .find(|method| method.id.as_str() == root_key_id)
         .ok_or_else(|| {
             AgentIdentityError::new(
                 "DelegateKeyMissingKeyAgreement",
                 format!("keyAgreement method {root_key_id} is missing from the DID document"),
             )
         })?;
-    let public_jwk = method.public_key_jwk.as_ref().ok_or_else(|| {
+    let public_jwk = verification_method_jwk(method).ok_or_else(|| {
         AgentIdentityError::new(
             "DelegateKeyMissingKeyAgreement",
             format!("keyAgreement method {root_key_id} does not contain a public JWK"),
         )
     })?;
-    if public_jwk.crv != "X25519" {
+    if jwk_curve(&public_jwk) != Some("X25519") {
         return Err(AgentIdentityError::new(
             "DelegateKeyMissingX25519",
             format!(
                 "keyAgreement method {root_key_id} uses {}, but delegate key delivery requires X25519",
-                public_jwk.crv
+                jwk_curve(&public_jwk).unwrap_or("unknown")
             ),
         ));
     }
-    Ok(root_key_id.clone())
+    Ok(root_key_id)
 }
 
 #[cfg(test)]
@@ -675,11 +682,12 @@ mod tests {
             DelegateDecryptionScope::ProtocolPath { .. }
         ));
         assert_eq!(
-            read_result.decryption_keys[0]
-                .derived_private_key
-                .derived_private_key
-                .crv,
-            "X25519"
+            jwk_curve(
+                &read_result.decryption_keys[0]
+                    .derived_private_key
+                    .derived_private_key
+            ),
+            Some("X25519")
         );
         assert!(write_result.decryption_keys.is_empty());
     }
@@ -759,7 +767,7 @@ mod tests {
             .unwrap();
 
         for private_jwk in imported.private_keys {
-            let key_uri = private_jwk.kid.unwrap();
+            let key_uri = private_jwk.key_id.unwrap();
             assert!(key_manager
                 .export_private_jwk(&key_uri)
                 .await
@@ -848,16 +856,13 @@ mod tests {
             root_key_id: "did:example:owner#enc".to_string(),
             derivation_scheme: PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
             derivation_path: vec!["protocolPath".to_string()],
-            derived_private_key: JsonWebKey {
-                kty: "OKP".to_string(),
-                crv: "X25519".to_string(),
-                x: "x".to_string(),
-                d: Some("d".to_string()),
-                y: None,
-                kid: None,
-                alg: None,
-                extra: BTreeMap::new(),
-            },
+            derived_private_key: serde_json::from_value(serde_json::json!({
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "eA",
+                "d": "ZA",
+            }))
+            .unwrap(),
         }
     }
 }

@@ -6,8 +6,8 @@ use base64::Engine as _;
 use bytes::Bytes;
 use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
 use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, JwsPublicKeyResolver, JwsSignature, PrivateJwkSigner,
-    StaticPublicKeyResolver, UniversalResolver,
+    Jws, JwsPublicKeyResolver, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver,
+    UniversalResolver, JWK,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -218,8 +218,8 @@ enum FixtureData {
 struct FixtureJwsKey {
     kid: String,
     algorithm: String,
-    public_jwk: JwsPublicJwk,
-    private_jwk: Option<JwsPrivateJwk>,
+    public_jwk: JWK,
+    private_jwk: Option<JWK>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3143,7 +3143,7 @@ struct SpecFixtureCase {
     #[serde(default)]
     jws: Option<SpecJwsInput>,
     #[serde(default, rename = "publicJwk")]
-    public_jwk: Option<JwsPublicJwk>,
+    public_jwk: Option<JWK>,
     expected: SpecExpected,
 }
 
@@ -3175,6 +3175,8 @@ struct SpecExpectedPublicKey {
     kty: String,
     crv: String,
     x: String,
+    #[serde(default, rename = "use")]
+    public_key_use: Option<String>,
     #[serde(default)]
     y: Option<String>,
     #[serde(default)]
@@ -3374,14 +3376,16 @@ fn fixture_did_resolution_match_spec() {
                 )
             });
 
-            let expected_jwk = JwsPublicJwk {
-                kty: expected.kty.clone(),
-                crv: expected.crv.clone(),
-                x: expected.x.clone(),
-                y: expected.y.clone(),
-                kid: expected.kid.clone(),
-                alg: expected.alg.clone(),
-            };
+            let expected_jwk: JWK = serde_json::from_value(serde_json::json!({
+                "kty": expected.kty,
+                "crv": expected.crv,
+                "x": expected.x,
+                "use": expected.public_key_use,
+                "y": expected.y,
+                "kid": expected.kid,
+                "alg": expected.alg,
+            }))
+            .unwrap_or_else(|error| panic!("{} expected JWK is invalid: {error}", case.id));
 
             let resolved = resolver
                 .resolve_public_jwk(did)

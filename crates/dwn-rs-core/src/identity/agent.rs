@@ -13,6 +13,10 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256, Sha512};
+use ssi_dids_core::document::verification_method::ValueOrReference;
+use ssi_dids_core::document::{DIDVerificationMethod, Service, VerificationRelationships};
+use ssi_dids_core::{DIDBuf, Document};
+use ssi_jwk::{Algorithm, Base64urlUInt, OctetParams, Params, JWK};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
 pub type AgentIdentityResult<T> = Result<T, AgentIdentityError>;
@@ -75,75 +79,6 @@ impl Display for AgentIdentityError {
 
 impl Error for AgentIdentityError {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JsonWebKey {
-    pub kty: String,
-    pub crv: String,
-    pub x: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub d: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alg: Option<String>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, JsonValue>,
-}
-
-impl JsonWebKey {
-    pub fn public_jwk(&self) -> Self {
-        let mut public = self.clone();
-        public.d = None;
-        public
-    }
-
-    fn with_kid(mut self, kid: impl Into<String>) -> Self {
-        self.kid = Some(kid.into());
-        self
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DidVerificationMethod {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub type_: String,
-    pub controller: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key_jwk: Option<JsonWebKey>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DidService {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub type_: String,
-    pub service_endpoint: JsonValue,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DidDocument {
-    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
-    pub context: Option<JsonValue>,
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub verification_method: Vec<DidVerificationMethod>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub authentication: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assertion_method: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub key_agreement: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub service: Vec<DidService>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DidMetadata {
@@ -157,10 +92,10 @@ pub struct DidMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct PortableDid {
     pub uri: String,
-    pub document: DidDocument,
+    pub document: Document,
     pub metadata: DidMetadata,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub private_keys: Vec<JsonWebKey>,
+    pub private_keys: Vec<JWK>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,15 +118,15 @@ pub struct PortableIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDerivedKeys {
-    pub identity_private_jwk: JsonWebKey,
-    pub signing_private_jwk: JsonWebKey,
-    pub encryption_private_jwk: JsonWebKey,
+    pub identity_private_jwk: JWK,
+    pub signing_private_jwk: JWK,
+    pub encryption_private_jwk: JWK,
     pub vault_content_encryption_key: Vec<u8>,
     pub vault_unlock_salt: Vec<u8>,
 }
 
 impl AgentDerivedKeys {
-    pub fn private_jwks(&self) -> Vec<JsonWebKey> {
+    pub fn private_jwks(&self) -> Vec<JWK> {
         vec![
             self.identity_private_jwk.clone(),
             self.signing_private_jwk.clone(),
@@ -203,9 +138,9 @@ impl AgentDerivedKeys {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDidCreateRequest {
-    pub identity_private_jwk: JsonWebKey,
-    pub signing_private_jwk: JsonWebKey,
-    pub encryption_private_jwk: JsonWebKey,
+    pub identity_private_jwk: JWK,
+    pub signing_private_jwk: JWK,
+    pub encryption_private_jwk: JWK,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dwn_endpoints: Vec<String>,
 }
@@ -235,22 +170,19 @@ pub trait SecretStore: Clone + Send + Sync + 'static {
 }
 
 pub trait AgentKeyManager: Clone + Send + Sync + 'static {
-    fn import_private_jwk<'a>(&'a self, jwk: JsonWebKey) -> AgentIdentityFuture<'a, String>;
-    fn export_private_jwk<'a>(
-        &'a self,
-        key_uri: &'a str,
-    ) -> AgentIdentityFuture<'a, Option<JsonWebKey>>;
-    fn public_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JsonWebKey>>;
+    fn import_private_jwk<'a>(&'a self, jwk: JWK) -> AgentIdentityFuture<'a, String>;
+    fn export_private_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JWK>>;
+    fn public_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JWK>>;
     fn derive_public_jwk<'a>(
         &'a self,
         key_uri: &'a str,
         derivation_path: Vec<String>,
-    ) -> AgentIdentityFuture<'a, JsonWebKey>;
+    ) -> AgentIdentityFuture<'a, JWK>;
     fn derive_private_jwk<'a>(
         &'a self,
         key_uri: &'a str,
         derivation_path: Vec<String>,
-    ) -> AgentIdentityFuture<'a, JsonWebKey>;
+    ) -> AgentIdentityFuture<'a, JWK>;
     fn delete_key<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, bool>;
 }
 
@@ -393,50 +325,41 @@ impl DidProvider for DeterministicDidJwkProvider {
         request: AgentDidCreateRequest,
     ) -> AgentIdentityFuture<'a, PortableDid> {
         Box::pin(async move {
-            let did_uri = did_jwk_uri(&request.identity_private_jwk.public_jwk())?;
+            let did_uri = did_jwk_uri(&request.identity_private_jwk.to_public())?;
             let sig_id = format!("{did_uri}#sig");
             let enc_id = format!("{did_uri}#enc");
             let identity_id = format!("{did_uri}#identity");
-            let signing_private_jwk = request.signing_private_jwk.with_kid(sig_id.clone());
-            let encryption_private_jwk = request.encryption_private_jwk.with_kid(enc_id.clone());
-            let identity_private_jwk = request.identity_private_jwk.with_kid(identity_id);
+            let signing_private_jwk = with_key_id(request.signing_private_jwk, sig_id.clone());
+            let encryption_private_jwk =
+                with_key_id(request.encryption_private_jwk, enc_id.clone());
+            let identity_private_jwk = with_key_id(request.identity_private_jwk, identity_id);
 
-            let mut document = DidDocument {
-                context: Some(JsonValue::String(
-                    "https://www.w3.org/ns/did/v1".to_string(),
-                )),
-                id: did_uri.clone(),
-                verification_method: vec![
-                    DidVerificationMethod {
-                        id: sig_id.clone(),
-                        type_: "JsonWebKey2020".to_string(),
-                        controller: did_uri.clone(),
-                        public_key_jwk: Some(signing_private_jwk.public_jwk()),
-                    },
-                    DidVerificationMethod {
-                        id: enc_id.clone(),
-                        type_: "JsonWebKey2020".to_string(),
-                        controller: did_uri.clone(),
-                        public_key_jwk: Some(encryption_private_jwk.public_jwk()),
-                    },
-                ],
-                authentication: vec![sig_id.clone()],
-                assertion_method: vec![sig_id],
-                key_agreement: vec![enc_id],
-                service: Vec::new(),
+            let did = parse_did(&did_uri)?;
+            let sig_reference = parse_verification_reference(&sig_id)?;
+            let enc_reference = parse_verification_reference(&enc_id)?;
+            let mut document = Document::new(did.clone());
+            // Keep the portable DID JSON-LD representation stable while using
+            // SSI's DID Core data model for the document itself.
+            document.property_set.insert(
+                "@context".to_string(),
+                JsonValue::String("https://www.w3.org/ns/did/v1".to_string()),
+            );
+            document.verification_method = vec![
+                did_verification_method(&sig_id, &did, signing_private_jwk.to_public())?,
+                did_verification_method(&enc_id, &did, encryption_private_jwk.to_public())?,
+            ];
+            document.verification_relationships = VerificationRelationships {
+                authentication: vec![sig_reference.clone()],
+                assertion_method: vec![sig_reference.clone()],
+                key_agreement: vec![enc_reference],
+                capability_invocation: vec![sig_reference.clone()],
+                capability_delegation: vec![sig_reference],
             };
             if !request.dwn_endpoints.is_empty() {
-                document.service.push(DidService {
-                    id: format!("{did_uri}#dwn"),
-                    type_: "DecentralizedWebNode".to_string(),
-                    service_endpoint: JsonValue::Array(
-                        request
-                            .dwn_endpoints
-                            .into_iter()
-                            .map(JsonValue::String)
-                            .collect(),
-                    ),
-                });
+                document.service.push(did_service(
+                    &format!("{did_uri}#dwn"),
+                    request.dwn_endpoints,
+                )?);
             }
 
             let portable_did = PortableDid {
@@ -538,13 +461,13 @@ impl SecretStore for MemorySecretStore {
 /// Keychain, OS-managed HSM).
 #[derive(Clone, Default)]
 pub struct MemoryKeyManager {
-    keys: Arc<RwLock<BTreeMap<String, JsonWebKey>>>,
+    keys: Arc<RwLock<BTreeMap<String, JWK>>>,
 }
 
 impl AgentKeyManager for MemoryKeyManager {
-    fn import_private_jwk<'a>(&'a self, jwk: JsonWebKey) -> AgentIdentityFuture<'a, String> {
+    fn import_private_jwk<'a>(&'a self, jwk: JWK) -> AgentIdentityFuture<'a, String> {
         Box::pin(async move {
-            if jwk.d.is_none() {
+            if jwk.is_public() {
                 return Err(AgentIdentityError::key_manager(
                     "private JWK is missing private key material",
                 ));
@@ -558,10 +481,7 @@ impl AgentKeyManager for MemoryKeyManager {
         })
     }
 
-    fn export_private_jwk<'a>(
-        &'a self,
-        key_uri: &'a str,
-    ) -> AgentIdentityFuture<'a, Option<JsonWebKey>> {
+    fn export_private_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JWK>> {
         Box::pin(async move {
             Ok(self
                 .keys
@@ -572,14 +492,14 @@ impl AgentKeyManager for MemoryKeyManager {
         })
     }
 
-    fn public_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JsonWebKey>> {
+    fn public_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JWK>> {
         Box::pin(async move {
             Ok(self
                 .keys
                 .read()
                 .map_err(AgentIdentityError::lock_poisoned)?
                 .get(key_uri)
-                .map(JsonWebKey::public_jwk))
+                .map(JWK::to_public))
         })
     }
 
@@ -587,12 +507,12 @@ impl AgentKeyManager for MemoryKeyManager {
         &'a self,
         key_uri: &'a str,
         derivation_path: Vec<String>,
-    ) -> AgentIdentityFuture<'a, JsonWebKey> {
+    ) -> AgentIdentityFuture<'a, JWK> {
         Box::pin(async move {
             Ok(self
                 .derive_private_jwk(key_uri, derivation_path)
                 .await?
-                .public_jwk())
+                .to_public())
         })
     }
 
@@ -600,7 +520,7 @@ impl AgentKeyManager for MemoryKeyManager {
         &'a self,
         key_uri: &'a str,
         derivation_path: Vec<String>,
-    ) -> AgentIdentityFuture<'a, JsonWebKey> {
+    ) -> AgentIdentityFuture<'a, JWK> {
         Box::pin(async move {
             let private_jwk = self
                 .keys
@@ -611,21 +531,18 @@ impl AgentKeyManager for MemoryKeyManager {
                 .ok_or_else(|| {
                     AgentIdentityError::key_manager(format!("key {key_uri} not found"))
                 })?;
-            if private_jwk.crv != "X25519" {
+            let params = okp_params(&private_jwk)?;
+            if params.curve != "X25519" {
                 return Err(AgentIdentityError::key_manager(
                     "protocol encryption derivation requires an X25519 private key",
                 ));
             }
-            let Some(private_key) = private_jwk.d.as_ref() else {
+            let Some(private_key) = params.private_key.as_ref() else {
                 return Err(AgentIdentityError::key_manager(
                     "private JWK is missing private key material",
                 ));
             };
-            let mut key = fixed_32(
-                &URL_SAFE_NO_PAD
-                    .decode(private_key)
-                    .map_err(|err| AgentIdentityError::key_manager(err.to_string()))?,
-            )?;
+            let mut key = fixed_32(&private_key.0)?;
             for segment in derivation_path {
                 if segment.is_empty() {
                     return Err(AgentIdentityError::key_manager(
@@ -719,32 +636,50 @@ pub fn validate_agent_did_key_requirements(portable_did: &PortableDid) -> AgentI
         .verification_method
         .iter()
         .any(|method| {
-            method
-                .public_key_jwk
+            verification_method_jwk(method)
                 .as_ref()
-                .is_some_and(|jwk| jwk.crv == "Ed25519")
-                && (portable_did.document.authentication.contains(&method.id)
-                    || portable_did.document.assertion_method.contains(&method.id))
+                .is_some_and(|jwk| jwk_curve(jwk) == Some("Ed25519"))
+                && (relationship_contains(
+                    &portable_did.document,
+                    &portable_did
+                        .document
+                        .verification_relationships
+                        .authentication,
+                    method,
+                ) || relationship_contains(
+                    &portable_did.document,
+                    &portable_did
+                        .document
+                        .verification_relationships
+                        .assertion_method,
+                    method,
+                ))
         });
     let has_key_agreement_method = portable_did
         .document
         .verification_method
         .iter()
         .any(|method| {
-            method
-                .public_key_jwk
+            verification_method_jwk(method)
                 .as_ref()
-                .is_some_and(|jwk| jwk.crv == "X25519")
-                && portable_did.document.key_agreement.contains(&method.id)
+                .is_some_and(|jwk| jwk_curve(jwk) == Some("X25519"))
+                && relationship_contains(
+                    &portable_did.document,
+                    &portable_did
+                        .document
+                        .verification_relationships
+                        .key_agreement,
+                    method,
+                )
         });
     let has_ed25519_private = portable_did
         .private_keys
         .iter()
-        .any(|jwk| jwk.crv == "Ed25519" && jwk.d.is_some());
+        .any(|jwk| jwk_curve(jwk) == Some("Ed25519") && !jwk.is_public());
     let has_x25519_private = portable_did
         .private_keys
         .iter()
-        .any(|jwk| jwk.crv == "X25519" && jwk.d.is_some());
+        .any(|jwk| jwk_curve(jwk) == Some("X25519") && !jwk.is_public());
 
     if !has_signing_method || !has_ed25519_private {
         return Err(AgentIdentityError::invalid_key_material(
@@ -851,18 +786,15 @@ fn fixed_32(bytes: &[u8]) -> AgentIdentityResult<[u8; 32]> {
     Ok(fixed)
 }
 
-fn ed25519_private_jwk(private_key: [u8; 32], alg: Option<&str>) -> JsonWebKey {
+fn ed25519_private_jwk(private_key: [u8; 32], alg: Option<&str>) -> JWK {
     let public_key = ed25519_public_key_bytes(private_key);
-    JsonWebKey {
-        kty: "OKP".to_string(),
-        crv: "Ed25519".to_string(),
-        x: URL_SAFE_NO_PAD.encode(public_key),
-        d: Some(URL_SAFE_NO_PAD.encode(private_key)),
-        y: None,
-        kid: None,
-        alg: alg.map(ToString::to_string),
-        extra: BTreeMap::new(),
-    }
+    let mut jwk = JWK::from(Params::OKP(OctetParams {
+        curve: "Ed25519".to_string(),
+        public_key: Base64urlUInt(public_key.to_vec()),
+        private_key: Some(Base64urlUInt(private_key.to_vec())),
+    }));
+    jwk.algorithm = alg.map(|_| Algorithm::EdDSA);
+    jwk
 }
 
 fn ed25519_public_key_bytes(private_key: [u8; 32]) -> [u8; 32] {
@@ -871,42 +803,122 @@ fn ed25519_public_key_bytes(private_key: [u8; 32]) -> [u8; 32] {
         .to_bytes()
 }
 
-fn x25519_private_jwk(private_key: [u8; 32]) -> JsonWebKey {
+fn x25519_private_jwk(private_key: [u8; 32]) -> JWK {
     let static_secret = X25519StaticSecret::from(private_key);
     let public_key = X25519PublicKey::from(&static_secret).to_bytes();
-    JsonWebKey {
-        kty: "OKP".to_string(),
-        crv: "X25519".to_string(),
-        x: URL_SAFE_NO_PAD.encode(public_key),
-        d: Some(URL_SAFE_NO_PAD.encode(private_key)),
-        y: None,
-        kid: None,
-        alg: None,
-        extra: BTreeMap::new(),
-    }
+    JWK::from(Params::OKP(OctetParams {
+        curve: "X25519".to_string(),
+        public_key: Base64urlUInt(public_key.to_vec()),
+        private_key: Some(Base64urlUInt(private_key.to_vec())),
+    }))
 }
 
-fn did_jwk_uri(public_jwk: &JsonWebKey) -> AgentIdentityResult<String> {
-    let mut jwk = public_jwk.clone();
-    jwk.d = None;
-    jwk.kid = None;
-    jwk.alg = None;
+fn did_jwk_uri(public_jwk: &JWK) -> AgentIdentityResult<String> {
+    let mut jwk = public_jwk.to_public();
+    jwk.key_id = None;
+    jwk.algorithm = None;
     let encoded = URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(&jwk).map_err(|err| AgentIdentityError::did(err.to_string()))?);
     Ok(format!("did:jwk:{encoded}"))
 }
 
-fn key_uri_for_jwk(jwk: &JsonWebKey) -> AgentIdentityResult<String> {
-    if let Some(kid) = &jwk.kid {
+fn key_uri_for_jwk(jwk: &JWK) -> AgentIdentityResult<String> {
+    if let Some(kid) = &jwk.key_id {
         return Ok(kid.clone());
     }
-    let public_jwk = jwk.public_jwk();
+    let public_jwk = jwk.to_public();
     let bytes = serde_json::to_vec(&public_jwk)
         .map_err(|err| AgentIdentityError::key_manager(err.to_string()))?;
     Ok(format!(
         "urn:jwk:sha256:{}",
         URL_SAFE_NO_PAD.encode(Sha256::digest(bytes))
     ))
+}
+
+pub(crate) fn jwk_curve(jwk: &JWK) -> Option<&str> {
+    match &jwk.params {
+        Params::OKP(params) => Some(&params.curve),
+        Params::EC(params) => params.curve.as_deref(),
+        _ => None,
+    }
+}
+
+pub(crate) fn verification_method_jwk(method: &DIDVerificationMethod) -> Option<JWK> {
+    method
+        .properties
+        .get("publicKeyJwk")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+pub(crate) fn relationship_id(document: &Document, relationship: &ValueOrReference) -> String {
+    relationship.id().resolve(&document.id).to_string()
+}
+
+fn relationship_contains(
+    document: &Document,
+    relationships: &[ValueOrReference],
+    method: &DIDVerificationMethod,
+) -> bool {
+    relationships
+        .iter()
+        .any(|relationship| *relationship.id().resolve(&document.id) == *method.id)
+}
+
+fn okp_params(jwk: &JWK) -> AgentIdentityResult<&OctetParams> {
+    match &jwk.params {
+        Params::OKP(params) => Ok(params),
+        _ => Err(AgentIdentityError::key_manager(
+            "key is not an octet key pair JWK",
+        )),
+    }
+}
+
+fn with_key_id(mut jwk: JWK, key_id: impl Into<String>) -> JWK {
+    jwk.key_id = Some(key_id.into());
+    jwk
+}
+
+fn parse_did(value: &str) -> AgentIdentityResult<DIDBuf> {
+    value
+        .parse()
+        .map_err(|err| AgentIdentityError::did(format!("invalid DID {value}: {err}")))
+}
+
+fn parse_verification_reference(value: &str) -> AgentIdentityResult<ValueOrReference> {
+    value
+        .parse::<ssi_dids_core::DIDURLBuf>()
+        .map(|url| ValueOrReference::Reference(url.into()))
+        .map_err(|err| AgentIdentityError::did(format!("invalid DID URL {value}: {err}")))
+}
+
+fn did_verification_method(
+    id: &str,
+    controller: &DIDBuf,
+    public_jwk: JWK,
+) -> AgentIdentityResult<DIDVerificationMethod> {
+    let id = id
+        .parse()
+        .map_err(|err| AgentIdentityError::did(format!("invalid DID URL {id}: {err}")))?;
+    let properties = BTreeMap::from([(
+        "publicKeyJwk".to_string(),
+        serde_json::to_value(public_jwk).map_err(|err| AgentIdentityError::did(err.to_string()))?,
+    )]);
+    Ok(DIDVerificationMethod::new(
+        id,
+        "JsonWebKey2020".to_string(),
+        controller.clone(),
+        properties,
+    ))
+}
+
+fn did_service(id: &str, endpoints: Vec<String>) -> AgentIdentityResult<Service> {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "type": "DecentralizedWebNode",
+        "serviceEndpoint": endpoints,
+    }))
+    .map_err(|err| AgentIdentityError::did(format!("invalid DID service: {err}")))
 }
 
 #[cfg(test)]
@@ -922,8 +934,8 @@ mod tests {
         let second = derive_agent_keys(RECOVERY_PHRASE).unwrap();
 
         assert_eq!(first, second);
-        assert_eq!(first.signing_private_jwk.crv, "Ed25519");
-        assert_eq!(first.encryption_private_jwk.crv, "X25519");
+        assert_eq!(jwk_curve(&first.signing_private_jwk), Some("Ed25519"));
+        assert_eq!(jwk_curve(&first.encryption_private_jwk), Some("X25519"));
         assert_eq!(first.vault_content_encryption_key.len(), 32);
         assert_eq!(first.vault_unlock_salt.len(), 32);
     }
@@ -950,7 +962,15 @@ mod tests {
         assert_eq!(first.portable_did.uri, second.portable_did.uri);
         assert!(first.portable_did.uri.starts_with("did:jwk:"));
         assert_eq!(first.key_uris.len(), 3);
-        assert_eq!(first.portable_did.document.key_agreement.len(), 1);
+        assert_eq!(
+            first
+                .portable_did
+                .document
+                .verification_relationships
+                .key_agreement
+                .len(),
+            1
+        );
         assert_eq!(first.portable_did.document.service.len(), 1);
         assert!(identity_service.stored_agent_did().await.unwrap().is_some());
         assert!(identity_service
@@ -982,8 +1002,14 @@ mod tests {
             })
             .await
             .unwrap();
-        portable_did.document.key_agreement.clear();
-        portable_did.private_keys.retain(|jwk| jwk.crv != "X25519");
+        portable_did
+            .document
+            .verification_relationships
+            .key_agreement
+            .clear();
+        portable_did
+            .private_keys
+            .retain(|jwk| jwk_curve(jwk) != Some("X25519"));
 
         let error = provider.import_did(portable_did).await.unwrap_err();
 

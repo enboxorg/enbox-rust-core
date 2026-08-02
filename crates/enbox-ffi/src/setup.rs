@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use dwn_rs_core::auth::{Jws, JwsPrivateJwk, PrivateJwkSigner};
+use dwn_rs_core::auth::{Jws, PrivateJwkSigner, JWK};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{ConfigureDescriptor, ProtocolQueryDescriptor};
 use dwn_rs_core::identity::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
@@ -17,6 +17,7 @@ use dwn_rs_core::protocols::Definition;
 use dwn_rs_stores::SqliteNativeDwn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use ssi_jwk::Params;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +48,13 @@ pub fn signer_from_portable_did(
     let private_jwk = portable_did
         .private_keys
         .iter()
-        .find(|jwk| jwk.crv == "Ed25519" && jwk.d.is_some())
+        .find(|jwk| {
+            matches!(
+                &jwk.params,
+                Params::OKP(params)
+                    if params.curve == "Ed25519" && params.private_key.is_some()
+            )
+        })
         .ok_or_else(|| {
             AgentIdentityError::new(
                 "AgentSignerMissing",
@@ -58,13 +65,25 @@ pub fn signer_from_portable_did(
             )
         })?;
 
-    let kid = private_jwk.kid.clone().or_else(|| {
+    let kid = private_jwk.key_id.clone().or_else(|| {
         portable_did
             .document
+            .verification_relationships
             .assertion_method
             .first()
-            .cloned()
-            .or_else(|| portable_did.document.authentication.first().cloned())
+            .or_else(|| {
+                portable_did
+                    .document
+                    .verification_relationships
+                    .authentication
+                    .first()
+            })
+            .map(|relationship| {
+                relationship
+                    .id()
+                    .resolve(&portable_did.document.id)
+                    .to_string()
+            })
     });
     let kid = kid.ok_or_else(|| {
         AgentIdentityError::new(
@@ -77,21 +96,11 @@ pub fn signer_from_portable_did(
     })?;
 
     let algorithm = private_jwk
-        .alg
-        .clone()
+        .algorithm
+        .map(|algorithm| algorithm.to_string())
         .unwrap_or_else(|| "EdDSA".to_string());
-    let private = JwsPrivateJwk {
-        kty: private_jwk.kty.clone(),
-        crv: private_jwk.crv.clone(),
-        d: private_jwk
-            .d
-            .clone()
-            .expect("filtered above: Ed25519 private key has d"),
-        x: private_jwk.x.clone(),
-        y: private_jwk.y.clone(),
-        kid: Some(kid.clone()),
-        alg: Some(algorithm.clone()),
-    };
+    let mut private: JWK = private_jwk.clone();
+    private.key_id = Some(kid.clone());
     Ok(PrivateJwkSigner::new(kid, algorithm, private))
 }
 

@@ -3,9 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
-};
+use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use dwn_rs_core::descriptors::ConfigureDescriptor;
 use dwn_rs_core::interfaces::messages::descriptors::records::WriteDescriptor;
@@ -648,28 +646,23 @@ fn test_signer() -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         "did:example:alice#key1",
         "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )
 }
 
 fn test_resolver() -> StaticPublicKeyResolver {
     StaticPublicKeyResolver::new(BTreeMap::from([(
         "did:example:alice#key1".to_string(),
-        JwsPublicJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            None,
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )]))
 }

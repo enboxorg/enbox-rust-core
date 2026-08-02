@@ -4,11 +4,13 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use crate::identity::agent::{
-    AgentIdentityError, AgentIdentityResult, AgentKeyManager, JsonWebKey, PortableDid, SecretStore,
+    jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
+    AgentKeyManager, PortableDid, SecretStore,
 };
 use crate::interfaces::messages::protocols::{Definition, PathEncryption, RuleSet};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use ssi_jwk::JWK;
 
 pub type SetupFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
 
@@ -446,7 +448,7 @@ fn set_path_encryption(
     definition: &mut Definition,
     relative_path: &[String],
     root_key_id: &str,
-    public_key_jwk: JsonWebKey,
+    public_key_jwk: JWK,
 ) -> AgentIdentityResult<()> {
     let Some((root, rest)) = relative_path.split_first() else {
         return Err(AgentIdentityError::new(
@@ -470,13 +472,18 @@ fn set_path_encryption(
     }
     rule_set.encryption = Some(PathEncryption {
         root_key_id: root_key_id.to_string(),
-        public_key_jwk: json_web_key_to_ssi(public_key_jwk)?,
+        public_key_jwk: public_key_jwk.to_public(),
     });
     Ok(())
 }
 
 fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<String> {
-    let Some(root_key_id) = tenant_did.document.key_agreement.first() else {
+    let Some(root_key) = tenant_did
+        .document
+        .verification_relationships
+        .key_agreement
+        .first()
+    else {
         return Err(AgentIdentityError::new(
             "ProtocolInstallMissingKeyAgreement",
             format!(
@@ -485,41 +492,34 @@ fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<St
             ),
         ));
     };
+    let root_key_id = relationship_id(&tenant_did.document, root_key);
     let method = tenant_did
         .document
         .verification_method
         .iter()
-        .find(|method| method.id == *root_key_id)
+        .find(|method| method.id.as_str() == root_key_id)
         .ok_or_else(|| {
             AgentIdentityError::new(
                 "ProtocolInstallMissingKeyAgreement",
                 format!("keyAgreement method {root_key_id} is missing from the DID document"),
             )
         })?;
-    let public_jwk = method.public_key_jwk.as_ref().ok_or_else(|| {
+    let public_jwk = verification_method_jwk(method).ok_or_else(|| {
         AgentIdentityError::new(
             "ProtocolInstallMissingKeyAgreement",
             format!("keyAgreement method {root_key_id} does not contain a public JWK"),
         )
     })?;
-    if public_jwk.crv != "X25519" {
+    if jwk_curve(&public_jwk) != Some("X25519") {
         return Err(AgentIdentityError::new(
             "ProtocolInstallMissingX25519",
             format!(
                 "keyAgreement method {root_key_id} uses {}, but protocol encryption requires X25519",
-                public_jwk.crv
+                jwk_curve(&public_jwk).unwrap_or("unknown")
             ),
         ));
     }
-    Ok(root_key_id.clone())
-}
-
-fn json_web_key_to_ssi(jwk: JsonWebKey) -> AgentIdentityResult<ssi_jwk::JWK> {
-    serde_json::from_value::<ssi_jwk::JWK>(
-        serde_json::to_value(jwk.public_jwk())
-            .map_err(|err| AgentIdentityError::new("ProtocolInstallInvalidJwk", err.to_string()))?,
-    )
-    .map_err(|err| AgentIdentityError::new("ProtocolInstallInvalidJwk", err.to_string()))
+    Ok(root_key_id)
 }
 
 fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
@@ -720,8 +720,14 @@ mod tests {
     #[tokio::test]
     async fn encrypted_protocol_install_fails_without_x25519_key_agreement() {
         let (mut agent_did, key_manager) = agent_did_with_keys().await;
-        agent_did.document.key_agreement.clear();
-        agent_did.private_keys.retain(|jwk| jwk.crv != "X25519");
+        agent_did
+            .document
+            .verification_relationships
+            .key_agreement
+            .clear();
+        agent_did
+            .private_keys
+            .retain(|jwk| jwk_curve(jwk) != Some("X25519"));
         let endpoint = MemoryProtocolEndpoint::default();
 
         let error =
