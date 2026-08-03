@@ -108,11 +108,11 @@ pub type GeneralJws = Jws;
 /// [`JwsPayload::payload_bytes`] (an infallible trait method defined upstream) never needs to
 /// panic on a serialization failure.
 #[derive(Clone)]
-pub struct Payload {
+pub struct AuthorizationPayload {
     bytes: Vec<u8>,
 }
 
-impl Payload {
+impl AuthorizationPayload {
     pub fn new(
         descriptor_cid: Cid,
         delegated_grant_id: Option<Cid>,
@@ -144,9 +144,43 @@ impl Payload {
     }
 }
 
-impl JwsPayload for Payload {
+impl JwsPayload for AuthorizationPayload {
     fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
         std::borrow::Cow::Borrowed(&self.bytes)
+    }
+}
+
+/// PayloadSnapshot allows for generic APIs to accept a payload that can be serialized
+/// into a JWS payload. This is useful for cases where the payload is not known at compile
+/// time, such as when the payload is generated from user input or from a database.
+#[derive(Clone)]
+pub struct PayloadSnapshot {
+    bytes: Vec<u8>,
+    cty: Option<String>,
+    typ: Option<String>,
+}
+
+impl PayloadSnapshot {
+    fn new(payload: &impl JwsPayload) -> Self {
+        Self {
+            bytes: payload.payload_bytes().into_owned(),
+            cty: payload.cty().map(ToOwned::to_owned),
+            typ: payload.typ().map(ToOwned::to_owned),
+        }
+    }
+}
+
+impl JwsPayload for PayloadSnapshot {
+    fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        std::borrow::Cow::Borrowed(&self.bytes)
+    }
+
+    fn cty(&self) -> Option<&str> {
+        self.cty.as_deref()
+    }
+
+    fn typ(&self) -> Option<&str> {
+        self.typ.as_deref()
     }
 }
 
@@ -182,46 +216,40 @@ impl Jws {
         S: JwsSigner,
         P: JwsPayload,
     {
-        let encoded_payload = base64url.encode(payload.payload_bytes());
+        let snapshot = PayloadSnapshot::new(&payload);
+        let encoded_payload = base64url.encode(&snapshot.bytes);
+        let signers = signers.ok_or(JwsError::SignError(SignatureError::MissingSigner))?;
 
-        if let Some(signers) = signers {
-            let signatures = Self::generate_signatures(signers, &payload).await?;
-            Ok(Self {
-                payload: Some(encoded_payload),
-                signatures: Some(signatures),
-                header: None,
-                extra: MapValue::default(),
-            })
-        } else {
-            Err(JwsError::SignError(SignatureError::MissingSigner))
-        }
+        let signatures = Self::generate_signatures(signers, &snapshot).await?;
+
+        Ok(Self {
+            payload: Some(encoded_payload),
+            signatures: Some(signatures),
+            header: None,
+            extra: MapValue::default(),
+        })
     }
 
-    async fn generate_signatures<S, P>(
+    async fn generate_signatures<S>(
         signers: Vec<S>,
-        payload: P,
+        payload: &PayloadSnapshot,
     ) -> Result<Vec<JwsSignature>, JwsError>
     where
         S: JwsSigner,
-        P: JwsPayload + Clone + Copy,
     {
-        stream::iter(signers)
-            .then(|signer| async move {
-                let result: Result<JwsSignature, JwsError> = async {
-                    let signature = signer.sign_into_decoded(payload).await?;
+        let mut signatures = Vec::with_capacity(signers.len());
 
-                    Ok(JwsSignature {
-                        protected: Some(signature.header().encode()),
-                        signature: Some(signature.signature.encode()),
-                        extra: MapValue::default(),
-                    })
-                }
-                .await;
+        for signer in signers {
+            let signed = signer.sign_into_decoded(payload).await?;
 
-                result
-            })
-            .try_collect()
-            .await
+            signatures.push(JwsSignature {
+                protected: Some(signed.header().encode()),
+                signature: Some(signed.signature.encode()),
+                extra: MapValue::default(),
+            });
+        }
+
+        Ok(signatures)
     }
 
     /// Synchronously sign `payload` using the local [`JwkSigner`] trait.
@@ -705,7 +733,7 @@ mod tests {
         let delegated_grant_id =
             Cid::from_str("bafyreia3vo2bkk4b4nshzup55wgkdgwpr5bsa474iyngfcegompdko6kt4").unwrap();
 
-        let payload = Payload::new(
+        let payload = AuthorizationPayload::new(
             descriptor_cid,
             Some(delegated_grant_id),
             Some("grant-123".to_string()),
