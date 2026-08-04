@@ -206,6 +206,14 @@ impl JwsPayload for AttestationPayload {
     }
 }
 
+#[derive(Debug)]
+struct VerificationInput {
+    kid: Option<String>,
+    algorithm: Algorithm,
+    signing_bytes: Vec<u8>,
+    signature: Vec<u8>,
+}
+
 impl Jws {
     /// Asynchronously sign `payload` with the supplied [`ssi_jws::JwsSigner`]s.
     pub async fn create<S, P>(payload: P, signers: Option<Vec<S>>) -> Result<Self, JwsError>
@@ -313,28 +321,18 @@ impl Jws {
         let mut signers = Vec::new();
 
         for signature in signatures {
-            let protected_b64 = signature
-                .protected
-                .as_deref()
-                .ok_or(JwsError::MissingProtected)?;
-            let signature_b64 = signature
-                .signature
-                .as_deref()
-                .ok_or(JwsError::MissingSignature)?;
-            let protected_header = decode_protected_header(protected_b64)?;
-            let kid = protected_header
-                .kid
-                .as_deref()
-                .ok_or(JwsError::MissingKid)?;
-
-            if protected_header.alg.is_none() {
-                return Err(JwsError::MissingAlg);
-            }
+            let input = prepare_verification(payload, signature)?;
+            let kid = input.kid.as_deref().ok_or(JwsError::MissingKid)?;
 
             let public_jwk = resolver
                 .resolve_public_jwk(kid)
                 .ok_or_else(|| JwsError::PublicKeyNotFound(kid.to_string()))?;
-            if verify_jws_signature(payload, protected_b64, signature_b64, &public_jwk)? {
+            if verify_jws_signature(
+                input.algorithm,
+                &input.signing_bytes,
+                &input.signature,
+                &public_jwk,
+            )? {
                 signers.push(extract_did(kid).to_string());
             } else {
                 return Err(JwsError::InvalidSignature);
@@ -352,16 +350,14 @@ impl Jws {
             .ok_or(JwsError::MissingSignatures)?;
 
         for signature in signatures {
-            let protected_b64 = signature
-                .protected
-                .as_deref()
-                .ok_or(JwsError::MissingProtected)?;
-            let signature_b64 = signature
-                .signature
-                .as_deref()
-                .ok_or(JwsError::MissingSignature)?;
+            let input = prepare_verification(payload, signature)?;
 
-            if !verify_jws_signature(payload, protected_b64, signature_b64, public_jwk)? {
+            if !verify_jws_signature(
+                input.algorithm,
+                &input.signing_bytes,
+                &input.signature,
+                public_jwk,
+            )? {
                 return Ok(false);
             }
         }
@@ -508,6 +504,38 @@ fn decode_protected_header(protected: &str) -> Result<JwsProtectedHeader, JwsErr
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+fn parse_algorithm(value: &str) -> Result<Algorithm, JwsError> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned()))
+        .map_err(|_| JwsError::UnsupportedAlgorithm(value.to_owned()))
+}
+
+fn prepare_verification(
+    base64url_payload: &str,
+    signature: &JwsSignature,
+) -> Result<VerificationInput, JwsError> {
+    let protected = signature
+        .protected
+        .as_deref()
+        .ok_or(JwsError::MissingProtected)?;
+    let signature = signature
+        .signature
+        .as_deref()
+        .ok_or(JwsError::MissingSignature)?;
+    let protected_header = decode_protected_header(protected)?;
+    let algorithm_name = protected_header
+        .alg
+        .as_deref()
+        .ok_or(JwsError::MissingAlg)?;
+    let algorithm = parse_algorithm(algorithm_name)?;
+
+    Ok(VerificationInput {
+        kid: protected_header.kid,
+        algorithm,
+        signing_bytes: format!("{protected}.{base64url_payload}").into_bytes(),
+        signature: decode_base64url(signature, "signature")?,
+    })
+}
+
 fn sign_jws_content(
     algorithm: Algorithm,
     private_jwk: &JWK,
@@ -531,34 +559,31 @@ fn map_ssi_sign_error(algorithm: Algorithm, error: ssi_jws::Error) -> JwsError {
 }
 
 fn verify_jws_signature(
-    base64url_payload: &str,
-    protected_b64: &str,
-    signature_b64: &str,
+    _algorithm: Algorithm,
+    signing_input: &[u8],
+    signature_bytes: &[u8],
     public_jwk: &JWK,
 ) -> Result<bool, JwsError> {
-    let signing_input = format!("{}.{}", protected_b64, base64url_payload);
-    let signature_bytes = decode_base64url(signature_b64, "signature")?;
-
     match jwk_curve(public_jwk)? {
         "Ed25519" => {
-            let signature = Ed25519Signature::from_slice(&signature_bytes)
+            let signature = Ed25519Signature::from_slice(signature_bytes)
                 .map_err(|err| JwsError::InvalidKey(err.to_string()))?;
             Ok(ed25519_verifying_key(public_jwk)?
-                .verify(signing_input.as_bytes(), &signature)
+                .verify(signing_input, &signature)
                 .is_ok())
         }
         "secp256k1" => {
-            let signature = Secp256k1Signature::from_slice(&signature_bytes)
+            let signature = Secp256k1Signature::from_slice(signature_bytes)
                 .map_err(|err| JwsError::InvalidKey(err.to_string()))?;
             Ok(secp256k1_verifying_key(public_jwk)?
-                .verify(signing_input.as_bytes(), &signature)
+                .verify(signing_input, &signature)
                 .is_ok())
         }
         "P-256" => {
-            let signature = P256Signature::from_slice(&signature_bytes)
+            let signature = P256Signature::from_slice(signature_bytes)
                 .map_err(|err| JwsError::InvalidKey(err.to_string()))?;
             Ok(p256_verifying_key(public_jwk)?
-                .verify(signing_input.as_bytes(), &signature)
+                .verify(signing_input, &signature)
                 .is_ok())
         }
         crv => Err(JwsError::UnsupportedCurve(crv.to_string())),
@@ -798,6 +823,75 @@ mod tests {
         assert!(matches!(
             mapped,
             JwsError::UnsupportedCurve(ref curve) if curve == "Ed448"
+        ));
+    }
+
+    #[test]
+    fn prepare_verification_parses_protected_input_once() {
+        let protected = base64url.encode(
+            serde_json::to_vec(&json!({
+                "kid": "did:example:alice#key-1",
+                "alg": "EdDSA",
+            }))
+            .unwrap(),
+        );
+        let signature_bytes = [1, 2, 3, 4];
+        let signature = JwsSignature {
+            protected: Some(protected.clone()),
+            signature: Some(base64url.encode(signature_bytes)),
+            ..Default::default()
+        };
+
+        let input = prepare_verification("cGF5bG9hZA", &signature).unwrap();
+
+        assert_eq!(input.kid.as_deref(), Some("did:example:alice#key-1"));
+        assert_eq!(input.algorithm, Algorithm::EdDSA);
+        assert_eq!(
+            input.signing_bytes,
+            format!("{protected}.cGF5bG9hZA").into_bytes()
+        );
+        assert_eq!(input.signature, signature_bytes);
+    }
+
+    #[test]
+    fn prepare_verification_rejects_missing_and_unknown_algorithms() {
+        let signature_for_header = |header: serde_json::Value| JwsSignature {
+            protected: Some(base64url.encode(serde_json::to_vec(&header).unwrap())),
+            signature: Some(base64url.encode([1, 2, 3, 4])),
+            ..Default::default()
+        };
+
+        let missing = prepare_verification("cGF5bG9hZA", &signature_for_header(json!({})))
+            .expect_err("missing alg must fail");
+        assert!(matches!(missing, JwsError::MissingAlg));
+
+        let unknown = prepare_verification(
+            "cGF5bG9hZA",
+            &signature_for_header(json!({ "alg": "not-an-ssi-algorithm" })),
+        )
+        .expect_err("unknown alg must fail");
+        assert!(matches!(
+            unknown,
+            JwsError::UnsupportedAlgorithm(ref name) if name == "not-an-ssi-algorithm"
+        ));
+    }
+
+    #[test]
+    fn verify_signatures_public_jwk_requires_protected_algorithm() {
+        let jws = Jws {
+            payload: Some("cGF5bG9hZA".to_string()),
+            signatures: Some(vec![JwsSignature {
+                protected: Some(base64url.encode(b"{}")),
+                signature: Some(base64url.encode([1, 2, 3, 4])),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let public_jwk = JWK::generate_ed25519().expect("generate Ed25519 JWK");
+
+        assert!(matches!(
+            jws.verify_signatures_public_jwk(&public_jwk),
+            Err(JwsError::MissingAlg)
         ));
     }
 
