@@ -41,6 +41,7 @@ use connect::{
 };
 use http_registration::HttpTenantRegistrationClient;
 use setup::{signer_from_portable_did, HttpDwnProtocolEndpoint, LocalDwnProtocolEndpoint};
+use ssi_jwk::Algorithm;
 
 uniffi::setup_scaffolding!();
 
@@ -156,7 +157,7 @@ impl Drop for EnboxCore {
 #[serde(rename_all = "camelCase")]
 struct SyncSignerConfig {
     key_id: String,
-    algorithm: String,
+    algorithm: Algorithm,
     private_jwk: JWK,
 }
 

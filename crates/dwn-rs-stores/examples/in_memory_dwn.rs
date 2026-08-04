@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use dwn_rs_core::auth::jws::Algorithm;
 use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::ConfigureDescriptor;
@@ -126,7 +127,7 @@ fn sign_message(
 fn test_signer() -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         "did:example:alice#key1",
-        "EdDSA",
+        Algorithm::EdDSA,
         ed25519_jwk(
             "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
             Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),

@@ -197,7 +197,7 @@ mod tests {
         }));
         private_jwk.key_id = Some(kid.clone());
         private_jwk.algorithm = Some(Algorithm::EdDSA);
-        let signer = PrivateJwkSigner::new(kid.clone(), "EdDSA", private_jwk);
+        let signer = PrivateJwkSigner::new(kid.clone(), Algorithm::EdDSA, private_jwk);
 
         let jws =
             Jws::create_general(b"hello, did:key", std::slice::from_ref(&signer)).expect("sign");

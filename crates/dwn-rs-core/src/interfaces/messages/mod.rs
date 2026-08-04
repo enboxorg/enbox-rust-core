@@ -146,7 +146,7 @@ where
     ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
-        let payload = jws::Payload::new(
+        let payload = jws::AuthorizationPayload::new(
             descriptor_cid,
             delegated_grant_id,
             permission_grant_id,

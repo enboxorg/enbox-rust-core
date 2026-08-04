@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
+use dwn_rs_core::auth::{
+    ed25519_jwk, jws::Algorithm, Jws, PrivateJwkSigner, StaticPublicKeyResolver,
+};
 use dwn_rs_core::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use dwn_rs_core::descriptors::ConfigureDescriptor;
 use dwn_rs_core::dwn::current_handler_kinds;
@@ -162,7 +164,7 @@ fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> Jso
 fn test_signer() -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         "did:example:alice#key1",
-        "EdDSA",
+        Algorithm::EdDSA,
         ed25519_jwk(
             "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
             Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),

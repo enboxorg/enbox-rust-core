@@ -8,6 +8,7 @@ use base64::Engine;
 use bytes::Bytes;
 use futures_util::{stream, Stream, StreamExt};
 use serde_json::json;
+use ssi_jwk::Algorithm;
 
 use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
@@ -1310,7 +1311,7 @@ fn signer_for(did: &str) -> PrivateJwkSigner {
     let key_id = format!("{did}#key1");
     PrivateJwkSigner::new(
         &key_id,
-        "EdDSA",
+        Algorithm::EdDSA,
         ed25519_jwk(
             "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
             Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),

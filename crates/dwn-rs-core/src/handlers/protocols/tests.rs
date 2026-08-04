@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use ssi_jwk::Algorithm;
 
 use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
@@ -964,7 +965,7 @@ fn test_signer() -> PrivateJwkSigner {
 fn test_signer_with_key_id(key_id: &str) -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         key_id,
-        "EdDSA",
+        Algorithm::EdDSA,
         ed25519_jwk(
             "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
             Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),

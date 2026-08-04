@@ -30,6 +30,7 @@ use futures_util::stream;
 use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
 use serde_json::Value;
+use ssi_jwk::Algorithm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::Future;
@@ -217,7 +218,7 @@ enum FixtureData {
 #[serde(rename_all = "camelCase")]
 struct FixtureJwsKey {
     kid: String,
-    algorithm: String,
+    algorithm: Algorithm,
     public_jwk: JWK,
     private_jwk: Option<JWK>,
 }
@@ -2841,7 +2842,7 @@ fn signing_keys(fixture_set: &FixtureSet, case: &FixtureCase) -> Vec<PrivateJwkS
                 panic!("{} signer {} must include a privateJwk", case.id, signer_id)
             });
 
-            PrivateJwkSigner::new(key.kid.clone(), key.algorithm.clone(), private_jwk)
+            PrivateJwkSigner::new(key.kid.clone(), key.algorithm, private_jwk)
         })
         .collect()
 }

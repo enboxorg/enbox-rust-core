@@ -17,7 +17,7 @@ use dwn_rs_core::protocols::Definition;
 use dwn_rs_stores::SqliteNativeDwn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use ssi_jwk::Params;
+use ssi_jwk::{Algorithm, Params};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,10 +95,7 @@ pub fn signer_from_portable_did(
         )
     })?;
 
-    let algorithm = private_jwk
-        .algorithm
-        .map(|algorithm| algorithm.to_string())
-        .unwrap_or_else(|| "EdDSA".to_string());
+    let algorithm = private_jwk.algorithm.unwrap_or_else(|| Algorithm::EdDSA);
     let mut private: JWK = private_jwk.clone();
     private.key_id = Some(kid.clone());
     Ok(PrivateJwkSigner::new(kid, algorithm, private))
