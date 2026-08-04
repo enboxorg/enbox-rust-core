@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use dwn_rs_core::auth::{JwsPrivateJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use dwn_rs_core::auth::{PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use dwn_rs_core::identity::agent::{
     derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
     DeterministicDidJwkProvider, MemoryDidResolverCache, MemoryKeyManager, PortableDid,
@@ -41,6 +41,7 @@ use connect::{
 };
 use http_registration::HttpTenantRegistrationClient;
 use setup::{signer_from_portable_did, HttpDwnProtocolEndpoint, LocalDwnProtocolEndpoint};
+use ssi_jwk::Algorithm;
 
 uniffi::setup_scaffolding!();
 
@@ -156,8 +157,8 @@ impl Drop for EnboxCore {
 #[serde(rename_all = "camelCase")]
 struct SyncSignerConfig {
     key_id: String,
-    algorithm: String,
-    private_jwk: JwsPrivateJwk,
+    algorithm: Algorithm,
+    private_jwk: JWK,
 }
 
 /// Which `SqliteNativeDwn` HTTP entry point a sync invocation should

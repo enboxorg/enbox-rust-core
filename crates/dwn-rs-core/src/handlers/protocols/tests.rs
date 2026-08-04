@@ -5,8 +5,9 @@ use std::sync::{Arc, RwLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use ssi_jwk::Algorithm;
 
-use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
@@ -43,12 +44,14 @@ async fn protocols_configure_stores_latest_base_state() {
         "http://example.com/protocol",
         true,
         "2025-01-01T00:00:00.000000Z",
-    );
+    )
+    .await;
     let newer = signed_configure_message(
         "http://example.com/protocol",
         false,
         "2025-01-01T00:00:01.000000Z",
-    );
+    )
+    .await;
 
     assert_eq!(
         handler
@@ -113,7 +116,8 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
                 "http://example.com/public",
                 true,
                 "2025-01-01T00:00:00.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -124,7 +128,8 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:01.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -166,7 +171,8 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:00.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -174,7 +180,7 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
     let reply = query_handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
-            &signed_query_message(None, test_signer_with_key_id("did:example:alice#key1")),
+            &signed_query_message(None, test_signer_with_key_id("did:example:alice#key1")).await,
             None,
         ))
         .await;
@@ -210,7 +216,8 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
                 "http://example.com/public",
                 true,
                 "2025-01-01T00:00:00.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -221,7 +228,8 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:01.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -229,7 +237,7 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
     let reply = query_handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
-            &signed_query_message(None, test_signer_with_key_id("did:example:bob#key1")),
+            &signed_query_message(None, test_signer_with_key_id("did:example:bob#key1")).await,
             None,
         ))
         .await;
@@ -265,7 +273,8 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
                 "http://example.com/private",
                 false,
                 "2025-01-01T00:00:00.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -284,7 +293,8 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
                 Some("http://example.com/private"),
                 test_signer_with_key_id("did:example:bob#key1"),
                 "grant-protocols-query",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -309,7 +319,8 @@ async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
         "http://example.com/original",
         true,
         "2025-01-01T00:00:00.000000Z",
-    );
+    )
+    .await;
     message["descriptor"]["definition"]["protocol"] =
         serde_json::Value::String("http://example.com/tampered".to_string());
 
@@ -343,7 +354,8 @@ async fn protocols_configure_rejects_non_tenant_signer() {
                 true,
                 "2025-01-01T00:00:00.000000Z",
                 test_signer_with_key_id("did:example:bob#key1"),
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -369,7 +381,8 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
                 "http://example.com/versioned",
                 true,
                 "2025-01-01T00:00:00.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -380,7 +393,8 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
                 "http://example.com/versioned",
                 false,
                 "2025-01-01T00:10:00.000000Z",
-            ),
+            )
+            .await,
             None,
         ))
         .await;
@@ -418,7 +432,8 @@ async fn protocols_configure_validates_composition_dependencies() {
     let missing_dependency = signed_configure_descriptor(composed_descriptor(
         "http://example.com/composed-missing",
         "threads:thread/participant",
-    ));
+    ))
+    .await;
     assert_eq!(
         handler
             .run(MethodHandlerRequest::new(
@@ -436,7 +451,7 @@ async fn protocols_configure_validates_composition_dependencies() {
         handler
             .run(MethodHandlerRequest::new(
                 "did:example:alice",
-                &signed_configure_descriptor(base_thread_descriptor()),
+                &signed_configure_descriptor(base_thread_descriptor()).await,
                 None,
             ))
             .await
@@ -451,7 +466,8 @@ async fn protocols_configure_validates_composition_dependencies() {
                 &signed_configure_descriptor(composed_descriptor(
                     "http://example.com/composed",
                     "threads:thread/participant",
-                )),
+                ))
+                .await,
                 None,
             ))
             .await
@@ -466,7 +482,8 @@ async fn protocols_configure_validates_composition_dependencies() {
                 &signed_configure_descriptor(composed_descriptor(
                     "http://example.com/composed-invalid-role",
                     "threads:thread/missing",
-                )),
+                ))
+                .await,
                 None,
             ))
             .await
@@ -495,7 +512,8 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
         "http://example.com/dispatch",
         true,
         "2025-01-01T00:00:00.000000Z",
-    );
+    )
+    .await;
     let configure_reply = dwn.process_message("did:example:alice", configure).await;
     assert_eq!(configure_reply.status.code, 202);
 
@@ -650,11 +668,15 @@ impl MessageStore for TestMessageStore {
     }
 }
 
-fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> serde_json::Value {
-    signed_configure_message_with_signer(protocol, published, timestamp, test_signer())
+async fn signed_configure_message(
+    protocol: &str,
+    published: bool,
+    timestamp: &str,
+) -> serde_json::Value {
+    signed_configure_message_with_signer(protocol, published, timestamp, test_signer()).await
 }
 
-fn signed_configure_message_with_signer(
+async fn signed_configure_message_with_signer(
     protocol: &str,
     published: bool,
     timestamp: &str,
@@ -664,13 +686,14 @@ fn signed_configure_message_with_signer(
         configure_descriptor(protocol, published, timestamp),
         signer,
     )
+    .await
 }
 
-fn signed_configure_descriptor(descriptor: ConfigureDescriptor) -> serde_json::Value {
-    signed_configure_descriptor_with_signer(descriptor, test_signer())
+async fn signed_configure_descriptor(descriptor: ConfigureDescriptor) -> serde_json::Value {
+    signed_configure_descriptor_with_signer(descriptor, test_signer()).await
 }
 
-fn signed_configure_descriptor_with_signer(
+async fn signed_configure_descriptor_with_signer(
     descriptor: ConfigureDescriptor,
     signer: PrivateJwkSigner,
 ) -> serde_json::Value {
@@ -678,29 +701,34 @@ fn signed_configure_descriptor_with_signer(
     let payload = serde_json::json!({
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer]).unwrap();
+    let signature = Jws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+        .await
+        .unwrap();
     serde_json::json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
     })
 }
 
-fn signed_query_message(protocol: Option<&str>, signer: PrivateJwkSigner) -> serde_json::Value {
+async fn signed_query_message(
+    protocol: Option<&str>,
+    signer: PrivateJwkSigner,
+) -> serde_json::Value {
     let descriptor = query_descriptor(protocol);
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let payload = serde_json::json!({
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer]).unwrap();
+    let signature = Jws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+        .await
+        .unwrap();
     serde_json::json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
     })
 }
 
-fn signed_query_message_with_grant(
+async fn signed_query_message_with_grant(
     protocol: Option<&str>,
     signer: PrivateJwkSigner,
     permission_grant_id: &str,
@@ -712,8 +740,9 @@ fn signed_query_message_with_grant(
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
         "permissionGrantId": permission_grant_id,
     });
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer]).unwrap();
+    let signature = Jws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+        .await
+        .unwrap();
     serde_json::json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
@@ -786,10 +815,11 @@ async fn put_protocols_query_grant(
         "contextId": grant_id,
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     let message: Message<Descriptor> = serde_json::from_value(serde_json::json!({
         "descriptor": descriptor_json,
@@ -964,16 +994,13 @@ fn test_signer() -> PrivateJwkSigner {
 fn test_signer_with_key_id(key_id: &str) -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         key_id,
-        "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        Algorithm::EdDSA,
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some(key_id),
+        )
+        .unwrap(),
     )
 }
 
@@ -997,15 +1024,13 @@ fn test_resolver_with_bob() -> StaticPublicKeyResolver {
     ]))
 }
 
-fn test_public_jwk(key_id: &str) -> JwsPublicJwk {
-    JwsPublicJwk {
-        kty: "OKP".to_string(),
-        crv: "Ed25519".to_string(),
-        x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-        y: None,
-        kid: Some(key_id.to_string()),
-        alg: Some("EdDSA".to_string()),
-    }
+fn test_public_jwk(key_id: &str) -> JWK {
+    ed25519_jwk(
+        "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+        None,
+        Some(key_id),
+    )
+    .unwrap()
 }
 
 fn matches_filters(indexes: &KeyValues, filters: Filters) -> bool {
@@ -1069,13 +1094,14 @@ fn test_store_error(error: String) -> crate::errors::MessageStoreError {
     ))
 }
 
-#[test]
-fn generic_message_deserializes_typescript_authorization_shape() {
+#[tokio::test]
+async fn generic_message_deserializes_typescript_authorization_shape() {
     let raw = signed_configure_message(
         "http://example.com/protocol",
         true,
         "2025-01-01T00:00:00.000000Z",
-    );
+    )
+    .await;
     let message: Message<Descriptor> = serde_json::from_value(raw.clone()).unwrap();
     assert_eq!(serde_json::to_value(message).unwrap(), raw);
 

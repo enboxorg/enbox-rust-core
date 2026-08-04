@@ -23,12 +23,13 @@
   "cases": [
     {
       "id": "did-jwk-okp-x25519",
-      "description": "did:jwk spec Examples — OKP X25519 worked example. The 'use':'enc' member is not part of the verification-key JWK shape the resolver models and is ignored on decode; the resolver yields kty/crv/x verbatim.",
+      "description": "did:jwk spec Examples — OKP X25519 worked example. The resolver preserves the decoded JWK verbatim, including the 'use':'enc' member.",
       "did": "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ1c2UiOiJlbmMiLCJ4IjoiM3A3YmZYdDl3YlRUVzJIQzdPUTFOei1EUThoYmVHZE5yZngtRkctSUswOCJ9",
       "expected": {
         "publicKey": {
           "kty": "OKP",
           "crv": "X25519",
+          "use": "enc",
           "x": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"
         }
       },

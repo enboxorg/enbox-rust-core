@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use dwn_rs_core::auth::{JwsPublicJwk, StaticPublicKeyResolver};
+use dwn_rs_core::auth::{ed25519_jwk, StaticPublicKeyResolver};
 use dwn_rs_core::runtime::desktop::server::{LoopbackDwnServer, SharedDesktopMessageProcessor};
 use dwn_rs_core::runtime::desktop::ws::SharedDesktopSubscribeProcessor;
 use dwn_rs_core::runtime::desktop::{
@@ -115,13 +115,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn test_resolver() -> StaticPublicKeyResolver {
     StaticPublicKeyResolver::new(BTreeMap::from([(
         "did:example:alice#key1".to_string(),
-        JwsPublicJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            None,
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )]))
 }

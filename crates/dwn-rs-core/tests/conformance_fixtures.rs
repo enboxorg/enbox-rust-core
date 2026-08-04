@@ -6,8 +6,8 @@ use base64::Engine as _;
 use bytes::Bytes;
 use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
 use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, JwsPublicKeyResolver, JwsSignature, PrivateJwkSigner,
-    StaticPublicKeyResolver, UniversalResolver,
+    Jws, JwsPublicKeyResolver, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver,
+    UniversalResolver, JWK,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -30,6 +30,7 @@ use futures_util::stream;
 use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
 use serde_json::Value;
+use ssi_jwk::Algorithm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::Future;
@@ -217,9 +218,9 @@ enum FixtureData {
 #[serde(rename_all = "camelCase")]
 struct FixtureJwsKey {
     kid: String,
-    algorithm: String,
-    public_jwk: JwsPublicJwk,
-    private_jwk: Option<JwsPrivateJwk>,
+    algorithm: Algorithm,
+    public_jwk: JWK,
+    private_jwk: Option<JWK>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -500,8 +501,8 @@ async fn fixture_dag_pb_cids_match_typescript() {
     }
 }
 
-#[test]
-fn fixture_general_jws_matches_typescript() {
+#[tokio::test]
+async fn fixture_general_jws_matches_typescript() {
     for suite in load_fixture_suites() {
         if !suite.has_assertion(JWS_GENERAL_SIGN_ASSERTION)
             && !suite.has_assertion(JWS_GENERAL_VERIFY_ASSERTION)
@@ -530,7 +531,7 @@ fn fixture_general_jws_matches_typescript() {
             }
 
             if check_signing && case.expected_error_code.is_none() {
-                assert_general_jws_signing(&suite.fixture_set, case);
+                assert_general_jws_signing(&suite.fixture_set, case).await;
             }
 
             if check_verification {
@@ -2815,8 +2816,9 @@ fn fixture_value_base64url(case: &FixtureCase, data: &Option<FixtureData>, label
     URL_SAFE_NO_PAD.encode(fixture_value_bytes(case, data, label))
 }
 
-fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
-    let actual = Jws::create_general(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
+async fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
+    let actual = Jws::create(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
+        .await
         .unwrap_or_else(|err| panic!("{} General JWS signing failed: {}", case.id, err));
 
     assert_eq!(actual, *jws(case), "{}", case.id);
@@ -2841,7 +2843,7 @@ fn signing_keys(fixture_set: &FixtureSet, case: &FixtureCase) -> Vec<PrivateJwkS
                 panic!("{} signer {} must include a privateJwk", case.id, signer_id)
             });
 
-            PrivateJwkSigner::new(key.kid.clone(), key.algorithm.clone(), private_jwk)
+            PrivateJwkSigner::new(key.kid.clone(), key.algorithm, private_jwk)
         })
         .collect()
 }
@@ -3143,7 +3145,7 @@ struct SpecFixtureCase {
     #[serde(default)]
     jws: Option<SpecJwsInput>,
     #[serde(default, rename = "publicJwk")]
-    public_jwk: Option<JwsPublicJwk>,
+    public_jwk: Option<JWK>,
     expected: SpecExpected,
 }
 
@@ -3175,6 +3177,8 @@ struct SpecExpectedPublicKey {
     kty: String,
     crv: String,
     x: String,
+    #[serde(default, rename = "use")]
+    public_key_use: Option<String>,
     #[serde(default)]
     y: Option<String>,
     #[serde(default)]
@@ -3374,14 +3378,16 @@ fn fixture_did_resolution_match_spec() {
                 )
             });
 
-            let expected_jwk = JwsPublicJwk {
-                kty: expected.kty.clone(),
-                crv: expected.crv.clone(),
-                x: expected.x.clone(),
-                y: expected.y.clone(),
-                kid: expected.kid.clone(),
-                alg: expected.alg.clone(),
-            };
+            let expected_jwk: JWK = serde_json::from_value(serde_json::json!({
+                "kty": expected.kty,
+                "crv": expected.crv,
+                "x": expected.x,
+                "use": expected.public_key_use,
+                "y": expected.y,
+                "kid": expected.kid,
+                "alg": expected.alg,
+            }))
+            .unwrap_or_else(|error| panic!("{} expected JWK is invalid: {error}", case.id));
 
             let resolved = resolver
                 .resolve_public_jwk(did)

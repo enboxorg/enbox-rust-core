@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use ssi_jwk::{Algorithm, Base64urlUInt, OctetParams, Params, JWK};
 
-use super::{JwsPublicJwk, JwsPublicKeyResolver};
+use super::JwsPublicKeyResolver;
 
 /// Multicodec varint prefix for an Ed25519 public key (`0xed 0x01`).
 ///
@@ -39,7 +40,7 @@ impl UniversalResolver {
 }
 
 impl JwsPublicKeyResolver for UniversalResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<JwsPublicJwk> {
+    fn resolve_public_jwk(&self, kid: &str) -> Option<JWK> {
         if let Some(fallback) = &self.fallback {
             if let Some(jwk) = fallback.resolve_public_jwk(kid) {
                 return Some(jwk);
@@ -49,7 +50,7 @@ impl JwsPublicKeyResolver for UniversalResolver {
     }
 }
 
-fn resolve_did_jwk(kid: &str) -> Option<JwsPublicJwk> {
+fn resolve_did_jwk(kid: &str) -> Option<JWK> {
     let base = kid.split('#').next().unwrap_or(kid);
     let encoded = base.strip_prefix("did:jwk:")?;
     let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
@@ -62,7 +63,7 @@ fn resolve_did_jwk(kid: &str) -> Option<JwsPublicJwk> {
 /// uses for `Authorization` JWS signatures (see [`crate::auth::jws`]). The
 /// fragment, when present, must match the multibase identifier exactly
 /// (matching `dwn-sdk-js` `DidKeyResolver`).
-fn resolve_did_key(kid: &str) -> Option<JwsPublicJwk> {
+fn resolve_did_key(kid: &str) -> Option<JWK> {
     let (base, fragment) = match kid.split_once('#') {
         Some((base, fragment)) => (base, Some(fragment)),
         None => (kid, None),
@@ -78,14 +79,14 @@ fn resolve_did_key(kid: &str) -> Option<JwsPublicJwk> {
     if public_key.len() != ED25519_PUBLIC_KEY_LEN {
         return None;
     }
-    Some(JwsPublicJwk {
-        kty: "OKP".to_string(),
-        crv: "Ed25519".to_string(),
-        x: URL_SAFE_NO_PAD.encode(public_key),
-        y: None,
-        kid: Some(format!("{base}#{identifier}")),
-        alg: Some("EdDSA".to_string()),
-    })
+    let mut jwk = JWK::from(Params::OKP(OctetParams {
+        curve: "Ed25519".to_string(),
+        public_key: Base64urlUInt(public_key.to_vec()),
+        private_key: None,
+    }));
+    jwk.key_id = Some(format!("{base}#{identifier}"));
+    jwk.algorithm = Some(Algorithm::EdDSA);
+    Some(jwk)
 }
 
 #[cfg(test)]
@@ -94,20 +95,24 @@ mod tests {
 
     #[test]
     fn resolves_did_jwk_public_key() {
-        let jwk = JwsPublicJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        };
+        let jwk: JWK = serde_json::from_value(serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            "kid": "did:example:alice#key1",
+            "alg": "EdDSA",
+        }))
+        .unwrap();
         let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&jwk).unwrap());
         let did = format!("did:jwk:{encoded}");
 
         let resolver = UniversalResolver::new();
         let resolved = resolver.resolve_public_jwk(&did).expect("did:jwk resolves");
-        assert_eq!(resolved.crv, "Ed25519");
+        assert_eq!(resolved.get_algorithm(), Some(Algorithm::EdDSA));
+        assert!(matches!(
+            &resolved.params,
+            Params::OKP(params) if params.curve == "Ed25519"
+        ));
     }
 
     /// Reference vector taken from <https://w3c-ccg.github.io/did-method-key/#example-1>:
@@ -121,10 +126,11 @@ mod tests {
         let resolved = resolver
             .resolve_public_jwk(DID_KEY_EXAMPLE)
             .expect("did:key resolves");
-        assert_eq!(resolved.kty, "OKP");
-        assert_eq!(resolved.crv, "Ed25519");
-        assert_eq!(resolved.alg.as_deref(), Some("EdDSA"));
-        assert_eq!(URL_SAFE_NO_PAD.decode(&resolved.x).unwrap().len(), 32);
+        assert!(matches!(
+            &resolved.params,
+            Params::OKP(params) if params.curve == "Ed25519" && params.public_key.0.len() == 32
+        ));
+        assert_eq!(resolved.algorithm, Some(Algorithm::EdDSA));
     }
 
     #[test]
@@ -135,7 +141,7 @@ mod tests {
         let resolved = resolver
             .resolve_public_jwk(&kid)
             .expect("did:key#kid resolves");
-        assert_eq!(resolved.kid.as_deref(), Some(kid.as_str()));
+        assert_eq!(resolved.key_id.as_deref(), Some(kid.as_str()));
     }
 
     #[test]
@@ -172,9 +178,9 @@ mod tests {
     /// `did:key#<identifier>` value must verify against the
     /// `UniversalResolver` without any pre-registered static keys. This
     /// is the path DWeb Connect uses for ephemeral connecting-app DIDs.
-    #[test]
-    fn verifies_jws_signed_by_did_key_ed25519() {
-        use crate::auth::{Jws, JwsPrivateJwk, PrivateJwkSigner};
+    #[tokio::test]
+    async fn verifies_jws_signed_by_did_key_ed25519() {
+        use crate::auth::{Jws, PrivateJwkSigner};
         use ed25519_dalek::{SigningKey, VerifyingKey};
         use rand::rngs::OsRng;
 
@@ -188,19 +194,18 @@ mod tests {
         let did = format!("did:key:{identifier}");
         let kid = format!("{did}#{identifier}");
 
-        let private_jwk = JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: URL_SAFE_NO_PAD.encode(public_bytes),
-            d: URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-            y: None,
-            kid: Some(kid.clone()),
-            alg: Some("EdDSA".to_string()),
-        };
-        let signer = PrivateJwkSigner::new(kid.clone(), "EdDSA", private_jwk);
+        let mut private_jwk = JWK::from(Params::OKP(OctetParams {
+            curve: "Ed25519".to_string(),
+            public_key: Base64urlUInt(public_bytes.to_vec()),
+            private_key: Some(Base64urlUInt(signing_key.to_bytes().to_vec())),
+        }));
+        private_jwk.key_id = Some(kid.clone());
+        private_jwk.algorithm = Some(Algorithm::EdDSA);
+        let signer = PrivateJwkSigner::new(kid.clone(), Algorithm::EdDSA, private_jwk);
 
-        let jws =
-            Jws::create_general(b"hello, did:key", std::slice::from_ref(&signer)).expect("sign");
+        let jws = Jws::create(b"hello, did:key".as_slice(), std::slice::from_ref(&signer))
+            .await
+            .expect("sign");
         let resolver = UniversalResolver::new();
         let signers = jws
             .verify_signatures(&resolver)

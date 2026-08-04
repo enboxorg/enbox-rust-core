@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use dwn_rs_core::auth::{Jws, JwsPrivateJwk, PrivateJwkSigner};
+use dwn_rs_core::auth::{Jws, PrivateJwkSigner, JWK};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{ConfigureDescriptor, ProtocolQueryDescriptor};
 use dwn_rs_core::identity::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
@@ -17,6 +17,7 @@ use dwn_rs_core::protocols::Definition;
 use dwn_rs_stores::SqliteNativeDwn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use ssi_jwk::{Algorithm, Params};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +48,13 @@ pub fn signer_from_portable_did(
     let private_jwk = portable_did
         .private_keys
         .iter()
-        .find(|jwk| jwk.crv == "Ed25519" && jwk.d.is_some())
+        .find(|jwk| {
+            matches!(
+                &jwk.params,
+                Params::OKP(params)
+                    if params.curve == "Ed25519" && params.private_key.is_some()
+            )
+        })
         .ok_or_else(|| {
             AgentIdentityError::new(
                 "AgentSignerMissing",
@@ -58,13 +65,25 @@ pub fn signer_from_portable_did(
             )
         })?;
 
-    let kid = private_jwk.kid.clone().or_else(|| {
+    let kid = private_jwk.key_id.clone().or_else(|| {
         portable_did
             .document
+            .verification_relationships
             .assertion_method
             .first()
-            .cloned()
-            .or_else(|| portable_did.document.authentication.first().cloned())
+            .or_else(|| {
+                portable_did
+                    .document
+                    .verification_relationships
+                    .authentication
+                    .first()
+            })
+            .map(|relationship| {
+                relationship
+                    .id()
+                    .resolve(&portable_did.document.id)
+                    .to_string()
+            })
     });
     let kid = kid.ok_or_else(|| {
         AgentIdentityError::new(
@@ -76,28 +95,15 @@ pub fn signer_from_portable_did(
         )
     })?;
 
-    let algorithm = private_jwk
-        .alg
-        .clone()
-        .unwrap_or_else(|| "EdDSA".to_string());
-    let private = JwsPrivateJwk {
-        kty: private_jwk.kty.clone(),
-        crv: private_jwk.crv.clone(),
-        d: private_jwk
-            .d
-            .clone()
-            .expect("filtered above: Ed25519 private key has d"),
-        x: private_jwk.x.clone(),
-        y: private_jwk.y.clone(),
-        kid: Some(kid.clone()),
-        alg: Some(algorithm.clone()),
-    };
+    let algorithm = private_jwk.algorithm.unwrap_or(Algorithm::EdDSA);
+    let mut private: JWK = private_jwk.clone();
+    private.key_id = Some(kid.clone());
     Ok(PrivateJwkSigner::new(kid, algorithm, private))
 }
 
 /// Build a signed `ProtocolsConfigure` message JSON suitable for
 /// `Dwn::process_message`.
-pub fn build_signed_protocols_configure(
+pub async fn build_signed_protocols_configure(
     definition: Definition,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
@@ -106,11 +112,11 @@ pub fn build_signed_protocols_configure(
         definition,
         permission_grant_id: None,
     };
-    sign_descriptor(&descriptor, signer, "AgentProtocolsConfigureInvalid")
+    sign_descriptor(&descriptor, signer, "AgentProtocolsConfigureInvalid").await
 }
 
 /// Build a signed `ProtocolsQuery` message JSON filtered by protocol URI.
-pub fn build_signed_protocols_query(
+pub async fn build_signed_protocols_query(
     protocol: &str,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
@@ -122,10 +128,10 @@ pub fn build_signed_protocols_query(
         }),
         permission_grant_id: None,
     };
-    sign_descriptor(&descriptor, signer, "AgentProtocolsQueryInvalid")
+    sign_descriptor(&descriptor, signer, "AgentProtocolsQueryInvalid").await
 }
 
-fn sign_descriptor<D: serde::Serialize>(
+async fn sign_descriptor<D: serde::Serialize>(
     descriptor: &D,
     signer: &PrivateJwkSigner,
     invalid_code: &str,
@@ -138,7 +144,8 @@ fn sign_descriptor<D: serde::Serialize>(
     let payload = serde_json::json!({ "descriptorCid": descriptor_cid });
     let payload_bytes = serde_json::to_vec(&payload)
         .map_err(|err| AgentIdentityError::new(invalid_code, err.to_string()))?;
-    let signature = Jws::create_general(&payload_bytes, std::slice::from_ref(signer))
+    let signature = Jws::create(&payload_bytes, std::slice::from_ref(signer))
+        .await
         .map_err(|err| AgentIdentityError::new(invalid_code, err.to_string()))?;
     Ok(serde_json::json!({
         "descriptor": descriptor_json,
@@ -175,7 +182,7 @@ impl ProtocolEndpoint for LocalDwnProtocolEndpoint {
         protocol: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
         Box::pin(async move {
-            let message = build_signed_protocols_query(protocol, &self.signer)?;
+            let message = build_signed_protocols_query(protocol, &self.signer).await?;
             let reply = self.process(tenant, message).await;
             require_ok(&reply, "AgentProtocolsQueryRejected")?;
             // DwnReply body is `#[serde(flatten)]`, so the `entries` field
@@ -212,7 +219,7 @@ impl ProtocolEndpoint for LocalDwnProtocolEndpoint {
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
         Box::pin(async move {
-            let message = build_signed_protocols_configure(definition, &self.signer)?;
+            let message = build_signed_protocols_configure(definition, &self.signer).await?;
             let reply = self.process(tenant, message).await;
             require_ok(&reply, "AgentProtocolsConfigureRejected")?;
             Ok(())
@@ -339,7 +346,7 @@ impl ProtocolEndpoint for HttpDwnProtocolEndpoint {
         protocol: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
         Box::pin(async move {
-            let message = build_signed_protocols_query(protocol, &self.signer)?;
+            let message = build_signed_protocols_query(protocol, &self.signer).await?;
             let reply = self.process(tenant, message).await?;
             require_ok(&reply, "HttpProtocolsQueryRejected")?;
             let Some(entries) = reply.get("entries") else {
@@ -374,7 +381,7 @@ impl ProtocolEndpoint for HttpDwnProtocolEndpoint {
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
         Box::pin(async move {
-            let message = build_signed_protocols_configure(definition, &self.signer)?;
+            let message = build_signed_protocols_configure(definition, &self.signer).await?;
             let reply = self.process(tenant, message).await?;
             require_ok(&reply, "HttpProtocolsConfigureRejected")?;
             Ok(())

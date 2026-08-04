@@ -6,8 +6,9 @@ use base64::Engine as _;
 use bytes::Bytes;
 use futures_util::stream;
 use serde_json::json;
+use ssi_jwk::Algorithm;
 
-use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     MessagesSubscribeDescriptor, MessagesSyncDescriptor, RecordsWriteDescriptor,
@@ -65,7 +66,8 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
         signer: test_signer(),
         permission_grant_id: None,
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let reply = handler
         .run(MethodHandlerRequest::new(
@@ -92,7 +94,7 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
 
-    let grant = permission_grant_message("grant-sync-1", Some("http://example.com/notes"));
+    let grant = permission_grant_message("grant-sync-1", Some("http://example.com/notes")).await;
     message_store
         .insert("did:example:alice", "grant-sync-1", grant)
         .await;
@@ -108,7 +110,8 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
         signer: bob_signer(),
         permission_grant_id: Some("grant-sync-1".to_string()),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let reply = handler
         .run(MethodHandlerRequest::new(
@@ -130,7 +133,7 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
 
-    let grant = permission_grant_message("grant-sync-2", Some("http://example.com/notes"));
+    let grant = permission_grant_message("grant-sync-2", Some("http://example.com/notes")).await;
     message_store
         .insert("did:example:alice", "grant-sync-2", grant)
         .await;
@@ -145,7 +148,8 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
         signer: bob_signer(),
         permission_grant_id: Some("grant-sync-2".to_string()),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let reply = handler
         .run(MethodHandlerRequest::new(
@@ -204,7 +208,8 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
         }],
         cursor: Some(first),
         ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let result = handler
         .handle_subscribe(
@@ -282,7 +287,8 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
         }],
         cursor: Some(old_cursor),
         ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let result = handler
         .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
@@ -338,7 +344,7 @@ fn event_indexes(protocol: &str) -> MapValue {
     ])
 }
 
-fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<Descriptor> {
+async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<Descriptor> {
     let scope = match protocol {
         Some(protocol) => json!({
             "interface": "Messages",
@@ -380,10 +386,11 @@ fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<D
         "contextId": grant_id,
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     serde_json::from_value(json!({
         "descriptor": descriptor_json,
@@ -416,7 +423,7 @@ impl SubscribeSpec {
     }
 }
 
-fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
+async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
     let descriptor = MessagesSubscribeDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         filters: spec.filters,
@@ -438,12 +445,13 @@ fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
             serde_json::Value::String(permission_grant_id),
         );
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),
         &[spec.signer],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,
@@ -478,7 +486,7 @@ impl SyncSpec {
     }
 }
 
-fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
+async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
     let descriptor = MessagesSyncDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         action: spec.action,
@@ -503,12 +511,13 @@ fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
             serde_json::Value::String(permission_grant_id),
         );
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),
         &[spec.signer],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,
@@ -534,16 +543,13 @@ fn signer_for(did: &str) -> PrivateJwkSigner {
     let key_id = format!("{did}#key1");
     PrivateJwkSigner::new(
         &key_id,
-        "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some(key_id.clone()),
-            alg: Some("EdDSA".to_string()),
-        },
+        Algorithm::EdDSA,
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some(&key_id),
+        )
+        .unwrap(),
     )
 }
 
@@ -560,15 +566,13 @@ fn test_resolver() -> StaticPublicKeyResolver {
     ]))
 }
 
-fn test_public_jwk(key_id: &str) -> JwsPublicJwk {
-    JwsPublicJwk {
-        kty: "OKP".to_string(),
-        crv: "Ed25519".to_string(),
-        x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-        y: None,
-        kid: Some(key_id.to_string()),
-        alg: Some("EdDSA".to_string()),
-    }
+fn test_public_jwk(key_id: &str) -> JWK {
+    ed25519_jwk(
+        "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+        None,
+        Some(key_id),
+    )
+    .unwrap()
 }
 
 #[derive(Clone, Default)]

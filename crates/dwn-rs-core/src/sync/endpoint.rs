@@ -744,7 +744,7 @@ impl SyncRequestAuthorizer for JwsSyncAuthorizer {
                 hashes.as_ref(),
                 canonical_rfc3339(Self::timestamp()).as_str(),
             )?;
-            sign_descriptor_message(&signer, descriptor, permission_grant_id.as_deref())
+            sign_descriptor_message(&signer, descriptor, permission_grant_id.as_deref()).await
         })
     }
 }
@@ -795,7 +795,7 @@ fn build_messages_sync_descriptor(
     Ok(JsonValue::Object(descriptor))
 }
 
-fn sign_descriptor_message(
+async fn sign_descriptor_message(
     signer: &crate::auth::PrivateJwkSigner,
     descriptor: JsonValue,
     permission_grant_id: Option<&str>,
@@ -811,12 +811,13 @@ fn sign_descriptor_message(
     if let Some(permission_grant_id) = permission_grant_id {
         payload["permissionGrantId"] = JsonValue::String(permission_grant_id.to_string());
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload)
             .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?
             .as_slice(),
         std::slice::from_ref(signer),
     )
+    .await
     .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?;
     Ok(json!({
         "descriptor": descriptor,

@@ -147,7 +147,11 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
     );
 
     let mut no_encryption_did = restored.portable_did.clone();
-    no_encryption_did.document.key_agreement.clear();
+    no_encryption_did
+        .document
+        .verification_relationships
+        .key_agreement
+        .clear();
     let plaintext_fallback = install_protocol_if_needed(
         &MemoryProtocolEndpoint::default(),
         &restored.key_manager,

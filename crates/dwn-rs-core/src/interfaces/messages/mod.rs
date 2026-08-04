@@ -42,11 +42,12 @@ impl Message<RecordsWriteDescriptor> {
                 message: e.to_string(),
             })?;
 
-        let signature = jws::Jws::create(payload, Some(signers))
-            .await
-            .map_err(|e| ValidationError {
-                message: e.to_string(),
-            })?;
+        let signature =
+            jws::Jws::create(&payload, &signers)
+                .await
+                .map_err(|e| ValidationError {
+                    message: e.to_string(),
+                })?;
 
         self.fields.attestation = Some(signature);
 
@@ -146,7 +147,7 @@ where
     ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
-        let payload = jws::Payload::new(
+        let payload = jws::AuthorizationPayload::new(
             descriptor_cid,
             delegated_grant_id,
             permission_grant_id,
@@ -156,7 +157,7 @@ where
             message: e.to_string(),
         })?;
 
-        let signature = jws::Jws::create(payload, Some(vec![signer]))
+        let signature = jws::Jws::create(&payload, std::slice::from_ref(&signer))
             .await
             .map_err(|e| ValidationError {
                 message: e.to_string(),

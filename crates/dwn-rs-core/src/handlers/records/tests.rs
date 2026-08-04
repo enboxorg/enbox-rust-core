@@ -8,8 +8,9 @@ use base64::Engine;
 use bytes::Bytes;
 use futures_util::{stream, Stream, StreamExt};
 use serde_json::json;
+use ssi_jwk::Algorithm;
 
-use crate::auth::{Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver};
+use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor, Records,
@@ -63,7 +64,8 @@ async fn records_write_read_query_and_count_published_inline_data() {
         data_size: data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     let record_id = write["recordId"].as_str().unwrap().to_string();
 
     let reply = write_handler
@@ -127,7 +129,8 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
         data_size: data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     let record_id = initial["recordId"].as_str().unwrap().to_string();
     let context_id = initial["contextId"].as_str().unwrap().to_string();
     assert_eq!(
@@ -151,7 +154,8 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
         date_created: "2025-01-01T00:00:00.000000Z".to_string(),
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
-    });
+    })
+    .await;
     let reply = handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
@@ -199,7 +203,8 @@ async fn records_write_rejects_older_conflicting_write() {
         data_size: data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
     let record_id = initial["recordId"].as_str().unwrap().to_string();
     let context_id = initial["contextId"].as_str().unwrap().to_string();
     assert_eq!(
@@ -223,7 +228,8 @@ async fn records_write_rejects_older_conflicting_write() {
         date_created: "2025-01-01T00:10:00.000000Z".to_string(),
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:09:00.000000Z")
-    });
+    })
+    .await;
     let reply = handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
@@ -257,7 +263,8 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
         data_size: data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     let record_id = write["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
@@ -314,7 +321,8 @@ async fn records_delete_prune_purges_descendant_records() {
         data_size: data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     let parent_record_id = parent["recordId"].as_str().unwrap().to_string();
     let parent_context_id = parent["contextId"].as_str().unwrap().to_string();
     assert_eq!(
@@ -339,7 +347,8 @@ async fn records_delete_prune_purges_descendant_records() {
         data_size: child_data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
-    });
+    })
+    .await;
     let child_record_id = child["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
@@ -354,7 +363,8 @@ async fn records_delete_prune_purges_descendant_records() {
         202
     );
 
-    let delete = signed_delete_message(&parent_record_id, true, "2025-01-01T00:02:00.000000Z");
+    let delete =
+        signed_delete_message(&parent_record_id, true, "2025-01-01T00:02:00.000000Z").await;
     let reply = delete_handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
@@ -395,7 +405,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
         data_size: old_data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     let old_record_id = old["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
@@ -419,7 +430,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
         published: Some(true),
         squash: Some(true),
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
-    });
+    })
+    .await;
     assert_eq!(
         handler
             .run(MethodHandlerRequest::new(
@@ -447,7 +459,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
         data_size: late_old_data.len() as u64,
         published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:30.000000Z")
-    });
+    })
+    .await;
     let reply = handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
@@ -488,7 +501,8 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         data_size: grant_data.len() as u64,
         data_format: "application/json".to_string(),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
@@ -512,7 +526,8 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         data_size: unpublished_data.len() as u64,
         permission_grant_id: Some(grant_id.clone()),
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
-    });
+    })
+    .await;
     let reply = handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
@@ -537,7 +552,8 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         published: Some(true),
         permission_grant_id: Some(grant_id),
         ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
-    });
+    })
+    .await;
     let reply = handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
@@ -578,7 +594,8 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
         data_size: grant_data.len() as u64,
         data_format: "application/json".to_string(),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     assert_eq!(
         handler
             .run(MethodHandlerRequest::new(
@@ -603,8 +620,9 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
         data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
         data_size: note_data.len() as u64,
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
-    });
-    let note = with_author_delegated_grant(note, &delegated_grant, bob_signer());
+    })
+    .await;
+    let note = with_author_delegated_grant(note, &delegated_grant, bob_signer()).await;
     let reply = handler
         .run(MethodHandlerRequest::new(
             "did:example:alice",
@@ -645,7 +663,8 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
         data_size: grant_data.len() as u64,
         data_format: "application/json".to_string(),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
-    });
+    })
+    .await;
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
@@ -670,7 +689,8 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
         data_size: note_data.len() as u64,
         permission_grant_id: Some(grant_id.clone()),
         ..WriteSpec::new("2025-01-01T00:05:00.000000Z")
-    });
+    })
+    .await;
     let note_record_id = note["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
@@ -699,7 +719,8 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
         data_size: revoke_data.len() as u64,
         data_format: "application/json".to_string(),
         ..WriteSpec::new("2025-01-01T00:04:00.000000Z")
-    });
+    })
+    .await;
     assert_eq!(
         handler
             .run(MethodHandlerRequest::new(
@@ -728,7 +749,7 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
     message_store.open().await.unwrap();
     event_log.open().await.unwrap();
 
-    let note = stored_note_message("2025-01-01T00:01:00.000000Z");
+    let note = stored_note_message("2025-01-01T00:01:00.000000Z").await;
     let first = event_log
         .emit(
             "did:example:alice",
@@ -769,7 +790,8 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
         },
         Some(first),
         "2025-01-01T00:10:00.000000Z",
-    );
+    )
+    .await;
 
     let result = handler
         .handle_subscribe(
@@ -812,7 +834,7 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
     let mut event_log = MemoryEventLog::new(1);
     event_log.open().await.unwrap();
 
-    let note = stored_note_message("2025-01-01T00:01:00.000000Z");
+    let note = stored_note_message("2025-01-01T00:01:00.000000Z").await;
     let mut old_cursor = event_log
         .emit(
             "did:example:alice",
@@ -852,7 +874,8 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
         },
         Some(old_cursor),
         "2025-01-01T00:10:00.000000Z",
-    );
+    )
+    .await;
 
     let result = handler
         .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
@@ -870,7 +893,7 @@ async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_su
     message_store.open().await.unwrap();
     event_log.open().await.unwrap();
 
-    let note = stored_note_message("2025-01-01T00:01:00.000000Z");
+    let note = stored_note_message("2025-01-01T00:01:00.000000Z").await;
     let indexes = records_write_indexes(&note, "did:example:alice", true).unwrap();
     message_store
         .put("did:example:alice", note.clone(), indexes)
@@ -891,7 +914,8 @@ async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_su
         },
         None,
         "2025-01-01T00:10:00.000000Z",
-    );
+    )
+    .await;
 
     let result = handler
         .handle_subscribe(
@@ -999,7 +1023,7 @@ impl WriteSpec {
     }
 }
 
-fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
+async fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
     let descriptor = RecordsWriteDescriptor {
         protocol: spec.protocol,
         protocol_path: spec.protocol_path,
@@ -1030,7 +1054,8 @@ fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let signature_payload =
         payload_with_permission_grant(&record_id, &context_id, spec.permission_grant_id.as_deref());
-    let signature = signature_for_descriptor(&descriptor_json, signature_payload, spec.signer);
+    let signature =
+        signature_for_descriptor(&descriptor_json, signature_payload, spec.signer).await;
     json!({
         "descriptor": descriptor_json,
         "recordId": record_id,
@@ -1039,7 +1064,7 @@ fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
     })
 }
 
-fn with_author_delegated_grant(
+async fn with_author_delegated_grant(
     mut message: serde_json::Value,
     grant: &serde_json::Value,
     signer: PrivateJwkSigner,
@@ -1055,7 +1080,8 @@ fn with_author_delegated_grant(
             "delegatedGrantId": grant_cid,
         }),
         signer,
-    );
+    )
+    .await;
     message["authorization"] = json!({
         "signature": signature,
         "authorDelegatedGrant": grant,
@@ -1063,26 +1089,29 @@ fn with_author_delegated_grant(
     message
 }
 
-fn signed_delete_message(record_id: &str, prune: bool, timestamp: &str) -> serde_json::Value {
+async fn signed_delete_message(record_id: &str, prune: bool, timestamp: &str) -> serde_json::Value {
     let descriptor = DeleteDescriptor {
         message_timestamp: parse_time(timestamp),
         record_id: record_id.to_string(),
         prune,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
-    let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer());
+    let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer()).await;
     json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
     })
 }
 
-fn stored_note_message(timestamp: &str) -> Message<Descriptor> {
-    serde_json::from_value(signed_write_message(WriteSpec {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
-        ..WriteSpec::new(timestamp)
-    }))
+async fn stored_note_message(timestamp: &str) -> Message<Descriptor> {
+    serde_json::from_value(
+        signed_write_message(WriteSpec {
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path: Some("note".to_string()),
+            ..WriteSpec::new(timestamp)
+        })
+        .await,
+    )
     .unwrap()
 }
 
@@ -1097,7 +1126,7 @@ fn record_event_indexes(protocol: &str, method: &str) -> KeyValues {
     ])
 }
 
-fn signed_records_subscribe_message(
+async fn signed_records_subscribe_message(
     filter: RecordsFilter,
     cursor: Option<crate::stores::ProgressToken>,
     timestamp: &str,
@@ -1110,7 +1139,7 @@ fn signed_records_subscribe_message(
         cursor,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
-    let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer());
+    let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer()).await;
     json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
@@ -1249,7 +1278,7 @@ async fn put_notes_protocol_without_actions(tenant: &str, message_store: &TestMe
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
-fn signature_for_descriptor(
+async fn signature_for_descriptor(
     descriptor: &serde_json::Value,
     extra_payload: serde_json::Value,
     signer: PrivateJwkSigner,
@@ -1259,12 +1288,13 @@ fn signature_for_descriptor(
         "descriptorCid".to_string(),
         serde_json::Value::String(generate_cid_from_json(descriptor).unwrap().to_string()),
     );
-    Jws::create_general(
+    Jws::create(
         serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),
         &[signer],
     )
+    .await
     .unwrap()
 }
 
@@ -1310,16 +1340,13 @@ fn signer_for(did: &str) -> PrivateJwkSigner {
     let key_id = format!("{did}#key1");
     PrivateJwkSigner::new(
         &key_id,
-        "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some(key_id.clone()),
-            alg: Some("EdDSA".to_string()),
-        },
+        Algorithm::EdDSA,
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some(&key_id),
+        )
+        .unwrap(),
     )
 }
 
@@ -1336,15 +1363,13 @@ fn test_resolver() -> StaticPublicKeyResolver {
     ]))
 }
 
-fn test_public_jwk(key_id: &str) -> JwsPublicJwk {
-    JwsPublicJwk {
-        kty: "OKP".to_string(),
-        crv: "Ed25519".to_string(),
-        x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-        y: None,
-        kid: Some(key_id.to_string()),
-        alg: Some("EdDSA".to_string()),
-    }
+fn test_public_jwk(key_id: &str) -> JWK {
+    ed25519_jwk(
+        "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+        None,
+        Some(key_id),
+    )
+    .unwrap()
 }
 
 #[derive(Clone, Default)]

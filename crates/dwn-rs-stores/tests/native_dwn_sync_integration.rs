@@ -2,9 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
-};
+use dwn_rs_core::auth::jws::Algorithm;
+use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use dwn_rs_core::descriptors::ConfigureDescriptor;
 use dwn_rs_core::interfaces::messages::descriptors::records::WriteDescriptor;
@@ -32,7 +31,7 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
         .await
         .expect("open local node");
 
-    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z");
+    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z").await;
     let configure_reply = peer.dwn().process_message(TENANT, configure.clone()).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
@@ -42,7 +41,7 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
         "{local_configure_reply:?}"
     );
 
-    let write = signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z");
+    let write = signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z").await;
     let write_reply = peer
         .process_message_with_data(
             TENANT,
@@ -85,7 +84,7 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
     assert_eq!(ledger.checkpoints.values().next().unwrap().tenant, TENANT);
 }
 
-fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
+async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
     let definition = Definition {
         protocol: "http://test-protocol.xyz".to_string(),
         published: true,
@@ -115,10 +114,10 @@ fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
         permission_grant_id: None,
         definition,
     };
-    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({}))
+    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({})).await
 }
 
-fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
+async fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
     let data_cid = generate_dag_pb_cid_from_bytes(b"loopback-test-payload").to_string();
     let descriptor = WriteDescriptor {
         protocol: Some("http://test-protocol.xyz".to_string()),
@@ -145,10 +144,11 @@ fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
         "recordId": record_id,
         "contextId": context_id,
     });
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,
@@ -158,7 +158,7 @@ fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
     })
 }
 
-fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonValue {
+async fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonValue {
     let descriptor_cid = generate_cid_from_json(&descriptor)
         .expect("descriptor cid")
         .to_string();
@@ -168,10 +168,11 @@ fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonVa
             payload[key] = value;
         }
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor,
@@ -193,29 +194,24 @@ fn records_write_entry_id(author: &str, descriptor: &WriteDescriptor) -> String 
 fn test_signer() -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         "did:example:alice#key1",
-        "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        Algorithm::EdDSA,
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )
 }
 
 fn test_resolver() -> StaticPublicKeyResolver {
     StaticPublicKeyResolver::new(BTreeMap::from([(
         "did:example:alice#key1".to_string(),
-        JwsPublicJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            None,
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )]))
 }

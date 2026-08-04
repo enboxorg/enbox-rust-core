@@ -3,9 +3,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
-};
+use dwn_rs_core::auth::jws::Algorithm;
+use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use dwn_rs_core::descriptors::ConfigureDescriptor;
 use dwn_rs_core::interfaces::messages::descriptors::records::WriteDescriptor;
@@ -44,7 +43,8 @@ async fn direct_bidirectional_sync_converges_after_peer_write() {
         signed_default_test_protocol_records_write(
             "2025-01-01T00:00:01.000000Z",
             b"direct-sync-payload-v1",
-        ),
+        )
+        .await,
         b"direct-sync-payload-v1",
     )
     .await;
@@ -71,7 +71,8 @@ async fn direct_incremental_sync_pulls_only_new_peer_records() {
         signed_default_test_protocol_records_write(
             "2025-01-01T00:00:01.000000Z",
             b"incremental-v1",
-        ),
+        )
+        .await,
         b"incremental-v1",
     )
     .await;
@@ -88,7 +89,8 @@ async fn direct_incremental_sync_pulls_only_new_peer_records() {
         signed_default_test_protocol_records_write(
             "2025-01-01T00:00:02.000000Z",
             b"incremental-v2",
-        ),
+        )
+        .await,
         b"incremental-v2",
     )
     .await;
@@ -113,7 +115,8 @@ async fn http_sync_pulls_from_loopback_remote() {
         signed_default_test_protocol_records_write(
             "2025-01-01T00:00:01.000000Z",
             b"http-sync-payload",
-        ),
+        )
+        .await,
         b"http-sync-payload",
     )
     .await;
@@ -141,7 +144,7 @@ async fn http_incremental_sync_reconnects_using_persisted_ledger_checkpoint() {
 
     peer_write_locked(
         &remote.peer,
-        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"gap-v1"),
+        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"gap-v1").await,
         b"gap-v1",
     )
     .await;
@@ -168,7 +171,7 @@ async fn http_incremental_sync_reconnects_using_persisted_ledger_checkpoint() {
 
     peer_write_locked(
         &remote.peer,
-        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"gap-v2"),
+        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"gap-v2").await,
         b"gap-v2",
     )
     .await;
@@ -194,7 +197,7 @@ async fn http_poll_reconcile_pulls_incremental_records() {
 
     peer_write_locked(
         &remote.peer,
-        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"poll-v1"),
+        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"poll-v1").await,
         b"poll-v1",
     )
     .await;
@@ -212,7 +215,7 @@ async fn http_poll_reconcile_pulls_incremental_records() {
 
     peer_write_locked(
         &remote.peer,
-        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"poll-v2"),
+        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"poll-v2").await,
         b"poll-v2",
     )
     .await;
@@ -238,7 +241,7 @@ async fn live_poll_handoff_catches_up_after_subscription_drop() {
 
     peer_write_locked(
         &remote.peer,
-        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"live-v1"),
+        signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z", b"live-v1").await,
         b"live-v1",
     )
     .await;
@@ -279,7 +282,7 @@ async fn live_poll_handoff_catches_up_after_subscription_drop() {
 
     peer_write_locked(
         &peer,
-        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"live-v2"),
+        signed_default_test_protocol_records_write("2025-01-01T00:00:02.000000Z", b"live-v2").await,
         b"live-v2",
     )
     .await;
@@ -451,7 +454,7 @@ async fn open_configured_local(resolver: &StaticPublicKeyResolver) -> SqliteNati
 }
 
 async fn install_protocol_on_node(node: &SqliteNativeDwn, timestamp: &str) {
-    let configure = signed_default_test_protocol_configure(timestamp);
+    let configure = signed_default_test_protocol_configure(timestamp).await;
     let reply = node.dwn().process_message(TENANT, configure).await;
     assert_eq!(reply.status.code, 202, "{reply:?}");
 }
@@ -539,7 +542,7 @@ fn assert_completed_with_pulls(
     );
 }
 
-fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
+async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
     let definition = Definition {
         protocol: "http://test-protocol.xyz".to_string(),
         published: true,
@@ -569,10 +572,10 @@ fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
         permission_grant_id: None,
         definition,
     };
-    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({}))
+    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({})).await
 }
 
-fn signed_default_test_protocol_records_write(timestamp: &str, payload: &[u8]) -> JsonValue {
+async fn signed_default_test_protocol_records_write(timestamp: &str, payload: &[u8]) -> JsonValue {
     let data_cid = generate_dag_pb_cid_from_bytes(payload).to_string();
     let descriptor = WriteDescriptor {
         protocol: Some("http://test-protocol.xyz".to_string()),
@@ -599,10 +602,11 @@ fn signed_default_test_protocol_records_write(timestamp: &str, payload: &[u8]) -
         "recordId": record_id,
         "contextId": context_id,
     });
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload_json).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,
@@ -612,7 +616,7 @@ fn signed_default_test_protocol_records_write(timestamp: &str, payload: &[u8]) -
     })
 }
 
-fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonValue {
+async fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonValue {
     let descriptor_cid = generate_cid_from_json(&descriptor)
         .expect("descriptor cid")
         .to_string();
@@ -622,10 +626,11 @@ fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonVa
             payload[key] = value;
         }
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor,
@@ -647,29 +652,24 @@ fn records_write_entry_id(author: &str, descriptor: &WriteDescriptor) -> String 
 fn test_signer() -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         "did:example:alice#key1",
-        "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        Algorithm::EdDSA,
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )
 }
 
 fn test_resolver() -> StaticPublicKeyResolver {
     StaticPublicKeyResolver::new(BTreeMap::from([(
         "did:example:alice#key1".to_string(),
-        JwsPublicJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            None,
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )]))
 }

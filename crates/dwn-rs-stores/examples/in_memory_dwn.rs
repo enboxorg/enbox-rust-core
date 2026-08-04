@@ -8,9 +8,8 @@
 
 use std::collections::BTreeMap;
 
-use dwn_rs_core::auth::{
-    Jws, JwsPrivateJwk, JwsPublicJwk, PrivateJwkSigner, StaticPublicKeyResolver,
-};
+use dwn_rs_core::auth::jws::Algorithm;
+use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::ConfigureDescriptor;
 use dwn_rs_core::interfaces::messages::protocols::{
@@ -29,7 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "http://example.com/in-memory-dwn",
         true,
         "2025-01-01T00:00:00.000000Z",
-    )?;
+    )
+    .await?;
     let configure_cid = generate_cid_from_json(&configure)?.to_string();
 
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         configure_reply.status.code, configure_reply.status.detail
     );
 
-    let read = signed_messages_read(&configure_cid, "2025-01-01T00:00:01.000000Z")?;
+    let read = signed_messages_read(&configure_cid, "2025-01-01T00:00:01.000000Z").await?;
     let read_reply = node.dwn().process_message(TENANT, read).await;
     println!(
         "MessagesRead -> {} {}",
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn signed_configure_message(
+async fn signed_configure_message(
     protocol: &str,
     published: bool,
     timestamp: &str,
@@ -87,10 +87,10 @@ fn signed_configure_message(
         definition,
     };
     let descriptor_json = serde_json::to_value(descriptor)?;
-    sign_message(descriptor_json, json!({}))
+    sign_message(descriptor_json, json!({})).await
 }
 
-fn signed_messages_read(
+async fn signed_messages_read(
     message_cid: &str,
     timestamp: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -100,10 +100,10 @@ fn signed_messages_read(
         "messageCid": message_cid,
         "messageTimestamp": timestamp,
     });
-    sign_message(descriptor, json!({}))
+    sign_message(descriptor, json!({})).await
 }
 
-fn sign_message(
+async fn sign_message(
     descriptor: serde_json::Value,
     extra_payload: serde_json::Value,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -117,8 +117,7 @@ fn sign_message(
             payload_obj.insert(key.clone(), value.clone());
         }
     }
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload)?.as_slice(), &[test_signer()])?;
+    let signature = Jws::create(serde_json::to_vec(&payload)?.as_slice(), &[test_signer()]).await?;
     Ok(json!({
         "descriptor": descriptor,
         "authorization": { "signature": signature }
@@ -128,29 +127,24 @@ fn sign_message(
 fn test_signer() -> PrivateJwkSigner {
     PrivateJwkSigner::new(
         "did:example:alice#key1",
-        "EdDSA",
-        JwsPrivateJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            d: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        Algorithm::EdDSA,
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"),
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )
 }
 
 fn test_resolver() -> StaticPublicKeyResolver {
     StaticPublicKeyResolver::new(BTreeMap::from([(
         "did:example:alice#key1".to_string(),
-        JwsPublicJwk {
-            kty: "OKP".to_string(),
-            crv: "Ed25519".to_string(),
-            x: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg".to_string(),
-            y: None,
-            kid: Some("did:example:alice#key1".to_string()),
-            alg: Some("EdDSA".to_string()),
-        },
+        ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            None,
+            Some("did:example:alice#key1"),
+        )
+        .unwrap(),
     )]))
 }
