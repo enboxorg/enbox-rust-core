@@ -73,7 +73,8 @@ async fn native_dwn_processes_protocols_configure_and_messages_read() {
         "http://example.com/native-dwn",
         true,
         "2025-01-01T00:00:00.000000Z",
-    );
+    )
+    .await;
     let configure_cid = generate_cid_from_json(&configure)
         .expect("configure cid")
         .to_string();
@@ -81,7 +82,7 @@ async fn native_dwn_processes_protocols_configure_and_messages_read() {
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
-    let read = signed_messages_read(&configure_cid, "2025-01-01T00:00:01.000000Z");
+    let read = signed_messages_read(&configure_cid, "2025-01-01T00:00:01.000000Z").await;
     let read_reply = node.dwn().process_message(TENANT, read).await;
     assert_eq!(read_reply.status.code, 200, "{read_reply:?}");
     assert_eq!(
@@ -91,22 +92,22 @@ async fn native_dwn_processes_protocols_configure_and_messages_read() {
     assert!(read_reply.body["entry"]["message"].is_object());
 }
 
-fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> JsonValue {
+async fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> JsonValue {
     let descriptor = configure_descriptor(protocol, published, timestamp);
-    signed_descriptor_message(descriptor, json!({}))
+    signed_descriptor_message(descriptor, json!({})).await
 }
 
-fn signed_messages_read(message_cid: &str, timestamp: &str) -> JsonValue {
+async fn signed_messages_read(message_cid: &str, timestamp: &str) -> JsonValue {
     let descriptor = json!({
         "interface": "Messages",
         "method": "Read",
         "messageCid": message_cid,
         "messageTimestamp": timestamp,
     });
-    signed_descriptor_message(descriptor, json!({}))
+    signed_descriptor_message(descriptor, json!({})).await
 }
 
-fn signed_descriptor_message(descriptor: JsonValue, extra_payload: JsonValue) -> JsonValue {
+async fn signed_descriptor_message(descriptor: JsonValue, extra_payload: JsonValue) -> JsonValue {
     let mut payload = json!({
         "descriptorCid": generate_cid_from_json(&descriptor).unwrap().to_string(),
     });
@@ -121,6 +122,7 @@ fn signed_descriptor_message(descriptor: JsonValue, extra_payload: JsonValue) ->
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor,
@@ -207,7 +209,8 @@ async fn fetch_protocol_definition_after_example_native_dwn_configure() {
         "http://example.com/native-dwn",
         true,
         "2025-01-01T00:00:00.000000Z",
-    );
+    )
+    .await;
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
@@ -224,7 +227,7 @@ async fn fetch_protocol_definition_after_default_test_protocol_configure() {
         .await
         .expect("open native node");
 
-    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z");
+    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z").await;
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
@@ -265,11 +268,11 @@ async fn native_dwn_records_write_after_default_test_protocol_configure() {
         .await
         .expect("open native node");
 
-    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z");
+    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z").await;
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
-    let write = signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z");
+    let write = signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z").await;
     let write_reply = node
         .process_message_with_data(
             TENANT,
@@ -280,7 +283,7 @@ async fn native_dwn_records_write_after_default_test_protocol_configure() {
     assert_eq!(write_reply.status.code, 202, "{write_reply:?}");
 }
 
-fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
+async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
     let definition = Definition {
         protocol: "http://test-protocol.xyz".to_string(),
         published: true,
@@ -310,10 +313,10 @@ fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
         permission_grant_id: None,
         definition,
     };
-    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({}))
+    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({})).await
 }
 
-fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
+async fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
     let data_cid = generate_dag_pb_cid_from_bytes(b"loopback-test-payload").to_string();
     let descriptor = WriteDescriptor {
         protocol: Some("http://test-protocol.xyz".to_string()),
@@ -344,6 +347,7 @@ fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,

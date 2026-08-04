@@ -178,8 +178,8 @@ mod tests {
     /// `did:key#<identifier>` value must verify against the
     /// `UniversalResolver` without any pre-registered static keys. This
     /// is the path DWeb Connect uses for ephemeral connecting-app DIDs.
-    #[test]
-    fn verifies_jws_signed_by_did_key_ed25519() {
+    #[tokio::test]
+    async fn verifies_jws_signed_by_did_key_ed25519() {
         use crate::auth::{Jws, PrivateJwkSigner};
         use ed25519_dalek::{SigningKey, VerifyingKey};
         use rand::rngs::OsRng;
@@ -203,8 +203,9 @@ mod tests {
         private_jwk.algorithm = Some(Algorithm::EdDSA);
         let signer = PrivateJwkSigner::new(kid.clone(), Algorithm::EdDSA, private_jwk);
 
-        let jws =
-            Jws::create_general(b"hello, did:key", std::slice::from_ref(&signer)).expect("sign");
+        let jws = Jws::create_general(b"hello, did:key", std::slice::from_ref(&signer))
+            .await
+            .expect("sign");
         let resolver = UniversalResolver::new();
         let signers = jws
             .verify_signatures(&resolver)

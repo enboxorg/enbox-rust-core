@@ -66,7 +66,8 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
         signer: test_signer(),
         permission_grant_id: None,
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let reply = handler
         .run(MethodHandlerRequest::new(
@@ -93,7 +94,7 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
 
-    let grant = permission_grant_message("grant-sync-1", Some("http://example.com/notes"));
+    let grant = permission_grant_message("grant-sync-1", Some("http://example.com/notes")).await;
     message_store
         .insert("did:example:alice", "grant-sync-1", grant)
         .await;
@@ -109,7 +110,8 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
         signer: bob_signer(),
         permission_grant_id: Some("grant-sync-1".to_string()),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let reply = handler
         .run(MethodHandlerRequest::new(
@@ -131,7 +133,7 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
 
-    let grant = permission_grant_message("grant-sync-2", Some("http://example.com/notes"));
+    let grant = permission_grant_message("grant-sync-2", Some("http://example.com/notes")).await;
     message_store
         .insert("did:example:alice", "grant-sync-2", grant)
         .await;
@@ -146,7 +148,8 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
         signer: bob_signer(),
         permission_grant_id: Some("grant-sync-2".to_string()),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let reply = handler
         .run(MethodHandlerRequest::new(
@@ -205,7 +208,8 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
         }],
         cursor: Some(first),
         ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let result = handler
         .handle_subscribe(
@@ -283,7 +287,8 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
         }],
         cursor: Some(old_cursor),
         ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
-    });
+    })
+    .await;
 
     let result = handler
         .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
@@ -339,7 +344,7 @@ fn event_indexes(protocol: &str) -> MapValue {
     ])
 }
 
-fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<Descriptor> {
+async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<Descriptor> {
     let scope = match protocol {
         Some(protocol) => json!({
             "interface": "Messages",
@@ -385,6 +390,7 @@ fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<D
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     serde_json::from_value(json!({
         "descriptor": descriptor_json,
@@ -417,7 +423,7 @@ impl SubscribeSpec {
     }
 }
 
-fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
+async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
     let descriptor = MessagesSubscribeDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         filters: spec.filters,
@@ -445,6 +451,7 @@ fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
             .as_slice(),
         &[spec.signer],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,
@@ -479,7 +486,7 @@ impl SyncSpec {
     }
 }
 
-fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
+async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
     let descriptor = MessagesSyncDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         action: spec.action,
@@ -510,6 +517,7 @@ fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
             .as_slice(),
         &[spec.signer],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,

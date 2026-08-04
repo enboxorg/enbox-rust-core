@@ -501,8 +501,8 @@ async fn fixture_dag_pb_cids_match_typescript() {
     }
 }
 
-#[test]
-fn fixture_general_jws_matches_typescript() {
+#[tokio::test]
+async fn fixture_general_jws_matches_typescript() {
     for suite in load_fixture_suites() {
         if !suite.has_assertion(JWS_GENERAL_SIGN_ASSERTION)
             && !suite.has_assertion(JWS_GENERAL_VERIFY_ASSERTION)
@@ -531,7 +531,7 @@ fn fixture_general_jws_matches_typescript() {
             }
 
             if check_signing && case.expected_error_code.is_none() {
-                assert_general_jws_signing(&suite.fixture_set, case);
+                assert_general_jws_signing(&suite.fixture_set, case).await;
             }
 
             if check_verification {
@@ -2816,8 +2816,9 @@ fn fixture_value_base64url(case: &FixtureCase, data: &Option<FixtureData>, label
     URL_SAFE_NO_PAD.encode(fixture_value_bytes(case, data, label))
 }
 
-fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
+async fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
     let actual = Jws::create_general(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
+        .await
         .unwrap_or_else(|err| panic!("{} General JWS signing failed: {}", case.id, err));
 
     assert_eq!(actual, *jws(case), "{}", case.id);

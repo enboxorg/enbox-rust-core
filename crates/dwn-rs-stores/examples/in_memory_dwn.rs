@@ -28,7 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "http://example.com/in-memory-dwn",
         true,
         "2025-01-01T00:00:00.000000Z",
-    )?;
+    )
+    .await?;
     let configure_cid = generate_cid_from_json(&configure)?.to_string();
 
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
@@ -37,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         configure_reply.status.code, configure_reply.status.detail
     );
 
-    let read = signed_messages_read(&configure_cid, "2025-01-01T00:00:01.000000Z")?;
+    let read = signed_messages_read(&configure_cid, "2025-01-01T00:00:01.000000Z").await?;
     let read_reply = node.dwn().process_message(TENANT, read).await;
     println!(
         "MessagesRead -> {} {}",
@@ -51,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn signed_configure_message(
+async fn signed_configure_message(
     protocol: &str,
     published: bool,
     timestamp: &str,
@@ -86,10 +87,10 @@ fn signed_configure_message(
         definition,
     };
     let descriptor_json = serde_json::to_value(descriptor)?;
-    sign_message(descriptor_json, json!({}))
+    sign_message(descriptor_json, json!({})).await
 }
 
-fn signed_messages_read(
+async fn signed_messages_read(
     message_cid: &str,
     timestamp: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -99,10 +100,10 @@ fn signed_messages_read(
         "messageCid": message_cid,
         "messageTimestamp": timestamp,
     });
-    sign_message(descriptor, json!({}))
+    sign_message(descriptor, json!({})).await
 }
 
-fn sign_message(
+async fn sign_message(
     descriptor: serde_json::Value,
     extra_payload: serde_json::Value,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -117,7 +118,7 @@ fn sign_message(
         }
     }
     let signature =
-        Jws::create_general(serde_json::to_vec(&payload)?.as_slice(), &[test_signer()])?;
+        Jws::create_general(serde_json::to_vec(&payload)?.as_slice(), &[test_signer()]).await?;
     Ok(json!({
         "descriptor": descriptor,
         "authorization": { "signature": signature }

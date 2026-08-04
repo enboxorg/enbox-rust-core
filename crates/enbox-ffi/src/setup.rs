@@ -95,7 +95,7 @@ pub fn signer_from_portable_did(
         )
     })?;
 
-    let algorithm = private_jwk.algorithm.unwrap_or_else(|| Algorithm::EdDSA);
+    let algorithm = private_jwk.algorithm.unwrap_or(Algorithm::EdDSA);
     let mut private: JWK = private_jwk.clone();
     private.key_id = Some(kid.clone());
     Ok(PrivateJwkSigner::new(kid, algorithm, private))
@@ -103,7 +103,7 @@ pub fn signer_from_portable_did(
 
 /// Build a signed `ProtocolsConfigure` message JSON suitable for
 /// `Dwn::process_message`.
-pub fn build_signed_protocols_configure(
+pub async fn build_signed_protocols_configure(
     definition: Definition,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
@@ -112,11 +112,11 @@ pub fn build_signed_protocols_configure(
         definition,
         permission_grant_id: None,
     };
-    sign_descriptor(&descriptor, signer, "AgentProtocolsConfigureInvalid")
+    sign_descriptor(&descriptor, signer, "AgentProtocolsConfigureInvalid").await
 }
 
 /// Build a signed `ProtocolsQuery` message JSON filtered by protocol URI.
-pub fn build_signed_protocols_query(
+pub async fn build_signed_protocols_query(
     protocol: &str,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
@@ -128,10 +128,10 @@ pub fn build_signed_protocols_query(
         }),
         permission_grant_id: None,
     };
-    sign_descriptor(&descriptor, signer, "AgentProtocolsQueryInvalid")
+    sign_descriptor(&descriptor, signer, "AgentProtocolsQueryInvalid").await
 }
 
-fn sign_descriptor<D: serde::Serialize>(
+async fn sign_descriptor<D: serde::Serialize>(
     descriptor: &D,
     signer: &PrivateJwkSigner,
     invalid_code: &str,
@@ -145,6 +145,7 @@ fn sign_descriptor<D: serde::Serialize>(
     let payload_bytes = serde_json::to_vec(&payload)
         .map_err(|err| AgentIdentityError::new(invalid_code, err.to_string()))?;
     let signature = Jws::create_general(&payload_bytes, std::slice::from_ref(signer))
+        .await
         .map_err(|err| AgentIdentityError::new(invalid_code, err.to_string()))?;
     Ok(serde_json::json!({
         "descriptor": descriptor_json,
@@ -181,7 +182,7 @@ impl ProtocolEndpoint for LocalDwnProtocolEndpoint {
         protocol: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
         Box::pin(async move {
-            let message = build_signed_protocols_query(protocol, &self.signer)?;
+            let message = build_signed_protocols_query(protocol, &self.signer).await?;
             let reply = self.process(tenant, message).await;
             require_ok(&reply, "AgentProtocolsQueryRejected")?;
             // DwnReply body is `#[serde(flatten)]`, so the `entries` field
@@ -218,7 +219,7 @@ impl ProtocolEndpoint for LocalDwnProtocolEndpoint {
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
         Box::pin(async move {
-            let message = build_signed_protocols_configure(definition, &self.signer)?;
+            let message = build_signed_protocols_configure(definition, &self.signer).await?;
             let reply = self.process(tenant, message).await;
             require_ok(&reply, "AgentProtocolsConfigureRejected")?;
             Ok(())
@@ -345,7 +346,7 @@ impl ProtocolEndpoint for HttpDwnProtocolEndpoint {
         protocol: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
         Box::pin(async move {
-            let message = build_signed_protocols_query(protocol, &self.signer)?;
+            let message = build_signed_protocols_query(protocol, &self.signer).await?;
             let reply = self.process(tenant, message).await?;
             require_ok(&reply, "HttpProtocolsQueryRejected")?;
             let Some(entries) = reply.get("entries") else {
@@ -380,7 +381,7 @@ impl ProtocolEndpoint for HttpDwnProtocolEndpoint {
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
         Box::pin(async move {
-            let message = build_signed_protocols_configure(definition, &self.signer)?;
+            let message = build_signed_protocols_configure(definition, &self.signer).await?;
             let reply = self.process(tenant, message).await?;
             require_ok(&reply, "HttpProtocolsConfigureRejected")?;
             Ok(())

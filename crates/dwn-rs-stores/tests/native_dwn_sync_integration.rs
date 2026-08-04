@@ -31,7 +31,7 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
         .await
         .expect("open local node");
 
-    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z");
+    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z").await;
     let configure_reply = peer.dwn().process_message(TENANT, configure.clone()).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
@@ -41,7 +41,7 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
         "{local_configure_reply:?}"
     );
 
-    let write = signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z");
+    let write = signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z").await;
     let write_reply = peer
         .process_message_with_data(
             TENANT,
@@ -84,7 +84,7 @@ async fn native_dwn_pulls_records_from_peer_via_direct_sync_endpoint() {
     assert_eq!(ledger.checkpoints.values().next().unwrap().tenant, TENANT);
 }
 
-fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
+async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
     let definition = Definition {
         protocol: "http://test-protocol.xyz".to_string(),
         published: true,
@@ -114,10 +114,10 @@ fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
         permission_grant_id: None,
         definition,
     };
-    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({}))
+    signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({})).await
 }
 
-fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
+async fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
     let data_cid = generate_dag_pb_cid_from_bytes(b"loopback-test-payload").to_string();
     let descriptor = WriteDescriptor {
         protocol: Some("http://test-protocol.xyz".to_string()),
@@ -148,6 +148,7 @@ fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor_json,
@@ -157,7 +158,7 @@ fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
     })
 }
 
-fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonValue {
+async fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonValue {
     let descriptor_cid = generate_cid_from_json(&descriptor)
         .expect("descriptor cid")
         .to_string();
@@ -171,6 +172,7 @@ fn signed_descriptor_message(descriptor: JsonValue, fields: JsonValue) -> JsonVa
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
+    .await
     .unwrap();
     json!({
         "descriptor": descriptor,
