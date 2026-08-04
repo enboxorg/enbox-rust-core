@@ -10,8 +10,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use ssi_jwk::{Algorithm, Base64urlUInt, OctetParams, Params, JWK};
 
-#[cfg(test)]
-use super::jws::{jwk_curve, okp_params};
 use super::JwsPublicKeyResolver;
 
 /// Multicodec varint prefix for an Ed25519 public key (`0xed 0x01`).
@@ -110,7 +108,11 @@ mod tests {
 
         let resolver = UniversalResolver::new();
         let resolved = resolver.resolve_public_jwk(&did).expect("did:jwk resolves");
-        assert_eq!(jwk_curve(&resolved).unwrap(), "Ed25519");
+        assert_eq!(resolved.get_algorithm(), Some(Algorithm::EdDSA));
+        assert!(matches!(
+            &resolved.params,
+            Params::OKP(params) if params.curve == "Ed25519"
+        ));
     }
 
     /// Reference vector taken from <https://w3c-ccg.github.io/did-method-key/#example-1>:
@@ -124,9 +126,11 @@ mod tests {
         let resolved = resolver
             .resolve_public_jwk(DID_KEY_EXAMPLE)
             .expect("did:key resolves");
-        assert_eq!(jwk_curve(&resolved).unwrap(), "Ed25519");
+        assert!(matches!(
+            &resolved.params,
+            Params::OKP(params) if params.curve == "Ed25519" && params.public_key.0.len() == 32
+        ));
         assert_eq!(resolved.algorithm, Some(Algorithm::EdDSA));
-        assert_eq!(okp_params(&resolved).unwrap().public_key.0.len(), 32);
     }
 
     #[test]

@@ -1,13 +1,9 @@
 use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD as base64url};
 use cid::Cid;
-use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
-use k256::ecdsa::signature::Verifier as _;
-use k256::ecdsa::{Signature as Secp256k1Signature, VerifyingKey as Secp256k1VerifyingKey};
-use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256VerifyingKey};
 use serde::{Deserialize, Serialize};
 use ssi_claims_core::SignatureError;
 pub use ssi_jwk::JWK;
-use ssi_jwk::{ECParams, OctetParams, Params};
+use ssi_jwk::{OctetParams, Params};
 use ssi_jws::{JwsPayload, JwsSigner};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -559,114 +555,42 @@ fn map_ssi_sign_error(algorithm: Algorithm, error: ssi_jws::Error) -> JwsError {
 }
 
 fn verify_jws_signature(
-    _algorithm: Algorithm,
+    algorithm: Algorithm,
     signing_input: &[u8],
     signature_bytes: &[u8],
     public_jwk: &JWK,
 ) -> Result<bool, JwsError> {
-    match jwk_curve(public_jwk)? {
-        "Ed25519" => {
-            let signature = Ed25519Signature::from_slice(signature_bytes)
-                .map_err(|err| JwsError::InvalidKey(err.to_string()))?;
-            Ok(ed25519_verifying_key(public_jwk)?
-                .verify(signing_input, &signature)
-                .is_ok())
+    let key_algorithm = public_jwk.get_algorithm().ok_or_else(|| {
+        JwsError::InvalidKey("unable to determine JWS algorithm from public key".to_string())
+    })?;
+    if !key_algorithm.is_compatible_with(algorithm) {
+        return Ok(false);
+    }
+
+    match ssi_jws::verify_bytes(algorithm, signing_input, public_jwk, signature_bytes) {
+        Ok(()) => Ok(true),
+        Err(
+            ssi_jws::Error::AlgorithmMismatch
+            | ssi_jws::Error::CryptoErr(_)
+            | ssi_jws::Error::InvalidSignature
+            | ssi_jws::Error::UnexpectedSignatureLength(_, _)
+            | ssi_jws::Error::Jwk(ssi_jwk::Error::CryptoErr(_)),
+        ) => Ok(false),
+        Err(error) => Err(map_ssi_verify_error(algorithm, error)),
+    }
+}
+
+fn map_ssi_verify_error(algorithm: Algorithm, error: ssi_jws::Error) -> JwsError {
+    match error {
+        ssi_jws::Error::AlgorithmNotImplemented(_)
+        | ssi_jws::Error::UnsupportedAlgorithm(_)
+        | ssi_jws::Error::MissingFeatures(_) => {
+            JwsError::UnsupportedAlgorithm(algorithm.to_string())
         }
-        "secp256k1" => {
-            let signature = Secp256k1Signature::from_slice(signature_bytes)
-                .map_err(|err| JwsError::InvalidKey(err.to_string()))?;
-            Ok(secp256k1_verifying_key(public_jwk)?
-                .verify(signing_input, &signature)
-                .is_ok())
-        }
-        "P-256" => {
-            let signature = P256Signature::from_slice(signature_bytes)
-                .map_err(|err| JwsError::InvalidKey(err.to_string()))?;
-            Ok(p256_verifying_key(public_jwk)?
-                .verify(signing_input, &signature)
-                .is_ok())
-        }
-        crv => Err(JwsError::UnsupportedCurve(crv.to_string())),
+        ssi_jws::Error::Jwk(ssi_jwk::Error::CurveNotImplemented(curve))
+        | ssi_jws::Error::CurveNotImplemented(curve) => JwsError::UnsupportedCurve(curve),
+        error => JwsError::InvalidKey(error.to_string()),
     }
-}
-
-fn ed25519_verifying_key(jwk: &JWK) -> Result<Ed25519VerifyingKey, JwsError> {
-    let public_key = okp_params(jwk)?.public_key.0.clone();
-    Ed25519VerifyingKey::from_bytes(&fixed_32_bytes(public_key, "Ed25519 public key")?)
-        .map_err(|err| JwsError::InvalidKey(err.to_string()))
-}
-
-fn secp256k1_verifying_key(jwk: &JWK) -> Result<Secp256k1VerifyingKey, JwsError> {
-    Secp256k1VerifyingKey::from_sec1_bytes(&ec_public_key_sec1(jwk)?)
-        .map_err(|err| JwsError::InvalidKey(err.to_string()))
-}
-
-fn p256_verifying_key(jwk: &JWK) -> Result<P256VerifyingKey, JwsError> {
-    P256VerifyingKey::from_sec1_bytes(&ec_public_key_sec1(jwk)?)
-        .map_err(|err| JwsError::InvalidKey(err.to_string()))
-}
-
-fn ec_public_key_sec1(jwk: &JWK) -> Result<Vec<u8>, JwsError> {
-    let params = ec_params(jwk)?;
-    let x = fixed_32_bytes(
-        params
-            .x_coordinate
-            .as_ref()
-            .ok_or_else(|| JwsError::InvalidKey("EC public key missing x".to_string()))?
-            .0
-            .clone(),
-        "EC public key x",
-    )?;
-    let y = fixed_32_bytes(
-        params
-            .y_coordinate
-            .as_ref()
-            .ok_or_else(|| JwsError::InvalidKey("EC public key missing y".to_string()))?
-            .0
-            .clone(),
-        "EC public key y",
-    )?;
-    let mut public_key = Vec::with_capacity(65);
-    public_key.push(0x04);
-    public_key.extend_from_slice(&x);
-    public_key.extend_from_slice(&y);
-
-    Ok(public_key)
-}
-
-pub(crate) fn jwk_curve(jwk: &JWK) -> Result<&str, JwsError> {
-    match &jwk.params {
-        Params::OKP(params) => Ok(&params.curve),
-        Params::EC(params) => params
-            .curve
-            .as_deref()
-            .ok_or_else(|| JwsError::InvalidKey("EC key missing crv".to_string())),
-        _ => Err(JwsError::InvalidKey(
-            "JWS key must be an EC or octet key pair".to_string(),
-        )),
-    }
-}
-
-pub(crate) fn okp_params(jwk: &JWK) -> Result<&OctetParams, JwsError> {
-    match &jwk.params {
-        Params::OKP(params) => Ok(params),
-        _ => Err(JwsError::InvalidKey(
-            "JWS key is not an octet key pair".to_string(),
-        )),
-    }
-}
-
-fn ec_params(jwk: &JWK) -> Result<&ECParams, JwsError> {
-    match &jwk.params {
-        Params::EC(params) => Ok(params),
-        _ => Err(JwsError::InvalidKey("JWS key is not an EC key".to_string())),
-    }
-}
-
-fn fixed_32_bytes(value: Vec<u8>, label: &str) -> Result<[u8; 32], JwsError> {
-    value
-        .try_into()
-        .map_err(|_| JwsError::InvalidKey(format!("{label} must be 32 bytes")))
 }
 
 fn decode_base64url(value: &str, label: &str) -> Result<Vec<u8>, JwsError> {
@@ -892,6 +816,70 @@ mod tests {
         assert!(matches!(
             jws.verify_signatures_public_jwk(&public_jwk),
             Err(JwsError::MissingAlg)
+        ));
+    }
+
+    #[test]
+    fn ssi_verification_accepts_supported_key_algorithms() {
+        let cases = [
+            (
+                JWK::generate_ed25519().expect("generate Ed25519 JWK"),
+                Algorithm::EdDSA,
+            ),
+            (JWK::generate_secp256k1(), Algorithm::ES256K),
+            (JWK::generate_p256(), Algorithm::ES256),
+        ];
+
+        for (private_jwk, algorithm) in cases {
+            let public_jwk = private_jwk.to_public();
+            let signer = PrivateJwkSigner::new("did:example:alice#key-1", algorithm, private_jwk);
+            let jws = Jws::create_general(b"payload", &[signer]).expect("sign payload");
+
+            assert!(jws
+                .verify_signatures_public_jwk(&public_jwk)
+                .expect("SSI verification should succeed for the matching algorithm"));
+        }
+    }
+
+    #[test]
+    fn protected_algorithm_must_be_compatible_with_resolved_key() {
+        let private_jwk = JWK::generate_ed25519().expect("generate Ed25519 JWK");
+        let public_jwk = private_jwk.to_public();
+        let kid = "did:example:alice#key-1";
+        let payload = base64url.encode(b"payload");
+        let protected = base64url.encode(
+            serde_json::to_vec(&json!({
+                "kid": kid,
+                "alg": "ES256K",
+            }))
+            .unwrap(),
+        );
+        let signing_input = format!("{protected}.{payload}");
+
+        // The bytes carry a valid Ed25519 signature, but the protected header
+        // falsely labels it as ES256K.
+        let signature =
+            ssi_jws::sign_bytes(Algorithm::EdDSA, signing_input.as_bytes(), &private_jwk)
+                .expect("sign deliberately mislabeled input");
+        let jws = Jws {
+            payload: Some(payload),
+            signatures: Some(vec![JwsSignature {
+                protected: Some(protected),
+                signature: Some(base64url.encode(signature)),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
+        assert!(!jws
+            .verify_signatures_public_jwk(&public_jwk)
+            .expect("algorithm mismatch is a failed verification"));
+
+        let mut resolver = StaticPublicKeyResolver::default();
+        resolver.insert(kid, public_jwk);
+        assert!(matches!(
+            jws.verify_signatures(&resolver),
+            Err(JwsError::InvalidSignature)
         ));
     }
 
