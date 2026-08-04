@@ -203,20 +203,23 @@ struct VerificationInput {
 }
 
 impl Jws {
-    /// Asynchronously sign `payload` with the supplied [`ssi_jws::JwsSigner`]s.
-    pub async fn create<S, P>(payload: P, signers: Option<Vec<S>>) -> Result<Self, JwsError>
+    /// Sign `payload` as a General JWS using the supplied SSI signers.
+    ///
+    /// The DWN wire format orders `kid` before `alg` in the protected header. This method keeps
+    /// that byte-level compatibility while preserving SSI payload and signer metadata and
+    /// delegating cryptography to [`JwsSigner`].
+    pub async fn create<S, P>(payload: &P, signers: &[S]) -> Result<Self, JwsError>
     where
         S: JwsSigner,
-        P: JwsPayload,
+        P: JwsPayload + ?Sized,
     {
-        let snapshot = PayloadSnapshot::new(&payload);
-        let encoded_payload = base64url.encode(&snapshot.bytes);
-        let signers = signers.ok_or(JwsError::SignError(SignatureError::MissingSigner))?;
         if signers.is_empty() {
             return Err(JwsError::SignError(SignatureError::MissingSigner));
         }
 
-        let signatures = Self::generate_signatures(signers, &snapshot).await?;
+        let snapshot = PayloadSnapshot::new(payload);
+        let encoded_payload = base64url.encode(&snapshot.bytes);
+        let signatures = Self::generate_signatures(signers, &encoded_payload, &snapshot).await?;
 
         Ok(Self {
             payload: Some(encoded_payload),
@@ -227,7 +230,8 @@ impl Jws {
     }
 
     async fn generate_signatures<S>(
-        signers: Vec<S>,
+        signers: &[S],
+        encoded_payload: &str,
         payload: &PayloadSnapshot,
     ) -> Result<Vec<JwsSignature>, JwsError>
     where
@@ -236,41 +240,18 @@ impl Jws {
         let mut signatures = Vec::with_capacity(signers.len());
 
         for signer in signers {
-            let signed = signer.sign_into_decoded(payload).await?;
-
-            signatures.push(JwsSignature {
-                protected: Some(signed.header().encode()),
-                signature: Some(signed.signature.encode()),
-                extra: MapValue::default(),
-            });
+            signatures.push(
+                Self::sign_encoded_payload(
+                    encoded_payload,
+                    signer,
+                    payload.typ.as_deref(),
+                    payload.cty.as_deref(),
+                )
+                .await?,
+            );
         }
 
         Ok(signatures)
-    }
-
-    /// Sign `payload` as a General JWS using the supplied SSI signers.
-    ///
-    /// The DWN wire format orders `kid` before `alg` in the protected header. This method keeps
-    /// that byte-level compatibility while delegating signer metadata and cryptography to
-    /// [`JwsSigner`].
-    pub async fn create_general<S>(payload: &[u8], signers: &[S]) -> Result<Self, JwsError>
-    where
-        S: JwsSigner,
-    {
-        if signers.is_empty() {
-            return Err(JwsError::SignError(SignatureError::MissingSigner));
-        }
-
-        let mut jws = Self {
-            payload: Some(base64url.encode(payload)),
-            signatures: Some(Vec::with_capacity(signers.len())),
-            ..Default::default()
-        };
-        for signer in signers {
-            jws.add_signature(signer).await?;
-        }
-
-        Ok(jws)
     }
 
     /// Append a signature to an existing JWS.
@@ -279,23 +260,39 @@ impl Jws {
         S: JwsSigner,
     {
         let payload = self.payload.as_deref().ok_or(JwsError::MissingPayload)?;
+        let signature = Self::sign_encoded_payload(payload, signer, None, None).await?;
+
+        self.signatures.get_or_insert_with(Vec::new).push(signature);
+
+        Ok(())
+    }
+
+    async fn sign_encoded_payload<S>(
+        encoded_payload: &str,
+        signer: &S,
+        typ: Option<&str>,
+        cty: Option<&str>,
+    ) -> Result<JwsSignature, JwsError>
+    where
+        S: JwsSigner,
+    {
         let info = signer.fetch_info().await?;
         let protected = base64url.encode(serde_json::to_vec(&JwsProtectedHeader {
             kid: info.kid,
             alg: Some(info.alg.to_string()),
+            jwk: info.jwk,
+            x5c: info.x5c,
+            typ: typ.map(ToOwned::to_owned),
+            cty: cty.map(ToOwned::to_owned),
         })?);
-        let signing_input = format!("{protected}.{payload}");
+        let signing_input = format!("{protected}.{encoded_payload}");
         let signature = signer.sign_bytes(signing_input.as_bytes()).await?;
 
-        self.signatures
-            .get_or_insert_with(Vec::new)
-            .push(JwsSignature {
-                protected: Some(protected),
-                signature: Some(base64url.encode(signature)),
-                extra: MapValue::default(),
-            });
-
-        Ok(())
+        Ok(JwsSignature {
+            protected: Some(protected),
+            signature: Some(base64url.encode(signature)),
+            extra: MapValue::default(),
+        })
     }
 
     /// Verify the signatures on this JWS, returning the DIDs of the signers.
@@ -404,8 +401,24 @@ pub struct StaticPublicKeyResolver {
     public_keys: BTreeMap<String, JWK>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct JwsProtectedHeader {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jwk: Option<JWK>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    x5c: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    typ: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cty: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct VerificationProtectedHeader {
     kid: Option<String>,
     alg: Option<String>,
 }
@@ -453,7 +466,7 @@ impl JwsPublicKeyResolver for StaticPublicKeyResolver {
     }
 }
 
-fn decode_protected_header(protected: &str) -> Result<JwsProtectedHeader, JwsError> {
+fn decode_protected_header(protected: &str) -> Result<VerificationProtectedHeader, JwsError> {
     let bytes = decode_base64url(protected, "protected header")?;
     Ok(serde_json::from_slice(&bytes)?)
 }
@@ -576,6 +589,27 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct MetadataSigner {
+        private_jwk: JWK,
+    }
+
+    impl JwsSigner for MetadataSigner {
+        async fn fetch_info(&self) -> Result<JwsSignerInfo, SignatureError> {
+            let mut info = JwsSignerInfo::new(
+                Some("did:example:alice#key-1".to_string()),
+                Algorithm::EdDSA,
+            );
+            info.jwk = Some(self.private_jwk.to_public());
+            info.x5c = Some(vec!["certificate".to_string()]);
+            Ok(info)
+        }
+
+        async fn sign_bytes(&self, signing_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
+            ssi_jws::sign_bytes(Algorithm::EdDSA, signing_bytes, &self.private_jwk)
+                .map_err(Into::into)
+        }
+    }
+
     impl JwsPayload for CountingPayload {
         fn typ(&self) -> Option<&str> {
             Some("JWT")
@@ -594,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn test_jws_create() {
         let jwk = JWK::generate_secp256k1();
-        let jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
+        let jws = Jws::create(b"hello world".as_slice(), &[jwk])
             .await
             .expect("could not create JWS");
 
@@ -622,12 +656,13 @@ mod tests {
             calls: Arc::clone(&calls),
         };
 
-        let jws = Jws::create(
-            payload,
-            Some(vec![JWK::generate_ed25519().expect("generate Ed25519 JWK")]),
-        )
-        .await
-        .expect("sign snapshotted payload");
+        let signer = MetadataSigner {
+            private_jwk: JWK::generate_ed25519().expect("generate Ed25519 JWK"),
+        };
+        let expected_public_jwk = signer.private_jwk.to_public();
+        let jws = Jws::create(&payload, &[signer])
+            .await
+            .expect("sign snapshotted payload");
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -639,26 +674,25 @@ mod tests {
             .protected
             .as_deref()
             .unwrap();
+        let protected_json = String::from_utf8(decode_base64url(protected, "header").unwrap())
+            .expect("protected header must be UTF-8");
+        assert!(
+            protected_json.starts_with(r#"{"kid":"did:example:alice#key-1","alg":"EdDSA","jwk":"#)
+        );
         let header = ssi_jws::Header::decode(protected.as_bytes()).unwrap();
+        assert_eq!(header.key_id.as_deref(), Some("did:example:alice#key-1"));
+        assert_eq!(header.jwk, Some(expected_public_jwk));
+        assert_eq!(
+            header.x509_certificate_chain,
+            Some(vec!["certificate".to_string()])
+        );
         assert_eq!(header.type_.as_deref(), Some("JWT"));
         assert_eq!(header.content_type.as_deref(), Some("application/json"));
     }
 
     #[tokio::test]
     async fn create_rejects_empty_signer_list() {
-        let error = Jws::create(b"payload".to_vec(), Some(Vec::<JWK>::new()))
-            .await
-            .expect_err("empty signer list must fail");
-
-        assert!(matches!(
-            error,
-            JwsError::SignError(SignatureError::MissingSigner)
-        ));
-    }
-
-    #[tokio::test]
-    async fn create_general_rejects_empty_signer_list() {
-        let error = Jws::create_general::<PrivateJwkSigner>(b"payload", &[])
+        let error = Jws::create::<JWK, _>(b"payload".as_slice(), &[])
             .await
             .expect_err("empty signer list must fail");
 
@@ -673,7 +707,7 @@ mod tests {
         let key = JWK::generate_ed25519().expect("generate Ed25519 JWK");
         let signer = PrivateJwkSigner::new("did:example:alice#key-1", Algorithm::ES256, key);
         assert!(matches!(
-            Jws::create_general(b"payload", &[signer]).await,
+            Jws::create(b"payload".as_slice(), &[signer]).await,
             Err(JwsError::SignError(SignatureError::UnsupportedAlgorithm(ref name)))
                 if name == "ES256"
         ));
@@ -702,7 +736,7 @@ mod tests {
         let bob_public = bob_key.to_public();
         let bob = PrivateJwkSigner::new("did:example:bob#key-1", Algorithm::ES256K, bob_key);
 
-        let mut jws = Jws::create_general(b"payload", &[alice])
+        let mut jws = Jws::create(b"payload".as_slice(), &[alice])
             .await
             .expect("sign with Alice");
         jws.add_signature(&bob).await.expect("sign with Bob");
@@ -800,7 +834,7 @@ mod tests {
         for (private_jwk, algorithm) in cases {
             let public_jwk = private_jwk.to_public();
             let signer = PrivateJwkSigner::new("did:example:alice#key-1", algorithm, private_jwk);
-            let jws = Jws::create_general(b"payload", &[signer])
+            let jws = Jws::create(b"payload".as_slice(), &[signer])
                 .await
                 .expect("sign payload");
 
@@ -885,7 +919,7 @@ mod tests {
         // Matching public JWK in this crate's shape, derived before signing.
         let public_jwk: JWK = serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
 
-        let jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
+        let jws = Jws::create(b"hello world".as_slice(), &[jwk])
             .await
             .expect("could not create JWS");
 
@@ -899,7 +933,7 @@ mod tests {
         let jwk = JWK::generate_secp256k1();
         let public_jwk: JWK = serde_json::from_value(serde_json::to_value(&jwk).unwrap()).unwrap();
 
-        let mut jws = Jws::create(b"hello world".to_vec(), Some(vec![jwk]))
+        let mut jws = Jws::create(b"hello world".as_slice(), &[jwk])
             .await
             .expect("could not create JWS");
 
@@ -919,12 +953,9 @@ mod tests {
 
     #[tokio::test]
     async fn verify_signatures_public_jwk_rejects_wrong_key() {
-        let jws = Jws::create(
-            b"hello world".to_vec(),
-            Some(vec![JWK::generate_secp256k1()]),
-        )
-        .await
-        .expect("could not create JWS");
+        let jws = Jws::create(b"hello world".as_slice(), &[JWK::generate_secp256k1()])
+            .await
+            .expect("could not create JWS");
 
         // A different key must not verify the signature.
         let other: JWK =

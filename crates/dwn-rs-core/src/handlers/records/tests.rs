@@ -1288,7 +1288,7 @@ async fn signature_for_descriptor(
         "descriptorCid".to_string(),
         serde_json::Value::String(generate_cid_from_json(descriptor).unwrap().to_string()),
     );
-    Jws::create_general(
+    Jws::create(
         serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),

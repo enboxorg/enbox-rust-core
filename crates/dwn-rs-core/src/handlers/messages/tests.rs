@@ -386,7 +386,7 @@ async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Mes
         "contextId": grant_id,
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
@@ -445,7 +445,7 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
             serde_json::Value::String(permission_grant_id),
         );
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),
@@ -511,7 +511,7 @@ async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
             serde_json::Value::String(permission_grant_id),
         );
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&serde_json::Value::Object(payload))
             .unwrap()
             .as_slice(),

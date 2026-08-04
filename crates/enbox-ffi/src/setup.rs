@@ -144,7 +144,7 @@ async fn sign_descriptor<D: serde::Serialize>(
     let payload = serde_json::json!({ "descriptorCid": descriptor_cid });
     let payload_bytes = serde_json::to_vec(&payload)
         .map_err(|err| AgentIdentityError::new(invalid_code, err.to_string()))?;
-    let signature = Jws::create_general(&payload_bytes, std::slice::from_ref(signer))
+    let signature = Jws::create(&payload_bytes, std::slice::from_ref(signer))
         .await
         .map_err(|err| AgentIdentityError::new(invalid_code, err.to_string()))?;
     Ok(serde_json::json!({

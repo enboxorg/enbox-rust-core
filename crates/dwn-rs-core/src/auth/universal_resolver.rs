@@ -203,7 +203,7 @@ mod tests {
         private_jwk.algorithm = Some(Algorithm::EdDSA);
         let signer = PrivateJwkSigner::new(kid.clone(), Algorithm::EdDSA, private_jwk);
 
-        let jws = Jws::create_general(b"hello, did:key", std::slice::from_ref(&signer))
+        let jws = Jws::create(b"hello, did:key".as_slice(), std::slice::from_ref(&signer))
             .await
             .expect("sign");
         let resolver = UniversalResolver::new();

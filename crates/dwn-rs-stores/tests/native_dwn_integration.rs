@@ -118,7 +118,7 @@ async fn signed_descriptor_message(descriptor: JsonValue, extra_payload: JsonVal
             payload_obj.insert(key.clone(), value.clone());
         }
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )
@@ -343,7 +343,7 @@ async fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValu
         "recordId": record_id,
         "contextId": context_id,
     });
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )

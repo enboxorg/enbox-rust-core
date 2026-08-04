@@ -117,8 +117,7 @@ async fn sign_message(
             payload_obj.insert(key.clone(), value.clone());
         }
     }
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload)?.as_slice(), &[test_signer()]).await?;
+    let signature = Jws::create(serde_json::to_vec(&payload)?.as_slice(), &[test_signer()]).await?;
     Ok(json!({
         "descriptor": descriptor,
         "authorization": { "signature": signature }

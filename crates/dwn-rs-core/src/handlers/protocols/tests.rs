@@ -701,10 +701,9 @@ async fn signed_configure_descriptor_with_signer(
     let payload = serde_json::json!({
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
-            .await
-            .unwrap();
+    let signature = Jws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+        .await
+        .unwrap();
     serde_json::json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
@@ -720,10 +719,9 @@ async fn signed_query_message(
     let payload = serde_json::json!({
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
-            .await
-            .unwrap();
+    let signature = Jws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+        .await
+        .unwrap();
     serde_json::json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
@@ -742,10 +740,9 @@ async fn signed_query_message_with_grant(
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
         "permissionGrantId": permission_grant_id,
     });
-    let signature =
-        Jws::create_general(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
-            .await
-            .unwrap();
+    let signature = Jws::create(serde_json::to_vec(&payload).unwrap().as_slice(), &[signer])
+        .await
+        .unwrap();
     serde_json::json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
@@ -818,7 +815,7 @@ async fn put_protocols_query_grant(
         "contextId": grant_id,
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
     });
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload).unwrap().as_slice(),
         &[test_signer()],
     )

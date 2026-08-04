@@ -811,7 +811,7 @@ async fn sign_descriptor_message(
     if let Some(permission_grant_id) = permission_grant_id {
         payload["permissionGrantId"] = JsonValue::String(permission_grant_id.to_string());
     }
-    let signature = Jws::create_general(
+    let signature = Jws::create(
         serde_json::to_vec(&payload)
             .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?
             .as_slice(),

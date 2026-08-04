@@ -2817,7 +2817,7 @@ fn fixture_value_base64url(case: &FixtureCase, data: &Option<FixtureData>, label
 }
 
 async fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase) {
-    let actual = Jws::create_general(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
+    let actual = Jws::create(&jws_payload_bytes(case), &signing_keys(fixture_set, case))
         .await
         .unwrap_or_else(|err| panic!("{} General JWS signing failed: {}", case.id, err));
 
