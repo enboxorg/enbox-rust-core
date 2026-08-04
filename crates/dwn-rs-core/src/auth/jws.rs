@@ -84,15 +84,6 @@ pub struct Jws {
     pub extra: MapValue,
 }
 
-/// Deprecated alias for [`Jws`] retained during the rename.
-#[deprecated(since = "0.2.0", note = "use `Jws` instead")]
-pub type JWS = Jws;
-
-/// Deprecated alias for [`Jws`] retained during the rename. Historically
-/// this referred to a parallel struct that has been collapsed into [`Jws`].
-#[deprecated(since = "0.2.0", note = "use `Jws` instead")]
-pub type GeneralJws = Jws;
-
 /// Pre-serialized JWS payload for a `RecordsWrite`/`ProtocolsConfigure`-style authorization
 /// signature. Serialization happens once in [`AuthorizationPayload::new`], which is fallible, so
 /// [`JwsPayload::payload_bytes`] (an infallible trait method defined upstream) never needs to
@@ -376,25 +367,6 @@ pub struct JwsSignature {
     pub extra: MapValue,
 }
 
-/// Deprecated alias for [`JwsSignature`].
-#[deprecated(since = "0.2.0", note = "use `JwsSignature` instead")]
-pub type SignatureEntry = JwsSignature;
-
-/// Deprecated alias for [`JwsSignature`].
-#[deprecated(since = "0.2.0", note = "use `JwsSignature` instead")]
-pub type GeneralJwsSignature = JwsSignature;
-
-/// Compatibility alias for the SSI JWK type used by signature verification.
-#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
-pub type JwsPublicJwk = JWK;
-
-#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
-pub type GeneralJwsPublicJwk = JWK;
-
-/// Compatibility alias for the SSI JWK type used by local signing.
-#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
-pub type JwsPrivateJwk = JWK;
-
 /// Build an SSI Ed25519 JWK from base64url key material.
 pub fn ed25519_jwk(
     public_key: &str,
@@ -415,9 +387,6 @@ pub fn ed25519_jwk(
     Ok(jwk)
 }
 
-#[deprecated(since = "0.2.0", note = "use `ssi_jwk::JWK` instead")]
-pub type GeneralJwsPrivateJwk = JWK;
-
 #[derive(Debug, Clone)]
 pub struct PrivateJwkSigner {
     key_id: String,
@@ -425,16 +394,10 @@ pub struct PrivateJwkSigner {
     private_jwk: JWK,
 }
 
-#[deprecated(since = "0.2.0", note = "use `ssi_jws::JwsSigner` instead")]
-pub use ssi_jws::JwsSigner as GeneralJwsSigner;
-
 /// Resolves a `kid` to a public JWK (used for signature verification).
 pub trait JwsPublicKeyResolver {
     fn resolve_public_jwk(&self, kid: &str) -> Option<JWK>;
 }
-
-#[deprecated(since = "0.2.0", note = "use `JwsPublicKeyResolver` instead")]
-pub use JwsPublicKeyResolver as GeneralJwsPublicKeyResolver;
 
 #[derive(Debug, Default, Clone)]
 pub struct StaticPublicKeyResolver {

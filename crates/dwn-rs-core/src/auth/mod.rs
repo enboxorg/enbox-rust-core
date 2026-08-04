@@ -9,9 +9,3 @@ pub use jws::{
     StaticPublicKeyResolver, JWK,
 };
 pub use universal_resolver::UniversalResolver;
-
-#[allow(deprecated)]
-pub use jws::{
-    GeneralJws, GeneralJwsPrivateJwk, GeneralJwsPublicJwk, GeneralJwsPublicKeyResolver,
-    GeneralJwsSignature, GeneralJwsSigner, JwsPrivateJwk, JwsPublicJwk, SignatureEntry, JWS,
-};
