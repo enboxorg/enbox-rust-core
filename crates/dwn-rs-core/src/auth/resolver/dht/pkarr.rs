@@ -1,7 +1,10 @@
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use ssi_dids_core::DID;
+use url::Url;
 
-use crate::auth::resolver::ResolverError;
+use crate::auth::resolver::{Resolution, ResolverError};
+
+use super::dns;
 
 const SIGNATURE_LEN: usize = 64;
 const SEQUENCE_LEN: usize = 8;
@@ -83,6 +86,38 @@ fn verify_bep44_message(
 
     key.verify(&payload, &signature)
         .map_err(|_| ResolverError::InvalidSignature)
+}
+
+pub(super) fn resolve_relay_payload(
+    did: &DID,
+    payload: &[u8],
+) -> Result<Resolution, ResolverError> {
+    let key = decode_identity_key(did)?;
+    let message = parse_relay_payload(payload)?;
+
+    verify_bep44_message(&key, &message)?;
+    let mut decoded = dns::decode_document(did, message.value)?;
+
+    decoded.document_metadata.version_id = Some(message.sequence.to_string());
+
+    Ok(decoded)
+}
+
+pub(super) fn gateway_identity_uri(gateway: &Url, did: &DID) -> Result<Url, ResolverError> {
+    let identity_key = decode_identity_key(did)?;
+    let encoded = z32::encode(identity_key.as_bytes());
+    let mut gateway = gateway.clone();
+    let mut path = gateway.path().to_string();
+    if !path.ends_with('/') {
+        path.push('/');
+        gateway.set_path(&path);
+    }
+    gateway.set_query(None);
+    gateway.set_fragment(None);
+
+    gateway
+        .join(&encoded)
+        .map_err(|_| ResolverError::InvalidGatewayUri(gateway.to_string()))
 }
 
 #[cfg(test)]

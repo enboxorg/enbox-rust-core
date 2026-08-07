@@ -18,6 +18,7 @@ pub mod r#static;
 pub mod universal;
 pub mod web;
 
+pub use dht::{DhtResolver, DhtResolverConfig};
 pub use error::ResolverError;
 pub use jwk::JwkResolver;
 pub use key::KeyResolver;
