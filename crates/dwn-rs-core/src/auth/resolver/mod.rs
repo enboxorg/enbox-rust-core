@@ -10,6 +10,7 @@ use ssi_jwk::JWK;
 use crate::auth::jws::JwsError;
 
 pub mod error;
+pub(crate) mod http;
 pub mod jwk;
 pub mod key;
 pub mod r#static;
