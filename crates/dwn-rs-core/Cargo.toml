@@ -44,6 +44,7 @@ ssi-jws = { version = "0.5.0", default-features = false, features = [
 ] }
 ulid = { version = "1.1.2", features = ["serde"] }
 url = { version = "2.5.0", features = ["serde"] }
+percent-encoding = "2.3.2"
 thiserror = "2.0.3"
 serde_json = "1.0.113"
 tracing = "0.1.40"

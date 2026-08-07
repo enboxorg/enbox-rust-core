@@ -4,11 +4,6 @@
 //! literal-host policy intentionally matches the pinned Enbox `fetchPublicUrl` implementation;
 //! it does not resolve DNS names or claim protection against DNS rebinding.
 
-#![allow(
-    dead_code,
-    reason = "wired into the did:web resolver in the next phase"
-)]
-
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};

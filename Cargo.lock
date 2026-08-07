@@ -1336,6 +1336,7 @@ dependencies = [
  "multihash",
  "multihash-codetable",
  "partially",
+ "percent-encoding",
  "pin-project-lite",
  "rand 0.8.6",
  "reqwest 0.12.28",

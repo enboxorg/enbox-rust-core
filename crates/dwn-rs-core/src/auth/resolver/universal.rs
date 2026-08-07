@@ -1,3 +1,9 @@
+//! Registry-based DID resolution with native methods and a compatibility fallback.
+//!
+//! `did:jwk`, `did:key`, and `did:web` are registered by default. A registered method is always
+//! authoritative: its failure never falls through to statically registered keys. Applications can
+//! replace a native method explicitly with [`UniversalResolver::register`].
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -6,10 +12,11 @@ use ssi_jwk::JWK;
 
 use super::{
     DidMethodResolver, DidResolver, JwkResolver, KeyResolver, Resolution, ResolverError,
-    ResolverFuture,
+    ResolverFuture, WebResolver,
 };
 
 #[derive(Clone)]
+/// Dispatches complete-document resolution by DID method name.
 pub struct UniversalResolver {
     methods: BTreeMap<String, Arc<dyn DidMethodResolver>>,
     fallback: Option<Arc<dyn DidResolver>>,
@@ -23,6 +30,7 @@ impl UniversalResolver {
         };
         resolver.register(JwkResolver);
         resolver.register(KeyResolver);
+        resolver.register(WebResolver::default());
         resolver
     }
 

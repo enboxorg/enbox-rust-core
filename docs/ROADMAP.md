@@ -91,7 +91,7 @@ Delivered:
 - Background-safe sync: `sync_once` / `poll_reconcile` accept `deadlineMs`, full `connectivity`, and `reason` and enforce the deadline via `tokio::time::timeout` ([#153](https://github.com/enboxorg/enbox-rust-core/pull/153)).
 - Durable checkpoint-driven resume: `list_pending_scopes` + `resume_pending` over the SQLite sync ledger, matching [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md) ([#157](https://github.com/enboxorg/enbox-rust-core/pull/157)).
 - Mobile runtime status: `initialize_runtime`, `unlock_with_reason`, `begin_/end_background_task`, extended `EnboxRuntimeStatus` ([#155](https://github.com/enboxorg/enbox-rust-core/pull/155)).
-- DID method parity: `UniversalResolver` now resolves `did:jwk` and `did:key` (Ed25519 multicodec) so DWeb Connect ephemeral DIDs verify in Rust ([#154](https://github.com/enboxorg/enbox-rust-core/pull/154)).
+- DID method parity: `UniversalResolver` resolves `did:jwk`, `did:key` (Ed25519 and secp256k1), and SSRF-filtered `did:web` documents so DWeb Connect and remote DID signatures verify in Rust. See [`DID_RESOLUTION.md`](DID_RESOLUTION.md) ([#154](https://github.com/enboxorg/enbox-rust-core/pull/154), [#197](https://github.com/enboxorg/enbox-rust-core/issues/197)).
 - Loopback interop expanded to `ProtocolsQuery`, `RecordsDelete`, and delete idempotency over the pinned `@enbox/dwn-clients` HTTP path ([#156](https://github.com/enboxorg/enbox-rust-core/pull/156)).
 - Desktop local node mode (`SqliteNativeDwn` + loopback HTTP/WebSocket server) is in use from M4 onward.
 - Android/iOS FFI builds wired into the Nix flake ([#142](https://github.com/enboxorg/enbox-rust-core/pull/142)).

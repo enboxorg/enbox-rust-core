@@ -65,3 +65,12 @@ As Rust gains full DWN engine behavior, add new assertion types rather than dupl
 - `crypto.jws` and `crypto.jwe`: validate signature/encryption/decryption behavior using deterministic vectors where possible.
 
 The rule is: one fixture case, multiple implementation adapters. Differences should be represented as `known_gap` status or explicit expected error/status output, not by forking fixtures per language.
+
+## DID resolver parity
+
+Native `did:jwk` and `did:key` shapes are covered by `fixtures/spec/did/`. The network-backed
+`did:web` URL, redirect, error, complete-document, and JWS integration cases currently live as Rust
+unit tests under `auth::resolver::{http,web}`. Those vectors were reconciled against
+`enboxorg/enbox` commit `c63bf424ac0997583db825e8a5fddf1507d30c40`; they are not shared fixtures and
+therefore do not change the separate `.enbox-version` fixture pin. See
+[`DID_RESOLUTION.md`](./DID_RESOLUTION.md) for the behavioral and security contract.
