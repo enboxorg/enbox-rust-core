@@ -96,8 +96,10 @@ failures are non-fatal; they neither turn a successful resolution into a failure
 resolver failure. Cached documents are checked again against the requested DID before use; a bad
 entry is invalidated and resolved again.
 
-The cache serves fresh entries only. Concurrent resolution coalescing, stale-while-revalidate for
-agent-managed DIDs, and a durable cache backend remain separate follow-up work.
+The cache serves fresh entries only. Concurrent cache misses for one DID coalesce into a single
+method resolution; followers receive that result, including a typed failure. If the leading caller
+is cancelled, the in-flight entry is removed and a remaining caller retries. Stale-while-revalidate
+for agent-managed DIDs and a durable cache backend remain separate follow-up work.
 
 ## Errors
 
@@ -144,7 +146,6 @@ Remaining work:
 - Resolution and document metadata are still empty for `did:web`.
 - Encryption recipient selection does not yet consume resolved `keyAgreement` methods or perform
   the upstream Ed25519-to-X25519 public-key conversion.
-- Concurrent-resolution coalescing is not implemented.
 - The default cache is process-local; agent stale-while-revalidate and durable storage are not
   implemented.
 - DNS resolution enforcement and a transport-level response-size limit are not implemented.
