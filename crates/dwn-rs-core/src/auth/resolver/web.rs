@@ -158,8 +158,11 @@ mod tests {
     use reqwest::StatusCode;
     use serde_json::json;
     use ssi_dids_core::DIDBuf;
+    use ssi_jwk::{Algorithm, JWK};
 
     use super::*;
+    use crate::auth::resolver::{DidResolver, StaticPublicKeyResolver, UniversalResolver};
+    use crate::auth::{Jws, PrivateJwkSigner};
 
     struct FakeExecutor {
         response: Mutex<Option<Result<super::super::http::HttpResponse, PublicHttpError>>>,
@@ -402,5 +405,59 @@ mod tests {
             Err(ResolverError::MethodNotSupported(method)) if method == "example"
         ));
         assert_eq!(http.request_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn universal_resolver_rejects_a_fetched_document_with_the_wrong_id() {
+        let body = br#"{"id":"did:web:other.example"}"#.as_slice();
+        let resolver = UniversalResolver::new()
+            .with_method(resolver(FakeExecutor::responding(StatusCode::OK, body)));
+
+        assert!(matches!(
+            resolver.resolve("did:web:example.com").await,
+            Err(ResolverError::InvalidDocument(message))
+                if message.contains("did:web:other.example")
+                    && message.contains("did:web:example.com")
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_web_resolution_cannot_be_shadowed_by_static_keys() {
+        let did = "did:web:127.0.0.1";
+        let fallback = StaticPublicKeyResolver::new(std::collections::BTreeMap::from([(
+            format!("{did}#key-1"),
+            JWK::generate_ed25519().unwrap(),
+        )]));
+        let resolver = UniversalResolver::with_fallback(fallback);
+
+        // The native did:web resolver rejects the loopback URL. If `web` were not registered,
+        // the static fallback would synthesize a document and this call would succeed.
+        assert_eq!(resolver.resolve(did).await, Err(ResolverError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn jws_verification_resolves_the_signing_key_from_a_web_document() {
+        let private_jwk = JWK::generate_ed25519().unwrap();
+        let public_jwk = private_jwk.to_public();
+        let did = "did:web:example.com";
+        let kid = format!("{did}#key-1");
+        let signer = PrivateJwkSigner::new(&kid, Algorithm::EdDSA, private_jwk);
+        let jws = Jws::create(b"resolved through did:web".as_slice(), &[signer])
+            .await
+            .unwrap();
+        let body = serde_json::to_vec(&json!({
+            "id": did,
+            "verificationMethod": [{
+                "id": kid,
+                "type": "JsonWebKey2020",
+                "controller": did,
+                "publicKeyJwk": public_jwk,
+            }]
+        }))
+        .unwrap();
+        let resolver = UniversalResolver::new()
+            .with_method(resolver(FakeExecutor::responding(StatusCode::OK, body)));
+
+        assert_eq!(jws.verify_signatures(&resolver).await.unwrap(), [did]);
     }
 }

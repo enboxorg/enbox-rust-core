@@ -6,7 +6,7 @@ use ssi_jwk::JWK;
 
 use super::{
     DidMethodResolver, DidResolver, JwkResolver, KeyResolver, Resolution, ResolverError,
-    ResolverFuture,
+    ResolverFuture, WebResolver,
 };
 
 #[derive(Clone)]
@@ -23,6 +23,7 @@ impl UniversalResolver {
         };
         resolver.register(JwkResolver);
         resolver.register(KeyResolver);
+        resolver.register(WebResolver::default());
         resolver
     }
 

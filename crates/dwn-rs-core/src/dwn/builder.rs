@@ -156,7 +156,11 @@ where
     RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
     Gate: TenantGate + 'static,
 {
-    build_native_dwn_with_did_resolver(config, UniversalResolver::with_fallback(static_keys))
+    build_native_dwn_with_did_resolver(config, resolver_with_static_keys(static_keys))
+}
+
+fn resolver_with_static_keys(static_keys: StaticPublicKeyResolver) -> UniversalResolver {
+    UniversalResolver::with_fallback(static_keys)
 }
 
 /// Construct a [`Dwn`] with all handlers registered and a complete DID resolver.
@@ -265,4 +269,37 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
         resolver.clone(),
     ));
     dwn.register(RecordsSubscribeHandler::new(message_store, resolver));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use ssi_jwk::JWK;
+
+    use super::*;
+    use crate::auth::resolver::ResolverError;
+
+    #[tokio::test]
+    async fn static_key_builder_keeps_native_web_resolution_authoritative() {
+        let web_did = "did:web:127.0.0.1";
+        let fallback_did = "did:example:alice";
+        let resolver = resolver_with_static_keys(StaticPublicKeyResolver::new(BTreeMap::from([
+            (format!("{web_did}#key-1"), JWK::generate_ed25519().unwrap()),
+            (
+                format!("{fallback_did}#key-1"),
+                JWK::generate_ed25519().unwrap(),
+            ),
+        ])));
+
+        // Native did:web rejects loopback before issuing a request instead of accepting the
+        // matching compatibility key from the builder's fallback map.
+        assert_eq!(
+            resolver.resolve(web_did).await,
+            Err(ResolverError::NotFound)
+        );
+
+        // Unregistered methods retain the builder's static-key compatibility behavior.
+        assert!(resolver.resolve(fallback_did).await.is_ok());
+    }
 }
