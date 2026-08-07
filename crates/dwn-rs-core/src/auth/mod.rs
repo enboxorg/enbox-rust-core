@@ -1,5 +1,6 @@
 pub mod authorization;
 pub mod jws;
+pub mod resolver;
 pub mod universal_resolver;
 
 pub use authorization::Authorization;
