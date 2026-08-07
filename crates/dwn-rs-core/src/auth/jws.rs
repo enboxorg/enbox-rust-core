@@ -447,7 +447,39 @@ impl JwsSigner for PrivateJwkSigner {
     }
 
     async fn sign_bytes(&self, signing_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
-        ssi_jws::sign_bytes(self.algorithm, signing_bytes, &self.private_jwk).map_err(Into::into)
+        let signature = ssi_jws::sign_bytes(self.algorithm, signing_bytes, &self.private_jwk)
+            .map_err(SignatureError::from)?;
+        let signature = if self.algorithm == Algorithm::ES256 {
+            normalize_es256_signature(&signature)
+        } else {
+            signature
+        };
+        Ok(signature)
+    }
+}
+
+/// Normalizes an ES256 (P-256) signature to the low-S form emitted by current
+/// Enbox `@enbox/dwn-sdk-js` (noble curves 2.x defaults to `lowS: true`).
+///
+/// The `ssi-jws` `p256` signing path emits the high-S equivalent for the same
+/// RFC 6979 nonce, so JWS bytes differ from the current TypeScript reference
+/// unless the `S` component is normalized. Non-ES256 signatures pass through
+/// unchanged.
+fn normalize_es256_signature(signature: &[u8]) -> Vec<u8> {
+    use p256::ecdsa::Signature;
+
+    if signature.len() != 64 {
+        return signature.to_vec();
+    }
+
+    let parsed = match Signature::from_slice(signature) {
+        Ok(parsed) => parsed,
+        Err(_) => return signature.to_vec(),
+    };
+
+    match parsed.normalize_s() {
+        Some(normalized) => normalized.to_bytes().to_vec(),
+        None => signature.to_vec(),
     }
 }
 
@@ -884,6 +916,44 @@ mod tests {
                 .verify_signatures_public_jwk(&public_jwk)
                 .expect("SSI verification should succeed for the matching algorithm"));
         }
+    }
+
+    #[tokio::test]
+    async fn es256_signatures_are_low_s_and_byte_stable() {
+        let private_jwk = JWK::generate_p256();
+        let signer = PrivateJwkSigner::new("did:example:alice#key-1", Algorithm::ES256, private_jwk);
+        let payload = b"stable ES256 payload".as_slice();
+
+        let first = Jws::create(payload, std::slice::from_ref(&signer))
+            .await
+            .expect("sign payload")
+            .signatures
+            .unwrap();
+        let second = Jws::create(payload, std::slice::from_ref(&signer))
+            .await
+            .expect("sign payload")
+            .signatures
+            .unwrap();
+
+        assert_eq!(first, second, "ES256 signing must be deterministic (RFC 6979)");
+        let signature_bytes = decode_base64url(
+            first[0].signature.as_deref().expect("signature"),
+            "signature",
+        )
+        .expect("valid base64url signature");
+        assert_eq!(signature_bytes.len(), 64, "ES256 signature must be 64 bytes");
+        assert!(
+            is_es256_low_s(&signature_bytes),
+            "ES256 signature must be normalized to the low-S form emitted by current Enbox"
+        );
+    }
+
+    fn is_es256_low_s(signature_bytes: &[u8]) -> bool {
+        use p256::ecdsa::Signature;
+        Signature::from_slice(signature_bytes)
+            .expect("valid 64-byte P-256 signature")
+            .normalize_s()
+            .is_none()
     }
 
     #[tokio::test]

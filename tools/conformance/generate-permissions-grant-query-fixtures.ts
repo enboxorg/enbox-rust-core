@@ -105,7 +105,7 @@ const fixture = {
   source: {
     package: '@enbox/dwn-sdk-js',
     repository: 'enboxorg/enbox',
-    commit: '1a227b0179f33e5d9ce3d68ba6275533ae306e2d',
+    commit: 'c63bf424ac0997583db825e8a5fddf1507d30c40',
     functions: [
       'PermissionsProtocol.createGrant',
       'RecordsQuery.create',

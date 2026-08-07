@@ -1335,6 +1335,7 @@ dependencies = [
  "multibase",
  "multihash",
  "multihash-codetable",
+ "p256",
  "partially",
  "percent-encoding",
  "pin-project-lite",
