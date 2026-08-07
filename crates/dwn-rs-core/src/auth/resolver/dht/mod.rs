@@ -1,1 +1,2 @@
+mod dns;
 mod pkarr;
