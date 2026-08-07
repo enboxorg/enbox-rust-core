@@ -16,8 +16,12 @@ pub enum ResolverError {
     #[error("internal error: {0}")]
     Internal(String),
 
-    #[error("invalid document length: expected {expected}, found {found}")]
-    InvalidDocumentLength { expected: usize, found: usize },
+    #[error("invalid document length: expected {min}..={max}, found {found}")]
+    InvalidDocumentLength {
+        min: usize,
+        max: usize,
+        found: usize,
+    },
 
     #[error("invalid gateway uri: {0}")]
     InvalidGatewayUri(String),
@@ -25,7 +29,7 @@ pub enum ResolverError {
     #[error("invalid public key")]
     InvalidPublicKey,
 
-    #[error("invalid public key length: found {found}")]
+    #[error("invalid public key length: expected {expected}, found {found}")]
     InvalidPublicKeyLength { found: usize, expected: usize },
 
     #[error("invalid public key type: found {found}")]
@@ -51,5 +55,69 @@ impl ResolverError {
             Self::InvalidPublicKeyType { .. } => "invalidPublicKeyType",
             Self::InvalidSignature => "invalidSignature",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dht_errors_expose_enbox_codes() {
+        let errors = [
+            (ResolverError::Internal("failure".into()), "internalError"),
+            (
+                ResolverError::InvalidDocumentLength {
+                    min: 72,
+                    max: 1072,
+                    found: 71,
+                },
+                "invalidDidDocumentLength",
+            ),
+            (
+                ResolverError::InvalidGatewayUri("http://localhost".into()),
+                "invalidGatewayUri",
+            ),
+            (ResolverError::InvalidPublicKey, "invalidPublicKey"),
+            (
+                ResolverError::InvalidPublicKeyLength {
+                    expected: 32,
+                    found: 31,
+                },
+                "invalidPublicKeyLength",
+            ),
+            (
+                ResolverError::InvalidPublicKeyType {
+                    found: "unsupported".into(),
+                },
+                "invalidPublicKeyType",
+            ),
+            (ResolverError::InvalidSignature, "invalidSignature"),
+        ];
+
+        for (error, expected) in errors {
+            assert_eq!(error.code(), expected);
+        }
+    }
+
+    #[test]
+    fn length_errors_report_their_complete_constraints() {
+        assert_eq!(
+            ResolverError::InvalidDocumentLength {
+                min: 72,
+                max: 1072,
+                found: 71,
+            }
+            .to_string(),
+            "invalid document length: expected 72..=1072, found 71"
+        );
+        assert_eq!(
+            ResolverError::InvalidPublicKeyLength {
+                expected: 32,
+                found: 31,
+            }
+            .to_string(),
+            "invalid public key length: expected 32, found 31"
+        );
     }
 }
