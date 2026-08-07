@@ -15,12 +15,14 @@ pub mod jwk;
 pub mod key;
 pub mod r#static;
 pub mod universal;
+pub mod web;
 
 pub use error::ResolverError;
 pub use jwk::JwkResolver;
 pub use key::KeyResolver;
 pub use r#static::StaticPublicKeyResolver;
 pub use universal::UniversalResolver;
+pub use web::{WebResolver, WebResolverConfig};
 
 pub type ResolverFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
