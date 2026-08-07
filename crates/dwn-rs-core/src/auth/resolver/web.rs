@@ -163,11 +163,13 @@ fn resolution_not_found(did: &DID, error: PublicHttpError) -> ResolverError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     use bytes::Bytes;
     use reqwest::header::HeaderMap;
     use reqwest::StatusCode;
+    use serde::Deserialize;
     use serde_json::json;
     use ssi_dids_core::DIDBuf;
     use ssi_jwk::{Algorithm, JWK};
@@ -230,6 +232,42 @@ mod tests {
         WebResolver::with_executor(WebResolverConfig::default(), http)
     }
 
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DidWebParityFixture {
+        schema_version: u64,
+        oracle: String,
+        source: ParityFixtureSource,
+        vectors: Vec<DidWebParityVector>,
+    }
+
+    #[derive(Deserialize)]
+    struct ParityFixtureSource {
+        repository: String,
+        commit: String,
+        path: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DidWebParityVector {
+        input: DidWebParityInput,
+        output: DidWebParityOutput,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DidWebParityInput {
+        did_uri: String,
+        mock_server: BTreeMap<String, serde_json::Value>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DidWebParityOutput {
+        did_document: serde_json::Value,
+    }
+
     // URL vectors mirror enboxorg/enbox did-web.ts at
     // c63bf424ac0997583db825e8a5fddf1507d30c40.
     #[test]
@@ -283,6 +321,63 @@ mod tests {
             document_url(&did("did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp")),
             Err(ResolverError::MethodNotSupported(method)) if method == "key"
         ));
+    }
+
+    #[tokio::test]
+    async fn resolves_upstream_parity_vectors() {
+        let fixture: DidWebParityFixture = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/parity/did/did-web-resolve.json"
+        )))
+        .unwrap();
+        assert_eq!(fixture.schema_version, 1);
+        assert_eq!(fixture.oracle, "enbox");
+        assert_eq!(fixture.source.repository, "enboxorg/enbox");
+        assert_eq!(
+            fixture.source.commit,
+            include_str!("../../../../../.enbox-version")
+                .lines()
+                .find(|line| !line.starts_with('#') && !line.trim().is_empty())
+                .unwrap()
+                .trim()
+        );
+        assert_eq!(
+            fixture.source.path,
+            "packages/dids/tests/fixtures/web5-spec-vectors/did_web/resolve.json"
+        );
+
+        for vector in fixture.vectors {
+            let DidWebParityVector {
+                input:
+                    DidWebParityInput {
+                        did_uri,
+                        mock_server,
+                    },
+                output,
+            } = vector;
+            let responses = mock_server.into_iter().collect::<Vec<_>>();
+            let [(expected_url, document)] = responses.as_slice() else {
+                panic!("each upstream did:web fixture must provide exactly one mock response");
+            };
+            let http =
+                FakeExecutor::responding(StatusCode::OK, serde_json::to_vec(&document).unwrap());
+            let resolution = resolver(http.clone())
+                .resolve(&did(&did_uri))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                serde_json::to_value(resolution.document).unwrap(),
+                output.did_document,
+                "{}",
+                did_uri
+            );
+            assert_eq!(http.request_count(), 1);
+            assert_eq!(
+                http.requests.lock().unwrap()[0].0.as_str(),
+                expected_url.as_str()
+            );
+        }
     }
 
     #[tokio::test]
