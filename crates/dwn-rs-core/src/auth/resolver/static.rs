@@ -1,14 +1,35 @@
+use std::collections::BTreeMap;
+
 use serde_json::json;
 use ssi_dids_core::document::verification_method::ValueOrReference;
 use ssi_dids_core::document::VerificationRelationships;
 use ssi_dids_core::{DIDBuf, DIDURLBuf, Document};
-
-pub use crate::auth::jws::StaticPublicKeyResolver;
+use ssi_jwk::JWK;
 
 use super::{verification_method_from_jwk, DidResolver, Resolution, ResolverError, ResolverFuture};
 
 const DID_CONTEXT: &str = "https://www.w3.org/ns/did/v1";
 const JWS_2020_CONTEXT: &str = "https://w3id.org/security/suites/jws-2020/v1";
+
+/// Compatibility resolver for applications that register public keys directly by `kid`.
+///
+/// DID URL keys are exposed as synthesized DID documents when this resolver is installed as a
+/// [`super::UniversalResolver`] fallback. Non-DID key identifiers remain available through
+/// [`DidResolver::resolve_static_kid`].
+#[derive(Debug, Default, Clone)]
+pub struct StaticPublicKeyResolver {
+    public_keys: BTreeMap<String, JWK>,
+}
+
+impl StaticPublicKeyResolver {
+    pub fn new(public_keys: BTreeMap<String, JWK>) -> Self {
+        Self { public_keys }
+    }
+
+    pub fn insert(&mut self, kid: impl Into<String>, public_jwk: JWK) {
+        self.public_keys.insert(kid.into(), public_jwk);
+    }
+}
 
 impl DidResolver for StaticPublicKeyResolver {
     fn resolve<'a>(
@@ -22,7 +43,7 @@ impl DidResolver for StaticPublicKeyResolver {
             let mut methods = Vec::new();
             let mut references = Vec::new();
 
-            for (kid, jwk) in self.public_keys() {
+            for (kid, jwk) in &self.public_keys {
                 let Ok(kid_url) = kid.parse::<DIDURLBuf>() else {
                     continue;
                 };
@@ -64,7 +85,7 @@ impl DidResolver for StaticPublicKeyResolver {
     }
 
     fn resolve_static_kid(&self, kid: &str) -> Option<ssi_jwk::JWK> {
-        self.public_keys().get(kid).map(ssi_jwk::JWK::to_public)
+        self.public_keys.get(kid).map(ssi_jwk::JWK::to_public)
     }
 }
 

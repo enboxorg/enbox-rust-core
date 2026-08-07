@@ -5,9 +5,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use bytes::Bytes;
 use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
+use dwn_rs_core::auth::resolver::DidResolver;
 use dwn_rs_core::auth::{
-    Jws, JwsPublicKeyResolver, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver,
-    UniversalResolver, JWK,
+    Jws, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver, UniversalResolver, JWK,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -3345,13 +3345,13 @@ fn fixture_cid_dagcbor_match_spec() {
 }
 
 /// Track A conformance: the `UniversalResolver` must resolve a `did:key`
-/// (Ed25519) and a `did:jwk` DID to exactly the public-key JWK fixed by the
+/// (Ed25519) and a `did:jwk` DID to the public-key material fixed by the
 /// respective external method specifications. The expected JWK material on each
 /// case is a hardcoded spec-vector literal (the did:key Ed25519/X25519 worked
 /// example from W3C-CCG, and the did:jwk Examples), NOT recomputed by the impl
 /// on the expected side — so this is a genuine spec assertion, not a tautology.
-#[test]
-fn fixture_did_resolution_match_spec() {
+#[tokio::test]
+async fn fixture_did_resolution_match_spec() {
     let resolver = UniversalResolver::new();
     let mut checked = 0usize;
     for set in load_spec_fixture_sets() {
@@ -3392,15 +3392,50 @@ fn fixture_did_resolution_match_spec() {
             }))
             .unwrap_or_else(|error| panic!("{} expected JWK is invalid: {error}", case.id));
 
-            let resolved = resolver
-                .resolve_public_jwk(did)
+            let base_did = did.split('#').next().unwrap_or(did);
+            let resolution = resolver.resolve(base_did).await.unwrap_or_else(|error| {
+                panic!("{} resolver failed to resolve {base_did}: {error}", case.id)
+            });
+            let method = resolution
+                .document
+                .verification_method
+                .first()
                 .unwrap_or_else(|| panic!("{} resolver yielded no key for {did}", case.id));
+            let resolved: JWK = serde_json::from_value(
+                method
+                    .properties
+                    .get("publicKeyJwk")
+                    .unwrap_or_else(|| {
+                        panic!("{} verification method has no publicKeyJwk", case.id)
+                    })
+                    .clone(),
+            )
+            .unwrap_or_else(|error| panic!("{} resolved JWK is invalid: {error}", case.id));
 
-            assert_eq!(
-                resolved, expected_jwk,
+            assert!(
+                resolved.equals_public(&expected_jwk),
                 "{} resolved public key must match the spec-vector literal",
                 case.id
             );
+            assert_eq!(
+                resolved.public_key_use, expected_jwk.public_key_use,
+                "{} resolved public-key use must match the spec-vector literal",
+                case.id
+            );
+            assert_eq!(
+                resolved.get_algorithm(),
+                expected_jwk.get_algorithm(),
+                "{} effective algorithm must match the spec-vector literal",
+                case.id
+            );
+            if let Some(expected_method_id) = expected_jwk.key_id.as_deref() {
+                assert_eq!(
+                    method.id.as_str(),
+                    expected_method_id,
+                    "{} verification-method id must match the spec-vector literal",
+                    case.id
+                );
+            }
             checked += 1;
         }
     }

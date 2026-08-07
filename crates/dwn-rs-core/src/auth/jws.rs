@@ -5,7 +5,6 @@ use ssi_claims_core::SignatureError;
 pub use ssi_jwk::JWK;
 use ssi_jwk::{OctetParams, Params};
 use ssi_jws::{JwsPayload, JwsSignerInfo};
-use std::collections::BTreeMap;
 use thiserror::Error;
 
 pub use ssi_jwk::Algorithm;
@@ -403,16 +402,6 @@ pub struct PrivateJwkSigner {
     private_jwk: JWK,
 }
 
-/// Resolves a `kid` to a public JWK (used for signature verification).
-pub trait JwsPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<JWK>;
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct StaticPublicKeyResolver {
-    public_keys: BTreeMap<String, JWK>,
-}
-
 #[derive(Serialize)]
 struct JwsProtectedHeader {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -459,26 +448,6 @@ impl JwsSigner for PrivateJwkSigner {
 
     async fn sign_bytes(&self, signing_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
         ssi_jws::sign_bytes(self.algorithm, signing_bytes, &self.private_jwk).map_err(Into::into)
-    }
-}
-
-impl StaticPublicKeyResolver {
-    pub fn new(public_keys: BTreeMap<String, JWK>) -> Self {
-        Self { public_keys }
-    }
-
-    pub fn insert(&mut self, kid: impl Into<String>, public_jwk: JWK) {
-        self.public_keys.insert(kid.into(), public_jwk);
-    }
-
-    pub(crate) fn public_keys(&self) -> &BTreeMap<String, JWK> {
-        &self.public_keys
-    }
-}
-
-impl JwsPublicKeyResolver for StaticPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<JWK> {
-        self.public_keys.get(kid).cloned()
     }
 }
 
@@ -590,10 +559,12 @@ impl JwsSigner for NoSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::resolver::StaticPublicKeyResolver;
     use serde_json::json;
     use ssi_jwk::JWK;
     use std::{
         borrow::Cow,
+        collections::BTreeMap,
         str::FromStr,
         sync::{
             atomic::{AtomicUsize, Ordering},
