@@ -559,7 +559,7 @@ impl JwsSigner for NoSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::resolver::StaticPublicKeyResolver;
+    use crate::auth::resolver::{StaticPublicKeyResolver, UniversalResolver};
     use serde_json::json;
     use ssi_jwk::JWK;
     use std::{
@@ -735,6 +735,61 @@ mod tests {
         assert_eq!(
             jws.verify_signatures(&resolver).await.unwrap(),
             ["did:example:alice", "did:example:bob"]
+        );
+    }
+
+    #[tokio::test]
+    async fn native_did_resolution_cannot_be_shadowed_by_static_keys() {
+        let private_jwk = JWK::generate_ed25519().unwrap();
+        let public_jwk = private_jwk.to_public();
+        let encoded = base64url.encode(serde_json::to_vec(&public_jwk).unwrap());
+        let did = format!("did:jwk:{encoded}");
+        let kid = format!("{did}#0");
+        let signer = PrivateJwkSigner::new(kid.clone(), Algorithm::EdDSA, private_jwk);
+        let jws = Jws::create(b"native wins".as_slice(), &[signer])
+            .await
+            .unwrap();
+
+        let fallback =
+            StaticPublicKeyResolver::new(BTreeMap::from([(kid, JWK::generate_ed25519().unwrap())]));
+        let resolver = UniversalResolver::with_fallback(fallback);
+
+        assert_eq!(jws.verify_signatures(&resolver).await.unwrap(), [did]);
+    }
+
+    #[tokio::test]
+    async fn verifies_multiple_signatures_across_native_did_methods() {
+        let jwk_private = JWK::generate_ed25519().unwrap();
+        let jwk_public = jwk_private.to_public();
+        let jwk_did = format!(
+            "did:jwk:{}",
+            base64url.encode(serde_json::to_vec(&jwk_public).unwrap())
+        );
+        let jwk_signer =
+            PrivateJwkSigner::new(format!("{jwk_did}#0"), Algorithm::EdDSA, jwk_private);
+
+        let key_private = JWK::generate_ed25519().unwrap();
+        let Params::OKP(key_params) = &key_private.params else {
+            panic!("generated Ed25519 JWK must use OKP parameters");
+        };
+        let mut multicodec_key = vec![0xed, 0x01];
+        multicodec_key.extend_from_slice(&key_params.public_key.0);
+        let identifier = multibase::encode(multibase::Base::Base58Btc, multicodec_key);
+        let key_did = format!("did:key:{identifier}");
+        let key_signer = PrivateJwkSigner::new(
+            format!("{key_did}#{identifier}"),
+            Algorithm::EdDSA,
+            key_private,
+        );
+
+        let jws = Jws::create(b"two native methods".as_slice(), &[jwk_signer, key_signer])
+            .await
+            .unwrap();
+        let resolver = UniversalResolver::new();
+
+        assert_eq!(
+            jws.verify_signatures(&resolver).await.unwrap(),
+            [jwk_did, key_did]
         );
     }
 

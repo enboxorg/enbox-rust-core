@@ -174,3 +174,138 @@ pub(crate) fn verification_method_jwk(method: &DIDVerificationMethod) -> Option<
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use ssi_jwk::JWK;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct DocumentResolver {
+        resolution: Resolution,
+    }
+
+    impl DidResolver for DocumentResolver {
+        fn resolve<'a>(
+            &'a self,
+            _did: &'a str,
+        ) -> ResolverFuture<'a, Result<Resolution, ResolverError>> {
+            Box::pin(async move { Ok(self.resolution.clone()) })
+        }
+    }
+
+    fn resolver_with_methods(methods: Vec<(&str, JWK)>) -> DocumentResolver {
+        let did = "did:example:alice".parse::<DIDBuf>().unwrap();
+        let mut document = Document::new(did.clone());
+        document.verification_method = methods
+            .into_iter()
+            .map(|(id, jwk)| verification_method_from_jwk(id, "JsonWebKey2020", &did, jwk).unwrap())
+            .collect();
+        DocumentResolver {
+            resolution: Resolution::new(document),
+        }
+    }
+
+    #[tokio::test]
+    async fn signing_key_uses_suffix_match_without_relationship_gating() {
+        let first = JWK::generate_ed25519().unwrap();
+        let selected = JWK::generate_ed25519().unwrap();
+        let resolver = resolver_with_methods(vec![
+            ("did:example:alice#key-1", first),
+            ("did:example:alice#key-2", selected.clone()),
+        ]);
+
+        // The document deliberately has no authentication or assertionMethod relationships.
+        let kid = "did:example:alice?alias=did:example:alice#key-2";
+        let resolved = resolve_signing_key(kid, &resolver).await.unwrap();
+
+        assert!(resolved.equals_public(&selected));
+        assert!(resolved.is_public());
+    }
+
+    #[tokio::test]
+    async fn missing_signing_key_reports_available_verification_method_ids() {
+        let resolver = resolver_with_methods(vec![
+            ("did:example:alice#key-1", JWK::generate_ed25519().unwrap()),
+            ("did:example:alice#key-2", JWK::generate_ed25519().unwrap()),
+        ]);
+
+        let error = resolve_signing_key("did:example:alice#missing", &resolver)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            JwsError::PublicKeyNotFound {
+                ref kid,
+                ref available_ids,
+            } if kid == "did:example:alice#missing"
+                && available_ids == &[
+                    "did:example:alice#key-1".to_string(),
+                    "did:example:alice#key-2".to_string(),
+                ]
+        ));
+    }
+
+    #[tokio::test]
+    async fn non_did_kid_uses_exact_static_lookup_and_returns_only_public_material() {
+        let private_jwk = JWK::generate_ed25519().unwrap();
+        let resolver = StaticPublicKeyResolver::new(BTreeMap::from([(
+            "legacy-key".to_string(),
+            private_jwk.clone(),
+        )]));
+
+        let resolved = resolve_signing_key("legacy-key", &resolver).await.unwrap();
+        assert!(resolved.equals_public(&private_jwk));
+        assert!(resolved.is_public());
+        assert!(matches!(
+            resolve_signing_key("legacy-key#suffix", &resolver).await,
+            Err(JwsError::PublicKeyNotFound {
+                ref kid,
+                ref available_ids,
+            }) if kid == "legacy-key#suffix" && available_ids.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_did_kid_never_uses_static_lookup() {
+        let kid = "did:not a valid DID";
+        let resolver = StaticPublicKeyResolver::new(BTreeMap::from([(
+            kid.to_string(),
+            JWK::generate_ed25519().unwrap(),
+        )]));
+
+        assert!(matches!(
+            resolve_signing_key(kid, &resolver).await,
+            Err(JwsError::ResolutionFailed {
+                source: ResolverError::InvalidDid,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn supported_method_failure_is_typed_and_never_uses_fallback() {
+        let did = "did:jwk:e30";
+        let kid = format!("{did}#0");
+        let fallback = StaticPublicKeyResolver::new(BTreeMap::from([(
+            kid.clone(),
+            JWK::generate_ed25519().unwrap(),
+        )]));
+        let resolver = UniversalResolver::with_fallback(fallback);
+
+        let error = resolve_signing_key(&kid, &resolver).await.unwrap_err();
+
+        assert!(matches!(
+            &error,
+            JwsError::ResolutionFailed {
+                did,
+                source: ResolverError::InvalidDid,
+            } if did == "did:jwk:e30"
+        ));
+        assert_eq!(error.code(), "GeneralJwsVerifierGetPublicKeyNotFound");
+    }
+}
