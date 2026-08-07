@@ -589,7 +589,7 @@ mod tests {
     use super::*;
     use crate::identity::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
-        MemoryDidResolverCache, MemoryKeyManager, MemorySecretStore,
+        MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
     use crate::interfaces::messages::protocols::{Type, Who};
     use serde_json::Value as JsonValue;
@@ -837,7 +837,7 @@ mod tests {
             DeterministicDidJwkProvider::default(),
             key_manager.clone(),
             MemorySecretStore::default(),
-            MemoryDidResolverCache::default(),
+            MemoryPortableDidStore::default(),
         );
         let initialization = service
             .initialize_from_recovery(AgentIdentityInitializeRequest {

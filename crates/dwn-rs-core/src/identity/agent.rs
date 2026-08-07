@@ -186,7 +186,11 @@ pub trait AgentKeyManager: Clone + Send + Sync + 'static {
     fn delete_key<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, bool>;
 }
 
-pub trait DidResolverCache: Clone + Send + Sync + 'static {
+/// Stores agent-owned portable identities.
+///
+/// This is not the cache for externally resolved DID documents. See
+/// [`crate::auth::resolver::DidResolutionCache`] for that boundary.
+pub trait PortableDidStore: Clone + Send + Sync + 'static {
     fn get_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, Option<PortableDid>>;
     fn put_did<'a>(&'a self, portable_did: PortableDid) -> AgentIdentityFuture<'a, ()>;
     fn delete_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, bool>;
@@ -214,7 +218,7 @@ where
     D: DidProvider,
     K: AgentKeyManager,
     S: SecretStore,
-    R: DidResolverCache,
+    R: PortableDidStore,
 {
     pub fn new(did_provider: D, key_manager: K, secret_store: S, resolver_cache: R) -> Self {
         Self {
@@ -567,17 +571,17 @@ impl AgentKeyManager for MemoryKeyManager {
     }
 }
 
-/// In-memory `DidResolverCache` for development and tests.
+/// In-memory `PortableDidStore` for development and tests.
 ///
 /// Process-local; not durable across runs and not shared across processes.
 /// Production deployments should back the cache with a SQLite
 /// store and respect TTLs from the resolver itself.
 #[derive(Clone, Default)]
-pub struct MemoryDidResolverCache {
+pub struct MemoryPortableDidStore {
     dids: Arc<RwLock<BTreeMap<String, PortableDid>>>,
 }
 
-impl DidResolverCache for MemoryDidResolverCache {
+impl PortableDidStore for MemoryPortableDidStore {
     fn get_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, Option<PortableDid>> {
         Box::pin(async move {
             Ok(self
@@ -610,6 +614,16 @@ impl DidResolverCache for MemoryDidResolverCache {
         })
     }
 }
+
+/// Deprecated name for [`PortableDidStore`].
+#[deprecated(
+    note = "use PortableDidStore; this stores agent-owned identities, not resolution results"
+)]
+pub use PortableDidStore as DidResolverCache;
+
+/// Deprecated name for [`MemoryPortableDidStore`].
+#[deprecated(note = "use MemoryPortableDidStore")]
+pub type MemoryDidResolverCache = MemoryPortableDidStore;
 
 pub fn derive_agent_keys(recovery_phrase: &str) -> AgentIdentityResult<AgentDerivedKeys> {
     let mnemonic = Mnemonic::parse_in(Language::English, recovery_phrase)
@@ -1037,13 +1051,13 @@ mod tests {
         DeterministicDidJwkProvider,
         MemoryKeyManager,
         MemorySecretStore,
-        MemoryDidResolverCache,
+        MemoryPortableDidStore,
     > {
         AgentIdentityService::new(
             DeterministicDidJwkProvider::default(),
             MemoryKeyManager::default(),
             MemorySecretStore::default(),
-            MemoryDidResolverCache::default(),
+            MemoryPortableDidStore::default(),
         )
     }
 }
