@@ -45,6 +45,14 @@ pub(crate) enum PublicHttpError {
     ResponseBody(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetPolicy {
+    /// Reject private, loopback, and link-local targets at every request hop.
+    PublicOnly,
+    /// Permit private hosts while retaining scheme, hostname, redirect, and deadline checks.
+    AllowPrivate,
+}
+
 #[derive(Clone)]
 pub(crate) struct HttpRequest {
     pub method: Method,
@@ -146,16 +154,35 @@ impl HttpExecutor for ReqwestHttpExecutor {
 /// Fetch a public URL while validating the initial target and every redirect target.
 pub(crate) async fn fetch_public_url(
     executor: &dyn HttpExecutor,
+    request: HttpRequest,
+    timeout: Duration,
+    max_redirects: usize,
+    description: &str,
+) -> Result<HttpResponse, PublicHttpError> {
+    fetch_url(
+        executor,
+        request,
+        timeout,
+        max_redirects,
+        description,
+        TargetPolicy::PublicOnly,
+    )
+    .await
+}
+
+pub(crate) async fn fetch_url(
+    executor: &dyn HttpExecutor,
     mut request: HttpRequest,
     timeout: Duration,
     max_redirects: usize,
     description: &str,
+    target_policy: TargetPolicy,
 ) -> Result<HttpResponse, PublicHttpError> {
     let started = Instant::now();
     let mut redirects_followed = 0;
 
     loop {
-        validate_public_url(&request.url, description)?;
+        validate_target_url(&request.url, description, target_policy)?;
         let remaining = timeout
             .checked_sub(started.elapsed())
             .filter(|remaining| !remaining.is_zero())
@@ -180,14 +207,23 @@ pub(crate) async fn fetch_public_url(
             .url
             .join(location)
             .map_err(|_| PublicHttpError::InvalidRedirect)?;
-        validate_public_url(&redirect_url, description)?;
+        validate_target_url(&redirect_url, description, target_policy)?;
 
         request.url = redirect_url;
         redirects_followed += 1;
     }
 }
 
-pub(crate) fn validate_public_url(url: &Url, description: &str) -> Result<(), PublicHttpError> {
+#[cfg(test)]
+fn validate_public_url(url: &Url, description: &str) -> Result<(), PublicHttpError> {
+    validate_target_url(url, description, TargetPolicy::PublicOnly)
+}
+
+fn validate_target_url(
+    url: &Url,
+    description: &str,
+    target_policy: TargetPolicy,
+) -> Result<(), PublicHttpError> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(PublicHttpError::InvalidScheme {
             description: description.to_string(),
@@ -198,7 +234,7 @@ pub(crate) fn validate_public_url(url: &Url, description: &str) -> Result<(), Pu
     let host = url.host().ok_or_else(|| PublicHttpError::MissingHostname {
         description: description.to_string(),
     })?;
-    if is_private_host(host) {
+    if target_policy == TargetPolicy::PublicOnly && is_private_host(host) {
         return Err(PublicHttpError::PrivateHostname {
             description: description.to_string(),
         });
