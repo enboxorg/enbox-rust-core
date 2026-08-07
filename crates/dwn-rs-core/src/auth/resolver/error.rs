@@ -1,4 +1,4 @@
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ResolverError {
     #[error("invalid DID")]

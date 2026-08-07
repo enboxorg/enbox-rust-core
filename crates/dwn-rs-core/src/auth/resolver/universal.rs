@@ -5,11 +5,12 @@
 //! Applications can replace a native method explicitly with [`UniversalResolver::register`].
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use ssi_dids_core::{DIDBuf, DID};
 use ssi_jwk::JWK;
+use tokio::sync::watch;
 
 use super::{
     DhtResolver, DidMethodResolver, DidResolutionCache, DidResolver, JwkResolver, KeyResolver,
@@ -18,12 +19,82 @@ use super::{
 
 const DEFAULT_CACHE_TTL: Duration = Duration::minutes(15);
 
+type ResolutionResult = Result<Resolution, ResolverError>;
+
+#[derive(Clone, Default)]
+/// Coordinates one active resolution per DID without involving the cache backend.
+struct InFlightResolutions {
+    entries: Arc<Mutex<BTreeMap<String, watch::Sender<Option<ResolutionResult>>>>>,
+}
+
+enum InFlightResolution {
+    Leader(InFlightLeader),
+    Follower(watch::Receiver<Option<ResolutionResult>>),
+}
+
+struct InFlightLeader {
+    did: String,
+    sender: watch::Sender<Option<ResolutionResult>>,
+    resolutions: InFlightResolutions,
+}
+
+impl InFlightResolutions {
+    fn join(&self, did: &str) -> InFlightResolution {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(sender) = entries.get(did) {
+            return InFlightResolution::Follower(sender.subscribe());
+        }
+
+        let (sender, _) = watch::channel(None);
+        entries.insert(did.to_string(), sender.clone());
+        InFlightResolution::Leader(InFlightLeader {
+            did: did.to_string(),
+            sender,
+            resolutions: self.clone(),
+        })
+    }
+
+    async fn wait(
+        mut receiver: watch::Receiver<Option<ResolutionResult>>,
+    ) -> Option<ResolutionResult> {
+        loop {
+            if let Some(result) = receiver.borrow_and_update().clone() {
+                return Some(result);
+            }
+            if receiver.changed().await.is_err() {
+                return None;
+            }
+        }
+    }
+}
+
+impl InFlightLeader {
+    fn finish(&self, result: &ResolutionResult) {
+        let _ = self.sender.send(Some(result.clone()));
+    }
+}
+
+impl Drop for InFlightLeader {
+    fn drop(&mut self) {
+        let mut entries = self
+            .resolutions
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        entries.remove(&self.did);
+    }
+}
+
 #[derive(Clone)]
 /// Dispatches complete-document resolution by DID method name.
 pub struct UniversalResolver {
     methods: BTreeMap<String, Arc<dyn DidMethodResolver>>,
     fallback: Option<Arc<dyn DidResolver>>,
     cache: Arc<dyn DidResolutionCache>,
+    in_flight: InFlightResolutions,
 }
 
 impl UniversalResolver {
@@ -32,6 +103,7 @@ impl UniversalResolver {
             methods: BTreeMap::new(),
             fallback: None,
             cache: Arc::new(MemoryDidResolutionCache::default()),
+            in_flight: InFlightResolutions::default(),
         };
         resolver.register(JwkResolver);
         resolver.register(KeyResolver);
@@ -114,6 +186,52 @@ impl UniversalResolver {
         let entry = resolution.clone().cached(now, fresh_until);
         let _ = self.cache.put(did.to_string(), entry).await;
     }
+
+    async fn resolve_and_cache(&self, did: &DID) -> ResolutionResult {
+        let resolution = match self.methods.get(did.method_name()) {
+            Some(method) => method.resolve(did).await?,
+            None => match &self.fallback {
+                Some(fallback) => fallback.resolve(did).await?,
+                None => {
+                    return Err(ResolverError::MethodNotSupported(
+                        did.method_name().to_string(),
+                    ));
+                }
+            },
+        };
+
+        let resolution = validate_document_id(did, resolution)?;
+        self.cache_resolution(did, &resolution, Utc::now()).await;
+        Ok(resolution)
+    }
+
+    async fn resolve_single_flight(&self, did: &DID) -> ResolutionResult {
+        loop {
+            if let Some(resolution) = self.cached_resolution(did, Utc::now()).await {
+                return Ok(resolution);
+            }
+
+            match self.in_flight.join(did.as_str()) {
+                InFlightResolution::Leader(leader) => {
+                    // The cache may have been filled after this caller's first lookup but before
+                    // it became the leader. Recheck it before invoking a method resolver.
+                    let result = match self.cached_resolution(did, Utc::now()).await {
+                        Some(resolution) => Ok(resolution),
+                        None => self.resolve_and_cache(did).await,
+                    };
+                    leader.finish(&result);
+                    return result;
+                }
+                InFlightResolution::Follower(receiver) => {
+                    // A cancelled leader closes its channel without publishing a result. Retry so
+                    // a remaining caller becomes the next leader instead of waiting forever.
+                    if let Some(result) = InFlightResolutions::wait(receiver).await {
+                        return result;
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Default for UniversalResolver {
@@ -132,27 +250,7 @@ impl DidResolver for UniversalResolver {
                 .parse::<DIDBuf>()
                 .map_err(|_| ResolverError::InvalidDid)?;
 
-            let now = Utc::now();
-            if let Some(resolution) = self.cached_resolution(&parsed, now).await {
-                return Ok(resolution);
-            }
-
-            let resolution = match self.methods.get(parsed.method_name()) {
-                Some(method) => method.resolve(&parsed).await?,
-                None => match &self.fallback {
-                    Some(fallback) => fallback.resolve(&parsed).await?,
-                    None => {
-                        return Err(ResolverError::MethodNotSupported(
-                            parsed.method_name().to_string(),
-                        ));
-                    }
-                },
-            };
-
-            let resolution = validate_document_id(&parsed, resolution)?;
-            self.cache_resolution(&parsed, &resolution, Utc::now())
-                .await;
-            Ok(resolution)
+            self.resolve_single_flight(&parsed).await
         })
     }
 
@@ -196,6 +294,7 @@ mod tests {
     use base64::Engine as _;
     use ssi_dids_core::Document;
     use ssi_jwk::{Base64urlUInt, OctetParams, Params};
+    use tokio::sync::Notify;
 
     use super::*;
     use crate::auth::resolver::{
@@ -267,6 +366,35 @@ mod tests {
         marker: &'static str,
         calls: Arc<AtomicUsize>,
         fail: bool,
+    }
+
+    struct GatedMethod {
+        method_name: &'static str,
+        calls: Arc<AtomicUsize>,
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        fail: bool,
+    }
+
+    impl DidMethodResolver for GatedMethod {
+        fn method_name(&self) -> &str {
+            self.method_name
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> ResolverFuture<'a, Result<Resolution, ResolverError>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.started.notify_waiters();
+                self.release.notified().await;
+                if self.fail {
+                    return Err(ResolverError::NotFound);
+                }
+                Ok(Resolution::new(Document::new(did.to_owned())))
+            })
+        }
     }
 
     impl DidMethodResolver for CountingMethod {
@@ -435,6 +563,109 @@ mod tests {
             assert_eq!(resolution.document.property_set["resolvedBy"], "method");
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn coalesces_concurrent_resolutions_for_one_did() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let resolver = Arc::new(UniversalResolver::new().with_method(GatedMethod {
+            method_name: "gated",
+            calls: calls.clone(),
+            started: started.clone(),
+            release: release.clone(),
+            fail: false,
+        }));
+
+        let first_started = started.notified();
+        let first = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.resolve("did:gated:alice").await }
+        });
+        first_started.await;
+        let second = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.resolve("did:gated:alice").await }
+        });
+        tokio::task::yield_now().await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        release.notify_one();
+        assert!(first.await.unwrap().is_ok());
+        assert!(second.await.unwrap().is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn shares_failures_without_caching_them() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let resolver = Arc::new(UniversalResolver::new().with_method(GatedMethod {
+            method_name: "gated",
+            calls: calls.clone(),
+            started: started.clone(),
+            release: release.clone(),
+            fail: true,
+        }));
+
+        let first_started = started.notified();
+        let first = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.resolve("did:gated:alice").await }
+        });
+        first_started.await;
+        let second = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.resolve("did:gated:alice").await }
+        });
+        tokio::task::yield_now().await;
+
+        release.notify_one();
+        assert_eq!(first.await.unwrap(), Err(ResolverError::NotFound));
+        assert_eq!(second.await.unwrap(), Err(ResolverError::NotFound));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        release.notify_one();
+        assert_eq!(
+            resolver.resolve("did:gated:alice").await,
+            Err(ResolverError::NotFound)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn retries_after_the_leading_resolution_is_cancelled() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let resolver = Arc::new(UniversalResolver::new().with_method(GatedMethod {
+            method_name: "gated",
+            calls: calls.clone(),
+            started: started.clone(),
+            release: release.clone(),
+            fail: false,
+        }));
+
+        let first_started = started.notified();
+        let leading = tokio::spawn({
+            let resolver = resolver.clone();
+            async move { resolver.resolve("did:gated:alice").await }
+        });
+        first_started.await;
+        leading.abort();
+        assert!(leading.await.unwrap_err().is_cancelled());
+        assert!(resolver
+            .in_flight
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
+
+        release.notify_one();
+        assert!(resolver.resolve("did:gated:alice").await.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
