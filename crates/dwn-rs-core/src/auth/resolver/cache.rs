@@ -128,15 +128,25 @@ mod tests {
     async fn stores_and_invalidates_complete_resolution_entries() {
         let cache = MemoryDidResolutionCache::default();
         let entry = entry();
+        let did = "did:example:alice";
 
-        cache
-            .put("did:example:alice".to_string(), entry.clone())
-            .await
-            .unwrap();
-        assert_eq!(cache.get("did:example:alice").await.unwrap(), Some(entry));
-        assert!(cache.invalidate("did:example:alice").await.unwrap());
-        assert_eq!(cache.get("did:example:alice").await.unwrap(), None);
-        assert!(!cache.invalidate("did:example:alice").await.unwrap());
+        cache.put(did.to_string(), entry.clone()).await.unwrap();
+        assert_eq!(cache.get(did).await.unwrap(), Some(entry));
+        assert!(cache.invalidate(did).await.unwrap());
+        assert_eq!(cache.get(did).await.unwrap(), None);
+        assert!(!cache.invalidate(did).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn keeps_entries_for_different_dids_separate() {
+        let cache = MemoryDidResolutionCache::default();
+        let entry = entry();
+        let first = "did:example:alice";
+        let second = "did:example:bob";
+
+        cache.put(first.to_string(), entry.clone()).await.unwrap();
+        assert_eq!(cache.get(first).await.unwrap(), Some(entry));
+        assert_eq!(cache.get(second).await.unwrap(), None);
     }
 
     #[test]
