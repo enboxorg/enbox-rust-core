@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ssi_dids_core::document::DIDVerificationMethod;
 use ssi_dids_core::{DIDBuf, DIDURLBuf, Document, DID};
@@ -9,6 +10,7 @@ use ssi_jwk::JWK;
 
 use crate::auth::jws::JwsError;
 
+pub mod cache;
 pub mod dht;
 pub mod error;
 pub(crate) mod http;
@@ -18,6 +20,9 @@ pub mod r#static;
 pub mod universal;
 pub mod web;
 
+pub use cache::{
+    CachedResolution, DidResolutionCache, MemoryDidResolutionCache, ResolutionCacheError,
+};
 pub use dht::{DhtResolver, DhtResolverConfig};
 pub use error::ResolverError;
 pub use jwk::JwkResolver;
@@ -62,11 +67,23 @@ pub struct ResolutionMetadata {
     pub properties: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Resolution {
     pub document: Document,
     pub document_metadata: DocumentMetadata,
     pub resolution_metadata: ResolutionMetadata,
+}
+
+impl Resolution {
+    pub fn cached(self, cached_at: DateTime<Utc>, fresh_until: DateTime<Utc>) -> CachedResolution {
+        CachedResolution {
+            resolution: self,
+            cached_at,
+            fresh_until,
+            stale_until: None,
+        }
+    }
 }
 
 impl Resolution {

@@ -7,19 +7,23 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use chrono::{DateTime, Duration, Utc};
 use ssi_dids_core::{DIDBuf, DID};
 use ssi_jwk::JWK;
 
 use super::{
-    DhtResolver, DidMethodResolver, DidResolver, JwkResolver, KeyResolver, Resolution,
-    ResolverError, ResolverFuture, WebResolver,
+    DhtResolver, DidMethodResolver, DidResolutionCache, DidResolver, JwkResolver, KeyResolver,
+    MemoryDidResolutionCache, Resolution, ResolverError, ResolverFuture, WebResolver,
 };
+
+const DEFAULT_CACHE_TTL: Duration = Duration::minutes(15);
 
 #[derive(Clone)]
 /// Dispatches complete-document resolution by DID method name.
 pub struct UniversalResolver {
     methods: BTreeMap<String, Arc<dyn DidMethodResolver>>,
     fallback: Option<Arc<dyn DidResolver>>,
+    cache: Arc<dyn DidResolutionCache>,
 }
 
 impl UniversalResolver {
@@ -27,6 +31,7 @@ impl UniversalResolver {
         let mut resolver = Self {
             methods: BTreeMap::new(),
             fallback: None,
+            cache: Arc::new(MemoryDidResolutionCache::default()),
         };
         resolver.register(JwkResolver);
         resolver.register(KeyResolver);
@@ -49,6 +54,21 @@ impl UniversalResolver {
         }
     }
 
+    /// Replace the complete-document resolution cache used by this resolver.
+    pub fn with_resolution_cache<C>(mut self, cache: C) -> Self
+    where
+        C: DidResolutionCache + 'static,
+    {
+        self.cache = Arc::new(cache);
+        self
+    }
+
+    /// Replace the complete-document resolution cache used by this resolver.
+    pub fn with_resolution_cache_arc(mut self, cache: Arc<dyn DidResolutionCache>) -> Self {
+        self.cache = cache;
+        self
+    }
+
     pub fn with_method<R>(mut self, resolver: R) -> Self
     where
         R: DidMethodResolver + 'static,
@@ -68,6 +88,32 @@ impl UniversalResolver {
         let method_name = resolver.method_name().to_string();
         self.methods.insert(method_name, resolver);
     }
+
+    async fn cached_resolution(&self, did: &DID, now: DateTime<Utc>) -> Option<Resolution> {
+        let did_str = did.as_str();
+        let entry = self.cache.get(did_str).await.ok().flatten()?;
+        if !entry.is_fresh_at(now) {
+            return None;
+        }
+
+        match validate_document_id(did, entry.resolution) {
+            Ok(resolution) => Some(resolution),
+            Err(_) => {
+                let _ = self.cache.invalidate(did_str).await;
+                None
+            }
+        }
+    }
+
+    async fn cache_resolution(&self, did: &DID, resolution: &Resolution, now: DateTime<Utc>) {
+        let fresh_until = cache_fresh_until(resolution, now);
+        if fresh_until <= now {
+            return;
+        }
+
+        let entry = resolution.clone().cached(now, fresh_until);
+        let _ = self.cache.put(did.to_string(), entry).await;
+    }
 }
 
 impl Default for UniversalResolver {
@@ -86,6 +132,11 @@ impl DidResolver for UniversalResolver {
                 .parse::<DIDBuf>()
                 .map_err(|_| ResolverError::InvalidDid)?;
 
+            let now = Utc::now();
+            if let Some(resolution) = self.cached_resolution(&parsed, now).await {
+                return Ok(resolution);
+            }
+
             let resolution = match self.methods.get(parsed.method_name()) {
                 Some(method) => method.resolve(&parsed).await?,
                 None => match &self.fallback {
@@ -98,7 +149,10 @@ impl DidResolver for UniversalResolver {
                 },
             };
 
-            validate_document_id(&parsed, resolution)
+            let resolution = validate_document_id(&parsed, resolution)?;
+            self.cache_resolution(&parsed, &resolution, Utc::now())
+                .await;
+            Ok(resolution)
         })
     }
 
@@ -107,6 +161,17 @@ impl DidResolver for UniversalResolver {
             .as_ref()
             .and_then(|fallback| fallback.resolve_static_kid(kid))
     }
+}
+
+fn cache_fresh_until(resolution: &Resolution, now: DateTime<Utc>) -> DateTime<Utc> {
+    let default_expiry = now + DEFAULT_CACHE_TTL;
+    resolution
+        .resolution_metadata
+        .expires
+        .as_deref()
+        .and_then(|expires| DateTime::parse_from_rfc3339(expires).ok())
+        .map(|expires| expires.with_timezone(&Utc).min(default_expiry))
+        .unwrap_or(default_expiry)
 }
 
 fn validate_document_id(
@@ -125,6 +190,7 @@ fn validate_document_id(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine as _;
@@ -132,7 +198,9 @@ mod tests {
     use ssi_jwk::{Base64urlUInt, OctetParams, Params};
 
     use super::*;
-    use crate::auth::resolver::StaticPublicKeyResolver;
+    use crate::auth::resolver::{
+        CachedResolution, MemoryDidResolutionCache, ResolutionCacheError, StaticPublicKeyResolver,
+    };
 
     fn jwk(byte: u8) -> JWK {
         JWK::from(Params::OKP(OctetParams {
@@ -191,6 +259,63 @@ mod tests {
                 let document = Document::new("did:wrong:other".parse().unwrap());
                 Ok(Resolution::new(document))
             })
+        }
+    }
+
+    struct CountingMethod {
+        method_name: &'static str,
+        marker: &'static str,
+        calls: Arc<AtomicUsize>,
+        fail: bool,
+    }
+
+    impl DidMethodResolver for CountingMethod {
+        fn method_name(&self) -> &str {
+            self.method_name
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> ResolverFuture<'a, Result<Resolution, ResolverError>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if self.fail {
+                    return Err(ResolverError::NotFound);
+                }
+                let mut document = Document::new(did.to_owned());
+                document.property_set.insert(
+                    "resolvedBy".to_string(),
+                    serde_json::Value::String(self.marker.to_string()),
+                );
+                Ok(Resolution::new(document))
+            })
+        }
+    }
+
+    struct FailingCache;
+
+    impl DidResolutionCache for FailingCache {
+        fn get<'a>(
+            &'a self,
+            _did: &'a str,
+        ) -> ResolverFuture<'a, Result<Option<CachedResolution>, ResolutionCacheError>> {
+            Box::pin(async { Err(ResolutionCacheError::Backend("read failure".to_string())) })
+        }
+
+        fn put<'a>(
+            &'a self,
+            _did: String,
+            _entry: CachedResolution,
+        ) -> ResolverFuture<'a, Result<(), ResolutionCacheError>> {
+            Box::pin(async { Err(ResolutionCacheError::Backend("write failure".to_string())) })
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _did: &'a str,
+        ) -> ResolverFuture<'a, Result<bool, ResolutionCacheError>> {
+            Box::pin(async { Err(ResolutionCacheError::Backend("delete failure".to_string())) })
         }
     }
 
@@ -290,5 +415,112 @@ mod tests {
             resolver.resolve("did:wrong:requested").await,
             Err(ResolverError::InvalidDocument(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn caches_validated_successful_resolutions() {
+        let cache = MemoryDidResolutionCache::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let resolver = UniversalResolver::new()
+            .with_resolution_cache(cache)
+            .with_method(CountingMethod {
+                method_name: "cached",
+                marker: "method",
+                calls: calls.clone(),
+                fail: false,
+            });
+
+        for _ in 0..2 {
+            let resolution = resolver.resolve("did:cached:alice").await.unwrap();
+            assert_eq!(resolution.document.property_set["resolvedBy"], "method");
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ignores_expired_or_invalid_cached_resolutions() {
+        let cache = MemoryDidResolutionCache::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let resolver = UniversalResolver::new()
+            .with_resolution_cache(cache.clone())
+            .with_method(CountingMethod {
+                method_name: "cached",
+                marker: "method",
+                calls: calls.clone(),
+                fail: false,
+            });
+        let did = "did:cached:alice".parse::<DIDBuf>().unwrap();
+        let now = Utc::now();
+
+        cache
+            .put(
+                did.to_string(),
+                Resolution::new(Document::new(did.clone()))
+                    .cached(now - Duration::minutes(16), now - Duration::minutes(1)),
+            )
+            .await
+            .unwrap();
+        let resolution = resolver.resolve(did.as_str()).await.unwrap();
+        assert_eq!(resolution.document.property_set["resolvedBy"], "method");
+
+        cache
+            .put(
+                did.to_string(),
+                Resolution::new(Document::new("did:cached:other".parse().unwrap()))
+                    .cached(now, now + Duration::minutes(15)),
+            )
+            .await
+            .unwrap();
+        let resolution = resolver.resolve(did.as_str()).await.unwrap();
+        assert_eq!(resolution.document.property_set["resolvedBy"], "method");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn resolution_and_cache_errors_are_not_cached_or_masked() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let resolver = UniversalResolver::new()
+            .with_resolution_cache(FailingCache)
+            .with_method(CountingMethod {
+                method_name: "cached",
+                marker: "method",
+                calls: calls.clone(),
+                fail: false,
+            });
+
+        assert!(resolver.resolve("did:cached:alice").await.is_ok());
+        assert!(resolver.resolve("did:cached:alice").await.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let failed_calls = Arc::new(AtomicUsize::new(0));
+        let failing_resolver = UniversalResolver::new().with_method(CountingMethod {
+            method_name: "failed",
+            marker: "unused",
+            calls: failed_calls.clone(),
+            fail: true,
+        });
+        assert!(matches!(
+            failing_resolver.resolve("did:failed:alice").await,
+            Err(ResolverError::NotFound)
+        ));
+        assert!(matches!(
+            failing_resolver.resolve("did:failed:alice").await,
+            Err(ResolverError::NotFound)
+        ));
+        assert_eq!(failed_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn document_expiry_caps_the_default_cache_ttl() {
+        let now = Utc::now();
+        let mut resolution = Resolution::new(Document::new("did:example:alice".parse().unwrap()));
+        resolution.resolution_metadata.expires = Some((now + Duration::minutes(5)).to_rfc3339());
+
+        assert_eq!(
+            cache_fresh_until(&resolution, now),
+            now + Duration::minutes(5)
+        );
+        resolution.resolution_metadata.expires = Some((now + Duration::minutes(20)).to_rfc3339());
+        assert_eq!(cache_fresh_until(&resolution, now), now + DEFAULT_CACHE_TTL);
     }
 }

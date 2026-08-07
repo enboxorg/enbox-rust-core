@@ -80,8 +80,24 @@ that resolves to an internal address is therefore outside the protection provide
 with a stronger SSRF boundary should supply network-level egress controls or replace the `web`
 method with a stricter resolver.
 
-The resolver currently has no explicit response-body size limit and no document cache. Those limits
-should be supplied by the surrounding network/runtime policy until they are added here.
+The resolver currently has no explicit response-body size limit. That limit should be supplied by
+the surrounding network/runtime policy until it is added here.
+
+## Resolution cache
+
+`UniversalResolver` uses an in-memory, complete-document cache by default. Entries are keyed by
+the canonical DID string, never by an individual verification method or `kid`. Applications may
+replace it with another `DidResolutionCache` implementation through
+`with_resolution_cache` or `with_resolution_cache_arc`.
+
+Only successfully resolved documents are cached. The default freshness window is 15 minutes and
+is capped by a parseable DID-resolution `expires` value when the method supplies one. Cache backend
+failures are non-fatal; they neither turn a successful resolution into a failure nor conceal a
+resolver failure. Cached documents are checked again against the requested DID before use; a bad
+entry is invalidated and resolved again.
+
+The cache serves fresh entries only. Concurrent resolution coalescing, stale-while-revalidate for
+agent-managed DIDs, and a durable cache backend remain separate follow-up work.
 
 ## Errors
 
@@ -113,16 +129,23 @@ verification.
 
 ## Parity provenance and remaining work
 
-The `did:web` URL, redirect, status, and error vectors were reconciled against
-`enboxorg/enbox` commit `c63bf424ac0997583db825e8a5fddf1507d30c40`. They remain Rust unit vectors
-rather than shared TypeScript fixtures because `.enbox-version` independently pins the existing
+The `did:web` URL, redirect, status, and error vectors are reconciled against the
+`enboxorg/enbox` commit pinned by `.enbox-version`. They are Rust-owned parity fixtures rather
+than shared TypeScript fixtures because `.enbox-version` independently pins the existing
 cross-runtime fixture corpus.
+
+The fixed upstream `did:web` and `did:dht` document-resolution vectors are checked into
+`fixtures/parity/did/`. Resolver unit tests load those fixtures without making live network
+requests, preserving the upstream response shapes and DNS-record inputs that the implementation
+must accept.
 
 Remaining work:
 
 - Resolution and document metadata are still empty for `did:web`.
 - Encryption recipient selection does not yet consume resolved `keyAgreement` methods or perform
   the upstream Ed25519-to-X25519 public-key conversion.
-- Resolver caching and concurrent-resolution coalescing are not implemented.
+- Concurrent-resolution coalescing is not implemented.
+- The default cache is process-local; agent stale-while-revalidate and durable storage are not
+  implemented.
 - DNS resolution enforcement and a transport-level response-size limit are not implemented.
 - Verification method object IDs must remain absolute because SSI represents them as `DIDURLBuf`.

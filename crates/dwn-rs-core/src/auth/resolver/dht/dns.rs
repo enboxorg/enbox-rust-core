@@ -537,76 +537,52 @@ mod tests {
     }
 
     #[test]
-    fn decodes_official_vector_two_shape() {
-        let root_name = format!("_did.{IDENTIFIER}.");
-        let k0 = format!("t=0;k={ED25519_KEY}");
-        let bytes = packet(&[
-            (
-                &root_name,
-                "v=0;vm=k0,k1;auth=k0;asm=k0,k1;inv=k0,k1;del=k0;svc=s0",
-            ),
-            ("_cnt._did.", "did:example:abcd"),
-            ("_aka._did.", "did:example:efgh,did:example:ijkl"),
-            ("_k0._did.", &k0),
-            (
-                "_k1._did.",
-                "t=1;k=Atf6NCChxjWpnrfPt1WDVE4ipYVSvi4pXCq4SUjx0jT9;c=did:dht:i9xkp8ddcbcg8jwq54ox699wuzxyifsqx4jru45zodqu453ksz6y",
-            ),
-            (
-                "_s0._did.",
-                "id=service-1;t=TestService;se=https://test-service.com/1,https://test-service.com/2",
-            ),
-            ("_typ._did.", "id=1,2,3"),
-        ]);
-
-        let resolution = decode_document(&did(), &bytes).unwrap();
-        let document = serde_json::to_value(resolution.document).unwrap();
-        let key_one_id = format!("{DID}#0GkvkdCGu3DL7Mkv0W1DhTMCBT9-z0CkFqZoJQtw7vw");
-        let key_zero_id = format!("{DID}#0");
-
+    fn decodes_upstream_parity_vector_two() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/parity/did/did-dht-vector-2.json"
+        )))
+        .unwrap();
+        assert_eq!(fixture["schemaVersion"], 1);
+        assert_eq!(fixture["oracle"], "enbox");
+        assert_eq!(fixture["source"]["repository"], "enboxorg/enbox");
         assert_eq!(
-            document,
-            serde_json::json!({
-                "id": DID,
-                "controller": "did:example:abcd",
-                "alsoKnownAs": ["did:example:efgh", "did:example:ijkl"],
-                "verificationMethod": [
-                    {
-                        "id": key_zero_id,
-                        "type": "JsonWebKey",
-                        "controller": DID,
-                        "publicKeyJwk": {
-                            "kid": ED25519_KID,
-                            "alg": "EdDSA",
-                            "crv": "Ed25519",
-                            "kty": "OKP",
-                            "x": ED25519_KEY,
-                        }
-                    },
-                    {
-                        "id": key_one_id,
-                        "type": "JsonWebKey",
-                        "controller": "did:dht:i9xkp8ddcbcg8jwq54ox699wuzxyifsqx4jru45zodqu453ksz6y",
-                        "publicKeyJwk": {
-                            "kid": "0GkvkdCGu3DL7Mkv0W1DhTMCBT9-z0CkFqZoJQtw7vw",
-                            "alg": "ES256K",
-                            "crv": "secp256k1",
-                            "kty": "EC",
-                            "x": "1_o0IKHGNamet8-3VYNUTiKlhVK-LilcKrhJSPHSNP0",
-                            "y": "qzU8qqh0wKB6JC_9HCu8pHE-ZPkDpw4AdJ-MsV2InVY",
-                        }
-                    }
-                ],
-                "authentication": [key_zero_id],
-                "assertionMethod": [key_zero_id, key_one_id],
-                "capabilityInvocation": [key_zero_id, key_one_id],
-                "capabilityDelegation": [key_zero_id],
-                "service": [{
-                    "id": format!("{DID}#service-1"),
-                    "type": "TestService",
-                    "serviceEndpoint": ["https://test-service.com/1", "https://test-service.com/2"]
-                }]
-            })
+            fixture["source"]["commit"],
+            include_str!("../../../../../../.enbox-version")
+                .lines()
+                .find(|line| !line.starts_with('#') && !line.trim().is_empty())
+                .unwrap()
+                .trim()
+        );
+        assert_eq!(
+            fixture["source"]["path"],
+            "packages/dids/tests/fixtures/test-vectors/did-dht/vector-2.json"
+        );
+
+        let vector = &fixture["vector"];
+        let did: DIDBuf = vector["didDocument"]["id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let mut packet = Packet::new_reply(0);
+        for record in vector["dnsRecords"].as_array().unwrap() {
+            if record["type"] != "TXT" {
+                continue;
+            }
+            packet.answers.push(ResourceRecord::new(
+                Name::new(record["name"].as_str().unwrap()).unwrap(),
+                CLASS::IN,
+                record["ttl"].as_u64().unwrap() as u32,
+                RData::TXT(TXT::try_from(record["rdata"].as_str().unwrap()).unwrap()),
+            ));
+        }
+
+        let bytes = packet.build_bytes_vec_compressed().unwrap();
+        let resolution = decode_document(&did, &bytes).unwrap();
+        assert_eq!(
+            serde_json::to_value(resolution.document).unwrap(),
+            vector["didDocument"]
         );
         assert_eq!(
             resolution.document_metadata.properties,

@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "oracle": "enbox",
+  "source": {
+    "repository": "enboxorg/enbox",
+    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
+    "path": "packages/dids/tests/fixtures/web5-spec-vectors/did_web/resolve.json",
+    "url": "https://github.com/enboxorg/enbox/blob/1a227b0179f33e5d9ce3d68ba6275533ae306e2d/packages/dids/tests/fixtures/web5-spec-vectors/did_web/resolve.json"
+  },
+  "description": "Fixed upstream did:web resolution vectors. Positive cases are replayed against the Rust resolver with a local HTTP executor; error and SSRF behavior is covered by resolver unit tests.",
+  "vectors": [
+    {
+      "description": "resolves to a well known URL",
+      "input": {
+        "didUri": "did:web:example.com",
+        "mockServer": {
+          "https://example.com/.well-known/did.json": {
+            "id": "did:web:example.com"
+          }
+        }
+      },
+      "output": {
+        "didDocument": {
+          "id": "did:web:example.com"
+        },
+        "didDocumentMetadata": {},
+        "didResolutionMetadata": {}
+      }
+    },
+    {
+      "description": "resolves to a URL with a path",
+      "input": {
+        "didUri": "did:web:w3c-ccg.github.io:user:alice",
+        "mockServer": {
+          "https://w3c-ccg.github.io/user/alice/did.json": {
+            "id": "did:web:w3c-ccg.github.io:user:alice"
+          }
+        }
+      },
+      "output": {
+        "didDocument": {
+          "id": "did:web:w3c-ccg.github.io:user:alice"
+        },
+        "didDocumentMetadata": {},
+        "didResolutionMetadata": {}
+      }
+    },
+    {
+      "description": "resolves to a URL with a path and a port",
+      "input": {
+        "didUri": "did:web:example.com%3A3000:user:alice",
+        "mockServer": {
+          "https://example.com:3000/user/alice/did.json": {
+            "id": "did:web:example.com%3A3000:user:alice"
+          }
+        }
+      },
+      "output": {
+        "didDocument": {
+          "id": "did:web:example.com%3A3000:user:alice"
+        },
+        "didDocumentMetadata": {},
+        "didResolutionMetadata": {}
+      }
+    }
+  ]
+}

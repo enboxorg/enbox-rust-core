@@ -68,9 +68,10 @@ The rule is: one fixture case, multiple implementation adapters. Differences sho
 
 ## DID resolver parity
 
-Native `did:jwk` and `did:key` shapes are covered by `fixtures/spec/did/`. The network-backed
-`did:web` URL, redirect, error, complete-document, and JWS integration cases currently live as Rust
-unit tests under `auth::resolver::{http,web}`. Those vectors were reconciled against
-`enboxorg/enbox` commit `c63bf424ac0997583db825e8a5fddf1507d30c40`; they are not shared fixtures and
-therefore do not change the separate `.enbox-version` fixture pin. See
-[`DID_RESOLUTION.md`](./DID_RESOLUTION.md) for the behavioral and security contract.
+Native `did:jwk` and `did:key` shapes are covered by `fixtures/spec/did/`. Fixed upstream
+`did:web` and `did:dht` document-resolution vectors live in `fixtures/parity/did/` and are loaded
+by Rust resolver tests without live network access. Redirect, SSRF, error, and JWS-integration
+cases remain unit tests under `auth::resolver::{http,web}`. These vectors are anchored to the
+`enboxorg/enbox` commit pinned by `.enbox-version`; they do not change the separate
+`.enbox-version` fixture pin. See [`DID_RESOLUTION.md`](./DID_RESOLUTION.md) for the behavioral and
+security contract.

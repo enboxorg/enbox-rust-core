@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use dwn_rs_core::auth::{PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use dwn_rs_core::identity::agent::{
     derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
-    DeterministicDidJwkProvider, MemoryDidResolverCache, MemoryKeyManager, PortableDid,
+    DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, PortableDid,
 };
 use dwn_rs_core::identity::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
@@ -130,7 +130,7 @@ type AgentService = AgentIdentityService<
     DeterministicDidJwkProvider,
     MemoryKeyManager,
     SqliteSecretStore,
-    MemoryDidResolverCache,
+    MemoryPortableDidStore,
 >;
 
 #[derive(uniffi::Object)]
@@ -1342,7 +1342,7 @@ impl EnboxCore {
             DeterministicDidJwkProvider::default(),
             MemoryKeyManager::default(),
             secret_store,
-            MemoryDidResolverCache::default(),
+            MemoryPortableDidStore::default(),
         );
         if let Some(portable_did) = self.runtime.block_on(service.stored_agent_did())? {
             self.runtime
@@ -1356,7 +1356,7 @@ pub(crate) async fn import_existing_identity(
     service: &AgentService,
     portable_did: &PortableDid,
 ) -> Result<(), dwn_rs_core::identity::agent::AgentIdentityError> {
-    use dwn_rs_core::identity::agent::{DidProvider, DidResolverCache};
+    use dwn_rs_core::identity::agent::{DidProvider, PortableDidStore};
     service
         .did_provider()
         .import_did(portable_did.clone())
