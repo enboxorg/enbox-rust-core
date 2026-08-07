@@ -13,6 +13,7 @@ method resolvers use the same asynchronous `DidResolver` boundary.
 | `did:jwk` | Decodes the method-specific identifier into an `ssi_jwk::JWK` and produces the Enbox document shape. |
 | `did:key` | Resolves Ed25519 and secp256k1 multicodec keys into `ssi_dids_core::Document`. |
 | `did:web` | Fetches and parses the complete remote document as `ssi_dids_core::Document`. |
+| `did:dht` | Fetches a signed Pkarr relay value, verifies it against the DID identity key, and decodes its DNS packet into an `ssi_dids_core::Document`. |
 
 Applications may add or replace methods with `with_method`, `register`, or `register_arc`.
 Explicit registration replaces an existing method with the same name.
@@ -42,11 +43,29 @@ and follows at most five redirects. Any 2xx response is accepted and parsed as a
 document. The universal resolver then requires the returned document `id` to equal the requested
 DID.
 
+## `did:dht` relay resolution
+
+`did:dht` identifiers are z-base-32-encoded Ed25519 identity public keys. The resolver appends
+the canonical identifier to its configured Pkarr-compatible gateway URL, fetches the relay value,
+and verifies the BEP44 signature over its sequence number and DNS payload before decoding it.
+
+The decoded DNS document preserves verification methods, relationship references, services,
+controllers, aliases, and DID types. A successful DHT resolution sets document metadata
+`published: true` and uses the BEP44 sequence number as `versionId`.
+
+`DhtResolver::default()` uses `https://enbox-did-dht.fly.dev`, a 30-second shared deadline, and
+at most five redirects. Supply `DhtResolver::new(DhtResolverConfig { .. })` through
+`UniversalResolver::with_method` or `register` to select a different gateway. Private, loopback,
+and link-local gateway targets remain rejected unless
+`DhtResolverConfig::allow_private_gateway_uri` is explicitly enabled for development or CI.
+
 ## Network security boundary
 
 The HTTP transport disables automatic redirects and validates the initial target and every redirect
 before issuing the request. `did:web` starts on HTTPS; redirects may target HTTP or HTTPS to preserve
-Enbox parity.
+Enbox parity. `did:dht` applies the same checks to its configured gateway; development and CI can
+explicitly allow private gateway targets without relaxing scheme, hostname, redirect, or deadline
+validation.
 
 Literal targets are rejected when they are:
 
@@ -70,8 +89,12 @@ should be supplied by the surrounding network/runtime policy until they are adde
 | --- | --- |
 | Invalid DID, percent encoding, or derived URL | `InvalidDid` (`invalidDid`) |
 | Resolver called for a different method | `MethodNotSupported` (`methodNotSupported`) |
-| Network, timeout, redirect, literal-host policy, non-2xx status, or JSON/document parsing failure | `NotFound` (`notFound`) |
+| `did:web` network, timeout, redirect, literal-host policy, non-2xx status, or JSON/document parsing failure | `NotFound` (`notFound`) |
 | Returned document ID differs from the requested DID | `InvalidDocument` (`invalidData`) |
+| `did:dht` invalid gateway target | `InvalidGatewayUri` (`invalidGatewayUri`) |
+| `did:dht` relay transport failure | `Internal` (`internalError`) |
+| `did:dht` invalid identity key, relay payload, DNS document, or verification method | typed `invalid*` resolver error |
+| `did:dht` invalid BEP44 signature | `InvalidSignature` (`invalidSignature`) |
 
 Transport details are written only to debug tracing; callers receive the stable Enbox error bucket.
 
@@ -97,8 +120,9 @@ cross-runtime fixture corpus.
 
 Remaining work:
 
-- `did:dht` is not implemented.
-- Resolution and document metadata are empty for `did:web`; version metadata is deferred with
-  `did:dht` support.
-- Verification method object IDs must be absolute because SSI represents them as `DIDURLBuf`.
-- DNS resolution enforcement, response-size limits, and caching are not implemented.
+- Resolution and document metadata are still empty for `did:web`.
+- Encryption recipient selection does not yet consume resolved `keyAgreement` methods or perform
+  the upstream Ed25519-to-X25519 public-key conversion.
+- Resolver caching and concurrent-resolution coalescing are not implemented.
+- DNS resolution enforcement and a transport-level response-size limit are not implemented.
+- Verification method object IDs must remain absolute because SSI represents them as `DIDURLBuf`.
