@@ -9,6 +9,7 @@ use ssi_jwk::JWK;
 
 use crate::auth::jws::JwsError;
 
+pub mod dht;
 pub mod error;
 pub(crate) mod http;
 pub mod jwk;
@@ -17,6 +18,7 @@ pub mod r#static;
 pub mod universal;
 pub mod web;
 
+pub use dht::{DhtResolver, DhtResolverConfig};
 pub use error::ResolverError;
 pub use jwk::JwkResolver;
 pub use key::KeyResolver;

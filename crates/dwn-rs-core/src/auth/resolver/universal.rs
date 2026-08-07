@@ -1,8 +1,8 @@
 //! Registry-based DID resolution with native methods and a compatibility fallback.
 //!
-//! `did:jwk`, `did:key`, and `did:web` are registered by default. A registered method is always
-//! authoritative: its failure never falls through to statically registered keys. Applications can
-//! replace a native method explicitly with [`UniversalResolver::register`].
+//! `did:jwk`, `did:key`, `did:web`, and `did:dht` are registered by default. A registered method
+//! is always authoritative: its failure never falls through to statically registered keys.
+//! Applications can replace a native method explicitly with [`UniversalResolver::register`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -11,8 +11,8 @@ use ssi_dids_core::{DIDBuf, DID};
 use ssi_jwk::JWK;
 
 use super::{
-    DidMethodResolver, DidResolver, JwkResolver, KeyResolver, Resolution, ResolverError,
-    ResolverFuture, WebResolver,
+    DhtResolver, DidMethodResolver, DidResolver, JwkResolver, KeyResolver, Resolution,
+    ResolverError, ResolverFuture, WebResolver,
 };
 
 #[derive(Clone)]
@@ -31,6 +31,7 @@ impl UniversalResolver {
         resolver.register(JwkResolver);
         resolver.register(KeyResolver);
         resolver.register(WebResolver::default());
+        resolver.register(DhtResolver::default());
         resolver
     }
 
@@ -206,6 +207,25 @@ mod tests {
         )
         .unwrap();
         assert!(resolved.equals_public(&native_jwk));
+    }
+
+    #[test]
+    fn registers_dht_by_default() {
+        assert!(UniversalResolver::new().methods.contains_key("dht"));
+    }
+
+    #[tokio::test]
+    async fn registered_dht_method_wins_over_matching_static_fallback() {
+        let did = "did:dht:alice";
+        let fallback = StaticPublicKeyResolver::new(BTreeMap::from([(format!("{did}#0"), jwk(1))]));
+        let resolver = UniversalResolver::with_fallback(fallback).with_method(TestMethod {
+            method_name: "dht".to_string(),
+            marker: "dht",
+            fail: false,
+        });
+
+        let resolution = resolver.resolve(did).await.unwrap();
+        assert_eq!(resolution.document.property_set["resolvedBy"], "dht");
     }
 
     #[tokio::test]

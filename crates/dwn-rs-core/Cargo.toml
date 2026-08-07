@@ -13,6 +13,7 @@ xtra = { version = "0.6.0", features = ["tokio", "sink", "instrumentation"] }
 chrono = { version = "0.4.30", features = ["serde"] }
 cid = { version = "0.11.1", features = ["serde"] }
 futures-util = "0.3.30"
+simple-dns = "0.12.0"
 ipld-core = { version = "0.4.1", features = ["serde"] }
 serde = { version = "1.0.183", features = ["derive"] }
 serde_ipld_dagcbor = "0.6.0"
@@ -36,7 +37,11 @@ tower = { version = "0.5.2", default-features = false }
 derive_more = { version = "1.0", features = ["display", "from", "try_into"] }
 ssi-dids-core = "0.3.1"
 base64 = "0.22.1"
-ssi-jwk = { version = "0.4.0", default-features = false, features = ["secp256r1", "secp256k1", "ed25519"] }
+ssi-jwk = { version = "0.4.0", default-features = false, features = [
+    "secp256r1",
+    "secp256k1",
+    "ed25519",
+] }
 ssi-jws = { version = "0.5.0", default-features = false, features = [
     "secp256r1",
     "secp256k1",
@@ -78,6 +83,7 @@ reqwest = { version = "0.12.28", default-features = false, features = [
     "json",
     "rustls-tls",
 ] }
+z32 = "1.3.0"
 
 [dev-dependencies]
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
