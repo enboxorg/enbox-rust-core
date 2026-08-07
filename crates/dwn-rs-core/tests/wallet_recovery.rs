@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use chrono::{Duration, Utc};
 use dwn_rs_core::identity::agent::{
     AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
-    IdentityMetadata, MemoryDidResolverCache, MemoryKeyManager, MemorySecretStore,
+    IdentityMetadata, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     PortableIdentity,
 };
 use dwn_rs_core::identity::connect::{
@@ -178,7 +178,7 @@ async fn recovered_agent(recovery_phrase: &str) -> RecoveredAgent {
         DeterministicDidJwkProvider::default(),
         key_manager.clone(),
         secret_store.clone(),
-        MemoryDidResolverCache::default(),
+        MemoryPortableDidStore::default(),
     );
     let initialization = service
         .initialize_from_recovery(AgentIdentityInitializeRequest {

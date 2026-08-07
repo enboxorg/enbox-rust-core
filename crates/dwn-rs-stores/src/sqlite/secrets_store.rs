@@ -108,7 +108,7 @@ mod tests {
     use super::*;
     use dwn_rs_core::identity::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
-        MemoryDidResolverCache, MemoryKeyManager, VAULT_PORTABLE_DID_KEY,
+        MemoryKeyManager, MemoryPortableDidStore, VAULT_PORTABLE_DID_KEY,
     };
     use dwn_rs_core::stores::MessageStore;
     use tempfile::tempdir;
@@ -163,7 +163,7 @@ mod tests {
                 DeterministicDidJwkProvider::default(),
                 MemoryKeyManager::default(),
                 vault,
-                MemoryDidResolverCache::default(),
+                MemoryPortableDidStore::default(),
             );
             let initialization = service
                 .initialize_from_recovery(AgentIdentityInitializeRequest {
