@@ -90,7 +90,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `enbox-ffi` protocol install / push / restore | `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption` over `Local`/`HttpDwnProtocolEndpoint` with axum mock server tests | done |
 | `enbox-ffi` DWeb Connect surface | `create_permission_request/_delegate_grant/_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, persisted decryption/context keys; covered in `enbox-ffi` tests | done |
 | `enbox-ffi` HTTP tenant registration | `register_tenant` against axum mock; anonymous, provider-auth-v0, refresh-on-expiry paths | done |
-| `UniversalResolver` DID method coverage | `did:jwk` (decode JWK from suffix) and `did:key` (Ed25519 multicodec); end-to-end JWS signed by a `did:key` verifies through the resolver | done |
+| `UniversalResolver` DID method coverage | `did:jwk`, `did:key` (Ed25519 + secp256k1), and `did:web`; complete SSI document parsing, SSRF/redirect policy, fallback anti-shadowing, document-ID validation, and end-to-end JWS verification are covered without live network calls | done |
 | `enbox-ffi` mobile runtime status | `initialize_runtime`, `unlock_with_reason`, `lock`, `begin_background_task`, `end_background_task`; covered in `enbox-ffi` tests | done |
 | `enbox-ffi` resume-pending sync | `list_pending_scopes`, `resume_pending` (batch deadline + per-scope `sync_once`); covered in `enbox-ffi` tests including a seeded-checkpoint drain | done |
 | Multi-node sync integration (direct + HTTP) | `crates/dwn-rs-stores/tests/sync_integration.rs` (6 scenarios in `cargo test --workspace`) | done |

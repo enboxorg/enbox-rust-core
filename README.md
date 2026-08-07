@@ -29,7 +29,7 @@ Core protocol wiring matches TypeScript `Dwn.create()`:
 
 - JSON Schema validation at the `process_message` boundary
 - `CoreProtocolRegistry` with permissions lifecycle hooks
-- `UniversalResolver` (`did:jwk`, `did:key`, registry extensions, and static fallback) for JWS verification
+- `UniversalResolver` (`did:jwk`, `did:key`, `did:web`, registry extensions, and non-shadowing static fallback) for JWS verification; see [`docs/DID_RESOLUTION.md`](docs/DID_RESOLUTION.md)
 - `StorageController` + `ResumableTaskManager` resume pending delete/squash tasks on open
 
 ### Test coverage (three layers + interop)
@@ -83,7 +83,7 @@ The migration plan is tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md) and mirror
 - **M5** — Agent, auth, and wallet core (complete)
 - **M6** — Native bindings and integration (in progress; FFI surface complete, background sync + mobile shell integration remaining)
 
-See also [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md), [`docs/BINDINGS.md`](docs/BINDINGS.md), [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md), [`docs/MIGRATION_GUIDE.md`](docs/MIGRATION_GUIDE.md), and [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
+See also [`docs/MIGRATION_PLAN.md`](docs/MIGRATION_PLAN.md), [`docs/BINDINGS.md`](docs/BINDINGS.md), [`docs/BACKGROUND_SYNC.md`](docs/BACKGROUND_SYNC.md), [`docs/MIGRATION_GUIDE.md`](docs/MIGRATION_GUIDE.md), [`docs/DID_RESOLUTION.md`](docs/DID_RESOLUTION.md), and [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md).
 
 ## Repository Policy
 

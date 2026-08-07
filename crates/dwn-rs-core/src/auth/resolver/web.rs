@@ -1,3 +1,10 @@
+//! `did:web` document resolution with Enbox-compatible URL and error semantics.
+//!
+//! Resolution starts at an HTTPS URL derived from the DID and uses the shared public-URL
+//! transport for manual redirects and literal-host filtering. That policy intentionally does not
+//! resolve DNS names or claim protection against DNS rebinding. See `docs/DID_RESOLUTION.md` for
+//! the complete compatibility and security contract.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,8 +21,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Network limits applied to one complete `did:web` resolution, including redirects.
 pub struct WebResolverConfig {
+    /// Deadline shared by the initial request and every followed redirect.
     pub timeout: Duration,
+    /// Maximum number of redirects followed after the initial request.
     pub max_redirects: usize,
 }
 
@@ -29,12 +39,14 @@ impl Default for WebResolverConfig {
 }
 
 #[derive(Clone)]
+/// Resolves `did:web` identifiers into complete SSI DID documents.
 pub struct WebResolver {
     config: WebResolverConfig,
     http: Arc<dyn HttpExecutor>,
 }
 
 impl WebResolver {
+    /// Create a resolver using the native HTTP client and the supplied limits.
     pub fn new(config: WebResolverConfig) -> Self {
         Self {
             config,
