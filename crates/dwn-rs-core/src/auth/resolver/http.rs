@@ -484,6 +484,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn allow_private_policy_requests_private_initial_url() {
+        let executor = FakeExecutor::new([response(StatusCode::OK)]);
+
+        let response = fetch_url(
+            &executor,
+            HttpRequest::get(Url::parse("http://127.0.0.1/did.json").unwrap()),
+            Duration::from_secs(30),
+            5,
+            "test URL",
+            TargetPolicy::AllowPrivate,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(executor.request_count(), 1);
+    }
+
+    #[tokio::test]
     async fn does_not_follow_private_or_non_network_redirects() {
         for location in ["http://169.254.169.254/metadata", "file:///etc/hosts"] {
             let executor = FakeExecutor::new([redirect(location)]);
@@ -499,6 +518,41 @@ mod tests {
             .is_err());
             assert_eq!(executor.request_count(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn allow_private_policy_allows_private_redirects_but_not_non_network_ones() {
+        let executor =
+            FakeExecutor::new([redirect("http://127.0.0.1/next"), response(StatusCode::OK)]);
+
+        let response = fetch_url(
+            &executor,
+            HttpRequest::get(Url::parse("https://example.com/did.json").unwrap()),
+            Duration::from_secs(30),
+            5,
+            "test URL",
+            TargetPolicy::AllowPrivate,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(executor.request_count(), 2);
+
+        let executor = FakeExecutor::new([redirect("file:///etc/hosts")]);
+        assert!(matches!(
+            fetch_url(
+                &executor,
+                HttpRequest::get(Url::parse("https://example.com/did.json").unwrap()),
+                Duration::from_secs(30),
+                5,
+                "test URL",
+                TargetPolicy::AllowPrivate,
+            )
+            .await,
+            Err(PublicHttpError::InvalidScheme { .. })
+        ));
+        assert_eq!(executor.request_count(), 1);
     }
 
     #[tokio::test]

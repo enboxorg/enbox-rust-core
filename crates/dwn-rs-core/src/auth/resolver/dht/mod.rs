@@ -124,3 +124,194 @@ fn map_gateway_error(error: PublicHttpError) -> ResolverError {
         | PublicHttpError::ResponseBody(_) => ResolverError::Internal(error.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use bytes::Bytes;
+    use ed25519_dalek::{Signer, SigningKey};
+    use reqwest::header::HeaderMap;
+    use reqwest::StatusCode;
+    use simple_dns::rdata::{RData, TXT};
+    use simple_dns::{Name, Packet, ResourceRecord, CLASS};
+    use ssi_dids_core::DIDBuf;
+
+    use super::*;
+    use crate::auth::resolver::http::HttpResponse;
+
+    struct FakeExecutor {
+        responses: Mutex<VecDeque<Result<HttpResponse, PublicHttpError>>>,
+        requests: Mutex<Vec<HttpRequest>>,
+    }
+
+    impl FakeExecutor {
+        fn new(responses: impl IntoIterator<Item = Result<HttpResponse, PublicHttpError>>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().collect()),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn request_count(&self) -> usize {
+            self.requests.lock().unwrap().len()
+        }
+    }
+
+    impl HttpExecutor for FakeExecutor {
+        fn execute_once<'a>(
+            &'a self,
+            request: HttpRequest,
+            _timeout: Duration,
+        ) -> ResolverFuture<'a, Result<HttpResponse, PublicHttpError>> {
+            Box::pin(async move {
+                self.requests.lock().unwrap().push(request);
+                self.responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("fake response must be configured")
+            })
+        }
+    }
+
+    fn response(status: StatusCode, body: Vec<u8>) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: HeaderMap::new(),
+            body: Bytes::from(body),
+        }
+    }
+
+    fn signed_relay_payload(sequence: u64) -> (DIDBuf, Vec<u8>) {
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let identifier = z32::encode(signing_key.verifying_key().as_bytes());
+        let did = format!("did:dht:{identifier}").parse().unwrap();
+        let public_key = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().as_bytes());
+
+        let mut packet = Packet::new_reply(0);
+        let root_name = format!("_did.{identifier}.");
+        packet.answers.push(ResourceRecord::new(
+            Name::new(&root_name).unwrap(),
+            CLASS::IN,
+            7200,
+            RData::TXT(TXT::try_from("v=0;vm=k0;auth=k0;asm=k0;inv=k0;del=k0").unwrap()),
+        ));
+        let key_record = format!("t=0;k={public_key}");
+        packet.answers.push(ResourceRecord::new(
+            Name::new("_k0._did.").unwrap(),
+            CLASS::IN,
+            7200,
+            RData::TXT(TXT::try_from(key_record.as_str()).unwrap()),
+        ));
+        let value = packet.build_bytes_vec_compressed().unwrap();
+        let prefix = format!("3:seqi{sequence}e1:v{}:", value.len());
+        let mut signing_payload = prefix.into_bytes();
+        signing_payload.extend_from_slice(&value);
+        let signature = signing_key.sign(&signing_payload);
+
+        let mut payload = Vec::with_capacity(72 + value.len());
+        payload.extend_from_slice(&signature.to_bytes());
+        payload.extend_from_slice(&sequence.to_be_bytes());
+        payload.extend_from_slice(&value);
+        (did, payload)
+    }
+
+    fn resolver(
+        config: DhtResolverConfig,
+        response: Result<HttpResponse, PublicHttpError>,
+    ) -> (DhtResolver, Arc<FakeExecutor>) {
+        let http = Arc::new(FakeExecutor::new([response]));
+        (DhtResolver::with_executor(config, http.clone()), http)
+    }
+
+    #[tokio::test]
+    async fn resolves_a_signed_relay_document() {
+        let (did, payload) = signed_relay_payload(42);
+        let config = DhtResolverConfig {
+            gateway_uri: Url::parse("https://gateway.example/pkarr").unwrap(),
+            ..DhtResolverConfig::default()
+        };
+        let (resolver, http) = resolver(config, Ok(response(StatusCode::OK, payload)));
+
+        let resolution = resolver.resolve(&did).await.unwrap();
+
+        assert_eq!(resolution.document.id, did);
+        assert_eq!(resolution.document.verification_method.len(), 1);
+        assert_eq!(
+            resolution.document_metadata.version_id.as_deref(),
+            Some("42")
+        );
+        assert_eq!(resolution.document_metadata.properties["published"], true);
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].url,
+            Url::parse(&format!(
+                "https://gateway.example/pkarr/{}",
+                did.method_specific_id()
+            ))
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn private_gateway_requires_explicit_opt_in() {
+        let (did, payload) = signed_relay_payload(1);
+        let config = DhtResolverConfig {
+            gateway_uri: Url::parse("http://127.0.0.1:7527").unwrap(),
+            ..DhtResolverConfig::default()
+        };
+        let (resolver, http) = resolver(config, Ok(response(StatusCode::OK, payload)));
+
+        assert!(matches!(
+            resolver.resolve(&did).await,
+            Err(ResolverError::InvalidGatewayUri(_))
+        ));
+        assert_eq!(http.request_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn private_gateway_can_be_explicitly_enabled() {
+        let (did, payload) = signed_relay_payload(1);
+        let config = DhtResolverConfig {
+            gateway_uri: Url::parse("http://127.0.0.1:7527").unwrap(),
+            allow_private_gateway_uri: true,
+            ..DhtResolverConfig::default()
+        };
+        let (resolver, http) = resolver(config, Ok(response(StatusCode::OK, payload)));
+
+        assert!(resolver.resolve(&did).await.is_ok());
+        assert_eq!(http.request_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn treats_missing_relay_values_as_not_found() {
+        let (did, _) = signed_relay_payload(1);
+        let (resolver, http) = resolver(
+            DhtResolverConfig::default(),
+            Ok(response(StatusCode::NOT_FOUND, Vec::new())),
+        );
+
+        assert_eq!(resolver.resolve(&did).await, Err(ResolverError::NotFound));
+        assert_eq!(http.request_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn maps_gateway_transport_failures_to_internal_errors() {
+        let (did, _) = signed_relay_payload(1);
+        let (resolver, http) = resolver(
+            DhtResolverConfig::default(),
+            Err(PublicHttpError::Request("connection refused".to_string())),
+        );
+
+        assert!(matches!(
+            resolver.resolve(&did).await,
+            Err(ResolverError::Internal(_))
+        ));
+        assert_eq!(http.request_count(), 1);
+    }
+}
