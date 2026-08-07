@@ -5,7 +5,7 @@ use ssi_dids_core::{DIDURLBuf, Document, DID};
 use ssi_jwk::{ed25519_parse, secp256k1_parse};
 
 use super::{
-    jwk_verification_method, DidMethodResolver, Resolution, ResolverError, ResolverFuture,
+    verification_method_from_jwk, DidMethodResolver, Resolution, ResolverError, ResolverFuture,
 };
 
 const DID_CONTEXT: &str = "https://www.w3.org/ns/did/v1";
@@ -60,7 +60,7 @@ fn resolve_document(did: &DID) -> Result<Resolution, ResolverError> {
 
     let verification_method_id = format!("{did}#{identifier}");
     jwk.key_id = Some(jwk.thumbprint().map_err(|_| ResolverError::InvalidDid)?);
-    let verification_method = jwk_verification_method(
+    let verification_method = verification_method_from_jwk(
         &verification_method_id,
         "JsonWebKey2020",
         &did.to_owned(),

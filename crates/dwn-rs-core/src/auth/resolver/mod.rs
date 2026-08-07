@@ -10,10 +10,14 @@ use ssi_jwk::JWK;
 pub mod error;
 pub mod jwk;
 pub mod key;
+pub mod r#static;
+pub mod universal;
 
 pub use error::ResolverError;
 pub use jwk::JwkResolver;
 pub use key::KeyResolver;
+pub use r#static::StaticPublicKeyResolver;
+pub use universal::UniversalResolver;
 
 pub type ResolverFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -85,7 +89,7 @@ pub trait DidMethodResolver: Send + Sync {
         -> ResolverFuture<'a, Result<Resolution, ResolverError>>;
 }
 
-pub(crate) fn jwk_verification_method(
+pub(crate) fn verification_method_from_jwk(
     id: &str,
     type_: &str,
     controller: &DIDBuf,
