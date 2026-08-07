@@ -5,12 +5,12 @@ use ssi_claims_core::SignatureError;
 pub use ssi_jwk::JWK;
 use ssi_jwk::{OctetParams, Params};
 use ssi_jws::{JwsPayload, JwsSignerInfo};
-use std::collections::BTreeMap;
 use thiserror::Error;
 
 pub use ssi_jwk::Algorithm;
 pub use ssi_jws::JwsSigner;
 
+use crate::auth::resolver::{resolve_signing_key, DidResolver, ResolverError};
 use crate::MapValue;
 
 #[derive(Error, Debug)]
@@ -33,8 +33,19 @@ pub enum JwsError {
     MissingProtected,
     #[error("JWS signature is missing the required 'signature' property")]
     MissingSignature,
-    #[error("public key for kid '{0}' not found")]
-    PublicKeyNotFound(String),
+    #[error(
+        "public key for kid '{kid}' not found; available verification methods: {available_ids:?}"
+    )]
+    PublicKeyNotFound {
+        kid: String,
+        available_ids: Vec<String>,
+    },
+    #[error("failed to resolve DID '{did}': {source}")]
+    ResolutionFailed {
+        did: String,
+        #[source]
+        source: ResolverError,
+    },
     #[error("Signature verification failed")]
     InvalidSignature,
     #[error("Unsupported JWS algorithm: {0}")]
@@ -50,7 +61,9 @@ impl JwsError {
         match self {
             Self::MissingKid => "GeneralJwsVerifierMissingKid",
             Self::MissingAlg => "GeneralJwsVerifierMissingAlg",
-            Self::PublicKeyNotFound(_) => "GeneralJwsVerifierGetPublicKeyNotFound",
+            Self::PublicKeyNotFound { .. } | Self::ResolutionFailed { .. } => {
+                "GeneralJwsVerifierGetPublicKeyNotFound"
+            }
             Self::InvalidSignature => "GeneralJwsVerifierInvalidSignature",
             Self::UnsupportedAlgorithm(_) => "JwsUnsupportedAlgorithm",
             Self::UnsupportedCurve(_) => "JwsVerifySignatureUnsupportedCrv",
@@ -296,10 +309,10 @@ impl Jws {
     }
 
     /// Verify the signatures on this JWS, returning the DIDs of the signers.
-    pub fn verify_signatures<R>(&self, resolver: &R) -> Result<Vec<String>, JwsError>
-    where
-        R: JwsPublicKeyResolver + ?Sized,
-    {
+    pub async fn verify_signatures(
+        &self,
+        resolver: &dyn DidResolver,
+    ) -> Result<Vec<String>, JwsError> {
         let payload = self.payload.as_deref().ok_or(JwsError::MissingPayload)?;
         let signatures = self
             .signatures
@@ -311,16 +324,14 @@ impl Jws {
             let input = prepare_verification(payload, signature)?;
             let kid = input.kid.as_deref().ok_or(JwsError::MissingKid)?;
 
-            let public_jwk = resolver
-                .resolve_public_jwk(kid)
-                .ok_or_else(|| JwsError::PublicKeyNotFound(kid.to_string()))?;
+            let public_jwk = resolve_signing_key(kid, resolver).await?;
             if verify_jws_signature(
                 input.algorithm,
                 &input.signing_bytes,
                 &input.signature,
                 &public_jwk,
             )? {
-                signers.push(extract_did(kid).to_string());
+                signers.push(extract_did(kid));
             } else {
                 return Err(JwsError::InvalidSignature);
             }
@@ -391,16 +402,6 @@ pub struct PrivateJwkSigner {
     private_jwk: JWK,
 }
 
-/// Resolves a `kid` to a public JWK (used for signature verification).
-pub trait JwsPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<JWK>;
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct StaticPublicKeyResolver {
-    public_keys: BTreeMap<String, JWK>,
-}
-
 #[derive(Serialize)]
 struct JwsProtectedHeader {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -447,22 +448,6 @@ impl JwsSigner for PrivateJwkSigner {
 
     async fn sign_bytes(&self, signing_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
         ssi_jws::sign_bytes(self.algorithm, signing_bytes, &self.private_jwk).map_err(Into::into)
-    }
-}
-
-impl StaticPublicKeyResolver {
-    pub fn new(public_keys: BTreeMap<String, JWK>) -> Self {
-        Self { public_keys }
-    }
-
-    pub fn insert(&mut self, kid: impl Into<String>, public_jwk: JWK) {
-        self.public_keys.insert(kid.into(), public_jwk);
-    }
-}
-
-impl JwsPublicKeyResolver for StaticPublicKeyResolver {
-    fn resolve_public_jwk(&self, kid: &str) -> Option<JWK> {
-        self.public_keys.get(kid).cloned()
     }
 }
 
@@ -548,10 +533,10 @@ fn decode_base64url(value: &str, label: &str) -> Result<Vec<u8>, JwsError> {
         .map_err(|err| JwsError::Base64UrlError(format!("{label}: {err}")))
 }
 
-fn extract_did(kid: &str) -> &str {
-    kid.split('#')
-        .next()
-        .expect("split always returns one item")
+fn extract_did(kid: &str) -> String {
+    kid.parse::<ssi_dids_core::DIDURLBuf>()
+        .map(|did_url| did_url.did().to_string())
+        .unwrap_or_else(|_| kid.to_string())
 }
 
 #[cfg(test)]
@@ -574,10 +559,12 @@ impl JwsSigner for NoSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::resolver::{StaticPublicKeyResolver, UniversalResolver};
     use serde_json::json;
     use ssi_jwk::JWK;
     use std::{
         borrow::Cow,
+        collections::BTreeMap,
         str::FromStr,
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -746,8 +733,63 @@ mod tests {
             ("did:example:bob#key-1".to_string(), bob_public),
         ]));
         assert_eq!(
-            jws.verify_signatures(&resolver).unwrap(),
+            jws.verify_signatures(&resolver).await.unwrap(),
             ["did:example:alice", "did:example:bob"]
+        );
+    }
+
+    #[tokio::test]
+    async fn native_did_resolution_cannot_be_shadowed_by_static_keys() {
+        let private_jwk = JWK::generate_ed25519().unwrap();
+        let public_jwk = private_jwk.to_public();
+        let encoded = base64url.encode(serde_json::to_vec(&public_jwk).unwrap());
+        let did = format!("did:jwk:{encoded}");
+        let kid = format!("{did}#0");
+        let signer = PrivateJwkSigner::new(kid.clone(), Algorithm::EdDSA, private_jwk);
+        let jws = Jws::create(b"native wins".as_slice(), &[signer])
+            .await
+            .unwrap();
+
+        let fallback =
+            StaticPublicKeyResolver::new(BTreeMap::from([(kid, JWK::generate_ed25519().unwrap())]));
+        let resolver = UniversalResolver::with_fallback(fallback);
+
+        assert_eq!(jws.verify_signatures(&resolver).await.unwrap(), [did]);
+    }
+
+    #[tokio::test]
+    async fn verifies_multiple_signatures_across_native_did_methods() {
+        let jwk_private = JWK::generate_ed25519().unwrap();
+        let jwk_public = jwk_private.to_public();
+        let jwk_did = format!(
+            "did:jwk:{}",
+            base64url.encode(serde_json::to_vec(&jwk_public).unwrap())
+        );
+        let jwk_signer =
+            PrivateJwkSigner::new(format!("{jwk_did}#0"), Algorithm::EdDSA, jwk_private);
+
+        let key_private = JWK::generate_ed25519().unwrap();
+        let Params::OKP(key_params) = &key_private.params else {
+            panic!("generated Ed25519 JWK must use OKP parameters");
+        };
+        let mut multicodec_key = vec![0xed, 0x01];
+        multicodec_key.extend_from_slice(&key_params.public_key.0);
+        let identifier = multibase::encode(multibase::Base::Base58Btc, multicodec_key);
+        let key_did = format!("did:key:{identifier}");
+        let key_signer = PrivateJwkSigner::new(
+            format!("{key_did}#{identifier}"),
+            Algorithm::EdDSA,
+            key_private,
+        );
+
+        let jws = Jws::create(b"two native methods".as_slice(), &[jwk_signer, key_signer])
+            .await
+            .unwrap();
+        let resolver = UniversalResolver::new();
+
+        assert_eq!(
+            jws.verify_signatures(&resolver).await.unwrap(),
+            [jwk_did, key_did]
         );
     }
 
@@ -844,8 +886,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn protected_algorithm_must_be_compatible_with_resolved_key() {
+    #[tokio::test]
+    async fn protected_algorithm_must_be_compatible_with_resolved_key() {
         let private_jwk = JWK::generate_ed25519().expect("generate Ed25519 JWK");
         let public_jwk = private_jwk.to_public();
         let kid = "did:example:alice#key-1";
@@ -881,7 +923,7 @@ mod tests {
         let mut resolver = StaticPublicKeyResolver::default();
         resolver.insert(kid, public_jwk);
         assert!(matches!(
-            jws.verify_signatures(&resolver),
+            jws.verify_signatures(&resolver).await,
             Err(JwsError::InvalidSignature)
         ));
     }

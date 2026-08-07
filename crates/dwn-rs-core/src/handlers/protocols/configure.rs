@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::core_protocol::CoreProtocolRegistry;
 use crate::descriptors::ConfigureDescriptor;
 use crate::dwn::{DwnReply, HandlerContext};
@@ -17,19 +17,19 @@ use super::common::*;
 pub struct ProtocolsConfigureHandler<MessageStore, StateIndex> {
     message_store: MessageStore,
     state_index: StateIndex,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateIndex> {
     pub fn new(
         message_store: MessageStore,
         state_index: StateIndex,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             state_index,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }
@@ -56,9 +56,11 @@ where
 
             let authorization = match permissions::validate_authorization_signature(
                 raw_message,
-                self.public_key_resolver.as_deref(),
+                self.did_resolver.as_deref(),
                 true,
-            ) {
+            )
+            .await
+            {
                 Ok(Some(authorization)) => authorization,
                 Ok(None) => {
                     return DwnReply::unauthorized(

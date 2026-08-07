@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use super::RecordsAuthorizationKind;
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsQueryDescriptor;
 use crate::dwn::DwnReply;
@@ -22,7 +22,7 @@ use crate::Message;
 #[derive(Clone)]
 pub struct RecordsQueryHandler<MessageStore> {
     message_store: MessageStore,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore> Handler for RecordsQueryHandler<MessageStore>
@@ -46,9 +46,11 @@ where
 
             let signature = match permissions::validate_authorization_signature(
                 raw_message,
-                self.public_key_resolver.as_deref(),
+                self.did_resolver.as_deref(),
                 false,
-            ) {
+            )
+            .await
+            {
                 Ok(signature) => signature,
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                     return DwnReply::bad_request(detail)
@@ -102,13 +104,10 @@ where
 }
 
 impl<MessageStore> RecordsQueryHandler<MessageStore> {
-    pub fn new(
-        message_store: MessageStore,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
-    ) -> Self {
+    pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
         Self {
             message_store,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }

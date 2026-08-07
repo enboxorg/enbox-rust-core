@@ -328,7 +328,7 @@ impl DidProvider for DeterministicDidJwkProvider {
             let did_uri = did_jwk_uri(&request.identity_private_jwk.to_public())?;
             let sig_id = format!("{did_uri}#sig");
             let enc_id = format!("{did_uri}#enc");
-            let identity_id = format!("{did_uri}#identity");
+            let identity_id = format!("{did_uri}#0");
             let signing_private_jwk = with_key_id(request.signing_private_jwk, sig_id.clone());
             let encryption_private_jwk =
                 with_key_id(request.encryption_private_jwk, enc_id.clone());

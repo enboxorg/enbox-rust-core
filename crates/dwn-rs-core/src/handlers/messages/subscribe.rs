@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
 use crate::dwn::{DwnReply, HandlerContext};
@@ -19,7 +19,7 @@ use super::common::*;
 pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
     message_store: MessageStore,
     event_log: EventLog,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 pub struct SubscribeReply {
@@ -58,12 +58,12 @@ impl<MessageStore, EventLog> MessagesSubscribeHandler<MessageStore, EventLog> {
     pub fn new(
         message_store: MessageStore,
         event_log: EventLog,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             event_log,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }
@@ -90,9 +90,11 @@ where
 
         let authorization = match permissions::validate_authorization_signature(
             raw_message,
-            self.public_key_resolver.as_deref(),
+            self.did_resolver.as_deref(),
             true,
-        ) {
+        )
+        .await
+        {
             Ok(Some(authorization)) => authorization,
             Ok(None) => {
                 return subscribe_reply(

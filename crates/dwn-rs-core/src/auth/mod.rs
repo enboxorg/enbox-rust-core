@@ -1,10 +1,7 @@
 pub mod authorization;
 pub mod jws;
-pub mod universal_resolver;
+pub mod resolver;
 
 pub use authorization::Authorization;
-pub use jws::{
-    ed25519_jwk, Jws, JwsError, JwsPublicKeyResolver, JwsSignature, JwsSigner, PrivateJwkSigner,
-    StaticPublicKeyResolver, JWK,
-};
-pub use universal_resolver::UniversalResolver;
+pub use jws::{ed25519_jwk, Jws, JwsError, JwsSignature, JwsSigner, PrivateJwkSigner, JWK};
+pub use resolver::{StaticPublicKeyResolver, UniversalResolver};

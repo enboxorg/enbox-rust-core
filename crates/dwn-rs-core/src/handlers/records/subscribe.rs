@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, SubscribeDescriptor};
 use crate::dwn::{DwnReply, Handler, HandlerContext, MethodHandler, MethodHandlerRequest};
@@ -26,7 +26,7 @@ use super::RecordsAuthorizationKind;
 #[derive(Clone)]
 pub struct RecordsSubscribeHandler<MessageStore> {
     message_store: MessageStore,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore> Handler for RecordsSubscribeHandler<MessageStore>
@@ -56,9 +56,11 @@ where
 
             let signature = match permissions::validate_authorization_signature(
                 raw_message,
-                self.public_key_resolver.as_deref(),
+                self.did_resolver.as_deref(),
                 false,
-            ) {
+            )
+            .await
+            {
                 Ok(signature) => signature,
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                     return DwnReply::bad_request(detail)
@@ -161,13 +163,10 @@ pub struct RecordsSubscribeReply {
 }
 
 impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
-    pub fn new(
-        message_store: MessageStore,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
-    ) -> Self {
+    pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
         Self {
             message_store,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }
@@ -176,7 +175,7 @@ impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
 pub struct RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
     message_store: MessageStore,
     event_log: EventLog,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore, EventLog> MethodHandler
@@ -201,12 +200,12 @@ impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, Event
     pub fn new(
         message_store: MessageStore,
         event_log: EventLog,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             event_log,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }
@@ -233,9 +232,11 @@ where
 
         let signature = match permissions::validate_authorization_signature(
             raw_message,
-            self.public_key_resolver.as_deref(),
+            self.did_resolver.as_deref(),
             false,
-        ) {
+        )
+        .await
+        {
             Ok(signature) => signature,
             Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                 return records_subscribe_reply(DwnReply::bad_request(detail), None)

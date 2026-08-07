@@ -8,7 +8,7 @@ use base64::Engine as _;
 use bytes::Bytes;
 use futures_util::stream;
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::cid::generate_dag_pb_cid_from_bytes;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsWriteDescriptor;
@@ -40,7 +40,7 @@ pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog = (
     state_index: StateIndex,
     event_log: Option<EventLog>,
     core_protocol_registry: CoreProtocolRegistry,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore, DataStore, StateIndex, EventLog> Handler
@@ -68,9 +68,11 @@ where
 
             let signature = match permissions::validate_authorization_signature(
                 raw_message,
-                self.public_key_resolver.as_deref(),
+                self.did_resolver.as_deref(),
                 true,
-            ) {
+            )
+            .await
+            {
                 Ok(Some(signature)) => signature,
                 Ok(None) => {
                     return DwnReply::unauthorized(
@@ -317,7 +319,7 @@ where
         data_store: DataStore,
         state_index: StateIndex,
         event_log: EventLog,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
@@ -325,7 +327,7 @@ where
             state_index,
             event_log: Some(event_log),
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
-            public_key_resolver,
+            did_resolver,
         }
     }
 }
@@ -341,7 +343,7 @@ impl<MessageStore, DataStore, StateIndex, EventLog>
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
@@ -349,7 +351,7 @@ impl<MessageStore, DataStore, StateIndex, EventLog>
             state_index,
             event_log: None,
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
-            public_key_resolver,
+            did_resolver,
         }
     }
 }

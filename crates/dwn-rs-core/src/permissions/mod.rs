@@ -5,7 +5,8 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::auth::{Jws, JwsError, JwsPublicKeyResolver};
+use crate::auth::resolver::DidResolver;
+use crate::auth::{Jws, JwsError};
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Records, RecordsWriteDescriptor,
@@ -223,17 +224,17 @@ pub fn permissions_protocol_definition() -> Definition {
     }
 }
 
-pub fn validate_authorization_signature(
+pub async fn validate_authorization_signature(
     raw_message: &JsonValue,
-    public_key_resolver: Option<&(dyn JwsPublicKeyResolver + Send + Sync)>,
+    did_resolver: Option<&dyn DidResolver>,
     required: bool,
 ) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
-    validate_authorization_signature_inner(raw_message, public_key_resolver, required, true)
+    validate_authorization_signature_inner(raw_message, did_resolver, required, true).await
 }
 
-fn validate_authorization_signature_inner(
+async fn validate_authorization_signature_inner(
     raw_message: &JsonValue,
-    public_key_resolver: Option<&(dyn JwsPublicKeyResolver + Send + Sync)>,
+    did_resolver: Option<&dyn DidResolver>,
     required: bool,
     validate_delegated_grant: bool,
 ) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
@@ -264,28 +265,28 @@ fn validate_authorization_signature_inner(
     let payload = decode_jws_payload(&jws)?;
     validate_descriptor_cid(raw_message, &payload)?;
     let unverified_signer = signer_did_from_jws(&jws)?;
-    let signer = public_key_resolver
-        .map(|resolver| {
-            jws.verify_signatures(resolver)
-                .map_err(|err| {
-                    AuthorizationValidationError::Unauthorized(format!("{}: {err}", err.code()))
-                })
-                .and_then(|signers| {
-                    signers.into_iter().next().ok_or_else(|| {
-                        AuthorizationValidationError::Unauthorized(
-                            "AuthenticateJwsMissing: no signer found".to_string(),
-                        )
-                    })
-                })
-        })
-        .transpose()?
-        .unwrap_or(unverified_signer);
+    let signer = match did_resolver {
+        Some(resolver) => jws
+            .verify_signatures(resolver)
+            .await
+            .map_err(|err| {
+                AuthorizationValidationError::Unauthorized(format!("{}: {err}", err.code()))
+            })?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                AuthorizationValidationError::Unauthorized(
+                    "AuthenticateJwsMissing: no signer found".to_string(),
+                )
+            })?,
+        None => unverified_signer,
+    };
 
     let mut author = signer.clone();
     let mut author_delegated_grant = None;
     if validate_delegated_grant {
         author_delegated_grant =
-            validate_embedded_author_delegated_grant(authorization, &payload, public_key_resolver)?;
+            validate_embedded_author_delegated_grant(authorization, &payload, did_resolver).await?;
         if let Some(grant) = &author_delegated_grant {
             author = grant.grantor.clone();
         }
@@ -299,10 +300,10 @@ fn validate_authorization_signature_inner(
     }))
 }
 
-fn validate_embedded_author_delegated_grant(
+async fn validate_embedded_author_delegated_grant(
     authorization: &JsonValue,
     payload: &JsonValue,
-    public_key_resolver: Option<&(dyn JwsPublicKeyResolver + Send + Sync)>,
+    did_resolver: Option<&dyn DidResolver>,
 ) -> Result<Option<PermissionGrant>, AuthorizationValidationError> {
     let Some(grant_value) = authorization.get("authorDelegatedGrant") else {
         if payload.get("delegatedGrantId").is_some() {
@@ -336,13 +337,18 @@ fn validate_embedded_author_delegated_grant(
         )));
     }
 
-    let grant_authorization =
-        validate_authorization_signature_inner(grant_value, public_key_resolver, true, false)?
-            .ok_or_else(|| {
-                AuthorizationValidationError::Unauthorized(
-                    "AuthenticateJwsMissing: authorization signature is required".to_string(),
-                )
-            })?;
+    let grant_authorization = Box::pin(validate_authorization_signature_inner(
+        grant_value,
+        did_resolver,
+        true,
+        false,
+    ))
+    .await?
+    .ok_or_else(|| {
+        AuthorizationValidationError::Unauthorized(
+            "AuthenticateJwsMissing: authorization signature is required".to_string(),
+        )
+    })?;
     parse_permission_grant(&grant_message, &grant_authorization.author)
         .map(Some)
         .map_err(AuthorizationValidationError::BadRequest)

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::descriptors::ProtocolQueryDescriptor;
 use crate::dwn::{DwnReply, HandlerContext};
 use crate::filters::{Filter, FilterKey, Filters};
@@ -15,17 +15,14 @@ const CONFIGURE_METHOD: &str = "Configure";
 #[derive(Clone)]
 pub struct ProtocolsQueryHandler<MessageStore> {
     message_store: MessageStore,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
-    pub fn new(
-        message_store: MessageStore,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
-    ) -> Self {
+    pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
         Self {
             message_store,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }
@@ -52,9 +49,11 @@ where
             let include_private = if raw_message.get("authorization").is_some() {
                 match permissions::validate_authorization_signature(
                     raw_message,
-                    self.public_key_resolver.as_deref(),
+                    self.did_resolver.as_deref(),
                     false,
-                ) {
+                )
+                .await
+                {
                     Ok(Some(authorization)) => {
                         match permissions::authorize_protocols_query(
                             tenant,

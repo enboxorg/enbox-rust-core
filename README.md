@@ -29,7 +29,7 @@ Core protocol wiring matches TypeScript `Dwn.create()`:
 
 - JSON Schema validation at the `process_message` boundary
 - `CoreProtocolRegistry` with permissions lifecycle hooks
-- `UniversalResolver` (`did:jwk:` + static fallback) for JWS verification
+- `UniversalResolver` (`did:jwk`, `did:key`, registry extensions, and static fallback) for JWS verification
 - `StorageController` + `ResumableTaskManager` resume pending delete/squash tasks on open
 
 ### Test coverage (three layers + interop)
