@@ -458,6 +458,10 @@ impl StaticPublicKeyResolver {
     pub fn insert(&mut self, kid: impl Into<String>, public_jwk: JWK) {
         self.public_keys.insert(kid.into(), public_jwk);
     }
+
+    pub(crate) fn public_keys(&self) -> &BTreeMap<String, JWK> {
+        &self.public_keys
+    }
 }
 
 impl JwsPublicKeyResolver for StaticPublicKeyResolver {
