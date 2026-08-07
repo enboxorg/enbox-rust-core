@@ -1,27 +1,26 @@
-pub use ssi_dids_core::resolution::Error;
-
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ResolverError {
+    #[error("invalid DID")]
     InvalidDid,
+
+    #[error("invalid DID document: {0}")]
+    InvalidDocument(String),
+
+    #[error("DID method '{0}' is not supported")]
     MethodNotSupported(String),
+
+    #[error("DID document not found")]
     NotFound,
-    Network(String),
-    InvalidData(Vec<u8>),
-    ResolutionError(Error),
 }
+
 impl ResolverError {
     pub fn code(&self) -> &'static str {
         match self {
-            ResolverError::InvalidDid => "invalidDid",
-            ResolverError::MethodNotSupported(_) => "methodNotSupported",
-            ResolverError::NotFound => "notFound",
-            ResolverError::Network(_) => "networkError",
-            ResolverError::InvalidData(_) => "invalidData",
-            ResolverError::ResolutionError(err) => match err {
-                Error::MethodNotSupported(_) => "methodNotSupported",
-                Error::NotFound => "notFound",
-                Error::InvalidData(_) => "invalidData",
-                _ => "resolutionError",
-            },
+            Self::InvalidDid => "invalidDid",
+            Self::InvalidDocument(_) => "invalidData",
+            Self::MethodNotSupported(_) => "methodNotSupported",
+            Self::NotFound => "notFound",
         }
     }
 }
