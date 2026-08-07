@@ -7,6 +7,8 @@ use ssi_dids_core::document::DIDVerificationMethod;
 use ssi_dids_core::{DIDBuf, DIDURLBuf, Document, DID};
 use ssi_jwk::JWK;
 
+use crate::auth::jws::JwsError;
+
 pub mod error;
 pub mod jwk;
 pub mod key;
@@ -89,6 +91,60 @@ pub trait DidMethodResolver: Send + Sync {
         -> ResolverFuture<'a, Result<Resolution, ResolverError>>;
 }
 
+pub async fn resolve_signing_key(kid: &str, resolver: &dyn DidResolver) -> Result<JWK, JwsError> {
+    if !kid.starts_with("did:") {
+        return resolver
+            .resolve_static_kid(kid)
+            .ok_or_else(|| JwsError::PublicKeyNotFound {
+                kid: kid.to_string(),
+                available_ids: Vec::new(),
+            });
+    }
+
+    let did_url = kid
+        .parse::<DIDURLBuf>()
+        .map_err(|_| JwsError::ResolutionFailed {
+            did: kid.split('#').next().unwrap_or(kid).to_string(),
+            source: ResolverError::InvalidDid,
+        })?;
+    let did = did_url.did().to_string();
+    let resolution = resolver
+        .resolve(&did)
+        .await
+        .map_err(|source| JwsError::ResolutionFailed {
+            did: did.clone(),
+            source,
+        })?;
+
+    if resolution.document.id != *did_url.did() {
+        return Err(JwsError::ResolutionFailed {
+            did: did.clone(),
+            source: ResolverError::InvalidDocument(format!(
+                "resolver returned '{}' for requested DID '{did}'",
+                resolution.document.id
+            )),
+        });
+    }
+
+    let available_ids = resolution
+        .document
+        .verification_method
+        .iter()
+        .map(|method| method.id.to_string())
+        .collect::<Vec<_>>();
+    resolution
+        .document
+        .verification_method
+        .iter()
+        .find(|method| kid.ends_with(method.id.as_str()))
+        .and_then(verification_method_jwk)
+        .map(|jwk| jwk.to_public())
+        .ok_or_else(|| JwsError::PublicKeyNotFound {
+            kid: kid.to_string(),
+            available_ids,
+        })
+}
+
 pub(crate) fn verification_method_from_jwk(
     id: &str,
     type_: &str,
@@ -109,4 +165,12 @@ pub(crate) fn verification_method_from_jwk(
         controller.clone(),
         properties,
     ))
+}
+
+pub(crate) fn verification_method_jwk(method: &DIDVerificationMethod) -> Option<JWK> {
+    method
+        .properties
+        .get("publicKeyJwk")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }

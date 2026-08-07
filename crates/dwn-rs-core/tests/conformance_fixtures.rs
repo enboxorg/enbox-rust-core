@@ -537,13 +537,15 @@ async fn fixture_general_jws_matches_typescript() {
             if check_verification {
                 match case.expected_error_code.as_deref() {
                     Some(expected_error_code) => assert_eq!(
-                        verify_general_jws(&suite.fixture_set, case).unwrap_err(),
+                        verify_general_jws(&suite.fixture_set, case)
+                            .await
+                            .unwrap_err(),
                         expected_error_code,
                         "{}",
                         case.id
                     ),
                     None => assert_eq!(
-                        verify_general_jws(&suite.fixture_set, case).unwrap(),
+                        verify_general_jws(&suite.fixture_set, case).await.unwrap(),
                         expected_signers(case),
                         "{}",
                         case.id
@@ -2824,13 +2826,14 @@ async fn assert_general_jws_signing(fixture_set: &FixtureSet, case: &FixtureCase
     assert_eq!(actual, *jws(case), "{}", case.id);
 }
 
-fn verify_general_jws(
+async fn verify_general_jws(
     fixture_set: &FixtureSet,
     case: &FixtureCase,
 ) -> Result<Vec<String>, &'static str> {
     let resolver = public_key_resolver(fixture_set, case);
     jws(case)
         .verify_signatures(&resolver)
+        .await
         .map_err(|err| err.code())
 }
 

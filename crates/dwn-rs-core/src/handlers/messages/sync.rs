@@ -7,7 +7,7 @@ use base64::Engine as _;
 use futures_util::TryStreamExt;
 use serde_json::Value as JsonValue;
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
 use crate::dwn::{DwnReply, HandlerContext};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
@@ -26,7 +26,7 @@ pub struct MessagesSyncHandler<MessageStore, DataStore, StateIndex> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore, DataStore, StateIndex> Handler
@@ -57,9 +57,11 @@ where
 
             let authorization = match permissions::validate_authorization_signature(
                 raw_message,
-                self.public_key_resolver.as_deref(),
+                self.did_resolver.as_deref(),
                 true,
-            ) {
+            )
+            .await
+            {
                 Ok(Some(authorization)) => authorization,
                 Ok(None) => {
                     return DwnReply::unauthorized(
@@ -96,13 +98,13 @@ impl<MessageStore, DataStore, StateIndex> MessagesSyncHandler<MessageStore, Data
         message_store: MessageStore,
         data_store: DataStore,
         state_index: StateIndex,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             data_store,
             state_index,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }

@@ -5,7 +5,8 @@
 
 use std::sync::Arc;
 
-use crate::auth::{JwsPublicKeyResolver, UniversalResolver};
+use crate::auth::resolver::{DidResolver, UniversalResolver};
+use crate::auth::StaticPublicKeyResolver;
 use crate::dwn::{AllowAllTenantGate, Dwn, DwnConfig, TenantGate};
 use crate::errors::{
     DataStoreError, EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError,
@@ -143,9 +144,9 @@ where
 }
 
 /// Construct a [`Dwn`] with all handlers registered and JWS verification enabled.
-pub fn build_native_dwn_with_resolver<MS, DS, SI, EL, RTS, Gate, R>(
+pub fn build_native_dwn_with_resolver<MS, DS, SI, EL, RTS, Gate>(
     config: NativeDwnConfig<MS, DS, SI, EL, RTS, Gate>,
-    public_key_resolver: R,
+    static_keys: StaticPublicKeyResolver,
 ) -> Dwn<MS, DS, SI, EL, RTS, (), Gate>
 where
     MS: MessageStoreTrait + Clone + Send + Sync + 'static,
@@ -154,7 +155,23 @@ where
     EL: EventLogTrait + Clone + Send + Sync + 'static,
     RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
     Gate: TenantGate + 'static,
-    R: JwsPublicKeyResolver + Send + Sync + Clone + 'static,
+{
+    build_native_dwn_with_did_resolver(config, UniversalResolver::with_fallback(static_keys))
+}
+
+/// Construct a [`Dwn`] with all handlers registered and a complete DID resolver.
+pub fn build_native_dwn_with_did_resolver<MS, DS, SI, EL, RTS, Gate, R>(
+    config: NativeDwnConfig<MS, DS, SI, EL, RTS, Gate>,
+    resolver: R,
+) -> Dwn<MS, DS, SI, EL, RTS, (), Gate>
+where
+    MS: MessageStoreTrait + Clone + Send + Sync + 'static,
+    DS: DataStoreTrait + Clone + Send + Sync + 'static,
+    SI: StateIndexTrait + Clone + Send + Sync + 'static,
+    EL: EventLogTrait + Clone + Send + Sync + 'static,
+    RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
+    Gate: TenantGate + 'static,
+    R: DidResolver + 'static,
 {
     let stores = config.stores;
 
@@ -169,8 +186,7 @@ where
         handlers: crate::dwn::default_method_handlers(),
     });
 
-    let resolver: Arc<dyn JwsPublicKeyResolver + Send + Sync> =
-        Arc::new(UniversalResolver::with_fallback(public_key_resolver));
+    let resolver: Arc<dyn DidResolver> = Arc::new(resolver);
     register_native_handlers(&mut dwn, stores, Some(resolver));
     dwn
 }
@@ -180,7 +196,7 @@ where
 fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
     dwn: &mut Dwn<MS, DS, SI, EL, RTS, (), Gate>,
     stores: NativeDwnStores<MS, DS, SI, EL, RTS>,
-    resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    resolver: Option<Arc<dyn DidResolver>>,
 ) where
     MS: MessageStoreTrait + Clone + Send + Sync + 'static,
     DS: DataStoreTrait + Clone + Send + Sync + 'static,

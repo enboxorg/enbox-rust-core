@@ -206,9 +206,10 @@ mod tests {
         let jws = Jws::create(b"hello, did:key".as_slice(), std::slice::from_ref(&signer))
             .await
             .expect("sign");
-        let resolver = UniversalResolver::new();
+        let resolver = crate::auth::resolver::UniversalResolver::new();
         let signers = jws
             .verify_signatures(&resolver)
+            .await
             .expect("did:key signature verifies");
         // verify_signatures returns the DID portion of the kid (fragment stripped).
         assert_eq!(signers, vec![did]);

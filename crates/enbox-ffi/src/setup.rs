@@ -65,26 +65,35 @@ pub fn signer_from_portable_did(
             )
         })?;
 
-    let kid = private_jwk.key_id.clone().or_else(|| {
-        portable_did
-            .document
-            .verification_relationships
-            .assertion_method
-            .first()
-            .or_else(|| {
-                portable_did
-                    .document
-                    .verification_relationships
-                    .authentication
-                    .first()
-            })
-            .map(|relationship| {
-                relationship
-                    .id()
-                    .resolve(&portable_did.document.id)
-                    .to_string()
-            })
-    });
+    // `did:jwk` has one canonical verification method (`#0`). Normalize
+    // persisted agent identities created before native DID resolution used
+    // that method id, rather than allowing a legacy static KID to shadow the
+    // method's document.
+    let kid = portable_did
+        .uri
+        .starts_with("did:jwk:")
+        .then(|| format!("{}#0", portable_did.uri))
+        .or_else(|| private_jwk.key_id.clone())
+        .or_else(|| {
+            portable_did
+                .document
+                .verification_relationships
+                .assertion_method
+                .first()
+                .or_else(|| {
+                    portable_did
+                        .document
+                        .verification_relationships
+                        .authentication
+                        .first()
+                })
+                .map(|relationship| {
+                    relationship
+                        .id()
+                        .resolve(&portable_did.document.id)
+                        .to_string()
+                })
+        });
     let kid = kid.ok_or_else(|| {
         AgentIdentityError::new(
             "AgentSignerMissing",

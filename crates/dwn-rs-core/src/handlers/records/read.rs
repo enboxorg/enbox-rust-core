@@ -5,7 +5,7 @@ use serde_json::{json, Value as JsonValue};
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::auth::JwsPublicKeyResolver;
+use crate::auth::resolver::DidResolver;
 use crate::descriptors::ReadDescriptor;
 use crate::dwn::{DwnReply, Handler, HandlerContext};
 use crate::filters::{FilterKey, Filters};
@@ -24,7 +24,7 @@ use super::RECORDS_INTERFACE;
 pub struct RecordsReadHandler<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
-    public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+    did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
 impl<MessageStore, DataStore> Handler for RecordsReadHandler<MessageStore, DataStore>
@@ -49,9 +49,11 @@ where
 
             let signature = match permissions::validate_authorization_signature(
                 raw_message,
-                self.public_key_resolver.as_deref(),
+                self.did_resolver.as_deref(),
                 false,
-            ) {
+            )
+            .await
+            {
                 Ok(signature) => signature,
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
                     return DwnReply::bad_request(detail)
@@ -214,12 +216,12 @@ impl<MessageStore, DataStore> RecordsReadHandler<MessageStore, DataStore> {
     pub fn new(
         message_store: MessageStore,
         data_store: DataStore,
-        public_key_resolver: Option<Arc<dyn JwsPublicKeyResolver + Send + Sync>>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             data_store,
-            public_key_resolver,
+            did_resolver,
         }
     }
 }
