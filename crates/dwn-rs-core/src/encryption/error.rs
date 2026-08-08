@@ -50,4 +50,7 @@ pub enum EncryptionError {
 
     #[error("AES key wrap: {0}")]
     AesKeyWrap(String),
+
+    #[error("legacy JWE: {0}")]
+    LegacyJwe(String),
 }

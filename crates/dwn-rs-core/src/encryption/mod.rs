@@ -15,6 +15,7 @@ pub mod aes_kw;
 pub mod ctr;
 pub mod error;
 pub mod kdf;
+pub mod legacy_jwe;
 pub mod x25519;
 
 pub use error::EncryptionError;
