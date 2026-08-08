@@ -1,9 +1,12 @@
 {
   "schemaVersion": 1,
+  "oracle": "rust-extension",
   "source": {
-    "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
+    "removedUpstreamAt": "25821eda3a551cc9b2f6605e2716a9705ebf3f63",
+    "issue": "https://github.com/enboxorg/enbox-rust-core/issues/188",
+    "note": "StateIndexLevel and the sparse-merkle-trie (smt) surfaces were deleted from upstream enbox in 25821eda ('chore(sync): remove legacy sync state surfaces'). This fixture records Rust-native StateIndex behavior that no longer exists upstream and is tracked as an intentional Rust extension, not current-upstream parity.",
     "stateIndex": "StateIndexLevel",
     "functions": [
       "StateIndexLevel.insert",
