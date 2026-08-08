@@ -40,6 +40,43 @@ jobs:
       - name: Verify fixture source.commit matches .enbox-version
         run: tools/conformance/check-fixture-provenance.sh
 
+  schema-drift:
+    name: Embedded schema drift (pinned Enbox)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Enbox pin
+        id: pin
+        run: |
+          sha="$(grep -v '^#' .enbox-version | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')"
+          if [ "${#sha}" -ne 40 ]; then
+            echo "Expected a 40-character commit SHA in .enbox-version, got: ${sha}" >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: enboxorg/enbox
+          ref: ${{ steps.pin.outputs.sha }}
+          path: enbox
+
+      - name: Refresh embedded schemas from pinned Enbox
+        env:
+          ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
+        run: tools/conformance/refresh-upstream-schemas.sh
+
+      - name: Fail if the refresh produced a diff
+        run: |
+          if [ -n "$(git status --porcelain crates/dwn-rs-core/schemas)" ]; then
+            echo "Embedded schemas are stale relative to the .enbox-version pin." >&2
+            echo "Run tools/conformance/refresh-upstream-schemas.sh and commit the result." >&2
+            git diff -- crates/dwn-rs-core/schemas >&2
+            exit 1
+          fi
+          echo "Embedded schemas match the pinned Enbox commit."
+
   typescript-conformance:
     name: TypeScript conformance (pinned Enbox)
     runs-on: ubuntu-latest

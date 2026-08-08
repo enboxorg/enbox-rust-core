@@ -56,8 +56,19 @@ type RecordsQueryHandlerModule = {
     didResolver: DidResolver;
     messageStore: MessageStore;
     coreProtocols: CoreProtocolRegistry;
+    validationStateReader: ValidationStateReader;
   }) => RecordsQueryHandlerInstance;
 };
+
+type ValidationStateReaderModule = {
+  StoreValidationStateReader: new (deps: {
+    messageStore: MessageStore;
+    dataStore: unknown;
+    coreProtocols?: CoreProtocolRegistry;
+  }) => ValidationStateReader;
+};
+
+type ValidationStateReader = unknown;
 
 type CoreProtocolRegistryModule = {
   CoreProtocolRegistry: new () => CoreProtocolRegistry;
@@ -106,6 +117,7 @@ const enboxTsRoot = process.env.ENBOX_TS_ROOT ?? defaultEnboxTsRoot;
 const messageStoreLevelModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/store/message-store-level.ts');
 const recordsQueryHandlerModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/handlers/records-query.ts');
 const coreProtocolModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/core/core-protocol.ts');
+const validationStateReaderModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/core/validation-state-reader.ts');
 const testStubGeneratorModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/tests/utils/test-stub-generator.ts');
 const didResolverModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/node_modules/@enbox/dids/src/index.ts');
 
@@ -113,6 +125,7 @@ for (const modulePath of [
   messageStoreLevelModulePath,
   recordsQueryHandlerModulePath,
   coreProtocolModulePath,
+  validationStateReaderModulePath,
   testStubGeneratorModulePath,
 ]) {
   if (!existsSync(modulePath)) {
@@ -126,6 +139,7 @@ for (const modulePath of [
 const { MessageStoreLevel } = await import(pathToFileURL(messageStoreLevelModulePath).href) as MessageStoreLevelModule;
 const { RecordsQueryHandler } = await import(pathToFileURL(recordsQueryHandlerModulePath).href) as RecordsQueryHandlerModule;
 const { CoreProtocolRegistry } = await import(pathToFileURL(coreProtocolModulePath).href) as CoreProtocolRegistryModule;
+const { StoreValidationStateReader } = await import(pathToFileURL(validationStateReaderModulePath).href) as ValidationStateReaderModule;
 const { TestStubGenerator } = await import(pathToFileURL(testStubGeneratorModulePath).href) as TestStubGeneratorModule;
 const { DidKey, UniversalResolver } = await import(
   existsSync(didResolverModulePath)
@@ -182,10 +196,15 @@ async function assertRecordsQueryReply(
   const didResolver = new UniversalResolver({ didResolvers: [DidKey] });
   const alice = await getConformanceAlicePersona();
   TestStubGenerator.stubDidResolver(didResolver, [alice]);
+  const coreProtocols = new CoreProtocolRegistry();
   const handler = new RecordsQueryHandler({
     didResolver,
     messageStore,
-    coreProtocols: new CoreProtocolRegistry(),
+    coreProtocols,
+    validationStateReader: new StoreValidationStateReader({
+      messageStore,
+      coreProtocols,
+    }),
   });
 
   await messageStore.open();

@@ -26,17 +26,39 @@ type FixtureCase = {
   cek?: FixtureData;
   ciphertext?: FixtureData;
   contentEncryptionAlgorithm?: string;
-  derivedPrivateJwk?: Record<string, unknown>;
-  ephemeralPrivateJwk?: Record<string, unknown>;
+  derivationScheme?: string;
+  encryption?: DwnEncryption;
   expectedErrorCode?: string;
   iv?: FixtureData;
-  jwe?: JweEncryption;
   keyAgreementAlgorithm?: string;
+  keyId?: string;
   plaintext?: FixtureData;
   recipientPrivateJwk?: Record<string, unknown>;
   recipientPublicJwk?: Record<string, unknown>;
   record?: Record<string, unknown>;
-  tag?: FixtureData;
+  derivedPrivateJwk?: DerivedPrivateJwk;
+  ephemeralPublicJwk?: Record<string, unknown>;
+  protocol?: string;
+  rolePath?: string;
+  seal?: SealKeyWrap;
+  sealContext?: { protocol: string; rolePath: string; contextId: string; audienceKeyId: string };
+  sealingPrivateJwk?: Record<string, unknown>;
+  audiencePrivateJwk?: Record<string, unknown>;
+};
+
+type SealKeyWrap = {
+  algorithm: string;
+  derivationScheme: string;
+  encryptedKey: string;
+  ephemeralPublicKey: Record<string, unknown>;
+  keyId: string;
+};
+
+type DerivedPrivateJwk = {
+  rootKeyId: string;
+  derivationScheme: string;
+  derivationPath?: string[];
+  derivedPrivateKey: Record<string, unknown>;
 };
 
 type FixtureData =
@@ -45,39 +67,52 @@ type FixtureData =
   | { encoding: 'repeatByte'; byte: number; length: number }
   | { encoding: 'utf8'; value: string };
 
-type JweEncryption = {
-  protected: string;
-  iv: string;
-  tag: string;
-  recipients: Array<{
-    encrypted_key: string;
-    header: {
-      derivationScheme: string;
-      epk: Record<string, unknown>;
-      kid: string;
-      derivedPublicKey?: Record<string, unknown>;
-    };
+type DwnEncryption = {
+  algorithm: string;
+  initializationVector: string;
+  keyEncryption: Array<{
+    algorithm: string;
+    keyId: string;
+    ephemeralPublicKey: Record<string, unknown>;
+    encryptedKey: string;
+    derivationScheme: string;
+    protocol?: string;
+    rolePath?: string;
   }>;
 };
 
 type EncryptionModule = {
   Encryption: {
-    aeadDecrypt(
+    decrypt(
       algorithm: string,
       keyBytes: Uint8Array,
       iv: Uint8Array,
       ciphertext: Uint8Array,
-      tag: Uint8Array
     ): Promise<Uint8Array>;
-    aeadEncrypt(
+    encrypt(
       algorithm: string,
       keyBytes: Uint8Array,
       iv: Uint8Array,
-      plaintext: Uint8Array
-    ): Promise<{ ciphertext: Uint8Array; tag: Uint8Array }>;
-    ecdhEsUnwrapKey(recipientPrivateKey: Record<string, unknown>, ephemeralPublicKey: Record<string, unknown>, wrappedKey: Uint8Array): Promise<Uint8Array>;
-    ecdhEsWrapKey(ephemeralPrivateKey: Record<string, unknown>, recipientPublicKey: Record<string, unknown>, cek: Uint8Array): Promise<Uint8Array>;
-    parseProtectedHeader(protectedBase64url: string): Record<string, unknown>;
+      plaintext: Uint8Array,
+    ): Promise<Uint8Array>;
+    unwrapKey(
+      recipientPrivateKey: Record<string, unknown>,
+      keyEncryption: DwnEncryption['keyEncryption'][number],
+    ): Promise<Uint8Array>;
+    unwrapSeal(input: {
+      audienceKeyId: string;
+      contextId: string;
+      protocol: string;
+      recipientPrivateKey: Record<string, unknown>;
+      rolePath: string;
+      seal: SealKeyWrap;
+    }): Promise<Uint8Array>;
+  };
+};
+
+type X25519Module = {
+  X25519: {
+    privateKeyToBytes(input: { privateKey: Record<string, unknown> }): Promise<Uint8Array>;
   };
 };
 
@@ -85,16 +120,27 @@ type RecordsModule = {
   Records: {
     decrypt(
       recordsWrite: Record<string, unknown>,
-      ancestorPrivateKey: Record<string, unknown>,
-      cipherStream: ReadableStream<Uint8Array>
+      keyDecrypter: KeyDecrypter,
+      cipherStream: ReadableStream<Uint8Array>,
     ): Promise<ReadableStream<Uint8Array>>;
   };
 };
 
-const jweProtectedAssertion = 'jwe.protected';
+type KeyDecrypter = {
+  rootKeyId: string;
+  derivationScheme: string;
+  derivePublicKey(fullDerivationPath: string[]): Promise<Record<string, unknown>>;
+  decrypt(
+    fullDerivationPath: string[],
+    keyUnwrapPayload: { encryptedKey: Uint8Array; ephemeralPublicKey: Record<string, unknown>; keyEncryption: DwnEncryption['keyEncryption'][number] },
+  ): Promise<Uint8Array>;
+};
+
+const jweEnvelopeAssertion = 'jwe.envelope';
 const jweAeadAssertion = 'jwe.aead';
 const jweKeywrapAssertion = 'jwe.keywrap';
 const jweDecryptAssertion = 'jwe.decrypt';
+const jweSealAssertion = 'jwe.seal';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
@@ -103,8 +149,9 @@ const defaultEnboxTsRoot = resolve(repoRoot, '../enbox');
 const enboxTsRoot = process.env.ENBOX_TS_ROOT ?? defaultEnboxTsRoot;
 const encryptionModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/utils/encryption.ts');
 const recordsModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/utils/records.ts');
+const x25519ModulePath = resolve(enboxTsRoot, 'packages/crypto/src/primitives/x25519.ts');
 
-for (const modulePath of [encryptionModulePath, recordsModulePath]) {
+for (const modulePath of [encryptionModulePath, recordsModulePath, x25519ModulePath]) {
   if (!existsSync(modulePath)) {
     throw new Error(
       `Unable to find TypeScript DWN SDK at ${modulePath}. ` +
@@ -115,6 +162,7 @@ for (const modulePath of [encryptionModulePath, recordsModulePath]) {
 
 const { Encryption } = await import(pathToFileURL(encryptionModulePath).href) as EncryptionModule;
 const { Records } = await import(pathToFileURL(recordsModulePath).href) as RecordsModule;
+const { X25519 } = await import(pathToFileURL(x25519ModulePath).href) as X25519Module;
 const manifest = await readJson<FixtureManifest>(resolve(fixturesRoot, 'manifest.json'));
 const fixtureSuites = await Promise.all(
   manifest.suites.map(async (suite): Promise<{ fixtureSet: FixtureSet; suite: FixtureSuiteRef }> => ({
@@ -123,80 +171,58 @@ const fixtureSuites = await Promise.all(
   }))
 );
 
-describe('TypeScript JWE conformance fixtures', () => {
+describe('TypeScript A256CTR JWE conformance fixtures', () => {
   for (const { fixtureSet, suite } of fixtureSuites) {
     if (
-      !suite.assertions.includes(jweProtectedAssertion) &&
+      !suite.assertions.includes(jweEnvelopeAssertion) &&
       !suite.assertions.includes(jweAeadAssertion) &&
       !suite.assertions.includes(jweKeywrapAssertion) &&
-      !suite.assertions.includes(jweDecryptAssertion)
+      !suite.assertions.includes(jweDecryptAssertion) &&
+      !suite.assertions.includes(jweSealAssertion)
     ) {
       continue;
     }
 
     describe(suite.id, () => {
       for (const fixtureCase of fixtureSet.cases) {
-        if (suite.assertions.includes(jweProtectedAssertion)) {
-          test(`${fixtureCase.id} protected header`, () => {
-            const expectedProtectedHeader = {
-              alg : keyAgreementAlgorithm(fixtureCase),
-              enc : contentEncryptionAlgorithm(fixtureCase),
-            };
+        if (fixtureCase.seal !== undefined) {
+          if (suite.assertions.includes(jweSealAssertion)) {
+            test(`${fixtureCase.id} seal`, async () => {
+              await assertSeal(fixtureCase);
+            });
+          }
+          continue;
+        }
 
-            expect(Encryption.parseProtectedHeader(jwe(fixtureCase).protected)).toEqual(expectedProtectedHeader);
-            expect(jwe(fixtureCase).protected).toBe(Buffer.from(JSON.stringify(expectedProtectedHeader)).toString('base64url'));
+        if (fixtureCase.expectedErrorCode !== undefined) {
+          continue;
+        }
+
+        if (suite.assertions.includes(jweEnvelopeAssertion) && fixtureCase.expectedErrorCode === undefined) {
+          test(`${fixtureCase.id} envelope`, async () => {
+            await assertEnvelope(fixtureCase);
           });
         }
 
         if (suite.assertions.includes(jweAeadAssertion) && fixtureCase.expectedErrorCode === undefined) {
-          test(`${fixtureCase.id} AEAD`, async () => {
-            const encrypted = await Encryption.aeadEncrypt(
-              contentEncryptionAlgorithm(fixtureCase),
-              bytes(fixtureCase, fixtureCase.cek, 'CEK'),
-              bytes(fixtureCase, fixtureCase.iv, 'IV'),
-              bytes(fixtureCase, fixtureCase.plaintext, 'plaintext'),
-            );
-
-            expect(toBase64Url(encrypted.ciphertext)).toBe(base64UrlValue(fixtureCase, fixtureCase.ciphertext, 'ciphertext'));
-            expect(toBase64Url(encrypted.tag)).toBe(base64UrlValue(fixtureCase, fixtureCase.tag, 'tag'));
-
-            await expect(Encryption.aeadDecrypt(
-              contentEncryptionAlgorithm(fixtureCase),
-              bytes(fixtureCase, fixtureCase.cek, 'CEK'),
-              bytes(fixtureCase, fixtureCase.iv, 'IV'),
-              bytes(fixtureCase, fixtureCase.ciphertext, 'ciphertext'),
-              bytes(fixtureCase, fixtureCase.tag, 'tag'),
-            )).resolves.toEqual(bytes(fixtureCase, fixtureCase.plaintext, 'plaintext'));
+          test(`${fixtureCase.id} A256CTR`, async () => {
+            await assertAead(fixtureCase);
           });
         }
 
-        if (suite.assertions.includes(jweKeywrapAssertion)) {
+        if (suite.assertions.includes(jweKeywrapAssertion) && fixtureCase.expectedErrorCode === undefined) {
           test(`${fixtureCase.id} key wrap`, async () => {
-            const recipient = singleRecipient(fixtureCase);
-            const wrappedKey = await Encryption.ecdhEsWrapKey(
-              jwk(fixtureCase, fixtureCase.ephemeralPrivateJwk, 'ephemeralPrivateJwk'),
-              jwk(fixtureCase, fixtureCase.recipientPublicJwk, 'recipientPublicJwk'),
-              bytes(fixtureCase, fixtureCase.cek, 'CEK'),
-            );
-
-            expect(toBase64Url(wrappedKey)).toBe(recipient.encrypted_key);
-
-            await expect(Encryption.ecdhEsUnwrapKey(
-              jwk(fixtureCase, fixtureCase.recipientPrivateJwk, 'recipientPrivateJwk'),
-              recipient.header.epk,
-              wrappedKey,
-            )).resolves.toEqual(bytes(fixtureCase, fixtureCase.cek, 'CEK'));
+            await assertKeywrap(fixtureCase);
           });
         }
 
         if (suite.assertions.includes(jweDecryptAssertion)) {
           test(`${fixtureCase.id} decrypt`, async () => {
-            const decrypted = decryptFixture(fixtureCase);
-
+            const decrypt = assertDecrypt(fixtureCase);
             if (fixtureCase.expectedErrorCode !== undefined) {
-              await expect(decrypted).rejects.toThrow();
+              await expect(decrypt).rejects.toMatchObject({ code: fixtureCase.expectedErrorCode });
             } else {
-              await expect(decrypted).resolves.toEqual(bytes(fixtureCase, fixtureCase.plaintext, 'plaintext'));
+              await decrypt;
             }
           });
         }
@@ -205,18 +231,106 @@ describe('TypeScript JWE conformance fixtures', () => {
   }
 });
 
-async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, 'utf8')) as T;
+async function assertEnvelope(fixtureCase: FixtureCase): Promise<void> {
+  const encryption = dwnEncryption(fixtureCase);
+  expect(encryption.algorithm).toBe(fixtureCase.contentEncryptionAlgorithm);
+  expect(encryption.initializationVector).toBe(base64UrlValue(fixtureCase, fixtureCase.iv, 'IV'));
+
+  const entry = singleKeyEncryption(fixtureCase);
+  expect(entry.algorithm).toBe(fixtureCase.keyAgreementAlgorithm);
+  expect(entry.keyId).toBe(fixtureCase.keyId);
+  expect(entry.derivationScheme).toBe(fixtureCase.derivationScheme);
+  expect(entry.encryptedKey).not.toBe('');
+  if (fixtureCase.ephemeralPublicJwk !== undefined) {
+    expect(entry.ephemeralPublicKey).toMatchObject(fixtureCase.ephemeralPublicJwk);
+  }
+  if (fixtureCase.derivationScheme === 'roleAudience') {
+    expect(entry.protocol).toBe(fixtureCase.protocol);
+    expect(entry.rolePath).toBe(fixtureCase.rolePath);
+  }
+
+  const record = fixtureCase.record!;
+  const recordEncryption = record.encryption as DwnEncryption;
+  expect(recordEncryption).toEqual(encryption);
 }
 
-async function decryptFixture(fixtureCase: FixtureCase): Promise<Uint8Array> {
-  const plaintextStream = await Records.decrypt(
-    record(fixtureCase),
-    jwk(fixtureCase, fixtureCase.derivedPrivateJwk, 'derivedPrivateJwk'),
+async function assertSeal(fixtureCase: FixtureCase): Promise<void> {
+  const seal = fixtureCase.seal!;
+  const context = fixtureCase.sealContext!;
+  expect(seal.algorithm).toBe(fixtureCase.keyAgreementAlgorithm);
+  expect(seal.derivationScheme).toBe('seal');
+  expect(seal.keyId).not.toBe('');
+  expect(seal.encryptedKey).not.toBe('');
+
+  // Opening the seal with the sealing private key and the recorded context
+  // must recover the audience private key bytes.
+  const audiencePrivateKeyBytes = await Encryption.unwrapSeal({
+    audienceKeyId      : context.audienceKeyId,
+    contextId          : context.contextId,
+    protocol           : context.protocol,
+    recipientPrivateKey: fixtureJwk(fixtureCase, fixtureCase.sealingPrivateJwk, 'sealingPrivateJwk'),
+    rolePath           : context.rolePath,
+    seal,
+  });
+
+  const audiencePrivateJwk = fixtureJwk(fixtureCase, fixtureCase.audiencePrivateJwk, 'audiencePrivateJwk');
+  const expectedBytes = await X25519.privateKeyToBytes({ privateKey: audiencePrivateJwk });
+  expect(Buffer.from(audiencePrivateKeyBytes).equals(Buffer.from(expectedBytes))).toBe(true);
+}
+
+async function assertAead(fixtureCase: FixtureCase): Promise<void> {
+  const encrypted = await Encryption.encrypt(
+    contentEncryptionAlgorithm(fixtureCase),
+    bytes(fixtureCase, fixtureCase.cek, 'CEK'),
+    bytes(fixtureCase, fixtureCase.iv, 'IV'),
+    bytes(fixtureCase, fixtureCase.plaintext, 'plaintext'),
+  );
+
+  expect(toBase64Url(encrypted)).toBe(base64UrlValue(fixtureCase, fixtureCase.ciphertext, 'ciphertext'));
+
+  await expect(Encryption.decrypt(
+    contentEncryptionAlgorithm(fixtureCase),
+    bytes(fixtureCase, fixtureCase.cek, 'CEK'),
+    bytes(fixtureCase, fixtureCase.iv, 'IV'),
+    bytes(fixtureCase, fixtureCase.ciphertext, 'ciphertext'),
+  )).resolves.toEqual(bytes(fixtureCase, fixtureCase.plaintext, 'plaintext'));
+}
+
+async function assertKeywrap(fixtureCase: FixtureCase): Promise<void> {
+  const entry = singleKeyEncryption(fixtureCase);
+  const unwrapped = await Encryption.unwrapKey(
+    fixtureJwk(fixtureCase, fixtureCase.recipientPrivateJwk, 'recipientPrivateJwk'),
+    entry,
+  );
+
+  expect(toBase64Url(unwrapped)).toBe(toBase64Url(bytes(fixtureCase, fixtureCase.cek, 'CEK')));
+}
+
+async function assertDecrypt(fixtureCase: FixtureCase): Promise<void> {
+  const decrypt = Records.decrypt(
+    fixtureCase.record!,
+    keyDecrypter(fixtureCase),
     byteStream(bytes(fixtureCase, fixtureCase.ciphertext, 'ciphertext')),
   );
 
-  return readStream(plaintextStream);
+  const plaintextStream = await decrypt;
+  const plaintext = await readStream(plaintextStream);
+  expect(toBase64Url(plaintext)).toBe(base64UrlValue(fixtureCase, fixtureCase.plaintext, 'plaintext'));
+}
+
+function keyDecrypter(fixtureCase: FixtureCase): KeyDecrypter {
+  const derived = fixtureCase.derivedPrivateJwk!;
+  const derivationPath = derived.derivationPath ?? [];
+  return {
+    rootKeyId        : derived.rootKeyId,
+    derivationScheme : derived.derivationScheme,
+    async derivePublicKey(_fullDerivationPath: string[]): Promise<Record<string, unknown>> {
+      return fixtureJwk(fixtureCase, fixtureCase.recipientPublicJwk, 'recipientPublicJwk');
+    },
+    async decrypt(_fullDerivationPath: string[], payload): Promise<Uint8Array> {
+      return Encryption.unwrapKey(derived.derivedPrivateKey, payload.keyEncryption);
+    },
+  };
 }
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
@@ -268,27 +382,19 @@ function byteStream(payload: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-function jwe(fixtureCase: FixtureCase): JweEncryption {
-  if (fixtureCase.jwe === undefined) {
-    throw new Error(`${fixtureCase.id} must include a JWE`);
+function dwnEncryption(fixtureCase: FixtureCase): DwnEncryption {
+  if (fixtureCase.encryption === undefined) {
+    throw new Error(`${fixtureCase.id} must include an encryption envelope`);
   }
 
-  return fixtureCase.jwe;
+  return fixtureCase.encryption;
 }
 
-function singleRecipient(fixtureCase: FixtureCase): JweEncryption['recipients'][number] {
-  const recipients = jwe(fixtureCase).recipients;
-  expect(recipients.length).toBe(1);
+function singleKeyEncryption(fixtureCase: FixtureCase): DwnEncryption['keyEncryption'][number] {
+  const keyEncryption = dwnEncryption(fixtureCase).keyEncryption;
+  expect(keyEncryption.length).toBe(1);
 
-  return recipients[0];
-}
-
-function keyAgreementAlgorithm(fixtureCase: FixtureCase): string {
-  if (fixtureCase.keyAgreementAlgorithm === undefined) {
-    throw new Error(`${fixtureCase.id} must include keyAgreementAlgorithm`);
-  }
-
-  return fixtureCase.keyAgreementAlgorithm;
+  return keyEncryption[0];
 }
 
 function contentEncryptionAlgorithm(fixtureCase: FixtureCase): string {
@@ -299,7 +405,7 @@ function contentEncryptionAlgorithm(fixtureCase: FixtureCase): string {
   return fixtureCase.contentEncryptionAlgorithm;
 }
 
-function jwk(fixtureCase: FixtureCase, value: Record<string, unknown> | undefined, label: string): Record<string, unknown> {
+function fixtureJwk(fixtureCase: FixtureCase, value: Record<string, unknown> | undefined, label: string): Record<string, unknown> {
   if (value === undefined) {
     throw new Error(`${fixtureCase.id} must include ${label}`);
   }
@@ -307,10 +413,6 @@ function jwk(fixtureCase: FixtureCase, value: Record<string, unknown> | undefine
   return value;
 }
 
-function record(fixtureCase: FixtureCase): Record<string, unknown> {
-  if (fixtureCase.record === undefined) {
-    throw new Error(`${fixtureCase.id} must include record`);
-  }
-
-  return fixtureCase.record;
+async function readJson<T>(path: string): Promise<T> {
+  return JSON.parse(await readFile(path, 'utf8')) as T;
 }

@@ -3,7 +3,7 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
+    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
     "jwsFunctions": ["GeneralJwsBuilder.create", "GeneralJwsVerifier.verifySignatures", "Jws.verifySignature"]
   },
   "keys": {
@@ -244,7 +244,7 @@
         "signatures": [
           {
             "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTpkYXZlI2tleTEiLCJhbGciOiJFUzI1NiJ9",
-            "signature": "u9E_dL4Ky3UYmvcPKiJKhLiqvMX45dWfbPAE5QyDzTWycTjXBvfKUoebEzDBXvLCrsaIiU_lJ7LV8HPARWhlzQ"
+            "signature": "u9E_dL4Ky3UYmvcPKiJKhLiqvMX45dWfbPAE5QyDzTVNjscn-Qg1rnhk7M8-oQ09DiByJFcydtIdyVcCtvq_hA"
           }
         ]
       }

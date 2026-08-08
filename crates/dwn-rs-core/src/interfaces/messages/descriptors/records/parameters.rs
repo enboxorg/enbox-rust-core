@@ -247,16 +247,14 @@ impl MessageValidator for WriteParameters {
                 .key_encryption_inputs
                 .iter()
                 .try_for_each(|input| {
-                    match (&input.derivation_scheme, &self.protocol, &self.schema) {
-                        (DerivationScheme::ProtocolPath, None, _) => Err(ValidationError {
+                    if input.derivation_scheme() == DerivationScheme::ProtocolPath
+                        && self.protocol.is_none()
+                    {
+                        return Err(ValidationError {
                             message: "'protocols' encryption requires a protocol".to_string(),
-                        }),
-                        (DerivationScheme::Schemas, _, None) => Err(ValidationError {
-                            message: "'schemas' encryption requires a schema".to_string(),
-                        }),
-                        (_, Some(_), Some(_)) => Ok(()),
-                        (_, _, _) => Ok(()),
+                        });
                     }
+                    Ok(())
                 })?;
         }
 
@@ -325,11 +323,11 @@ impl MessageParameters for WriteParameters {
 
         if let Some(encryption_input) = &self.encryption_input {
             fields.encryption =
-                Some(
-                    Encryption::build_jwe(encryption_input).map_err(|e| ValidationError {
+                Some(Encryption::build_encryption(encryption_input).map_err(|e| {
+                    ValidationError {
                         message: e.to_string(),
-                    })?,
-                );
+                    }
+                })?);
         }
         fields.record_id = self.record_id.clone();
 

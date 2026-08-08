@@ -204,7 +204,13 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     expect(reply.status.code).toBe(202);
   });
 
-  test('MessagesSync root over HTTP changes after RecordsWrite', async () => {
+  test.skip('MessagesSync root over HTTP changes after RecordsWrite', async () => {
+    // MessagesSync and StateIndex were removed upstream
+    // (enbox@25821eda "chore(sync): remove legacy sync state surfaces"). The
+    // Rust-native MessagesSync surface is retained as an intentional Rust
+    // extension; reconciliation parity is tracked in #187/#188/#192. This
+    // interop scenario is disabled until a current-upstream durable-feed
+    // surface replaces it.
     const client = new HttpDwnRpcClient();
     const alice = await getLoopbackPersona();
 

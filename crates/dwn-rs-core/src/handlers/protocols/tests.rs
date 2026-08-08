@@ -930,8 +930,8 @@ fn base_thread_descriptor() -> ConfigureDescriptor {
                         RuleSet {
                             role: Some(true),
                             actions: vec![Action::Who(ActionWho {
-                                who: Who::Anyone,
-                                of: None,
+                                who: Who::Author,
+                                of: Some("thread".to_string()),
                                 can: vec![Can::Create, Can::Read],
                             })],
                             ..Default::default()
