@@ -124,4 +124,4 @@ cd enbox && bun run --filter @enbox/dwn-sdk-js test:node
 ENBOX_TS_ROOT=/path/to/enbox bun test tools/interop/loopback-interop.test.ts
 ```
 
-See also [CONFORMANCE.md](./CONFORMANCE.md) for the fixture contract and adapter model.
+See also [CONFORMANCE.md](./CONFORMANCE.md) for the fixture contract and adapter model, and [PARITY_MATRIX.md](./PARITY_MATRIX.md) for the versioned, issue-linked parity inventory against the pinned Enbox baseline.
