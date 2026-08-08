@@ -173,7 +173,7 @@ Identity migration runs independently of DWN store migration:
 Remote Enbox DWN servers stay compatible through the wire protocol:
 
 - Rust local nodes send the same message JSON, CIDs, JWS/JWE, and protocol records as TypeScript.
-- `MessagesSync` root / subtree / leaves / diff replies stay compatible with current TypeScript fixtures. This is gated by the `loopback-interop` CI job, which runs the pinned `@enbox/dwn-clients` against the Rust server.
+- Rust-native `MessagesSync` root / subtree / leaves / diff replies are an intentional extension; upstream removed `MessagesSync`/`StateIndex` (`25821eda`). The Rust-native sync fixtures are validated in Rust only, and the loopback `MessagesSync` scenario is disabled pending the durable-feed migration (#187/#188/#192).
 - Remote servers don't need to know whether a client local node is TypeScript or Rust.
 - Server-side data migration is out of scope for local Rust migration; remote nodes can be migrated independently.
 
@@ -183,10 +183,10 @@ Stable across the migration (covered by `typescript-conformance` + `dwn-sdk-js-r
 
 - DWN wire messages and replies.
 - CID calculation and descriptor CIDs.
-- General JWS and JWE wire shapes.
+- General JWS and the current A256CTR / X25519-HKDF-SHA256+A256KW JWE wire shapes.
 - Protocol definitions and permission-grant semantics.
 - Records data CID and data size behavior.
-- Sync roots, subtree hashes, leaves, progress tokens, and gap semantics.
+- Rust-native sync roots, subtree hashes, leaves, progress tokens, and gap semantics (intentional extension; upstream removed the legacy sync surfaces).
 
 Allowed to change at the app integration boundary:
 

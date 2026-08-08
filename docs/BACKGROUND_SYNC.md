@@ -1,5 +1,11 @@
 # Mobile Background Sync Entry Points
 
+> **Status:** This document describes the Rust-native `MessagesSync` / `StateIndex` background sync
+> surface — an **intentional Rust extension**. Upstream Enbox removed the legacy sync state surfaces
+> (`25821eda`, `chore(sync): remove legacy sync state surfaces`) and reconciles durable message
+> feeds through `MessagesQuery`. This is **not** current-upstream parity; the durable-feed migration
+> is tracked in #187/#188/#192.
+
 ## Goal
 
 Mobile apps must be able to trigger bounded Rust sync work from native background execution without a foreground React Native app, Bun, Node, or a long-lived JavaScript runtime. Every API below is safe to call repeatedly and can resume after process death through durable checkpoints.

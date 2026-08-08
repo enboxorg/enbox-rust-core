@@ -7,8 +7,8 @@ This repository validates DWN behavior through **three independent layers**. The
 | Field | Value |
 |-------|-------|
 | Pin file | [`.enbox-version`](../.enbox-version) |
-| Current commit | `1a227b0179f33e5d9ce3d68ba6275533ae306e2d` |
-| Fixture `source.commit` | Must match `.enbox-version` (checked in CI) |
+| Current commit | `c63bf424ac0997583db825e8a5fddf1507d30c40` |
+| Fixture `source.commit` | Must match `.enbox-version` unless `oracle: "rust-extension"` (checked in CI) |
 
 ## Layer overview
 
@@ -34,12 +34,12 @@ This repository validates DWN behavior through **three independent layers**. The
 | `jws.general.sign` | yes | `typescript-jws.test.ts` | utils/jws specs | — | covered |
 | `jws.general.verify` | yes | `typescript-jws.test.ts` | utils/jws specs | — | covered |
 | `jws.general.payload` | yes | `typescript-jws.test.ts` | utils/jws specs | — | covered |
-| `jwe.protected` | yes | `typescript-jwe.test.ts` | utils/encryption specs | — | covered |
+| `jwe.envelope` | yes | `typescript-jwe.test.ts` | utils/encryption specs | — | covered |
 | `jwe.aead` | yes | `typescript-jwe.test.ts` | utils/encryption specs | — | covered |
 | `jwe.keywrap` | yes | `typescript-jwe.test.ts` | utils/encryption specs | — | covered |
 | `jwe.decrypt` | yes | `typescript-jwe.test.ts` | utils/encryption specs | — | covered |
-| `state-index.operations` | yes | `typescript-state-index.test.ts` | store/state-index specs | — | covered |
-| `messages-sync.replies` | yes | `typescript-messages-sync.test.ts` | handlers/messages-sync specs | — | covered |
+| `state-index.operations` | yes | — (no TS adapter; upstream removed StateIndex) | removed upstream | — | rust extension (#188) |
+| `messages-sync.replies` | yes | — (no TS adapter; upstream removed MessagesSync) | removed upstream | — | rust extension (#188) |
 | `native-sync.engine` | yes (`native_dwn_sync_integration.rs`) | — | — | — | covered |
 | `progress-token.replay` | yes (`sqlite_event_log_progress_integration.rs`, `sync_ledger_integration.rs`) | — | handlers/subscribe specs | — | partial |
 | `descriptor.roundtrip` | yes | `typescript-descriptor-roundtrip.test.ts` | handler descriptor specs | — | covered |
@@ -49,6 +49,16 @@ This repository validates DWN behavior through **three independent layers**. The
 **Loopback interop (layer 4)** covers unsigned `RecordsQuery`, signed `ProtocolsConfigure`, signed `RecordsWrite` + `RecordsRead`, WebSocket `RecordsSubscribe` with HTTP write updates, and permissions grants (`tools/interop/loopback-interop.test.ts`). Runs in the `loopback-interop` CI job.
 
 **Partial** means the shared fixture corpus exercises a slice of the behavior; the dwn-sdk-js native suite covers the full handler/feature/scenario surface.
+
+## Rust-extension fixtures
+
+`StateIndex` and `MessagesSync` (and the sparse-merkle trie they use) were removed from upstream
+Enbox in `25821eda` (`chore(sync): remove legacy sync state surfaces`). Rust keeps them as
+intentional extensions: their fixtures carry `oracle: "rust-extension"`, pin `source.commit` to the
+last upstream commit that contained the surface, and record `removedUpstreamAt` plus an `issue`
+link (#188). There is no TypeScript adapter for them because the upstream modules no longer exist;
+Rust validates them directly in `conformance_fixtures.rs`. The durable-feed migration is tracked in
+#187/#188/#192.
 
 ## dwn-sdk-js native categories (Enbox `@enbox/dwn-sdk-js`)
 
@@ -73,7 +83,8 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `typescript-conformance` | `bun test tools/conformance/typescript-*.test.ts` | Shared JSON fixtures via TS adapters at pinned Enbox |
 | `dwn-sdk-js-reference` | `bun run --filter @enbox/dwn-sdk-js test:node` | Full SDK regression at pinned Enbox |
 | `loopback-interop` | build server + `bun test tools/interop/loopback-interop.test.ts` | TS HTTP + WebSocket clients against Rust `LoopbackDwnServer` |
-| Fixture provenance | `tools/conformance/check-fixture-provenance.sh` | Fail if any fixture `source.commit` ≠ `.enbox-version` |
+| Fixture provenance | `tools/conformance/check-fixture-provenance.sh` | Fail if any fixture `source.commit` ≠ `.enbox-version` (except rust-extension fixtures) |
+| Schema drift | `tools/conformance/refresh-upstream-schemas.sh` | Fail if embedded schemas are stale relative to the `.enbox-version` pin |
 
 ## Gaps and roadmap
 
@@ -84,7 +95,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
 | Rust-backed `TestSuite.runInjectableDependentTests` | Phase 1 scaffold in `tools/interop/testsuite-injection.test.ts` (#108); WASM path documented in [STORES_SDK_JS.md](./STORES_SDK_JS.md); FFI adapters future | partial |
 | `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
-| Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe, `MessagesSync` root | done |
+| Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe; the removed-upstream `MessagesSync` scenario is disabled (see #188) | done |
 | `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `poll_reconcile`, `sync_status` + crate README | done |
 | `enbox-ffi` agent identity surface | `initialize_agent_identity`, `current_agent_identity`, `derive_agent_keys_from_phrase` + `SqliteSecretStore`; covered in `crates/enbox-ffi/src/lib.rs` tests | done |
 | `enbox-ffi` protocol install / push / restore | `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption` over `Local`/`HttpDwnProtocolEndpoint` with axum mock server tests | done |
