@@ -44,12 +44,13 @@
       }
     },
     {
-      "id": "protocol-valid-roles-tags-limits-delivery",
-      "description": "Valid Enbox directives: $role, $size, $tags, $recordLimit, $immutable, $delivery, and $squash.",
+      "id": "protocol-directives-role-tags-limits-delivery",
+      "description": "Directives $role, $size, $tags, $recordLimit, $immutable, $delivery, and $squash. The $role path is rejected because upstream requires an authorized issuer for role records: 'anyone' cannot create or squash an initial role record.",
       "rustStatus": "supported",
       "protocolAuthorization": {
         "directives": ["$role", "$size", "$tags", "$recordLimit", "$immutable", "$delivery", "$squash"],
-        "expectedStatusCode": 202,
+        "expectedStatusCode": 400,
+        "expectedErrorCode": "ProtocolsConfigureInvalidRoleIssuance",
         "definition": {
           "protocol": "http://example.com/tasks",
           "published": true,
