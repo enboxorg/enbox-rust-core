@@ -921,7 +921,8 @@ mod tests {
     #[tokio::test]
     async fn es256_signatures_are_low_s_and_byte_stable() {
         let private_jwk = JWK::generate_p256();
-        let signer = PrivateJwkSigner::new("did:example:alice#key-1", Algorithm::ES256, private_jwk);
+        let signer =
+            PrivateJwkSigner::new("did:example:alice#key-1", Algorithm::ES256, private_jwk);
         let payload = b"stable ES256 payload".as_slice();
 
         let first = Jws::create(payload, std::slice::from_ref(&signer))
@@ -935,13 +936,20 @@ mod tests {
             .signatures
             .unwrap();
 
-        assert_eq!(first, second, "ES256 signing must be deterministic (RFC 6979)");
+        assert_eq!(
+            first, second,
+            "ES256 signing must be deterministic (RFC 6979)"
+        );
         let signature_bytes = decode_base64url(
             first[0].signature.as_deref().expect("signature"),
             "signature",
         )
         .expect("valid base64url signature");
-        assert_eq!(signature_bytes.len(), 64, "ES256 signature must be 64 bytes");
+        assert_eq!(
+            signature_bytes.len(),
+            64,
+            "ES256 signature must be 64 bytes"
+        );
         assert!(
             is_es256_low_s(&signature_bytes),
             "ES256 signature must be normalized to the low-S form emitted by current Enbox"
