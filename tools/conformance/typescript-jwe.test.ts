@@ -38,6 +38,20 @@ type FixtureCase = {
   record?: Record<string, unknown>;
   derivedPrivateJwk?: DerivedPrivateJwk;
   ephemeralPublicJwk?: Record<string, unknown>;
+  protocol?: string;
+  rolePath?: string;
+  seal?: SealKeyWrap;
+  sealContext?: { protocol: string; rolePath: string; contextId: string; audienceKeyId: string };
+  sealingPrivateJwk?: Record<string, unknown>;
+  audiencePrivateJwk?: Record<string, unknown>;
+};
+
+type SealKeyWrap = {
+  algorithm: string;
+  derivationScheme: string;
+  encryptedKey: string;
+  ephemeralPublicKey: Record<string, unknown>;
+  keyId: string;
 };
 
 type DerivedPrivateJwk = {
@@ -62,6 +76,8 @@ type DwnEncryption = {
     ephemeralPublicKey: Record<string, unknown>;
     encryptedKey: string;
     derivationScheme: string;
+    protocol?: string;
+    rolePath?: string;
   }>;
 };
 
@@ -83,6 +99,20 @@ type EncryptionModule = {
       recipientPrivateKey: Record<string, unknown>,
       keyEncryption: DwnEncryption['keyEncryption'][number],
     ): Promise<Uint8Array>;
+    unwrapSeal(input: {
+      audienceKeyId: string;
+      contextId: string;
+      protocol: string;
+      recipientPrivateKey: Record<string, unknown>;
+      rolePath: string;
+      seal: SealKeyWrap;
+    }): Promise<Uint8Array>;
+  };
+};
+
+type X25519Module = {
+  X25519: {
+    privateKeyToBytes(input: { privateKey: Record<string, unknown> }): Promise<Uint8Array>;
   };
 };
 
@@ -110,6 +140,7 @@ const jweEnvelopeAssertion = 'jwe.envelope';
 const jweAeadAssertion = 'jwe.aead';
 const jweKeywrapAssertion = 'jwe.keywrap';
 const jweDecryptAssertion = 'jwe.decrypt';
+const jweSealAssertion = 'jwe.seal';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
@@ -118,8 +149,9 @@ const defaultEnboxTsRoot = resolve(repoRoot, '../enbox');
 const enboxTsRoot = process.env.ENBOX_TS_ROOT ?? defaultEnboxTsRoot;
 const encryptionModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/utils/encryption.ts');
 const recordsModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/utils/records.ts');
+const x25519ModulePath = resolve(enboxTsRoot, 'packages/crypto/src/primitives/x25519.ts');
 
-for (const modulePath of [encryptionModulePath, recordsModulePath]) {
+for (const modulePath of [encryptionModulePath, recordsModulePath, x25519ModulePath]) {
   if (!existsSync(modulePath)) {
     throw new Error(
       `Unable to find TypeScript DWN SDK at ${modulePath}. ` +
@@ -130,6 +162,7 @@ for (const modulePath of [encryptionModulePath, recordsModulePath]) {
 
 const { Encryption } = await import(pathToFileURL(encryptionModulePath).href) as EncryptionModule;
 const { Records } = await import(pathToFileURL(recordsModulePath).href) as RecordsModule;
+const { X25519 } = await import(pathToFileURL(x25519ModulePath).href) as X25519Module;
 const manifest = await readJson<FixtureManifest>(resolve(fixturesRoot, 'manifest.json'));
 const fixtureSuites = await Promise.all(
   manifest.suites.map(async (suite): Promise<{ fixtureSet: FixtureSet; suite: FixtureSuiteRef }> => ({
@@ -144,13 +177,23 @@ describe('TypeScript A256CTR JWE conformance fixtures', () => {
       !suite.assertions.includes(jweEnvelopeAssertion) &&
       !suite.assertions.includes(jweAeadAssertion) &&
       !suite.assertions.includes(jweKeywrapAssertion) &&
-      !suite.assertions.includes(jweDecryptAssertion)
+      !suite.assertions.includes(jweDecryptAssertion) &&
+      !suite.assertions.includes(jweSealAssertion)
     ) {
       continue;
     }
 
     describe(suite.id, () => {
       for (const fixtureCase of fixtureSet.cases) {
+        if (fixtureCase.seal !== undefined) {
+          if (suite.assertions.includes(jweSealAssertion)) {
+            test(`${fixtureCase.id} seal`, async () => {
+              await assertSeal(fixtureCase);
+            });
+          }
+          continue;
+        }
+
         if (fixtureCase.expectedErrorCode !== undefined) {
           continue;
         }
@@ -201,10 +244,38 @@ async function assertEnvelope(fixtureCase: FixtureCase): Promise<void> {
   if (fixtureCase.ephemeralPublicJwk !== undefined) {
     expect(entry.ephemeralPublicKey).toMatchObject(fixtureCase.ephemeralPublicJwk);
   }
+  if (fixtureCase.derivationScheme === 'roleAudience') {
+    expect(entry.protocol).toBe(fixtureCase.protocol);
+    expect(entry.rolePath).toBe(fixtureCase.rolePath);
+  }
 
   const record = fixtureCase.record!;
   const recordEncryption = record.encryption as DwnEncryption;
   expect(recordEncryption).toEqual(encryption);
+}
+
+async function assertSeal(fixtureCase: FixtureCase): Promise<void> {
+  const seal = fixtureCase.seal!;
+  const context = fixtureCase.sealContext!;
+  expect(seal.algorithm).toBe(fixtureCase.keyAgreementAlgorithm);
+  expect(seal.derivationScheme).toBe('seal');
+  expect(seal.keyId).not.toBe('');
+  expect(seal.encryptedKey).not.toBe('');
+
+  // Opening the seal with the sealing private key and the recorded context
+  // must recover the audience private key bytes.
+  const audiencePrivateKeyBytes = await Encryption.unwrapSeal({
+    audienceKeyId      : context.audienceKeyId,
+    contextId          : context.contextId,
+    protocol           : context.protocol,
+    recipientPrivateKey: fixtureJwk(fixtureCase, fixtureCase.sealingPrivateJwk, 'sealingPrivateJwk'),
+    rolePath           : context.rolePath,
+    seal,
+  });
+
+  const audiencePrivateJwk = fixtureJwk(fixtureCase, fixtureCase.audiencePrivateJwk, 'audiencePrivateJwk');
+  const expectedBytes = await X25519.privateKeyToBytes({ privateKey: audiencePrivateJwk });
+  expect(Buffer.from(audiencePrivateKeyBytes).equals(Buffer.from(expectedBytes))).toBe(true);
 }
 
 async function assertAead(fixtureCase: FixtureCase): Promise<void> {

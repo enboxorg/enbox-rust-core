@@ -4,7 +4,7 @@
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
     "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
-    "note": "Deterministic A256CTR + X25519-HKDF-SHA256+A256KW vectors (pinned CEK/IV/ephemeral keys); ciphertext and encryptedKey computed with the same primitives @enbox/dwn-sdk-js uses, verified via tools/conformance/typescript-jwe.test.ts."
+    "note": "Deterministic A256CTR + X25519-HKDF-SHA256+A256KW vectors (pinned CEK/IV/ephemeral keys) covering protocolPath, roleAudience, and seal key wrapping; ciphertext and encryptedKey computed with the same primitives @enbox/dwn-sdk-js uses, verified via tools/conformance/typescript-jwe.test.ts."
   },
   "cases": [
     {
@@ -13,31 +13,31 @@
       "keyAgreementAlgorithm": "X25519-HKDF-SHA256+A256KW",
       "contentEncryptionAlgorithm": "A256CTR",
       "derivationScheme": "protocolPath",
-      "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+      "keyId": "HcofRtCgcAgsTvvmsjdr_4itCjPHXiPIGWudhtvdi94",
       "recipientPrivateJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "d": "ZDpyZWNpcGllbnQtcHJvdG9jb2wtcGF0aFhYWFhYWFg",
-        "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc",
+        "d": "cmVjaXBpZW50LXByb3RvY29sLXBhdGhYWFhYWFhYWFg",
+        "x": "uHJbgQnDcLyAMop4DeV1Dr34PocsroflOVWIhi_eBVQ",
         "kid": "did:example:alice#enc"
       },
       "recipientPublicJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc",
+        "x": "uHJbgQnDcLyAMop4DeV1Dr34PocsroflOVWIhi_eBVQ",
         "kid": "did:example:alice#enc"
       },
       "ephemeralPrivateJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "d": "ZDplcGhlbWVyYWwtcHJvdG9jb2wtcGF0aFhYWFhYWFg",
-        "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+        "d": "ZXBoZW1lcmFsLXByb3RvY29sLXBhdGhYWFhYWFhYWFg",
+        "x": "TvZFDMyJNVuUxgmcZJXzEpLW0DhRKm6LiE4yxEByGQU",
         "kid": "did:example:alice#ephemeral"
       },
       "ephemeralPublicJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+        "x": "TvZFDMyJNVuUxgmcZJXzEpLW0DhRKm6LiE4yxEByGQU",
         "kid": "did:example:alice#ephemeral"
       },
       "cek": {
@@ -62,14 +62,14 @@
         "keyEncryption": [
           {
             "algorithm": "X25519-HKDF-SHA256+A256KW",
-            "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+            "keyId": "HcofRtCgcAgsTvvmsjdr_4itCjPHXiPIGWudhtvdi94",
             "ephemeralPublicKey": {
               "kty": "OKP",
               "crv": "X25519",
-              "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+              "x": "TvZFDMyJNVuUxgmcZJXzEpLW0DhRKm6LiE4yxEByGQU",
               "kid": "did:example:alice#ephemeral"
             },
-            "encryptedKey": "KihbqckheDvgI4ZRJNu3el6L0dM8GLhXp_trR3P-vEpVs_pRpJbwjg",
+            "encryptedKey": "arfE8YWfzaAP9IE9--WuBgYt2miRIKsbAufkxhwxBZlFGc1ldZ-xfA",
             "derivationScheme": "protocolPath"
           }
         ]
@@ -92,14 +92,14 @@
           "keyEncryption": [
             {
               "algorithm": "X25519-HKDF-SHA256+A256KW",
-              "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+              "keyId": "HcofRtCgcAgsTvvmsjdr_4itCjPHXiPIGWudhtvdi94",
               "ephemeralPublicKey": {
                 "kty": "OKP",
                 "crv": "X25519",
-                "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+                "x": "TvZFDMyJNVuUxgmcZJXzEpLW0DhRKm6LiE4yxEByGQU",
                 "kid": "did:example:alice#ephemeral"
               },
-              "encryptedKey": "KihbqckheDvgI4ZRJNu3el6L0dM8GLhXp_trR3P-vEpVs_pRpJbwjg",
+              "encryptedKey": "arfE8YWfzaAP9IE9--WuBgYt2miRIKsbAufkxhwxBZlFGc1ldZ-xfA",
               "derivationScheme": "protocolPath"
             }
           ]
@@ -117,43 +117,45 @@
         "derivedPrivateKey": {
           "kty": "OKP",
           "crv": "X25519",
-          "d": "ZDpyZWNpcGllbnQtcHJvdG9jb2wtcGF0aFhYWFhYWFg",
-          "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc",
+          "d": "cmVjaXBpZW50LXByb3RvY29sLXBhdGhYWFhYWFhYWFg",
+          "x": "uHJbgQnDcLyAMop4DeV1Dr34PocsroflOVWIhi_eBVQ",
           "kid": "did:example:alice#enc"
         }
       }
     },
     {
-      "id": "jwe-a256ctr-wrong-recipient",
+      "id": "jwe-a256ctr-role-audience",
       "rustStatus": "supported",
       "keyAgreementAlgorithm": "X25519-HKDF-SHA256+A256KW",
       "contentEncryptionAlgorithm": "A256CTR",
-      "derivationScheme": "protocolPath",
-      "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+      "derivationScheme": "roleAudience",
+      "keyId": "q55ii2awy_tAqBl_rb_KHiuk7qccp09gN5GrgavuOY0",
+      "protocol": "https://example.com/protocol/notes",
+      "rolePath": "member",
       "recipientPrivateJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "d": "ZDp3cm9uZy1yZWNpcGllbnRYWFhYWFhYWFhYWFhYWFg",
-        "x": "298ju9eC_ZF69XIHRDWKS5jsscRE8RKqPGh_33S9YBA",
-        "kid": "did:example:mallory#enc"
+        "d": "cmVjaXBpZW50LXJvbGUtYXVkaWVuY2VYWFhYWFhYWFg",
+        "x": "R7DDchZr_KUFr0qzqDU3Fq5-zw6ZWP3T1CqA1bvPqj0",
+        "kid": "did:example:alice#enc"
       },
       "recipientPublicJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "x": "298ju9eC_ZF69XIHRDWKS5jsscRE8RKqPGh_33S9YBA",
-        "kid": "did:example:mallory#enc"
+        "x": "R7DDchZr_KUFr0qzqDU3Fq5-zw6ZWP3T1CqA1bvPqj0",
+        "kid": "did:example:alice#enc"
       },
       "ephemeralPrivateJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "d": "ZDplcGhlbWVyYWwtcHJvdG9jb2wtcGF0aFhYWFhYWFg",
-        "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+        "d": "ZXBoZW1lcmFsLXJvbGUtYXVkaWVuY2VYWFhYWFhYWFg",
+        "x": "OkYnrO4pe7jzF10fG-z5f_OfElzzZkCau48_ugy9Ozs",
         "kid": "did:example:alice#ephemeral"
       },
       "ephemeralPublicJwk": {
         "kty": "OKP",
         "crv": "X25519",
-        "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+        "x": "OkYnrO4pe7jzF10fG-z5f_OfElzzZkCau48_ugy9Ozs",
         "kid": "did:example:alice#ephemeral"
       },
       "cek": {
@@ -162,11 +164,11 @@
       },
       "plaintext": {
         "encoding": "utf8",
-        "value": "Enbox JWE A256CTR wrong-recipient fixture"
+        "value": "Enbox JWE A256CTR roleAudience fixture"
       },
       "ciphertext": {
         "encoding": "base64url",
-        "value": "Vh5242Pi4yXJBbHuaU23uPBSx2s0KOoZpTvSckoK_saWdz9jP26T3MQ"
+        "value": "Vh5242Pi4yXJBbHuaU23uPBSwnY3I8xBszfUdVkGu86LLy1_NX8"
       },
       "iv": {
         "encoding": "base64url",
@@ -178,15 +180,17 @@
         "keyEncryption": [
           {
             "algorithm": "X25519-HKDF-SHA256+A256KW",
-            "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+            "keyId": "q55ii2awy_tAqBl_rb_KHiuk7qccp09gN5GrgavuOY0",
             "ephemeralPublicKey": {
               "kty": "OKP",
               "crv": "X25519",
-              "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+              "x": "OkYnrO4pe7jzF10fG-z5f_OfElzzZkCau48_ugy9Ozs",
               "kid": "did:example:alice#ephemeral"
             },
-            "encryptedKey": "NQaInpSIT3gPO7TK0DjpAhmwoSodbYMqAwUeDnLT7uGhyz-iW77Tag",
-            "derivationScheme": "protocolPath"
+            "encryptedKey": "Zu-1SLMTdznzjGOlGdWBLQHxbZFOlxT3pCTXN17aH2dhf93r6sxL9w",
+            "derivationScheme": "roleAudience",
+            "protocol": "https://example.com/protocol/notes",
+            "rolePath": "member"
           }
         ]
       },
@@ -194,51 +198,83 @@
         "descriptor": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/jwe",
-          "protocolPath": "thread/message",
-          "dataCid": "bafkreic7xaiufvfoc43em4dohek7vrgzzj5z2b2sxj75odyev6cl3kuzhm",
-          "dataSize": 41,
+          "protocol": "https://example.com/protocol/notes",
+          "dataCid": "bafkreiantkxywpgv6ysrifwk3zi67i77o4yxxaup2oawms5l3n7khq2vfm",
+          "dataSize": 38,
           "dataFormat": "text/plain"
         },
         "contextId": "root-context/child",
-        "recordId": "test-record-id-wrong-recipient",
+        "recordId": "test-record-id-role-audience",
         "encryption": {
           "algorithm": "A256CTR",
           "initializationVector": "wMHCw8TFxsfIycrLzM3Ozw",
           "keyEncryption": [
             {
               "algorithm": "X25519-HKDF-SHA256+A256KW",
-              "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+              "keyId": "q55ii2awy_tAqBl_rb_KHiuk7qccp09gN5GrgavuOY0",
               "ephemeralPublicKey": {
                 "kty": "OKP",
                 "crv": "X25519",
-                "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28",
+                "x": "OkYnrO4pe7jzF10fG-z5f_OfElzzZkCau48_ugy9Ozs",
                 "kid": "did:example:alice#ephemeral"
               },
-              "encryptedKey": "NQaInpSIT3gPO7TK0DjpAhmwoSodbYMqAwUeDnLT7uGhyz-iW77Tag",
-              "derivationScheme": "protocolPath"
+              "encryptedKey": "Zu-1SLMTdznzjGOlGdWBLQHxbZFOlxT3pCTXN17aH2dhf93r6sxL9w",
+              "derivationScheme": "roleAudience",
+              "protocol": "https://example.com/protocol/notes",
+              "rolePath": "member"
             }
           ]
         }
       },
       "derivedPrivateJwk": {
         "rootKeyId": "did:example:alice#enc",
-        "derivationScheme": "protocolPath",
+        "derivationScheme": "roleAudience",
         "derivationPath": [
-          "protocolPath",
-          "https://example.com/protocol/jwe",
-          "thread",
-          "message"
+          "roleAudience"
         ],
         "derivedPrivateKey": {
           "kty": "OKP",
           "crv": "X25519",
-          "d": "ZDpyZWNpcGllbnQtcHJvdG9jb2wtcGF0aFhYWFhYWFg",
-          "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc",
+          "d": "cmVjaXBpZW50LXJvbGUtYXVkaWVuY2VYWFhYWFhYWFg",
+          "x": "R7DDchZr_KUFr0qzqDU3Fq5-zw6ZWP3T1CqA1bvPqj0",
           "kid": "did:example:alice#enc"
         }
+      }
+    },
+    {
+      "id": "jwe-a256ctr-seal",
+      "rustStatus": "supported",
+      "keyAgreementAlgorithm": "X25519-HKDF-SHA256+A256KW",
+      "seal": {
+        "algorithm": "X25519-HKDF-SHA256+A256KW",
+        "derivationScheme": "seal",
+        "encryptedKey": "BNdM94UG2spUEF_dANHbBbfMHDqkq2-liqIion2nEGeKr87fQMnYLg",
+        "ephemeralPublicKey": {
+          "crv": "X25519",
+          "kid": "9tOb183nLY8lW1KtH-g7ou7lWYt6HC2yU5BnI8NRofs",
+          "kty": "OKP",
+          "x": "-6WJjols0E4zpawS9S2povLwkpYNUcwGEXD2YSvD7Bc"
+        },
+        "keyId": "qKpn4plbkMfU3yWDjgvuQc0qGzvQJn031umInc0PnAE"
       },
-      "expectedErrorCode": "RecordsDecryptNoMatchingKeyEncryptedFound"
+      "sealContext": {
+        "protocol": "https://example.org/protocols/seal-fixture",
+        "rolePath": "chat/member",
+        "contextId": "root/thread",
+        "audienceKeyId": "wGUj0R5Q0vED7B2EW4GFOCqJB1XXTPm6pIjixu2psL4"
+      },
+      "sealingPrivateJwk": {
+        "crv": "X25519",
+        "d": "yFNS7zIsSPFOsaR5iTELRuAGRB7X0V_XaNE_XYU7yUY",
+        "kty": "OKP",
+        "x": "0Zf6pn0EvFNFTIoiZ8Krr36DkI3_dBrF5pBt2mC3CkM"
+      },
+      "audiencePrivateJwk": {
+        "crv": "X25519",
+        "d": "6MxyxL2s6wN4BygLw9kQqGV_nbzJnK8nPdkH2aOKiVw",
+        "kty": "OKP",
+        "x": "7OUu7CaMaUI0bEoF4m2yDnltlSF0FYbKNrY1odGnOHg"
+      }
     }
   ]
 }

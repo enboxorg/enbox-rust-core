@@ -44,6 +44,7 @@ const JWE_ENVELOPE_ASSERTION: &str = "jwe.envelope";
 const JWE_AEAD_ASSERTION: &str = "jwe.aead";
 const JWE_KEYWRAP_ASSERTION: &str = "jwe.keywrap";
 const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
+const JWE_SEAL_ASSERTION: &str = "jwe.seal";
 const STATE_INDEX_OPERATIONS_ASSERTION: &str = "state-index.operations";
 const MESSAGES_SYNC_REPLIES_ASSERTION: &str = "messages-sync.replies";
 const MESSAGE_PROCESS_ASSERTION: &str = "message.process";
@@ -110,9 +111,15 @@ struct FixtureCase {
     key_id: Option<String>,
     payload: Option<FixtureJwsPayload>,
     plaintext: Option<FixtureData>,
+    protocol: Option<String>,
     recipient_private_jwk: Option<FixtureX25519PrivateJwk>,
     recipient_public_jwk: Option<FixtureX25519PublicJwk>,
     record: Option<Value>,
+    role_path: Option<String>,
+    seal: Option<Value>,
+    seal_context: Option<SealContextFixture>,
+    sealing_private_jwk: Option<FixtureX25519PrivateJwk>,
+    audience_private_jwk: Option<FixtureX25519PrivateJwk>,
     signer_ids: Option<Vec<String>>,
     tenants: Option<Vec<String>>,
     operations: Option<Vec<StateIndexOperation>>,
@@ -289,6 +296,15 @@ struct FixtureDerivedPrivateJwk {
     derivation_path: Vec<String>,
     #[allow(dead_code)]
     derived_private_key: FixtureX25519PrivateJwk,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SealContextFixture {
+    protocol: String,
+    role_path: String,
+    context_id: String,
+    audience_key_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -540,6 +556,7 @@ fn fixture_jwe_matches_typescript() {
         let check_aead = suite.has_assertion(JWE_AEAD_ASSERTION);
         let check_keywrap = suite.has_assertion(JWE_KEYWRAP_ASSERTION);
         let check_decrypt = suite.has_assertion(JWE_DECRYPT_ASSERTION);
+        let check_seal = suite.has_assertion(JWE_SEAL_ASSERTION);
 
         for case in suite
             .fixture_set
@@ -547,6 +564,13 @@ fn fixture_jwe_matches_typescript() {
             .iter()
             .filter(|case| case.rust_status == RustStatus::Supported)
         {
+            if case.seal.is_some() {
+                if check_seal {
+                    assert_jwe_seal(case);
+                }
+                continue;
+            }
+
             assert_jwe_production_model(case);
 
             if check_envelope {
@@ -2329,17 +2353,35 @@ fn assert_jwe_envelope(case: &FixtureCase) {
     );
     assert_eq!(key_encryption.key_id(), key_id(case), "{} keyId", case.id);
     assert_eq!(
-        key_encryption.derivation_scheme(),
-        dwn_rs_core::encryption::DerivationScheme::ProtocolPath,
+        key_encryption.derivation_scheme().as_str(),
+        derivation_scheme(case),
         "{} derivation scheme",
         case.id
     );
-    assert_eq!(
-        derivation_scheme(case),
-        "protocolPath",
-        "{} derivation scheme fixture",
-        case.id
-    );
+    match key_encryption.derivation_scheme() {
+        dwn_rs_core::encryption::DerivationScheme::ProtocolPath => {
+            assert_eq!(
+                key_encryption.protocol(),
+                None,
+                "{} protocolPath entries must not carry protocol",
+                case.id
+            );
+        }
+        dwn_rs_core::encryption::DerivationScheme::RoleAudience => {
+            assert_eq!(
+                key_encryption.protocol(),
+                case.protocol.as_deref(),
+                "{} roleAudience protocol",
+                case.id
+            );
+            assert_eq!(
+                key_encryption.role_path(),
+                case.role_path.as_deref(),
+                "{} roleAudience rolePath",
+                case.id
+            );
+        }
+    }
     assert_eq!(
         x25519_public_key_bytes(key_encryption.ephemeral_public_key()),
         Some(decode_base64url_array_fixture::<32>(
@@ -2496,6 +2538,64 @@ fn decrypt_jwe_case(case: &FixtureCase) -> Result<Vec<u8>, String> {
     )
 }
 
+fn assert_jwe_seal(case: &FixtureCase) {
+    let seal_value = case
+        .seal
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a seal", case.id));
+    let seal: dwn_rs_core::encryption::SealKeyWrap = serde_json::from_value(seal_value.clone())
+        .unwrap_or_else(|err| panic!("{} seal decode failed: {err}", case.id));
+    assert_eq!(
+        serde_json::to_value(&seal).unwrap(),
+        *seal_value,
+        "{} seal roundtrip",
+        case.id
+    );
+    assert_eq!(
+        seal.algorithm().as_str(),
+        key_agreement_algorithm(case),
+        "{} seal algorithm",
+        case.id
+    );
+    assert!(
+        !seal.encrypted_key().is_empty(),
+        "{} seal encryptedKey must not be empty",
+        case.id
+    );
+
+    let context = case
+        .seal_context
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include sealContext", case.id));
+    let sealing_private_jwk = case
+        .sealing_private_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include sealingPrivateJwk", case.id));
+
+    // Opening the seal with the sealing private key must recover the audience
+    // private key bytes.
+    let unwrapped = dwn_rs_core::encryption::seal_unwrap(
+        &decode_base64url_array_fixture(&sealing_private_jwk.d, &case.id, "sealing private key"),
+        &seal,
+        &context.protocol,
+        &context.role_path,
+        &context.context_id,
+        &context.audience_key_id,
+    )
+    .unwrap_or_else(|err| panic!("{} seal unwrap failed: {err}", case.id));
+
+    let audience_private_jwk = case
+        .audience_private_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include audiencePrivateJwk", case.id));
+    assert_eq!(
+        unwrapped,
+        decode_base64url(&audience_private_jwk.d, &case.id, "audience private key"),
+        "{} unwrapped audience private key",
+        case.id
+    );
+}
+
 fn jwe_ctr_encrypt(
     algorithm: &str,
     key: &[u8],
@@ -2531,8 +2631,8 @@ fn x25519_hkdf_a256kw_wrap(
     recipient_public_key: &[u8; 32],
     key_id: &str,
     derivation_scheme: dwn_rs_core::encryption::DerivationScheme,
-    _protocol: Option<&str>,
-    _role_path: Option<&str>,
+    protocol: Option<&str>,
+    role_path: Option<&str>,
     cek: &[u8],
 ) -> Result<Vec<u8>, String> {
     dwn_rs_core::encryption::x25519_hkdf_a256kw_wrap(
@@ -2540,8 +2640,8 @@ fn x25519_hkdf_a256kw_wrap(
         recipient_public_key,
         key_id,
         derivation_scheme,
-        None,
-        None,
+        protocol,
+        role_path,
         cek,
     )
     .map_err(|err| err.to_string())
@@ -2552,8 +2652,8 @@ fn x25519_hkdf_a256kw_unwrap(
     ephemeral_public_key: &[u8; 32],
     key_id: &str,
     derivation_scheme: dwn_rs_core::encryption::DerivationScheme,
-    _protocol: Option<&str>,
-    _role_path: Option<&str>,
+    protocol: Option<&str>,
+    role_path: Option<&str>,
     wrapped_key: &[u8],
 ) -> Result<Vec<u8>, String> {
     dwn_rs_core::encryption::x25519_hkdf_a256kw_unwrap(
@@ -2561,8 +2661,8 @@ fn x25519_hkdf_a256kw_unwrap(
         ephemeral_public_key,
         key_id,
         derivation_scheme,
-        None,
-        None,
+        protocol,
+        role_path,
         wrapped_key,
     )
     .map_err(|err| err.to_string())
@@ -2605,6 +2705,7 @@ fn construct_jwe_derivation_path(case: &FixtureCase) -> Vec<String> {
             path.extend(protocol_path.split('/').map(str::to_string));
             path
         }
+        "roleAudience" => vec!["roleAudience".to_string()],
         scheme => panic!("{} unsupported derivation scheme {}", case.id, scheme),
     }
 }
