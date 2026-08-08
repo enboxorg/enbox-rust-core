@@ -157,7 +157,9 @@ impl MessageFields for WriteFields {
 mod tests {
     use crate::{
         auth::jws::JwsSignature,
-        encryption::{DerivationScheme, Encryption, JweRecipient, JweRecipientHeader},
+        encryption::{
+            ContentEncryptionAlgorithm, Encryption, KeyAgreementAlgorithm, KeyEncryption,
+        },
     };
 
     use super::*;
@@ -193,16 +195,12 @@ mod tests {
                     ..Default::default()
                 },
                 encryption: Some(Encryption {
-                    protected: "protected".to_string(),
-                    iv: "initialization_vector".to_string(),
-                    tag: "tag".to_string(),
-                    recipients: vec![JweRecipient {
-                        header: JweRecipientHeader {
-                            kid: "root_key_id".to_string(),
-                            epk: jwk.clone(),
-                            derivation_scheme: DerivationScheme::DataFormats,
-                            derived_public_key: None,
-                        },
+                    algorithm: ContentEncryptionAlgorithm::A256Ctr,
+                    initialization_vector: "initialization_vector".to_string(),
+                    key_encryption: vec![KeyEncryption::ProtocolPath {
+                        algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+                        key_id: "root_key_id".to_string(),
+                        ephemeral_public_key: jwk.clone(),
                         encrypted_key: "encrypted_key".to_string(),
                     }],
                 }),
@@ -222,17 +220,15 @@ mod tests {
                     "recordId": "record_id",
                     "contextId": "context_id",
                     "encryption": {{
-                        "protected": "protected",
-                        "iv": "initialization_vector",
-                        "tag": "tag",
-                        "recipients": [
+                        "algorithm": "A256CTR",
+                        "initializationVector": "initialization_vector",
+                        "keyEncryption": [
                             {{
-                                "header": {{
-                                    "kid": "root_key_id",
-                                    "epk": {jwk},
-                                    "derivationScheme": "dataFormats"
-                                }},
-                                "encrypted_key": "encrypted_key"
+                                "algorithm": "X25519-HKDF-SHA256+A256KW",
+                                "keyId": "root_key_id",
+                                "ephemeralPublicKey": {jwk},
+                                "encryptedKey": "encrypted_key",
+                                "derivationScheme": "protocolPath"
                             }}
                         ]
                     }},
@@ -278,17 +274,15 @@ mod tests {
                 "recordId": "record_id",
                 "contextId": "context_id",
                 "encryption": {{
-                    "protected": "protected",
-                    "iv": "initialization_vector",
-                    "tag": "tag",
-                    "recipients": [
+                    "algorithm": "A256CTR",
+                    "initializationVector": "initialization_vector",
+                    "keyEncryption": [
                         {{
-                            "header": {{
-                                "kid": "root_key_id",
-                                "epk": {jwk},
-                                "derivationScheme": "dataFormats"
-                            }},
-                            "encrypted_key": "encrypted_key"
+                            "algorithm": "X25519-HKDF-SHA256+A256KW",
+                            "keyId": "root_key_id",
+                            "ephemeralPublicKey": {jwk},
+                            "encryptedKey": "encrypted_key",
+                            "derivationScheme": "protocolPath"
                         }}
                     ]
                 }},
