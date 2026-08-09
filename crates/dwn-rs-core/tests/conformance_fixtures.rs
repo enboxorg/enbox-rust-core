@@ -2311,7 +2311,7 @@ fn assert_jwe_envelope(case: &FixtureCase) {
     let encryption_value = record(case)
         .get("encryption")
         .unwrap_or_else(|| panic!("{} record must include encryption", case.id));
-    let encryption: dwn_rs_core::encryption::Encryption =
+    let encryption: dwn_rs_core::encryption::EncryptionEnvelope =
         serde_json::from_value(encryption_value.clone())
             .unwrap_or_else(|err| panic!("{} JWE envelope decode failed: {err}", case.id));
 
@@ -2603,7 +2603,7 @@ fn jwe_ctr_encrypt(
     plaintext: &[u8],
 ) -> Result<Vec<u8>, String> {
     match algorithm {
-        "A256CTR" => dwn_rs_core::encryption::Encryption::ctr_encrypt(key, iv, plaintext)
+        "A256CTR" => dwn_rs_core::encryption::EncryptionEnvelope::ctr_encrypt(key, iv, plaintext)
             .map_err(|err| err.to_string()),
         _ => Err(format!(
             "unsupported content encryption algorithm {algorithm}"
@@ -2618,7 +2618,7 @@ fn jwe_ctr_decrypt(
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, String> {
     match algorithm {
-        "A256CTR" => dwn_rs_core::encryption::Encryption::ctr_decrypt(key, iv, ciphertext)
+        "A256CTR" => dwn_rs_core::encryption::EncryptionEnvelope::ctr_decrypt(key, iv, ciphertext)
             .map_err(|err| err.to_string()),
         _ => Err(format!(
             "unsupported content encryption algorithm {algorithm}"
@@ -2920,7 +2920,7 @@ fn single_key_encryption(case: &FixtureCase) -> dwn_rs_core::encryption::KeyEncr
     let encryption_value = record(case)
         .get("encryption")
         .unwrap_or_else(|| panic!("{} record must include encryption", case.id));
-    let encryption: dwn_rs_core::encryption::Encryption =
+    let encryption: dwn_rs_core::encryption::EncryptionEnvelope =
         serde_json::from_value(encryption_value.clone())
             .unwrap_or_else(|err| panic!("{} JWE envelope decode failed: {err}", case.id));
     assert_eq!(

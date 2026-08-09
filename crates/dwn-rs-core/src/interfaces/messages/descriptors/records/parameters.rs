@@ -1,6 +1,6 @@
 use crate::auth::Authorization;
 use crate::descriptors::{MessageParameters, MessageValidator, ValidationError};
-use crate::encryption::{DerivationScheme, Encryption, EncryptionInput};
+use crate::encryption::{DerivationScheme, Encryption, EncryptionEnvelope, EncryptionInput};
 use crate::fields::WriteFields;
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::{normalize_url, MapValue, Message, Pagination};
@@ -322,12 +322,13 @@ impl MessageParameters for WriteParameters {
         };
 
         if let Some(encryption_input) = &self.encryption_input {
-            fields.encryption =
-                Some(Encryption::build_encryption(encryption_input).map_err(|e| {
+            fields.encryption = Some(Encryption::Envelope(
+                EncryptionEnvelope::build_encryption(encryption_input).map_err(|e| {
                     ValidationError {
                         message: e.to_string(),
                     }
-                })?);
+                })?,
+            ));
         }
         fields.record_id = self.record_id.clone();
 

@@ -160,7 +160,15 @@ async fn test_write_builds_jwe_encryption_fields() {
     .await
     .unwrap();
 
-    let encryption = fields.unwrap().encryption.unwrap();
+    // encryption is an Encryption::Envelope, which is the struct EncryptionEnvelope,
+    // which contains the fields algorithm, initialization_vector, and key_encryption
+    // We can check that the fields are present and have the expected values.
+    let binding = fields.unwrap();
+    let encryption = match binding.encryption.as_ref().unwrap() {
+        crate::encryption::Encryption::Envelope(envelope) => envelope,
+        _ => panic!("Expected Encryption::Envelope"),
+    };
+
     assert_eq!(
         encryption.algorithm,
         crate::encryption::ContentEncryptionAlgorithm::A256Ctr

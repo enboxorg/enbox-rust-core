@@ -158,7 +158,7 @@ mod tests {
     use crate::{
         auth::jws::JwsSignature,
         encryption::{
-            ContentEncryptionAlgorithm, Encryption, KeyAgreementAlgorithm, KeyEncryption,
+            ContentEncryptionAlgorithm, EncryptionEnvelope, KeyAgreementAlgorithm, KeyEncryption,
         },
     };
 
@@ -194,7 +194,7 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                encryption: Some(Encryption {
+                encryption: Some(Encryption::Envelope(EncryptionEnvelope {
                     algorithm: ContentEncryptionAlgorithm::A256Ctr,
                     initialization_vector: "initialization_vector".to_string(),
                     key_encryption: vec![KeyEncryption::ProtocolPath {
@@ -203,7 +203,7 @@ mod tests {
                         ephemeral_public_key: jwk.clone(),
                         encrypted_key: "encrypted_key".to_string(),
                     }],
-                }),
+                })),
                 attestation: Some(Jws {
                     payload: Some("payload".to_string()),
                     signatures: Some(vec![JwsSignature {

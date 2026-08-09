@@ -156,9 +156,34 @@ impl KeyEncryption {
     }
 }
 
-/// Current-format DWN encryption envelope used by TypeScript RecordsWrite.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Encryption {
+#[serde(untagged)]
+pub enum Encryption {
+    Envelope(EncryptionEnvelope),
+    LegacyJwe(legacy_jwe::LegacyJweEncryption),
+}
+
+impl Encryption {
+    pub fn decrypt(
+        &self,
+        private_jwk: &JWK,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
+        match self {
+            Encryption::Envelope(envelope) => envelope.decrypt(private_jwk, ciphertext),
+            Encryption::LegacyJwe(jwe) => jwe.decrypt(private_jwk, ciphertext),
+        }
+    }
+
+    pub fn is_legacy_jwe(&self) -> bool {
+        matches!(self, Encryption::LegacyJwe(_))
+    }
+}
+
+/// Encryption envelope for a RecordsWrite, including the CEK, IV, and
+/// `keyEncryption` entries.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct EncryptionEnvelope {
     pub algorithm: ContentEncryptionAlgorithm,
     #[serde(rename = "initializationVector")]
     pub initialization_vector: String,
@@ -304,7 +329,7 @@ pub struct SealKeyWrapInput<'a> {
     pub audience_key_id: &'a str,
 }
 
-impl Encryption {
+impl EncryptionEnvelope {
     /// Builds an encryption envelope, mirroring
     /// `Encryption.buildEncryptionProperty` including its parameter
     /// validation (CEK length, IV length, non-empty key-encryption inputs).
@@ -701,28 +726,28 @@ mod tests {
                 .unwrap(),
             }],
         };
-        assert!(Encryption::build_encryption(&valid_input).is_ok());
+        assert!(EncryptionEnvelope::build_encryption(&valid_input).is_ok());
 
         // Short CEK must fail.
         let short_key = EncryptionInput {
             key: (0u8..31).collect(),
             ..valid_input.clone()
         };
-        assert!(Encryption::build_encryption(&short_key).is_err());
+        assert!(EncryptionEnvelope::build_encryption(&short_key).is_err());
 
         // Short IV must fail.
         let short_iv = EncryptionInput {
             initialization_vector: (0xa0u8..0xaf).collect(),
             ..valid_input.clone()
         };
-        assert!(Encryption::build_encryption(&short_iv).is_err());
+        assert!(EncryptionEnvelope::build_encryption(&short_iv).is_err());
 
         // Empty keyEncryptionInputs must fail.
         let empty_inputs = EncryptionInput {
             key_encryption_inputs: vec![],
             ..valid_input.clone()
         };
-        assert!(Encryption::build_encryption(&empty_inputs).is_err());
+        assert!(EncryptionEnvelope::build_encryption(&empty_inputs).is_err());
     }
 
     #[test]
@@ -740,7 +765,7 @@ mod tests {
         };
 
         // A 16-byte IV decodes to the required A256CTR counter block length.
-        let valid = Encryption {
+        let valid = EncryptionEnvelope {
             algorithm: ContentEncryptionAlgorithm::A256Ctr,
             initialization_vector: "oKGio6SlpqeoqaqrrK2urw".to_string(),
             key_encryption: vec![key_encryption.clone()],
@@ -748,7 +773,7 @@ mod tests {
         valid.validate().expect("16-byte IV must validate");
 
         // A 15-byte IV must be rejected.
-        let short_iv = Encryption {
+        let short_iv = EncryptionEnvelope {
             initialization_vector: "AAECAwQFBgcICQoLDA0O".to_string(),
             ..valid.clone()
         };
@@ -759,14 +784,14 @@ mod tests {
         );
 
         // A 17-byte IV must be rejected.
-        let long_iv = Encryption {
+        let long_iv = EncryptionEnvelope {
             initialization_vector: format!("{}{}", valid.initialization_vector, "AA"),
             ..valid.clone()
         };
         assert!(long_iv.validate().is_err());
 
         // An invalid-base64url IV must be rejected.
-        let bad_b64 = Encryption {
+        let bad_b64 = EncryptionEnvelope {
             initialization_vector: "!!not-base64!!".to_string(),
             ..valid.clone()
         };
@@ -789,7 +814,7 @@ mod tests {
             .unwrap(),
             encrypted_key: "a2V5".to_string(),
         };
-        let encryption = Encryption {
+        let encryption = EncryptionEnvelope {
             algorithm: ContentEncryptionAlgorithm::A256Ctr,
             initialization_vector: "oKGio6SlpqeoqaqrrK2urw".to_string(),
             key_encryption: vec![key_encryption],

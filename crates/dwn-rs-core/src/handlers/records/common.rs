@@ -13,6 +13,7 @@ use crate::descriptors::{
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::DwnReply;
+use crate::encryption::Encryption;
 use crate::errors::EventLogError;
 use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
@@ -117,21 +118,30 @@ pub(crate) fn validate_records_write_integrity(
     // with a malformed IV or ephemeral key is rejected at admission rather than failing
     // decryption later.
     if let Some(encryption) = write_fields(message)?.encryption.as_ref() {
-        encryption.validate().map_err(|error| match error {
-            crate::encryption::EncryptionError::InvalidInitializationVectorLength { found } => {
-                format!(
-                    "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: A256CTR initializationVector must decode to 16 bytes, got {found}"
-                )
+        match encryption {
+            Encryption::Envelope(envelope) => {
+                envelope.validate().map_err(|error| match error {
+                    crate::encryption::EncryptionError::InvalidInitializationVectorLength { found } => {
+                        format!(
+                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: A256CTR initializationVector must decode to 16 bytes, got {found}"
+                        )
+                    }
+                    crate::encryption::EncryptionError::InvalidBase64Url { label, error } => {
+                        format!(
+                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: {label} must be valid base64url: {error}"
+                        )
+                    }
+                    other => format!(
+                        "RecordsWriteValidateIntegrityEncryptionEphemeralPublicKeyInvalid: {other}"
+                    ),
+                })?;
             }
-            crate::encryption::EncryptionError::InvalidBase64Url { label, error } => {
-                format!(
-                    "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: {label} must be valid base64url: {error}"
-                )
+            Encryption::LegacyJwe(_) => {
+                // Legacy JWE is deprecated. It's only valid for decryption of existing records, not
+                // for new writes. Reject any new writes with a legacy JWE.
+                return Err("RecordsWriteValidateIntegrityEncryptionLegacyJweInvalid: Legacy JWE is deprecated and not allowed for new writes".to_string());
             }
-            other => format!(
-                "RecordsWriteValidateIntegrityEncryptionEphemeralPublicKeyInvalid: {other}"
-            ),
-        })?;
+        }
     }
 
     // `contextId` is a protocol-only surface: per DWN spec.md:1028 a record NOT
