@@ -596,18 +596,16 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
     })
     .await;
-    assert_eq!(
-        handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &grant,
-                Some(grant_data.clone())
-            ))
-            .await
-            .status
-            .code,
-        202
-    );
+
+    let resp = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &grant,
+            Some(grant_data.clone()),
+        ))
+        .await;
+
+    assert_eq!(resp.status.code, 202);
     let mut delegated_grant = grant.clone();
     delegated_grant["encodedData"] = serde_json::Value::String(URL_SAFE_NO_PAD.encode(&grant_data));
 

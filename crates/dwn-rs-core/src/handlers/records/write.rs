@@ -474,14 +474,28 @@ where
         let protocol_path = descriptor.protocol_path.clone();
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
-        let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
-            tenant,
-            &protocol_path,
-            &self.message_store,
-            Some(&governing_timestamp),
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+
+        // check if protocol is defined in the core_protocol_registry and use that
+        // definition, otherwise fetch the protocol definition from the message store
+        let definition = if self.core_protocol_registry.has(&descriptor.protocol) {
+            self.core_protocol_registry
+                .get_definition(&descriptor.protocol)
+                .ok_or_else(|| {
+                    format!(
+                        "ProtocolAuthorizationInvalidProtocol: {} is not defined",
+                        &descriptor.protocol
+                    )
+                })?
+        } else {
+            crate::handlers::protocols::configure::fetch_protocol_definition(
+                tenant,
+                &protocol_path,
+                &self.message_store,
+                Some(&governing_timestamp),
+            )
+            .await
+            .map_err(|err| err.to_string())?
+        };
         let rule_set = protocol_types::get_rule_set_at_path(
             descriptor.protocol_path.as_str(),
             &definition.structure,
