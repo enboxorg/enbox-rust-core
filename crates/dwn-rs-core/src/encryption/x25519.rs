@@ -3,10 +3,19 @@ use super::error::EncryptionError;
 use ssi_jwk::{Base64urlUInt, OctetParams, Params, JWK};
 
 /// X25519 shared secret from an X25519 private key and X25519 public key.
-pub(crate) fn shared_secret(private_key: &[u8; 32], public_key: &[u8; 32]) -> Vec<u8> {
+pub(crate) fn shared_secret(
+    private_key: &[u8; 32],
+    public_key: &[u8; 32],
+) -> Result<Vec<u8>, EncryptionError> {
     let secret = x25519_dalek::StaticSecret::from(*private_key);
     let public = x25519_dalek::PublicKey::from(*public_key);
-    secret.diffie_hellman(&public).as_bytes().to_vec()
+    let dh = secret.diffie_hellman(&public);
+    // check if the shared secret is all zeros, which indicates a weak key agreement
+    if dh.as_bytes().iter().all(|&b| b == 0) {
+        return Err(EncryptionError::WeakSecret);
+    }
+
+    Ok(dh.as_bytes().to_vec())
 }
 
 /// Builds a public-only X25519 JWK.

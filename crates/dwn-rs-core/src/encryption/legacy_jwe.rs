@@ -122,7 +122,7 @@ impl LegacyJweEncryption {
         let shared_secret = x25519::shared_secret(
             &x25519::private_key_bytes(recipient_private_jwk)?,
             &x25519::public_key_bytes(&recipient.header.epk)?,
-        );
+        )?;
         aes_kw::unwrap(
             &legacy_a256kw_kek(&shared_secret),
             &decode_base64url(&recipient.encrypted_key, "encrypted_key")?,
@@ -244,7 +244,8 @@ mod tests {
                 .unwrap()
                 .to_vec(),
         };
-        let shared_secret = x25519::shared_secret(&ephemeral_private, recipient_public.as_bytes());
+        let shared_secret =
+            x25519::shared_secret(&ephemeral_private, recipient_public.as_bytes()).unwrap();
         let wrapped_cek = aes_kw::wrap(&legacy_a256kw_kek(&shared_secret), &cek).unwrap();
         let protected = base64url.encode(
             serde_json::to_vec(&LegacyJweProtectedHeader {

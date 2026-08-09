@@ -500,7 +500,7 @@ pub fn x25519_hkdf_a256kw_wrap(
     if cek.len() != 32 {
         return Err(EncryptionError::InvalidContentEncryptionKeyLength { found: cek.len() });
     }
-    let shared_secret = x25519::shared_secret(ephemeral_private_key, recipient_public_key);
+    let shared_secret = x25519::shared_secret(ephemeral_private_key, recipient_public_key)?;
     let kek = kdf::a256kw_kek(
         &shared_secret,
         key_id,
@@ -521,7 +521,7 @@ pub fn x25519_hkdf_a256kw_unwrap(
     role_path: Option<&str>,
     wrapped_key: &[u8],
 ) -> Result<Vec<u8>, EncryptionError> {
-    let shared_secret = x25519::shared_secret(recipient_private_key, ephemeral_public_key);
+    let shared_secret = x25519::shared_secret(recipient_private_key, ephemeral_public_key)?;
     let kek = kdf::a256kw_kek(
         &shared_secret,
         key_id,
@@ -543,7 +543,7 @@ pub fn seal_wrap(
     let shared_secret = x25519::shared_secret(
         &ephemeral_secret.to_bytes(),
         &x25519::public_key_bytes(&input.public_key)?,
-    );
+    )?;
     let kek = kdf::seal_kek(
         &shared_secret,
         input.protocol,
@@ -573,7 +573,7 @@ pub fn seal_unwrap(
     let shared_secret = x25519::shared_secret(
         recipient_private_key,
         &x25519::public_key_bytes(seal.ephemeral_public_key())?,
-    );
+    )?;
     let kek = kdf::seal_kek(
         &shared_secret,
         protocol,
@@ -907,5 +907,74 @@ mod tests {
         });
         let short_d: JWK = serde_json::from_value(short_d).unwrap();
         assert!(x25519::private_key_bytes(&short_d).is_err());
+    }
+
+    #[test]
+    fn rejects_low_order_x25519_keys_for_record_and_seal_key_wraps() {
+        let private_key = [7; 32];
+        let low_order_public_key = [0; 32];
+        let cek = [9; 32];
+
+        // A low-order recipient key produces an all-zero secret, so it must
+        // not produce a wrapped record CEK.
+        assert!(matches!(
+            x25519_hkdf_a256kw_wrap(
+                &private_key,
+                &low_order_public_key,
+                "kid",
+                DerivationScheme::ProtocolPath,
+                None,
+                None,
+                &cek,
+            ),
+            Err(EncryptionError::WeakSecret)
+        ));
+
+        // Likewise, an attacker-provided low-order ephemeral key must not be
+        // usable to unwrap any record CEK.
+        assert!(matches!(
+            x25519_hkdf_a256kw_unwrap(
+                &private_key,
+                &low_order_public_key,
+                "kid",
+                DerivationScheme::ProtocolPath,
+                None,
+                None,
+                &[0; 24],
+            ),
+            Err(EncryptionError::WeakSecret)
+        ));
+
+        let seal_input = SealKeyWrapInput {
+            algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+            key_id: "seal-kid".to_string(),
+            public_key: x25519::public_jwk(&low_order_public_key),
+            protocol: "https://example.com/protocol",
+            role_path: "member",
+            context_id: "context",
+            audience_key_id: "audience-kid",
+        };
+        assert!(matches!(
+            seal_wrap(&seal_input, &cek),
+            Err(EncryptionError::WeakSecret)
+        ));
+
+        let low_order_seal = SealKeyWrap::Seal {
+            algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+            key_id: "seal-kid".to_string(),
+            ephemeral_public_key: x25519::public_jwk(&low_order_public_key),
+            encrypted_key: base64url.encode([0; 24]),
+        };
+        assert!(matches!(
+            seal_unwrap(
+                &private_key,
+                &low_order_seal,
+                "https://example.com/protocol",
+                "member",
+                "context",
+                "audience-kid",
+            ),
+            Err(EncryptionError::WeakSecret)
+        ));
     }
 }
