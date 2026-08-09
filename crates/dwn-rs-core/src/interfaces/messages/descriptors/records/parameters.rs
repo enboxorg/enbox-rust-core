@@ -184,7 +184,7 @@ pub struct WriteParameters {
     pub recipient: Option<String>,
     pub protocol: String,
     #[serde(rename = "protocolPath")]
-    pub protocol_path: Option<String>,
+    pub protocol_path: String,
     #[serde(rename = "protocolRole")]
     pub protocol_role: Option<String>,
     pub schema: Option<String>,
