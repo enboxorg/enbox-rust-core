@@ -171,10 +171,7 @@ pub(crate) fn validate_records_write_integrity(
         // `contextId == recordId`. Upstream gates this check on
         // `descriptor.protocol !== undefined`; a protocol-less record has no
         // contextId to validate.
-        if descriptor.protocol.is_some()
-            && descriptor.parent_id.is_none()
-            && context_id.as_deref() != Some(record_id.as_str())
-        {
+        if descriptor.parent_id.is_none() && context_id.as_deref() != Some(record_id.as_str()) {
             return Err("RecordsWriteValidateIntegrityContextIdMismatch: root contextId must match recordId".to_string());
         }
     }
@@ -259,7 +256,11 @@ pub(crate) fn verify_immutable_properties(
     .map(|(property, _, _)| property.to_string())
     .or_else(|| {
         [
-            ("protocol", &initial.protocol, &new.protocol),
+            (
+                "protocol",
+                &Some(initial.protocol.clone()),
+                &Some(new.protocol.clone()),
+            ),
             ("protocolPath", &initial.protocol_path, &new.protocol_path),
             ("recipient", &initial.recipient, &new.recipient),
             ("schema", &initial.schema, &new.schema),
@@ -393,9 +394,10 @@ pub(crate) fn records_delete_indexes(
     let mut indexes = descriptor_indexes(descriptor)?;
     indexes.insert("isLatestBaseState".to_string(), Value::Bool(true));
     indexes.insert("author".to_string(), Value::String(author.to_string()));
-    if let Some(protocol) = &initial.protocol {
-        indexes.insert("protocol".to_string(), Value::String(protocol.clone()));
-    }
+    indexes.insert(
+        "protocol".to_string(),
+        Value::String(initial.protocol.clone()),
+    );
     if let Some(protocol_path) = &initial.protocol_path {
         indexes.insert(
             "protocolPath".to_string(),
@@ -948,18 +950,19 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(message)?;
-    let protocol = descriptor.protocol.as_deref().ok_or_else(|| {
-        "ProtocolAuthorizationProtocolNotFound: protocol-based authorization requires protocol"
-            .to_string()
-    })?;
+    let protocol = descriptor.protocol.clone();
     let protocol_path = descriptor.protocol_path.as_deref().ok_or_else(|| {
         "ProtocolAuthorizationMissingProtocolPath: protocolPath is required".to_string()
     })?;
     let governing_timestamp = governing_timestamp(tenant, message, message_store, author).await?;
-    let definition =
-        fetch_protocol_definition(tenant, protocol, message_store, Some(&governing_timestamp))
-            .await
-            .map_err(|err| err.to_string())?;
+    let definition = fetch_protocol_definition(
+        tenant,
+        protocol.as_str(),
+        message_store,
+        Some(&governing_timestamp),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
     let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
         .ok_or_else(|| {
             format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
@@ -1067,7 +1070,7 @@ pub(crate) fn check_actor(
                 .and_then(|definition| definition.uses.as_ref())
                 .and_then(|uses| uses.get(parsed.alias))
                 .is_some_and(|protocol| {
-                    descriptor.protocol.as_deref() == Some(protocol.as_str())
+                    descriptor.protocol == *protocol
                         && descriptor.protocol_path.as_deref() == Some(parsed.protocol_path)
                 })
         } else {
@@ -1095,11 +1098,12 @@ pub(crate) async fn matching_role_record_exists<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let mut protocol = record_chain
+    let mut protocol: String = record_chain
         .last()
         .and_then(|message| records_write_descriptor(message).ok())
-        .and_then(|descriptor| descriptor.protocol.clone())
+        .and_then(|descriptor| Some(descriptor.protocol.clone()))
         .unwrap_or_default();
+
     let mut protocol_path = role.to_string();
     if let Some(parsed) = protocol_types::parse_cross_protocol_ref(role) {
         protocol = definition

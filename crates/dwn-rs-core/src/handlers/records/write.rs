@@ -471,9 +471,6 @@ where
         author: &str,
     ) -> Result<(), String> {
         let descriptor = records_write_descriptor(message)?;
-        let Some(protocol) = &descriptor.protocol else {
-            return Ok(());
-        };
         let protocol_path = descriptor.protocol_path.as_deref().ok_or_else(|| {
             "ProtocolAuthorizationMissingProtocolPath: protocolPath is required for protocol records".to_string()
         })?;
@@ -481,7 +478,7 @@ where
             governing_timestamp(tenant, message, &self.message_store, author).await?;
         let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
-            protocol,
+            descriptor.protocol.as_str(),
             &self.message_store,
             Some(&governing_timestamp),
         )
@@ -586,8 +583,7 @@ where
         message: &Message<Descriptor>,
     ) -> Result<(), String> {
         let descriptor = records_write_descriptor(message)?;
-        let (Some(protocol), Some(protocol_path)) =
-            (&descriptor.protocol, &descriptor.protocol_path)
+        let (protocol, Some(protocol_path)) = (&descriptor.protocol, &descriptor.protocol_path)
         else {
             return Ok(());
         };
@@ -711,8 +707,7 @@ where
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     let descriptor = records_write_descriptor(message)?;
-    let (Some(protocol), Some(protocol_path)) = (&descriptor.protocol, &descriptor.protocol_path)
-    else {
+    let (protocol, Some(protocol_path)) = (&descriptor.protocol, &descriptor.protocol_path) else {
         return Ok(());
     };
     let record_id = record_id(message)

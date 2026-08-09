@@ -305,7 +305,7 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
 fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
     let data = Bytes::from_static(b"hello");
     let descriptor = RecordsWriteDescriptor {
-        protocol: Some("http://example.com/notes".to_string()),
+        protocol: "http://example.com/notes".to_string(),
         protocol_path: Some("note".to_string()),
         recipient: None,
         schema: None,
@@ -365,7 +365,7 @@ async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Mes
     }))
     .unwrap();
     let descriptor = RecordsWriteDescriptor {
-        protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
         protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
         recipient: Some("did:example:bob".to_string()),
         schema: None,

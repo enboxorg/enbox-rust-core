@@ -182,7 +182,7 @@ pub enum DateSort {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct WriteParameters {
     pub recipient: Option<String>,
-    pub protocol: Option<String>,
+    pub protocol: String,
     #[serde(rename = "protocolPath")]
     pub protocol_path: Option<String>,
     #[serde(rename = "protocolRole")]
@@ -217,15 +217,6 @@ pub struct WriteParameters {
 
 impl MessageValidator for WriteParameters {
     fn validate(&self) -> Result<(), ValidationError> {
-        if self.protocol.is_none() && self.protocol_path.is_some()
-            || self.protocol.is_some() && self.protocol_path.is_none()
-        {
-            return Err(ValidationError {
-                message: "protocol and protocolPath must be either both set or both unset"
-                    .to_string(),
-            });
-        }
-
         if self.data.is_none() && self.data_cid.is_none()
             || self.data.is_some() && self.data_cid.is_some()
         {
@@ -248,7 +239,7 @@ impl MessageValidator for WriteParameters {
                 .iter()
                 .try_for_each(|input| {
                     if input.derivation_scheme() == DerivationScheme::ProtocolPath
-                        && self.protocol.is_none()
+                        && self.protocol.is_empty()
                     {
                         return Err(ValidationError {
                             message: "'protocols' encryption requires a protocol".to_string(),
@@ -285,10 +276,9 @@ impl MessageParameters for WriteParameters {
         let now = chrono::Utc::now();
 
         let mut descriptor = WriteDescriptor {
-            protocol: self
-                .protocol
-                .as_ref()
-                .and_then(|url| normalize_url(url).ok()),
+            protocol: normalize_url(self.protocol.as_str()).map_err(|e| ValidationError {
+                message: e.to_string(),
+            })?,
             protocol_path: self.protocol_path.clone(),
             recipient: self.recipient.clone(),
             schema: self.schema.as_ref().and_then(|url| normalize_url(url).ok()),

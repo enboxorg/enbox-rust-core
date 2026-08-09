@@ -94,7 +94,7 @@ mod inner {
         parameters = super::WriteParameters
     )]
     pub struct WriteDescriptor {
-        pub protocol: Option<String>,
+        pub protocol: String,
         #[serde(rename = "protocolPath")]
         pub protocol_path: Option<String>,
         pub recipient: Option<String>,
