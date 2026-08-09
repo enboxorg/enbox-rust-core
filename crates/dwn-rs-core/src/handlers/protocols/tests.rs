@@ -788,7 +788,7 @@ async fn put_protocols_query_grant(
     .unwrap();
     let descriptor = RecordsWriteDescriptor {
         protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         schema: None,
         tags: protocol.map(|protocol| {

@@ -261,7 +261,11 @@ pub(crate) fn verify_immutable_properties(
                 &Some(initial.protocol.clone()),
                 &Some(new.protocol.clone()),
             ),
-            ("protocolPath", &initial.protocol_path, &new.protocol_path),
+            (
+                "protocolPath",
+                &Some(initial.protocol_path.clone()),
+                &Some(new.protocol_path.clone()),
+            ),
             ("recipient", &initial.recipient, &new.recipient),
             ("schema", &initial.schema, &new.schema),
             ("parentId", &initial.parent_id, &new.parent_id),
@@ -398,12 +402,10 @@ pub(crate) fn records_delete_indexes(
         "protocol".to_string(),
         Value::String(initial.protocol.clone()),
     );
-    if let Some(protocol_path) = &initial.protocol_path {
-        indexes.insert(
-            "protocolPath".to_string(),
-            Value::String(protocol_path.clone()),
-        );
-    }
+    indexes.insert(
+        "protocolPath".to_string(),
+        Value::String(initial.protocol_path.clone()),
+    );
     if let Some(recipient) = &initial.recipient {
         indexes.insert("recipient".to_string(), Value::String(recipient.clone()));
     }
@@ -951,9 +953,7 @@ where
 {
     let descriptor = records_write_descriptor(message)?;
     let protocol = descriptor.protocol.clone();
-    let protocol_path = descriptor.protocol_path.as_deref().ok_or_else(|| {
-        "ProtocolAuthorizationMissingProtocolPath: protocolPath is required".to_string()
-    })?;
+    let protocol_path = descriptor.protocol_path.clone();
     let governing_timestamp = governing_timestamp(tenant, message, message_store, author).await?;
     let definition = fetch_protocol_definition(
         tenant,
@@ -963,10 +963,11 @@ where
     )
     .await
     .map_err(|err| err.to_string())?;
-    let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
-        .ok_or_else(|| {
-            format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
-        })?;
+    let rule_set =
+        protocol_types::get_rule_set_at_path(protocol_path.as_str(), &definition.structure)
+            .ok_or_else(|| {
+                format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
+            })?;
     let chain = construct_record_chain(tenant, message, message_store).await?;
     let actions = actions_for_message_kind(tenant, message, author, kind, message_store).await?;
     authorize_actions(
@@ -1071,10 +1072,10 @@ pub(crate) fn check_actor(
                 .and_then(|uses| uses.get(parsed.alias))
                 .is_some_and(|protocol| {
                     descriptor.protocol == *protocol
-                        && descriptor.protocol_path.as_deref() == Some(parsed.protocol_path)
+                        && descriptor.protocol_path == parsed.protocol_path
                 })
         } else {
-            descriptor.protocol_path.as_deref() == Some(of)
+            descriptor.protocol_path == of
         };
         if !path_matches {
             return false;

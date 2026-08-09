@@ -471,21 +471,22 @@ where
         author: &str,
     ) -> Result<(), String> {
         let descriptor = records_write_descriptor(message)?;
-        let protocol_path = descriptor.protocol_path.as_deref().ok_or_else(|| {
-            "ProtocolAuthorizationMissingProtocolPath: protocolPath is required for protocol records".to_string()
-        })?;
+        let protocol_path = descriptor.protocol_path.clone();
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
         let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
-            descriptor.protocol.as_str(),
+            &protocol_path,
             &self.message_store,
             Some(&governing_timestamp),
         )
         .await
         .map_err(|err| err.to_string())?;
-        let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
-            .ok_or_else(|| {
+        let rule_set = protocol_types::get_rule_set_at_path(
+            descriptor.protocol_path.as_str(),
+            &definition.structure,
+        )
+        .ok_or_else(|| {
             format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
         })?;
 
@@ -583,13 +584,9 @@ where
         message: &Message<Descriptor>,
     ) -> Result<(), String> {
         let descriptor = records_write_descriptor(message)?;
-        let (protocol, Some(protocol_path)) = (&descriptor.protocol, &descriptor.protocol_path)
-        else {
-            return Ok(());
-        };
         let definition = match crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
-            protocol,
+            &descriptor.protocol,
             &self.message_store,
             None,
         )
@@ -599,7 +596,7 @@ where
             Err(_) => return Ok(()),
         };
         let Some(rule_set) =
-            protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
+            protocol_types::get_rule_set_at_path(&descriptor.protocol_path, &definition.structure)
         else {
             return Ok(());
         };
@@ -611,8 +608,8 @@ where
             ("interface", string_filter(RECORDS_INTERFACE)),
             ("method", string_filter(WRITE_METHOD)),
             ("isLatestBaseState", bool_filter(true)),
-            ("protocol", string_filter(protocol)),
-            ("protocolPath", string_filter(protocol_path)),
+            ("protocol", string_filter(&descriptor.protocol)),
+            ("protocolPath", string_filter(&descriptor.protocol_path)),
             ("squash", bool_filter(true)),
         ]);
         if let Some(parent_context) =
@@ -645,7 +642,7 @@ where
                 "ProtocolAuthorizationSquashBackstop: incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
                 canonical_rfc3339(descriptor.message_timestamp),
                 canonical_rfc3339(newest_timestamp),
-                protocol_path
+                &descriptor.protocol_path
             ));
         }
         Ok(())
@@ -707,15 +704,12 @@ where
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     let descriptor = records_write_descriptor(message)?;
-    let (protocol, Some(protocol_path)) = (&descriptor.protocol, &descriptor.protocol_path) else {
-        return Ok(());
-    };
     let record_id = record_id(message)
         .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
     let mut filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
-        ("protocol", string_filter(protocol)),
-        ("protocolPath", string_filter(protocol_path)),
+        ("protocol", string_filter(&descriptor.protocol)),
+        ("protocolPath", string_filter(&descriptor.protocol_path)),
     ]);
     if let Some(parent_context) =
         context_id(message).and_then(|context| parent_context_id(&context))

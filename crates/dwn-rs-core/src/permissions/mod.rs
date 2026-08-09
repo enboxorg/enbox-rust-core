@@ -472,28 +472,27 @@ pub fn validate_permissions_record_schema(message: &Message<Descriptor>) -> Resu
         return Ok(());
     }
     let data = permission_record_data_bytes(message)?;
-    match descriptor.protocol_path.as_deref() {
-        Some(PERMISSIONS_REQUEST_PATH) => {
+    match descriptor.protocol_path.as_str() {
+        PERMISSIONS_REQUEST_PATH => {
             let data: PermissionRequestData = serde_json::from_slice(&data).map_err(|err| {
                 format!("PermissionsProtocolValidateSchemaInvalidRequest: {err}")
             })?;
             validate_scope_and_tags(&data.scope, descriptor)
         }
-        Some(PERMISSIONS_GRANT_PATH) => {
+        PERMISSIONS_GRANT_PATH => {
             let data: PermissionGrantData = serde_json::from_slice(&data)
                 .map_err(|err| format!("PermissionsProtocolValidateSchemaInvalidGrant: {err}"))?;
             validate_scope_and_tags(&data.scope, descriptor)
         }
-        Some(PERMISSIONS_REVOCATION_PATH) => {
+        PERMISSIONS_REVOCATION_PATH => {
             let _: PermissionRevocationData = serde_json::from_slice(&data).map_err(|err| {
                 format!("PermissionsProtocolValidateSchemaInvalidRevocation: {err}")
             })?;
             Ok(())
         }
-        Some(protocol_path) => Err(format!(
+        protocol_path => Err(format!(
             "PermissionsProtocolValidateSchemaUnexpectedRecord: Unexpected permission record: {protocol_path}"
         )),
-        None => Err("PermissionsProtocolValidateSchemaUnexpectedRecord: permission record missing protocolPath".to_string()),
     }
 }
 
@@ -507,7 +506,7 @@ where
 {
     let descriptor = records_write_descriptor(message)?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
-        || descriptor.protocol_path.as_deref() != Some(PERMISSIONS_REVOCATION_PATH)
+        || descriptor.protocol_path != PERMISSIONS_REVOCATION_PATH
     {
         return Ok(());
     }
@@ -544,7 +543,7 @@ where
 {
     let descriptor = records_write_descriptor(message)?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
-        || descriptor.protocol_path.as_deref() != Some(PERMISSIONS_REVOCATION_PATH)
+        || descriptor.protocol_path != PERMISSIONS_REVOCATION_PATH
     {
         return Ok(());
     }
@@ -743,13 +742,20 @@ where
         message_store,
     )
     .await?;
-    let protocol = filter.protocol.as_deref();
-    if protocol != permission_grant.scope.protocol() {
+
+    let target = ProtocolScopeTarget {
+        protocol: filter.protocol.as_deref(),
+        protocol_path: filter.protocol_path.as_deref(),
+        context_id: filter.context_id.as_deref(),
+    };
+
+    if !permission_grant.scope.matches_protocol_target(&target) {
         return Err(format!(
             "RecordsGrantAuthorizationQueryOrSubscribeProtocolScopeMismatch: Grant protocol scope {:?} does not match protocol in message {:?}",
-            permission_grant.scope.protocol(), protocol
+            permission_grant.scope, target
         ));
     }
+
     Ok(true)
 }
 
@@ -785,15 +791,9 @@ where
         message_store,
     )
     .await?;
-    let record_protocol = records_write_descriptor(records_write_to_delete)?
-        .protocol
-        .as_str();
-    if Some(record_protocol) != permission_grant.scope.protocol() {
-        return Err(format!(
-            "RecordsGrantAuthorizationDeleteProtocolScopeMismatch: Grant protocol scope {:?} does not match protocol in record to delete {:?}",
-            permission_grant.scope.protocol(), record_protocol
-        ));
-    }
+
+    verify_records_scope(records_write_to_delete, &permission_grant.scope)?;
+
     Ok(true)
 }
 
@@ -1102,7 +1102,7 @@ fn verify_records_scope(
     let context_id = context_id(records_write_message);
     let target = ProtocolScopeTarget {
         protocol: Some(descriptor.protocol.as_str()),
-        protocol_path: descriptor.protocol_path.as_deref(),
+        protocol_path: Some(descriptor.protocol_path.as_str()),
         context_id: context_id.as_deref(),
     };
 
@@ -1141,23 +1141,30 @@ async fn verify_messages_protocol_scope<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let protocol = match &message_to_read.descriptor {
+    let context_id = context_id(message_to_read);
+    let permission_scope = get_scope_from_permission_record(
+            tenant,
+            message_store,
+            message_to_read,
+        )
+        .await?;
+
+
+    let target = match &message_to_read.descriptor {
         Descriptor::Records(records) => match records.as_ref() {
             Records::Write(write) => {
-                if write.protocol == PERMISSIONS_PROTOCOL_URI {
-                    let permission_scope = get_scope_from_permission_record(
-                        tenant,
-                        message_store,
-                        message_to_read,
-                    )
-                    .await?;
+                let protocol = if write.protocol == PERMISSIONS_PROTOCOL_URI {
+                    
 
-                    permission_scope.protocol().ok_or_else(|| {
-                        "MessagesReadVerifyScopeFailed: permission record must have a scope with a `protocol` property".to_string()
-                    })?
-                    .to_owned()
+                     permission_scope.protocol()
                 } else {
-                    write.protocol.clone()
+                    Some(write.protocol.as_str())
+                };
+
+                ProtocolScopeTarget {
+                    protocol,
+                    protocol_path: Some(write.protocol_path.as_str()),
+                    context_id: context_id.as_deref(),
                 }
             }
             Records::Delete(delete) => {
@@ -1176,8 +1183,13 @@ where
             }
         },
         Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            crate::descriptors::Protocols::Configure(configure) => configure.definition.protocol.clone(),
-
+            crate::descriptors::Protocols::Configure(configure) => {
+                ProtocolScopeTarget {
+                    protocol: Some(configure.definition.protocol.as_str()),
+                    protocol_path: None,
+                    context_id: None,
+                }
+            }
             _ => {
                 return Err("MessagesReadVerifyScopeFailed: only ProtocolsConfigure messages are supported for scope verification".to_string());
             }
@@ -1185,11 +1197,6 @@ where
         _ => {
             return Err("MessagesReadVerifyScopeFailed: only Records and Protocols messages are supported for scope verification".to_string())
         }
-    };
-    let target = ProtocolScopeTarget {
-        protocol: Some(protocol.as_str()),
-        protocol_path: None,
-        context_id: None,
     };
 
     if !scope.matches_protocol_target(&target) {
@@ -1217,8 +1224,8 @@ where
             descriptor.protocol
         ));
     }
-    match descriptor.protocol_path.as_deref() {
-        Some(PERMISSIONS_REVOCATION_PATH) => {
+    match descriptor.protocol_path.as_str() {
+        PERMISSIONS_REVOCATION_PATH => {
             let parent_id = descriptor.parent_id.as_deref().ok_or_else(|| {
                 "PermissionsProtocolGetScopeInvalidRevocation: revocation parentId is required"
                     .to_string()
@@ -1227,7 +1234,7 @@ where
                 .await
                 .map(|grant| grant.scope)
         }
-        Some(PERMISSIONS_GRANT_PATH) => {
+        PERMISSIONS_GRANT_PATH => {
             let grantor = message_author(incoming_message).ok_or_else(|| {
                 "PermissionGrantParseMissingAuthorization: unable to extract grantor".to_string()
             })?;
@@ -1281,7 +1288,7 @@ fn parse_permission_grant(
 ) -> Result<PermissionGrant, String> {
     let descriptor = records_write_descriptor(message)?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
-        || descriptor.protocol_path.as_deref() != Some(PERMISSIONS_GRANT_PATH)
+        || descriptor.protocol_path != PERMISSIONS_GRANT_PATH
     {
         return Err("GrantAuthorizationGrantMissing: permission grant must be a PermissionsProtocol grant RecordsWrite".to_string());
     }

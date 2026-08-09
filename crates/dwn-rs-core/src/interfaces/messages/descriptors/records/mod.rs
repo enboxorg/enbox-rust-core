@@ -96,7 +96,7 @@ mod inner {
     pub struct WriteDescriptor {
         pub protocol: String,
         #[serde(rename = "protocolPath")]
-        pub protocol_path: Option<String>,
+        pub protocol_path: String,
         pub recipient: Option<String>,
         pub schema: Option<String>,
         pub tags: Option<MapValue>,

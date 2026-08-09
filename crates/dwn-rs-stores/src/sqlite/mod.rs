@@ -321,7 +321,7 @@ mod tests {
         let descriptor =
             Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
                 protocol: protocol.to_string(),
-                protocol_path: Some("note".to_string()),
+                protocol_path: "note".to_string(),
                 recipient: None,
                 schema: None,
                 tags: None,
