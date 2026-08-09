@@ -86,7 +86,7 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
 }
 
 #[tokio::test]
-async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
+async fn messages_sync_is_not_authorized_by_messages_read_grant() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore;
     let mut state_index = MemoryStateIndex::default();
@@ -120,12 +120,15 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
             None,
         ))
         .await;
-    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
-    assert!(reply.body["root"].as_str().is_some());
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert!(reply
+        .status
+        .detail
+        .contains("GrantAuthorizationMethodMismatch"));
 }
 
 #[tokio::test]
-async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
+async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore;
     let mut state_index = MemoryStateIndex::default();
@@ -162,7 +165,7 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
     assert!(reply
         .status
         .detail
-        .contains("MessagesGrantAuthorizationMismatchedProtocol"));
+        .contains("GrantAuthorizationMethodMismatch"));
 }
 
 #[tokio::test]

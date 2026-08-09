@@ -1,3 +1,10 @@
+pub mod scopes;
+
+pub use crate::permissions::scopes::{
+    ContextId, MessagesScope, MessagesSelector, PermissionScope, ProtocolPath, ProtocolsMethod,
+    ProtocolsScope, RecordsMethod, RecordsScope, RecordsSelector,
+};
+
 use std::collections::BTreeMap;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -10,6 +17,7 @@ use crate::auth::{Jws, JwsError};
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Records, RecordsWriteDescriptor,
+    QUERY,
 };
 use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
@@ -29,7 +37,6 @@ const PROTOCOLS_INTERFACE: &str = "Protocols";
 const MESSAGES_INTERFACE: &str = "Messages";
 const READ_METHOD: &str = "Read";
 const SUBSCRIBE_METHOD: &str = "Subscribe";
-const SYNC_METHOD: &str = "Sync";
 const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,18 +71,6 @@ pub struct PermissionGrant {
     pub delegated: Option<bool>,
     pub scope: PermissionScope,
     pub conditions: Option<PermissionConditions>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct PermissionScope {
-    pub interface: String,
-    pub method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
-    #[serde(rename = "contextId", skip_serializing_if = "Option::is_none")]
-    pub context_id: Option<String>,
-    #[serde(rename = "protocolPath", skip_serializing_if = "Option::is_none")]
-    pub protocol_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -525,10 +520,10 @@ where
         .as_ref()
         .and_then(|tags| tags.get("protocol"))
         .and_then(index_value_as_str);
-    if grant.scope.protocol.as_deref() != revocation_protocol_tag {
+    if grant.scope.protocol() != revocation_protocol_tag {
         return Err(format!(
             "PermissionsProtocolValidateRevocationProtocolTagMismatch: Revocation protocol {:?} does not match grant protocol {:?}",
-            revocation_protocol_tag, grant.scope.protocol
+            revocation_protocol_tag, grant.scope.protocol()
         ));
     }
     Ok(())
@@ -748,10 +743,10 @@ where
     )
     .await?;
     let protocol = filter.protocol.as_deref();
-    if protocol != permission_grant.scope.protocol.as_deref() {
+    if protocol != permission_grant.scope.protocol() {
         return Err(format!(
             "RecordsGrantAuthorizationQueryOrSubscribeProtocolScopeMismatch: Grant protocol scope {:?} does not match protocol in message {:?}",
-            permission_grant.scope.protocol, protocol
+            permission_grant.scope.protocol(), protocol
         ));
     }
     Ok(true)
@@ -792,10 +787,10 @@ where
     let record_protocol = records_write_descriptor(records_write_to_delete)?
         .protocol
         .as_deref();
-    if record_protocol != permission_grant.scope.protocol.as_deref() {
+    if record_protocol != permission_grant.scope.protocol() {
         return Err(format!(
             "RecordsGrantAuthorizationDeleteProtocolScopeMismatch: Grant protocol scope {:?} does not match protocol in record to delete {:?}",
-            permission_grant.scope.protocol, record_protocol
+            permission_grant.scope.protocol(), record_protocol
         ));
     }
     Ok(true)
@@ -863,7 +858,7 @@ where
         message_store,
     )
     .await?;
-    let protocol_in_grant = permission_grant.scope.protocol.as_deref();
+    let protocol_in_grant = permission_grant.scope.protocol();
     let protocol_in_message = protocols_query_descriptor(protocols_query_message)?
         .filter
         .as_ref()
@@ -930,7 +925,7 @@ where
         message_store,
     )
     .await?;
-    if let Some(scoped_protocol) = permission_grant.scope.protocol.as_deref() {
+    if let Some(scoped_protocol) = permission_grant.scope.protocol() {
         if protocols_in_message.is_empty() {
             return Err(format!(
                 "MessagesGrantAuthorizationMismatchedProtocol: The scoped protocol {scoped_protocol} is not present in the incoming message"
@@ -987,7 +982,7 @@ where
         message_store,
     )
     .await?;
-    let grant_protocol = permission_grant.scope.protocol.as_deref();
+    let grant_protocol = permission_grant.scope.protocol();
     if let Some(grant_protocol) = grant_protocol {
         let configured_protocol = protocols_configure_descriptor(protocols_configure_message)?
             .definition
@@ -1037,29 +1032,26 @@ where
     )
     .await?;
     let (interface, method) = message_interface_and_method(incoming_message)?;
-    if interface != permission_grant.scope.interface {
+    if interface != permission_grant.scope.interface() {
         return Err(format!(
             "GrantAuthorizationInterfaceMismatch: DWN Interface of incoming message is outside the scope of permission grant with ID {}",
             permission_grant.id
         ));
     }
     if interface == MESSAGES_INTERFACE {
-        if permission_grant.scope.method != READ_METHOD {
+        if permission_grant.scope.method() != READ_METHOD {
             return Err(format!(
                 "GrantAuthorizationMethodMismatch: messages permission grant must have method 'Read', got '{}' for grant {}",
-                permission_grant.scope.method, permission_grant.id
+                permission_grant.scope.method(), permission_grant.id
             ));
         }
-        if !matches!(
-            method.as_str(),
-            READ_METHOD | SUBSCRIBE_METHOD | SYNC_METHOD
-        ) {
+        if !matches!(method.as_str(), READ_METHOD | QUERY | SUBSCRIBE_METHOD) {
             return Err(format!(
                 "GrantAuthorizationMethodMismatch: DWN Method of incoming message is outside the scope of permission grant with ID {}",
                 permission_grant.id
             ));
         }
-    } else if method != permission_grant.scope.method {
+    } else if method != permission_grant.scope.method() {
         return Err(format!(
             "GrantAuthorizationMethodMismatch: DWN Method of incoming message is outside the scope of permission grant with ID {}",
             permission_grant.id
@@ -1106,10 +1098,10 @@ fn verify_records_scope(
     grant_scope: &PermissionScope,
 ) -> Result<(), String> {
     let descriptor = records_write_descriptor(records_write_message)?;
-    if grant_scope.protocol.as_deref() != descriptor.protocol.as_deref() {
+    if grant_scope.protocol() != descriptor.protocol.as_deref() {
         return Err("RecordsGrantAuthorizationScopeProtocolMismatch: Grant scope specifies different protocol than what appears in the record".to_string());
     }
-    if let Some(scope_context_id) = grant_scope.context_id.as_deref() {
+    if let Some(scope_context_id) = grant_scope.context_id() {
         let record_context_id = context_id(records_write_message).ok_or_else(|| {
             "RecordsGrantAuthorizationScopeContextIdMismatch: record contextId is missing"
                 .to_string()
@@ -1118,7 +1110,7 @@ fn verify_records_scope(
             return Err("RecordsGrantAuthorizationScopeContextIdMismatch: Grant scope specifies different contextId than what appears in the record".to_string());
         }
     }
-    if let Some(scope_protocol_path) = grant_scope.protocol_path.as_deref() {
+    if let Some(scope_protocol_path) = grant_scope.protocol_path() {
         if descriptor.protocol_path.as_deref() != Some(scope_protocol_path) {
             return Err("RecordsGrantAuthorizationScopeProtocolPathMismatch: Grant scope specifies different protocolPath than what appears in the record".to_string());
         }
@@ -1151,7 +1143,7 @@ async fn verify_messages_protocol_scope<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let Some(scoped_protocol) = scope.protocol.as_deref() else {
+    let Some(scoped_protocol) = scope.protocol() else {
         return Ok(());
     };
     match &message_to_read.descriptor {
@@ -1164,7 +1156,7 @@ where
                     let permission_scope =
                         get_scope_from_permission_record(tenant, message_store, message_to_read)
                             .await?;
-                    if permission_scope.protocol.as_deref() == Some(scoped_protocol) {
+                    if permission_scope.protocol() == Some(scoped_protocol) {
                         return Ok(());
                     }
                 }
@@ -1238,16 +1230,11 @@ fn validate_scope_and_tags(
     scope: &PermissionScope,
     descriptor: &RecordsWriteDescriptor,
 ) -> Result<(), String> {
-    if let Some(protocol) = scope.protocol.as_deref() {
+    if let Some(protocol) = scope.protocol() {
         validate_permission_protocol_tag(descriptor, protocol)?;
     }
-    if scope.interface == RECORDS_INTERFACE {
-        if scope.protocol.is_none() {
-            return Err("PermissionsProtocolValidateScopeMissingProtocol: Permission grants for Records must have a scope with a `protocol` property".to_string());
-        }
-        if scope.context_id.is_some() && scope.protocol_path.is_some() {
-            return Err("PermissionsProtocolValidateScopeContextIdProhibitedProperties: Permission grants cannot have both `contextId` and `protocolPath` present".to_string());
-        }
+    if scope.interface() == RECORDS_INTERFACE && scope.protocol().is_none() {
+        return Err("PermissionsProtocolValidateScopeMissingProtocol: Permission grants for Records must have a scope with a `protocol` property".to_string());
     }
     Ok(())
 }
@@ -1521,13 +1508,10 @@ mod tests {
             date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
             date_expires: parse_time("2025-02-01T00:00:00.000000Z"),
             delegated: None,
-            scope: PermissionScope {
-                interface: "Messages".to_string(),
-                method: "Read".to_string(),
+            scope: PermissionScope::Messages(MessagesScope {
                 protocol: Some("http://example.com/notes".to_string()),
-                context_id: None,
-                protocol_path: None,
-            },
+                selector: None,
+            }),
             conditions: None,
         };
         let message = Message {
