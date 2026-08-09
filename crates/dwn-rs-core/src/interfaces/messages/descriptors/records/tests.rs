@@ -93,7 +93,7 @@ async fn test_write_descriptor() {
     let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
     let wd = WriteDescriptor {
-        protocol: "test".to_string(),
+        protocol: "https://example.com/test".to_string(),
         protocol_path: "test".to_string(),
         recipient: None,
         schema: None,
@@ -111,6 +111,8 @@ async fn test_write_descriptor() {
     };
 
     let (build_wd, _) = WriteParameters {
+        protocol: Some("https://example.com/test".to_string()),
+        protocol_path: Some("test".to_string()),
         data_cid: Some("test".to_string()),
         data_size: Some(0),
         date_created: Some(message_timestamp),
@@ -139,8 +141,8 @@ async fn test_write_builds_jwe_encryption_fields() {
     }))
     .unwrap();
     let (_, fields) = WriteParameters {
-        protocol: "https://example.com/protocol/jwe".to_string(),
-        protocol_path: "thread/message".to_string(),
+        protocol: Some("https://example.com/protocol/jwe".to_string()),
+        protocol_path: Some("thread/message".to_string()),
         data_cid: Some("bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e".to_string()),
         data_size: Some(32),
         data_format: "text/plain".to_string(),
