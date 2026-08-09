@@ -145,15 +145,13 @@ async fn test_write_builds_jwe_encryption_fields() {
         data_size: Some(32),
         data_format: "text/plain".to_string(),
         encryption_input: Some(EncryptionInput {
-            algorithm: Some(crate::encryption::ContentEncryptionAlgorithm::A256GCM),
+            algorithm: Some(crate::encryption::ContentEncryptionAlgorithm::A256Ctr),
             key: (0u8..32).collect(),
-            initialization_vector: vec![0xa0; 12],
-            authentication_tag: vec![0x42; 16],
-            key_encryption_inputs: vec![KeyEncryptionInput {
-                derivation_scheme: DerivationScheme::ProtocolPath,
-                public_key_id: "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E".to_string(),
+            initialization_vector: (0xa0u8..0xb0).collect(),
+            key_encryption_inputs: vec![KeyEncryptionInput::ProtocolPath {
+                algorithm: crate::encryption::KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+                key_id: "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E".to_string(),
                 public_key,
-                algorithm: None,
             }],
         }),
         ..Default::default()
@@ -162,25 +160,33 @@ async fn test_write_builds_jwe_encryption_fields() {
     .await
     .unwrap();
 
-    let encryption = fields.unwrap().encryption.unwrap();
+    // encryption is an Encryption::Envelope, which is the struct EncryptionEnvelope,
+    // which contains the fields algorithm, initialization_vector, and key_encryption
+    // We can check that the fields are present and have the expected values.
+    let binding = fields.unwrap();
+    let encryption = match binding.encryption.as_ref().unwrap() {
+        crate::encryption::Encryption::Envelope(envelope) => envelope,
+        _ => panic!("Expected Encryption::Envelope"),
+    };
+
     assert_eq!(
-        encryption.protected_header().unwrap(),
-        crate::encryption::JweProtectedHeader {
-            alg: crate::encryption::KeyAgreementAlgorithm::EcdhEsA256kw,
-            enc: crate::encryption::ContentEncryptionAlgorithm::A256GCM,
-        }
+        encryption.algorithm,
+        crate::encryption::ContentEncryptionAlgorithm::A256Ctr
+    );
+    assert_eq!(encryption.key_encryption.len(), 1);
+    assert_eq!(
+        encryption.key_encryption[0].derivation_scheme(),
+        DerivationScheme::ProtocolPath
     );
     let encryption_json = serde_json::to_value(encryption).unwrap();
-    assert!(encryption_json.get("protected").is_some());
-    assert!(encryption_json.get("iv").is_some());
-    assert!(encryption_json.get("tag").is_some());
-    assert!(encryption_json.get("recipients").is_some());
-    assert!(encryption_json.get("keyEncryption").is_none());
+    assert!(encryption_json.get("algorithm").is_some());
+    assert!(encryption_json.get("initializationVector").is_some());
+    assert!(encryption_json.get("keyEncryption").is_some());
     assert_eq!(
-        encryption_json["recipients"][0]["header"]["derivationScheme"],
+        encryption_json["keyEncryption"][0]["derivationScheme"],
         "protocolPath"
     );
-    assert!(!encryption_json["recipients"][0]["encrypted_key"]
+    assert!(!encryption_json["keyEncryption"][0]["encryptedKey"]
         .as_str()
         .unwrap()
         .is_empty());

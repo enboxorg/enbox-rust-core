@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Fixture provenance gate.
 #
-# Two oracle tracks live under fixtures/:
+# Three oracle tracks live under fixtures/:
 #   - TS-parity fixtures: expected values mirror @enbox/dwn-sdk-js. Each such
 #     fixture MUST pin source.commit == .enbox-version.
 #   - Spec fixtures (fixtures/spec/**): expected values come from an external
 #     specification or test vector. Each MUST declare oracle "spec" and a
 #     source.spec block, and MUST NOT carry a source.commit (it is not anchored
 #     to the TS impl).
+#   - Rust-extension fixtures: expected values mirror a Rust-native surface that
+#     upstream removed (e.g. MessagesSync/StateIndex). Each MUST declare oracle
+#     "rust-extension", a source.issue link, and a source.commit pointing at the
+#     last upstream commit that still contained the surface (removedUpstreamAt
+#     records where it disappeared). These are exempt from the .enbox-version
+#     equality rule because the surface no longer exists upstream.
 #
-# A fixture that fits neither track (no valid enbox commit, no spec source)
-# FAILS — silently skipping such files previously let unprovenanced fixtures
-# masquerade as conformance.
+# A fixture that fits none of these tracks FAILS — silently skipping such files
+# previously let unprovenanced fixtures masquerade as conformance.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -49,13 +54,32 @@ while IFS= read -r -d '' file; do
       fi
       ;;
     *)
-      # TS-parity oracle: require a source.commit pinned to .enbox-version.
-      if [ -z "${commit}" ]; then
-        echo "${rel}: no source.commit and not a fixtures/spec/* spec fixture — unprovenanced" >&2
-        status=1
-      elif [ "${commit}" != "${pin}" ]; then
-        echo "${rel}: source.commit=${commit} expected ${pin}" >&2
-        status=1
+      if grep -Eq '"oracle"[[:space:]]*:[[:space:]]*"rust-extension"' "${file}"; then
+        # Rust-extension oracle: upstream removed the surface. Require an issue
+        # link and a 40-char source.commit (last upstream commit that had the
+        # surface); do NOT require equality with the current .enbox-version pin.
+        if [ -z "${commit}" ]; then
+          echo "${rel}: rust-extension fixture must pin a 40-char source.commit" >&2
+          status=1
+        fi
+        removed_at="$(grep -o '"removedUpstreamAt"[[:space:]]*:[[:space:]]*"[^"]*"' "${file}" | head -1 | sed 's/.*"\([0-9a-f]\{40\}\)".*/\1/' || true)"
+        if [ "${#removed_at}" -ne 40 ]; then
+          echo "${rel}: rust-extension fixture must record a 40-char removedUpstreamAt commit, got: ${removed_at}" >&2
+          status=1
+        fi
+        if ! grep -Eq '"issue"[[:space:]]*:[[:space:]]*"https?://' "${file}"; then
+          echo "${rel}: rust-extension fixture must include an absolute source.issue URL" >&2
+          status=1
+        fi
+      else
+        # TS-parity oracle: require a source.commit pinned to .enbox-version.
+        if [ -z "${commit}" ]; then
+          echo "${rel}: no source.commit and not a fixtures/spec/* or rust-extension fixture — unprovenanced" >&2
+          status=1
+        elif [ "${commit}" != "${pin}" ]; then
+          echo "${rel}: source.commit=${commit} expected ${pin}" >&2
+          status=1
+        fi
       fi
       ;;
   esac

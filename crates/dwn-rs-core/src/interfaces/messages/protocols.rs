@@ -470,6 +470,7 @@ fn validate_rule_set(
     }
 
     validate_actions(protocol_path, &rule_set.actions, roles, uses)?;
+    validate_role_record_issuance(protocol_path, rule_set)?;
 
     if let Some(type_name) = protocol_path.split('/').next_back() {
         if types
@@ -636,6 +637,36 @@ fn validate_actions(
     }
 
     Ok(())
+}
+
+/// Rejects role paths that let any unrestricted caller issue a role, matching
+/// upstream `ProtocolsConfigure.validateRoleRecordIssuance`: a `$role: true`
+/// rule set must not let `anyone` create or squash the initial role record.
+fn validate_role_record_issuance(
+    protocol_path: &str,
+    rule_set: &RuleSet,
+) -> Result<(), ProtocolDefinitionError> {
+    if rule_set.role != Some(true) {
+        return Ok(());
+    }
+
+    let anyone_can_issue_role = rule_set.actions.iter().any(|action| match action {
+        Action::Who(action) => {
+            action.who == Who::Anyone
+                && (action.can.contains(&Can::Create) || action.can.contains(&Can::Squash))
+        }
+        Action::Role(_) => false,
+    });
+    if !anyone_can_issue_role {
+        return Ok(());
+    }
+
+    Err(protocol_error(
+        "ProtocolsConfigureInvalidRoleIssuance",
+        format!(
+            "role assignments at protocol path '{protocol_path}' require an authorized issuer; 'anyone' cannot create or squash an initial role record."
+        ),
+    ))
 }
 
 fn validate_action_can(protocol_path: &str, can: &[Can]) -> Result<(), ProtocolDefinitionError> {

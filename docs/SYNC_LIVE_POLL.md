@@ -1,5 +1,11 @@
 # Live and poll sync reconciliation
 
+> **Status:** Rust-native `NativeSyncEngine` reconciles via `MessagesSync` / SMT diff — an
+> **intentional Rust extension**. Upstream Enbox removed the legacy sync state surfaces
+> (`25821eda`, `chore(sync): remove legacy sync state surfaces`) and reconciles durable message
+> feeds through `MessagesQuery`. This document describes the Rust extension as implemented; it is
+> **not** current-upstream parity. The durable-feed migration is tracked in #187/#188/#192.
+
 Rust `NativeSyncEngine` mirrors the dual-mode behavior of TypeScript `SyncEngineLevel` in `enbox/packages/agent/src/sync-engine-level.ts`.
 
 ## Modes

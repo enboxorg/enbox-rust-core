@@ -1,10 +1,6 @@
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit};
-use aes_gcm::aead::AeadInPlace;
-use aes_gcm::{Aes256Gcm, Nonce as AesGcmNonce, Tag as AesGcmTag};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use bytes::Bytes;
-use chacha20poly1305::{Tag as XChaCha20Poly1305Tag, XChaCha20Poly1305, XNonce};
 use dwn_rs_core::auth::resolver::DidResolver;
 use dwn_rs_core::auth::{
     Jws, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver, UniversalResolver, JWK,
@@ -27,7 +23,6 @@ use dwn_rs_core::stores::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
 use dwn_rs_stores::SqliteNativeDwn;
 use futures_util::stream;
-use k256::sha2::{Digest, Sha256};
 use serde::Deserialize;
 use serde_json::Value;
 use ssi_jwk::Algorithm;
@@ -45,10 +40,11 @@ const CID_DAG_PB_STREAM_ASSERTION: &str = "cid.dagpb.stream";
 const JWS_GENERAL_SIGN_ASSERTION: &str = "jws.general.sign";
 const JWS_GENERAL_VERIFY_ASSERTION: &str = "jws.general.verify";
 const JWS_GENERAL_PAYLOAD_ASSERTION: &str = "jws.general.payload";
-const JWE_PROTECTED_ASSERTION: &str = "jwe.protected";
+const JWE_ENVELOPE_ASSERTION: &str = "jwe.envelope";
 const JWE_AEAD_ASSERTION: &str = "jwe.aead";
 const JWE_KEYWRAP_ASSERTION: &str = "jwe.keywrap";
 const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
+const JWE_SEAL_ASSERTION: &str = "jwe.seal";
 const STATE_INDEX_OPERATIONS_ASSERTION: &str = "state-index.operations";
 const MESSAGES_SYNC_REPLIES_ASSERTION: &str = "messages-sync.replies";
 const MESSAGE_PROCESS_ASSERTION: &str = "message.process";
@@ -58,7 +54,6 @@ const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 mod conformance_helpers;
 use conformance_helpers::read_fixture;
 
-const JWE_ERROR_DECRYPT_FAILED: &str = "JweDecryptFailed";
 const MAX_INLINE_DATA_SIZE: usize = 30_000;
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +98,7 @@ struct FixtureCase {
     derived_private_jwk: Option<FixtureDerivedPrivateJwk>,
     ephemeral_private_jwk: Option<FixtureX25519PrivateJwk>,
     ephemeral_public_jwk: Option<FixtureX25519PublicJwk>,
+    encryption: Option<Value>,
     message_cid: Option<String>,
     message: Option<Value>,
     cid: Option<String>,
@@ -110,16 +106,21 @@ struct FixtureCase {
     expected_error_code: Option<String>,
     expected_signers: Option<Vec<String>>,
     iv: Option<FixtureData>,
-    jwe: Option<FixtureJwe>,
     jws: Option<Jws>,
     key_agreement_algorithm: Option<String>,
+    key_id: Option<String>,
     payload: Option<FixtureJwsPayload>,
     plaintext: Option<FixtureData>,
+    protocol: Option<String>,
     recipient_private_jwk: Option<FixtureX25519PrivateJwk>,
     recipient_public_jwk: Option<FixtureX25519PublicJwk>,
     record: Option<Value>,
+    role_path: Option<String>,
+    seal: Option<Value>,
+    seal_context: Option<SealContextFixture>,
+    sealing_private_jwk: Option<FixtureX25519PrivateJwk>,
+    audience_private_jwk: Option<FixtureX25519PrivateJwk>,
     signer_ids: Option<Vec<String>>,
-    tag: Option<FixtureData>,
     tenants: Option<Vec<String>>,
     operations: Option<Vec<StateIndexOperation>>,
     process: Option<MessageProcessFixture>,
@@ -235,30 +236,6 @@ enum FixtureJwsPayload {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FixtureJwe {
-    protected: String,
-    iv: String,
-    tag: String,
-    recipients: Vec<FixtureJweRecipient>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FixtureJweRecipient {
-    header: FixtureJweRecipientHeader,
-    encrypted_key: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FixtureJweRecipientHeader {
-    kid: String,
-    epk: FixtureX25519PublicJwk,
-    derivation_scheme: String,
-    derived_public_key: Option<FixtureX25519PublicJwk>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 enum StateIndexOperation {
     #[serde(rename = "insert")]
@@ -313,17 +290,31 @@ enum StateIndexOperation {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FixtureDerivedPrivateJwk {
+    #[allow(dead_code)]
     root_key_id: String,
     derivation_scheme: String,
     derivation_path: Vec<String>,
+    #[allow(dead_code)]
     derived_private_key: FixtureX25519PrivateJwk,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SealContextFixture {
+    protocol: String,
+    role_path: String,
+    context_id: String,
+    audience_key_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct FixtureX25519PublicJwk {
+    #[allow(dead_code)]
     kty: String,
+    #[allow(dead_code)]
     crv: String,
     x: String,
+    #[allow(dead_code)]
     kid: Option<String>,
 }
 
@@ -334,12 +325,6 @@ struct FixtureX25519PrivateJwk {
     d: String,
     x: String,
     kid: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FixtureJweProtectedHeader {
-    alg: String,
-    enc: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -559,7 +544,7 @@ async fn fixture_general_jws_matches_typescript() {
 #[test]
 fn fixture_jwe_matches_typescript() {
     for suite in load_fixture_suites() {
-        if !suite.has_assertion(JWE_PROTECTED_ASSERTION)
+        if !suite.has_assertion(JWE_ENVELOPE_ASSERTION)
             && !suite.has_assertion(JWE_AEAD_ASSERTION)
             && !suite.has_assertion(JWE_KEYWRAP_ASSERTION)
             && !suite.has_assertion(JWE_DECRYPT_ASSERTION)
@@ -567,10 +552,11 @@ fn fixture_jwe_matches_typescript() {
             continue;
         }
 
-        let check_protected = suite.has_assertion(JWE_PROTECTED_ASSERTION);
+        let check_envelope = suite.has_assertion(JWE_ENVELOPE_ASSERTION);
         let check_aead = suite.has_assertion(JWE_AEAD_ASSERTION);
         let check_keywrap = suite.has_assertion(JWE_KEYWRAP_ASSERTION);
         let check_decrypt = suite.has_assertion(JWE_DECRYPT_ASSERTION);
+        let check_seal = suite.has_assertion(JWE_SEAL_ASSERTION);
 
         for case in suite
             .fixture_set
@@ -578,17 +564,24 @@ fn fixture_jwe_matches_typescript() {
             .iter()
             .filter(|case| case.rust_status == RustStatus::Supported)
         {
+            if case.seal.is_some() {
+                if check_seal {
+                    assert_jwe_seal(case);
+                }
+                continue;
+            }
+
             assert_jwe_production_model(case);
 
-            if check_protected {
-                assert_jwe_protected_header(case);
+            if check_envelope {
+                assert_jwe_envelope(case);
             }
 
             if check_aead && case.expected_error_code.is_none() {
                 assert_jwe_aead(case);
             }
 
-            if check_keywrap {
+            if check_keywrap && case.expected_error_code.is_none() {
                 assert_jwe_keywrap(case);
             }
 
@@ -2295,29 +2288,15 @@ fn assert_jwe_production_model(case: &FixtureCase) {
         case.id
     );
 
-    let protected = encryption
-        .protected_header()
-        .unwrap_or_else(|err| panic!("{} production JWE protected parse failed: {err}", case.id));
-    assert_eq!(
-        serde_json::to_value(protected).unwrap(),
-        serde_json::json!({
-            "alg": key_agreement_algorithm(case),
-            "enc": content_encryption_algorithm(case),
-        }),
-        "{} production JWE protected header",
-        case.id
-    );
-
     let ciphertext = fixture_value_bytes(case, &case.ciphertext, "ciphertext");
-    let private_jwk = fixture_private_jwk_to_jwk(&derived_private_jwk(case).derived_private_key);
+    let private_jwk = fixture_private_jwk_to_jwk(recipient_private_jwk(case));
     let decrypt_result = encryption.decrypt(&private_jwk, &ciphertext);
     match case.expected_error_code.as_deref() {
-        Some(JWE_ERROR_DECRYPT_FAILED) => assert!(
+        Some(error_code) => assert!(
             decrypt_result.is_err(),
-            "{} production JWE decrypt must fail",
+            "{} production JWE decrypt must fail with {error_code}",
             case.id
         ),
-        Some(error_code) => panic!("{} unsupported JWE error code {}", case.id, error_code),
         None => assert_eq!(
             decrypt_result
                 .unwrap_or_else(|err| panic!("{} production JWE decrypt failed: {err}", case.id)),
@@ -2328,38 +2307,94 @@ fn assert_jwe_production_model(case: &FixtureCase) {
     }
 }
 
-fn assert_jwe_protected_header(case: &FixtureCase) {
-    let protected = decode_base64url(&jwe(case).protected, &case.id, "JWE protected header");
-    let header: FixtureJweProtectedHeader =
-        serde_json::from_slice(&protected).unwrap_or_else(|err| {
-            panic!(
-                "{} must include a valid JWE protected header: {}",
-                case.id, err
-            )
-        });
+fn assert_jwe_envelope(case: &FixtureCase) {
+    let encryption_value = record(case)
+        .get("encryption")
+        .unwrap_or_else(|| panic!("{} record must include encryption", case.id));
+    let encryption: dwn_rs_core::encryption::EncryptionEnvelope =
+        serde_json::from_value(encryption_value.clone())
+            .unwrap_or_else(|err| panic!("{} JWE envelope decode failed: {err}", case.id));
+
+    let top_level_encryption = case
+        .encryption
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a top-level encryption envelope", case.id));
+    assert_eq!(
+        top_level_encryption, encryption_value,
+        "{} top-level encryption must match record.encryption",
+        case.id
+    );
 
     assert_eq!(
-        header.alg,
-        key_agreement_algorithm(case),
-        "{} JWE alg",
+        encryption.algorithm,
+        dwn_rs_core::encryption::ContentEncryptionAlgorithm::A256Ctr,
+        "{} content encryption algorithm",
         case.id
     );
     assert_eq!(
-        header.enc,
         content_encryption_algorithm(case),
-        "{} JWE enc",
+        "A256CTR",
+        "{} content encryption algorithm fixture",
+        case.id
+    );
+    assert_eq!(
+        encryption.initialization_vector,
+        fixture_value_base64url(case, &case.iv, "IV"),
+        "{} initialization vector",
         case.id
     );
 
-    let expected_protected = format!(
-        "{{\"alg\":{},\"enc\":{}}}",
-        serde_json::to_string(key_agreement_algorithm(case)).expect("alg must serialize"),
-        serde_json::to_string(content_encryption_algorithm(case)).expect("enc must serialize")
-    );
+    let key_encryption = single_key_encryption(case);
     assert_eq!(
-        URL_SAFE_NO_PAD.encode(expected_protected.as_bytes()),
-        jwe(case).protected,
-        "{} protected header encoding",
+        key_encryption.algorithm().as_str(),
+        key_agreement_algorithm(case),
+        "{} key agreement algorithm",
+        case.id
+    );
+    assert_eq!(key_encryption.key_id(), key_id(case), "{} keyId", case.id);
+    assert_eq!(
+        key_encryption.derivation_scheme().as_str(),
+        derivation_scheme(case),
+        "{} derivation scheme",
+        case.id
+    );
+    match key_encryption.derivation_scheme() {
+        dwn_rs_core::encryption::DerivationScheme::ProtocolPath => {
+            assert_eq!(
+                key_encryption.protocol(),
+                None,
+                "{} protocolPath entries must not carry protocol",
+                case.id
+            );
+        }
+        dwn_rs_core::encryption::DerivationScheme::RoleAudience => {
+            assert_eq!(
+                key_encryption.protocol(),
+                case.protocol.as_deref(),
+                "{} roleAudience protocol",
+                case.id
+            );
+            assert_eq!(
+                key_encryption.role_path(),
+                case.role_path.as_deref(),
+                "{} roleAudience rolePath",
+                case.id
+            );
+        }
+    }
+    assert_eq!(
+        x25519_public_key_bytes(key_encryption.ephemeral_public_key()),
+        Some(decode_base64url_array_fixture::<32>(
+            &ephemeral_public_jwk(case).x,
+            &case.id,
+            "ephemeral public key"
+        )),
+        "{} ephemeral public key",
+        case.id
+    );
+    assert!(
+        !key_encryption.encrypted_key().is_empty(),
+        "{} encryptedKey must not be empty",
         case.id
     );
 }
@@ -2368,9 +2403,8 @@ fn assert_jwe_aead(case: &FixtureCase) {
     let cek = fixture_value_bytes(case, &case.cek, "CEK");
     let iv = fixture_value_bytes(case, &case.iv, "IV");
     let plaintext = fixture_value_bytes(case, &case.plaintext, "plaintext");
-    let (ciphertext, tag) =
-        jwe_aead_encrypt(content_encryption_algorithm(case), &cek, &iv, &plaintext)
-            .unwrap_or_else(|err| panic!("{} AEAD encrypt failed: {}", case.id, err));
+    let ciphertext = jwe_ctr_encrypt(content_encryption_algorithm(case), &cek, &iv, &plaintext)
+        .unwrap_or_else(|err| panic!("{} A256CTR encrypt failed: {}", case.id, err));
 
     assert_eq!(
         URL_SAFE_NO_PAD.encode(&ciphertext),
@@ -2378,68 +2412,55 @@ fn assert_jwe_aead(case: &FixtureCase) {
         "{} ciphertext",
         case.id
     );
-    assert_eq!(
-        URL_SAFE_NO_PAD.encode(&tag),
-        fixture_value_base64url(case, &case.tag, "tag"),
-        "{} tag",
-        case.id
-    );
 
-    let decrypted = jwe_aead_decrypt(
-        content_encryption_algorithm(case),
-        &cek,
-        &iv,
-        &ciphertext,
-        &tag,
-    )
-    .unwrap_or_else(|err| panic!("{} AEAD decrypt failed: {}", case.id, err));
+    let decrypted = jwe_ctr_decrypt(content_encryption_algorithm(case), &cek, &iv, &ciphertext)
+        .unwrap_or_else(|err| panic!("{} A256CTR decrypt failed: {}", case.id, err));
     assert_eq!(decrypted, plaintext, "{} plaintext", case.id);
 }
 
 fn assert_jwe_keywrap(case: &FixtureCase) {
-    let recipient = single_jwe_recipient(case);
+    let key_encryption = single_key_encryption(case);
     let cek = fixture_value_bytes(case, &case.cek, "CEK");
-    let wrapped = ecdh_es_wrap_key(
-        ephemeral_private_jwk(case),
-        recipient_public_jwk(case),
+    let wrapped = x25519_hkdf_a256kw_wrap(
+        &decode_base64url_array_fixture(
+            &ephemeral_private_jwk(case).d,
+            &case.id,
+            "ephemeral private key",
+        ),
+        &decode_base64url_array_fixture(
+            &recipient_public_jwk(case).x,
+            &case.id,
+            "recipient public key",
+        ),
+        key_encryption.key_id(),
+        key_encryption.derivation_scheme(),
+        key_encryption.protocol(),
+        key_encryption.role_path(),
         &cek,
     )
-    .unwrap_or_else(|err| panic!("{} ECDH-ES wrap failed: {}", case.id, err));
+    .unwrap_or_else(|err| panic!("{} X25519-HKDF wrap failed: {}", case.id, err));
 
     assert_eq!(
         URL_SAFE_NO_PAD.encode(&wrapped),
-        recipient.encrypted_key,
-        "{} encrypted_key",
+        key_encryption.encrypted_key(),
+        "{} encryptedKey",
         case.id
     );
-    assert_eq!(
-        recipient.header.epk.x,
-        ephemeral_public_jwk(case).x,
-        "{} ephemeral public key",
-        case.id
-    );
-    match derivation_scheme(case) {
-        "protocolContext" => assert_eq!(
-            recipient
-                .header
-                .derived_public_key
-                .as_ref()
-                .unwrap_or_else(|| panic!("{} must include derivedPublicKey", case.id))
-                .x,
-            recipient_public_jwk(case).x,
-            "{} derived public key",
-            case.id
-        ),
-        _ => assert!(
-            recipient.header.derived_public_key.is_none(),
-            "{} must not include derivedPublicKey",
-            case.id
-        ),
-    }
 
-    let unwrapped =
-        ecdh_es_unwrap_key(recipient_private_jwk(case), &recipient.header.epk, &wrapped)
-            .unwrap_or_else(|err| panic!("{} ECDH-ES unwrap failed: {}", case.id, err));
+    let unwrapped = x25519_hkdf_a256kw_unwrap(
+        &decode_base64url_array_fixture(
+            &recipient_private_jwk(case).d,
+            &case.id,
+            "recipient private key",
+        ),
+        &x25519_public_key_bytes(key_encryption.ephemeral_public_key()).unwrap(),
+        key_encryption.key_id(),
+        key_encryption.derivation_scheme(),
+        key_encryption.protocol(),
+        key_encryption.role_path(),
+        &wrapped,
+    )
+    .unwrap_or_else(|err| panic!("{} X25519-HKDF unwrap failed: {}", case.id, err));
     assert_eq!(unwrapped, cek, "{} unwrapped CEK", case.id);
 }
 
@@ -2447,12 +2468,11 @@ fn assert_jwe_decrypt(case: &FixtureCase) {
     let decrypt_result = decrypt_jwe_case(case);
 
     match case.expected_error_code.as_deref() {
-        Some(JWE_ERROR_DECRYPT_FAILED) => assert!(
+        Some(error_code) => assert!(
             decrypt_result.is_err(),
-            "{} must fail JWE decryption",
+            "{} must fail JWE decryption with {error_code}",
             case.id
         ),
-        Some(error_code) => panic!("{} unsupported JWE error code {}", case.id, error_code),
         None => assert_eq!(
             decrypt_result.unwrap_or_else(|err| panic!("{} JWE decrypt failed: {}", case.id, err)),
             fixture_value_bytes(case, &case.plaintext, "plaintext"),
@@ -2463,16 +2483,18 @@ fn assert_jwe_decrypt(case: &FixtureCase) {
 }
 
 fn decrypt_jwe_case(case: &FixtureCase) -> Result<Vec<u8>, String> {
-    let recipient = single_jwe_recipient(case);
+    let key_encryption = single_key_encryption(case);
     let derived_private_jwk = derived_private_jwk(case);
 
     assert_eq!(
-        recipient.header.kid, derived_private_jwk.root_key_id,
-        "{} recipient kid",
+        key_encryption.key_id(),
+        key_id(case),
+        "{} recipient keyId",
         case.id
     );
     assert_eq!(
-        recipient.header.derivation_scheme, derived_private_jwk.derivation_scheme,
+        key_encryption.derivation_scheme().as_str(),
+        derived_private_jwk.derivation_scheme,
         "{} recipient derivationScheme",
         case.id
     );
@@ -2483,10 +2505,18 @@ fn decrypt_jwe_case(case: &FixtureCase) -> Result<Vec<u8>, String> {
         case.id
     );
 
-    let encrypted_key = decode_base64url(&recipient.encrypted_key, &case.id, "encrypted_key");
-    let cek = ecdh_es_unwrap_key(
-        &derived_private_jwk.derived_private_key,
-        &recipient.header.epk,
+    let encrypted_key = decode_base64url(key_encryption.encrypted_key(), &case.id, "encryptedKey");
+    let cek = x25519_hkdf_a256kw_unwrap(
+        &decode_base64url_array_fixture(
+            &recipient_private_jwk(case).d,
+            &case.id,
+            "recipient private key",
+        ),
+        &x25519_public_key_bytes(key_encryption.ephemeral_public_key()).unwrap(),
+        key_encryption.key_id(),
+        key_encryption.derivation_scheme(),
+        key_encryption.protocol(),
+        key_encryption.role_path(),
         &encrypted_key,
     )?;
     assert_eq!(
@@ -2496,239 +2526,162 @@ fn decrypt_jwe_case(case: &FixtureCase) -> Result<Vec<u8>, String> {
         case.id
     );
 
-    jwe_aead_decrypt(
+    jwe_ctr_decrypt(
         content_encryption_algorithm(case),
         &cek,
-        &decode_base64url(&jwe(case).iv, &case.id, "JWE IV"),
+        &decode_base64url(
+            &fixture_value_base64url(case, &case.iv, "IV"),
+            &case.id,
+            "initialization vector",
+        ),
         &fixture_value_bytes(case, &case.ciphertext, "ciphertext"),
-        &decode_base64url(&jwe(case).tag, &case.id, "JWE tag"),
     )
 }
 
-fn jwe_aead_encrypt(
+fn assert_jwe_seal(case: &FixtureCase) {
+    let seal_value = case
+        .seal
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a seal", case.id));
+    let seal: dwn_rs_core::encryption::SealKeyWrap = serde_json::from_value(seal_value.clone())
+        .unwrap_or_else(|err| panic!("{} seal decode failed: {err}", case.id));
+    assert_eq!(
+        serde_json::to_value(&seal).unwrap(),
+        *seal_value,
+        "{} seal roundtrip",
+        case.id
+    );
+    assert_eq!(
+        seal.algorithm().as_str(),
+        key_agreement_algorithm(case),
+        "{} seal algorithm",
+        case.id
+    );
+    assert!(
+        !seal.encrypted_key().is_empty(),
+        "{} seal encryptedKey must not be empty",
+        case.id
+    );
+
+    let context = case
+        .seal_context
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include sealContext", case.id));
+    let sealing_private_jwk = case
+        .sealing_private_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include sealingPrivateJwk", case.id));
+
+    // Opening the seal with the sealing private key must recover the audience
+    // private key bytes.
+    let unwrapped = dwn_rs_core::encryption::seal_unwrap(
+        &decode_base64url_array_fixture(&sealing_private_jwk.d, &case.id, "sealing private key"),
+        &seal,
+        &context.protocol,
+        &context.role_path,
+        &context.context_id,
+        &context.audience_key_id,
+    )
+    .unwrap_or_else(|err| panic!("{} seal unwrap failed: {err}", case.id));
+
+    let audience_private_jwk = case
+        .audience_private_jwk
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include audiencePrivateJwk", case.id));
+    assert_eq!(
+        unwrapped,
+        decode_base64url(&audience_private_jwk.d, &case.id, "audience private key"),
+        "{} unwrapped audience private key",
+        case.id
+    );
+}
+
+fn jwe_ctr_encrypt(
     algorithm: &str,
     key: &[u8],
     iv: &[u8],
     plaintext: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> Result<Vec<u8>, String> {
     match algorithm {
-        "A256GCM" => {
-            let cipher = Aes256Gcm::new_from_slice(key).map_err(|err| err.to_string())?;
-            let mut ciphertext = plaintext.to_vec();
-            let tag = cipher
-                .encrypt_in_place_detached(AesGcmNonce::from_slice(iv), b"", &mut ciphertext)
-                .map_err(|err| err.to_string())?;
-
-            Ok((ciphertext, tag.to_vec()))
-        }
-        "XC20P" => {
-            let cipher = XChaCha20Poly1305::new_from_slice(key).map_err(|err| err.to_string())?;
-            let mut ciphertext = plaintext.to_vec();
-            let tag = cipher
-                .encrypt_in_place_detached(XNonce::from_slice(iv), b"", &mut ciphertext)
-                .map_err(|err| err.to_string())?;
-
-            Ok((ciphertext, tag.to_vec()))
-        }
+        "A256CTR" => dwn_rs_core::encryption::EncryptionEnvelope::ctr_encrypt(key, iv, plaintext)
+            .map_err(|err| err.to_string()),
         _ => Err(format!(
             "unsupported content encryption algorithm {algorithm}"
         )),
     }
 }
 
-fn jwe_aead_decrypt(
+fn jwe_ctr_decrypt(
     algorithm: &str,
     key: &[u8],
     iv: &[u8],
     ciphertext: &[u8],
-    tag: &[u8],
 ) -> Result<Vec<u8>, String> {
     match algorithm {
-        "A256GCM" => {
-            let cipher = Aes256Gcm::new_from_slice(key).map_err(|err| err.to_string())?;
-            let mut plaintext = ciphertext.to_vec();
-            cipher
-                .decrypt_in_place_detached(
-                    AesGcmNonce::from_slice(iv),
-                    b"",
-                    &mut plaintext,
-                    AesGcmTag::from_slice(tag),
-                )
-                .map_err(|err| err.to_string())?;
-
-            Ok(plaintext)
-        }
-        "XC20P" => {
-            let cipher = XChaCha20Poly1305::new_from_slice(key).map_err(|err| err.to_string())?;
-            let mut plaintext = ciphertext.to_vec();
-            cipher
-                .decrypt_in_place_detached(
-                    XNonce::from_slice(iv),
-                    b"",
-                    &mut plaintext,
-                    XChaCha20Poly1305Tag::from_slice(tag),
-                )
-                .map_err(|err| err.to_string())?;
-
-            Ok(plaintext)
-        }
+        "A256CTR" => dwn_rs_core::encryption::EncryptionEnvelope::ctr_decrypt(key, iv, ciphertext)
+            .map_err(|err| err.to_string()),
         _ => Err(format!(
             "unsupported content encryption algorithm {algorithm}"
         )),
     }
 }
 
-fn ecdh_es_wrap_key(
-    ephemeral_private_jwk: &FixtureX25519PrivateJwk,
-    recipient_public_jwk: &FixtureX25519PublicJwk,
+fn x25519_hkdf_a256kw_wrap(
+    ephemeral_private_key: &[u8; 32],
+    recipient_public_key: &[u8; 32],
+    key_id: &str,
+    derivation_scheme: dwn_rs_core::encryption::DerivationScheme,
+    protocol: Option<&str>,
+    role_path: Option<&str>,
     cek: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let shared_secret = x25519_shared_secret(ephemeral_private_jwk, recipient_public_jwk)?;
-    let kek = concat_kdf_a256kw(&shared_secret);
-    aes_key_wrap(&kek, cek)
+    dwn_rs_core::encryption::x25519_hkdf_a256kw_wrap(
+        ephemeral_private_key,
+        recipient_public_key,
+        key_id,
+        derivation_scheme,
+        protocol,
+        role_path,
+        cek,
+    )
+    .map_err(|err| err.to_string())
 }
 
-fn ecdh_es_unwrap_key(
-    recipient_private_jwk: &FixtureX25519PrivateJwk,
-    ephemeral_public_jwk: &FixtureX25519PublicJwk,
+fn x25519_hkdf_a256kw_unwrap(
+    recipient_private_key: &[u8; 32],
+    ephemeral_public_key: &[u8; 32],
+    key_id: &str,
+    derivation_scheme: dwn_rs_core::encryption::DerivationScheme,
+    protocol: Option<&str>,
+    role_path: Option<&str>,
     wrapped_key: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let shared_secret = x25519_shared_secret(recipient_private_jwk, ephemeral_public_jwk)?;
-    let kek = concat_kdf_a256kw(&shared_secret);
-    aes_key_unwrap(&kek, wrapped_key)
+    dwn_rs_core::encryption::x25519_hkdf_a256kw_unwrap(
+        recipient_private_key,
+        ephemeral_public_key,
+        key_id,
+        derivation_scheme,
+        protocol,
+        role_path,
+        wrapped_key,
+    )
+    .map_err(|err| err.to_string())
 }
 
-fn x25519_shared_secret(
-    private_jwk: &FixtureX25519PrivateJwk,
-    public_jwk: &FixtureX25519PublicJwk,
-) -> Result<Vec<u8>, String> {
-    assert_x25519_private_jwk(private_jwk);
-    assert_x25519_public_jwk(public_jwk);
-
-    let private_key = decode_base64url(&private_jwk.d, "JWE", "X25519 private key");
-    let public_key = decode_base64url(&public_jwk.x, "JWE", "X25519 public key");
-    let private_key: [u8; 32] = private_key
-        .try_into()
-        .map_err(|_| "X25519 private key must be 32 bytes".to_string())?;
-    let public_key: [u8; 32] = public_key
-        .try_into()
-        .map_err(|_| "X25519 public key must be 32 bytes".to_string())?;
-
-    let secret = x25519_dalek::StaticSecret::from(private_key);
-    let public = x25519_dalek::PublicKey::from(public_key);
-    Ok(secret.diffie_hellman(&public).as_bytes().to_vec())
+fn decode_base64url_array_fixture<const N: usize>(
+    value: &str,
+    case_id: &str,
+    label: &str,
+) -> [u8; N] {
+    let bytes = decode_base64url(value, case_id, label);
+    assert_eq!(bytes.len(), N, "{} {} must be {N} bytes", case_id, label);
+    bytes.try_into().expect("checked byte length")
 }
 
-fn concat_kdf_a256kw(shared_secret: &[u8]) -> Vec<u8> {
-    let mut fixed_info = Vec::new();
-    append_length_prefixed(&mut fixed_info, b"A256KW");
-    append_length_prefixed(&mut fixed_info, b"");
-    append_length_prefixed(&mut fixed_info, b"");
-    fixed_info.extend_from_slice(&256u32.to_be_bytes());
-
-    let mut hasher = Sha256::new();
-    hasher.update(1u32.to_be_bytes());
-    hasher.update(shared_secret);
-    hasher.update(fixed_info);
-    hasher.finalize()[..32].to_vec()
-}
-
-fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
-    output.extend_from_slice(&(value.len() as u32).to_be_bytes());
-    output.extend_from_slice(value);
-}
-
-fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
-    if plaintext.len() < 16 || !plaintext.len().is_multiple_of(8) {
-        return Err("AES-KW plaintext must be at least 16 bytes and 64-bit aligned".to_string());
-    }
-
-    let cipher = aes::Aes256::new_from_slice(kek).map_err(|err| err.to_string())?;
-    let n = plaintext.len() / 8;
-    let mut a = [0xa6; 8];
-    let mut r = plaintext
-        .chunks_exact(8)
-        .map(|chunk| {
-            let mut block = [0u8; 8];
-            block.copy_from_slice(chunk);
-            block
-        })
-        .collect::<Vec<_>>();
-
-    for j in 0..6 {
-        for (i, block) in r.iter_mut().enumerate() {
-            let mut input = [0u8; 16];
-            input[..8].copy_from_slice(&a);
-            input[8..].copy_from_slice(block);
-
-            let mut encrypted = GenericArray::clone_from_slice(&input);
-            cipher.encrypt_block(&mut encrypted);
-
-            a.copy_from_slice(&encrypted[..8]);
-            xor_aes_kw_counter(&mut a, (n * j + i + 1) as u64);
-            block.copy_from_slice(&encrypted[8..]);
-        }
-    }
-
-    let mut wrapped = Vec::with_capacity(8 + plaintext.len());
-    wrapped.extend_from_slice(&a);
-    for block in r {
-        wrapped.extend_from_slice(&block);
-    }
-
-    Ok(wrapped)
-}
-
-fn aes_key_unwrap(kek: &[u8], wrapped_key: &[u8]) -> Result<Vec<u8>, String> {
-    if wrapped_key.len() < 24 || !wrapped_key.len().is_multiple_of(8) {
-        return Err("AES-KW ciphertext must be at least 24 bytes and 64-bit aligned".to_string());
-    }
-
-    let cipher = aes::Aes256::new_from_slice(kek).map_err(|err| err.to_string())?;
-    let n = wrapped_key.len() / 8 - 1;
-    let mut a = [0u8; 8];
-    a.copy_from_slice(&wrapped_key[..8]);
-    let mut r = wrapped_key[8..]
-        .chunks_exact(8)
-        .map(|chunk| {
-            let mut block = [0u8; 8];
-            block.copy_from_slice(chunk);
-            block
-        })
-        .collect::<Vec<_>>();
-
-    for j in (0..6).rev() {
-        for i in (0..n).rev() {
-            let mut block_a = a;
-            xor_aes_kw_counter(&mut block_a, (n * j + i + 1) as u64);
-
-            let mut input = [0u8; 16];
-            input[..8].copy_from_slice(&block_a);
-            input[8..].copy_from_slice(&r[i]);
-
-            let mut decrypted = GenericArray::clone_from_slice(&input);
-            cipher.decrypt_block(&mut decrypted);
-
-            a.copy_from_slice(&decrypted[..8]);
-            r[i].copy_from_slice(&decrypted[8..]);
-        }
-    }
-
-    if a != [0xa6; 8] {
-        return Err("AES-KW integrity check failed".to_string());
-    }
-
-    let mut plaintext = Vec::with_capacity(wrapped_key.len() - 8);
-    for block in r {
-        plaintext.extend_from_slice(&block);
-    }
-
-    Ok(plaintext)
-}
-
-fn xor_aes_kw_counter(a: &mut [u8; 8], counter: u64) {
-    for (left, right) in a.iter_mut().zip(counter.to_be_bytes()) {
-        *left ^= right;
+fn x25519_public_key_bytes(jwk: &ssi_jwk::JWK) -> Option<[u8; 32]> {
+    match &jwk.params {
+        ssi_jwk::Params::OKP(octet_params) => octet_params.public_key.0.clone().try_into().ok(),
+        _ => None,
     }
 }
 
@@ -2752,49 +2705,9 @@ fn construct_jwe_derivation_path(case: &FixtureCase) -> Vec<String> {
             path.extend(protocol_path.split('/').map(str::to_string));
             path
         }
-        "protocolContext" => {
-            let context_id = record
-                .get("contextId")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("{} JWE record must include contextId", case.id));
-            vec![
-                "protocolContext".to_string(),
-                context_id
-                    .split('/')
-                    .next()
-                    .expect("split always returns one item")
-                    .to_string(),
-            ]
-        }
+        "roleAudience" => vec!["roleAudience".to_string()],
         scheme => panic!("{} unsupported derivation scheme {}", case.id, scheme),
     }
-}
-
-fn assert_x25519_public_jwk(jwk: &FixtureX25519PublicJwk) {
-    assert_eq!(jwk.kty, "OKP", "X25519 public JWK kty");
-    assert_eq!(jwk.crv, "X25519", "X25519 public JWK crv");
-    assert_eq!(
-        decode_base64url(&jwk.x, "JWE", "X25519 public key").len(),
-        32,
-        "X25519 public key length"
-    );
-    assert!(jwk.kid.as_deref().unwrap_or_default().len() <= 128);
-}
-
-fn assert_x25519_private_jwk(jwk: &FixtureX25519PrivateJwk) {
-    assert_eq!(jwk.kty, "OKP", "X25519 private JWK kty");
-    assert_eq!(jwk.crv, "X25519", "X25519 private JWK crv");
-    assert_eq!(
-        decode_base64url(&jwk.d, "JWE", "X25519 private key").len(),
-        32,
-        "X25519 private key length"
-    );
-    assert_eq!(
-        decode_base64url(&jwk.x, "JWE", "X25519 private public key").len(),
-        32,
-        "X25519 private public key length"
-    );
-    assert!(jwk.kid.as_deref().unwrap_or_default().len() <= 128);
 }
 
 fn fixture_value_bytes(case: &FixtureCase, data: &Option<FixtureData>, label: &str) -> Vec<u8> {
@@ -2949,18 +2862,6 @@ fn jws(case: &FixtureCase) -> &Jws {
         .unwrap_or_else(|| panic!("{} must include a JWS", case.id))
 }
 
-fn jwe(case: &FixtureCase) -> &FixtureJwe {
-    case.jwe
-        .as_ref()
-        .unwrap_or_else(|| panic!("{} must include a JWE", case.id))
-}
-
-fn single_jwe_recipient(case: &FixtureCase) -> &FixtureJweRecipient {
-    let recipients = &jwe(case).recipients;
-    assert_eq!(recipients.len(), 1, "{} JWE recipient count", case.id);
-    &recipients[0]
-}
-
 fn recipient_private_jwk(case: &FixtureCase) -> &FixtureX25519PrivateJwk {
     case.recipient_private_jwk
         .as_ref()
@@ -3007,6 +2908,28 @@ fn derivation_scheme(case: &FixtureCase) -> &str {
     case.derivation_scheme
         .as_deref()
         .unwrap_or_else(|| panic!("{} must include derivationScheme", case.id))
+}
+
+fn key_id(case: &FixtureCase) -> &str {
+    case.key_id
+        .as_deref()
+        .unwrap_or_else(|| panic!("{} must include keyId", case.id))
+}
+
+fn single_key_encryption(case: &FixtureCase) -> dwn_rs_core::encryption::KeyEncryption {
+    let encryption_value = record(case)
+        .get("encryption")
+        .unwrap_or_else(|| panic!("{} record must include encryption", case.id));
+    let encryption: dwn_rs_core::encryption::EncryptionEnvelope =
+        serde_json::from_value(encryption_value.clone())
+            .unwrap_or_else(|err| panic!("{} JWE envelope decode failed: {err}", case.id));
+    assert_eq!(
+        encryption.key_encryption.len(),
+        1,
+        "{} keyEncryption entry count",
+        case.id
+    );
+    encryption.key_encryption[0].clone()
 }
 
 fn record(case: &FixtureCase) -> &Value {

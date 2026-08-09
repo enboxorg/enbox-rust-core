@@ -19,7 +19,7 @@
     {
       "id": "crypto.jwe-encryption",
       "path": "crypto/jwe-encryption.json",
-      "assertions": ["jwe.protected", "jwe.aead", "jwe.keywrap", "jwe.decrypt"]
+      "assertions": ["jwe.envelope", "jwe.aead", "jwe.keywrap", "jwe.decrypt", "jwe.seal"]
     },
     {
       "id": "dwn.messages.basic-interface-messages",

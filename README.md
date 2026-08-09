@@ -43,6 +43,7 @@ See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the full matrix. CI run
 | `dwn-sdk-js-reference` | Full `@enbox/dwn-sdk-js test:node` at pinned Enbox |
 | `loopback-interop` | TS HTTP client against Rust loopback server |
 | `fixture-provenance` | Fixture `source.commit` matches `.enbox-version` |
+| `schema-drift` | Embedded schemas refreshed against the pinned Enbox commit |
 
 ### Sync and transport (M4 — complete)
 

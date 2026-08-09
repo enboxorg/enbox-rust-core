@@ -290,4 +290,41 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn current_encrypted_records_write_matches_embedded_schema() {
+        let message = serde_json::json!({
+            "recordId": "record1",
+            "contextId": "context1",
+            "authorization": {},
+            "encryption": {
+                "algorithm": "A256CTR",
+                "initializationVector": "oKGio6SlpqeoqaqrrK2urw",
+                "keyEncryption": [{
+                    "algorithm": "X25519-HKDF-SHA256+A256KW",
+                    "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+                    "derivationScheme": "protocolPath",
+                    "ephemeralPublicKey": {
+                        "kty": "OKP",
+                        "crv": "X25519",
+                        "x": "KodzRXbFA4L-ip7jNU5hFa1oOMbl6jOVQufMsijug28"
+                    },
+                    "encryptedKey": "KihbqckheDvgI4ZRJNu3el6L0dM8GLhXp_trR3P-vEpVs_pRpJbwjg"
+                }]
+            },
+            "descriptor": {
+                "interface": "Records",
+                "method": "Write",
+                "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                "dateCreated": "2025-01-01T00:00:00.000000Z",
+                "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
+                "dataSize": 38,
+                "dataFormat": "text/plain",
+                "protocol": "https://example.com/protocol/jwe",
+                "protocolPath": "thread/message"
+            }
+        });
+
+        validate_message(&message).expect("current encrypted RecordsWrite must validate");
+    }
 }

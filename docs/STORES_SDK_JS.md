@@ -16,9 +16,9 @@ The Enbox product path uses **native SQLite** (`SqliteNativeDwn` in `dwn-rs-stor
 
 Three layers prove the Rust SQLite implementation matches `@enbox/dwn-sdk-js`:
 
-1. **Shared fixtures** (`tools/conformance/typescript-*.test.ts`) — 15 assertion types across CID, JWS, JWE, StateIndex, MessagesSync, descriptor roundtrip, message.process, and protocol authorization. Same fixtures consumed by Rust (`conformance_fixtures.rs`) and TS (pinned `@enbox/dwn-sdk-js`).
+1. **Shared fixtures** (`tools/conformance/typescript-*.test.ts`) — 15 assertion types across CID, JWS, JWE, StateIndex, MessagesSync, descriptor roundtrip, message.process, and protocol authorization. Same fixtures consumed by Rust (`conformance_fixtures.rs`) and TS (pinned `@enbox/dwn-sdk-js`). `StateIndex` and `MessagesSync` were removed from upstream Enbox and are validated in Rust only as intentional extensions; see [TEST_COVERAGE.md](./TEST_COVERAGE.md#rust-extension-fixtures).
 2. **dwn-sdk-js native suite** (`bun run --filter @enbox/dwn-sdk-js test:node`) — full handler/feature/scenario coverage runs at the pinned Enbox commit; protects against TS-side regressions before Rust touches behavior.
-3. **Loopback interop** (`tools/interop/loopback-interop.test.ts`) — TS HTTP and WebSocket clients call into the Rust `LoopbackDwnServer`, covering signed Records, Protocols, Permissions grants, `RecordsSubscribe` over WebSocket, and `MessagesSync` root.
+3. **Loopback interop** (`tools/interop/loopback-interop.test.ts`) — TS HTTP and WebSocket clients call into the Rust `LoopbackDwnServer`, covering signed Records, Protocols, Permissions grants, and `RecordsSubscribe` over WebSocket. The removed-upstream `MessagesSync` scenario is disabled (see #188).
 
 See [`TEST_COVERAGE.md`](./TEST_COVERAGE.md) for the full matrix and CI jobs.
 

@@ -13,6 +13,7 @@ use crate::descriptors::{
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::DwnReply;
+use crate::encryption::Encryption;
 use crate::errors::EventLogError;
 use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
@@ -108,6 +109,39 @@ pub(crate) fn validate_records_write_integrity(
         != Some(record_id.as_str())
     {
         return Err("RecordsWriteValidateIntegrityRecordIdUnauthorized: recordId in message does not match recordId in authorization".to_string());
+    }
+
+    // Encrypted records carry an `encryption` envelope whose `initializationVector`
+    // JSON Schema can only constrain to base64url, not to 16 decoded bytes re-checks
+    // the decoded length and every key-encryption entry during `RecordsWrite.parse`
+    // via `Encryption.validateEncryptionProperty`; mirror that so an inbound message
+    // with a malformed IV or ephemeral key is rejected at admission rather than failing
+    // decryption later.
+    if let Some(encryption) = write_fields(message)?.encryption.as_ref() {
+        match encryption {
+            Encryption::Envelope(envelope) => {
+                envelope.validate().map_err(|error| match error {
+                    crate::encryption::EncryptionError::InvalidInitializationVectorLength { found } => {
+                        format!(
+                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: A256CTR initializationVector must decode to 16 bytes, got {found}"
+                        )
+                    }
+                    crate::encryption::EncryptionError::InvalidBase64Url { label, error } => {
+                        format!(
+                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: {label} must be valid base64url: {error}"
+                        )
+                    }
+                    other => format!(
+                        "RecordsWriteValidateIntegrityEncryptionEphemeralPublicKeyInvalid: {other}"
+                    ),
+                })?;
+            }
+            Encryption::LegacyJwe(_) => {
+                // Legacy JWE is deprecated. It's only valid for decryption of existing records, not
+                // for new writes. Reject any new writes with a legacy JWE.
+                return Err("RecordsWriteValidateIntegrityEncryptionLegacyJweInvalid: Legacy JWE is deprecated and not allowed for new writes".to_string());
+            }
+        }
     }
 
     // `contextId` is a protocol-only surface: per DWN spec.md:1028 a record NOT
@@ -1623,5 +1657,84 @@ impl DescriptorMethod for RecordsWriteDescriptor {
 
     fn method(&self) -> &'static str {
         WRITE_METHOD
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn encrypted_write_message(initialization_vector: &str) -> JsonValue {
+        // Non-initial write: `recordId` differs from the entry ID so the
+        // date-created/context-id initial-write checks are not exercised here.
+        json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Write",
+                "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                "dateCreated": "2025-01-01T00:00:00.000000Z",
+                "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
+                "dataSize": 38,
+                "dataFormat": "text/plain",
+                "protocol": "https://example.com/protocol/jwe",
+                "protocolPath": "thread/message"
+            },
+            "recordId": "some-non-initial-record-id",
+            "contextId": "some-context-id",
+            "encryption": {
+                "algorithm": "A256CTR",
+                "initializationVector": initialization_vector,
+                "keyEncryption": [{
+                    "algorithm": "X25519-HKDF-SHA256+A256KW",
+                    "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
+                    "derivationScheme": "protocolPath",
+                    "ephemeralPublicKey": {
+                        "kty": "OKP",
+                        "crv": "X25519",
+                        "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+                    },
+                    "encryptedKey": "KihbqckheDvgI4ZRJNu3el6L0dM8GLhXp_trR3P-vEpVs_pRpJbwjg"
+                }]
+            },
+            "authorization": {
+                "signature": {
+                    "payload": "cGF5bG9hZA",
+                    "signatures": [{
+                        "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                        "signature": "c2lnbmF0dXJl"
+                    }]
+                }
+            }
+        })
+    }
+
+    fn integrity_message(raw: &JsonValue) -> Message<Descriptor> {
+        serde_json::from_value(raw.clone()).expect("message must deserialize")
+    }
+
+    #[test]
+    fn records_write_integrity_validates_encryption_iv_length() {
+        // 16-byte IV decodes to the required A256CTR counter block length.
+        let ok = integrity_message(&encrypted_write_message("oKGio6SlpqeoqaqrrK2urw"));
+        let signature = AuthorizationContext {
+            signer: "did:example:alice".to_string(),
+            author: "did:example:alice".to_string(),
+            payload: json!({
+                "recordId": "some-non-initial-record-id",
+                "contextId": "some-context-id",
+            }),
+            author_delegated_grant: None,
+        };
+        validate_records_write_integrity(&ok, &signature).expect("16-byte IV must validate");
+
+        // 15-byte IV must be rejected at integrity time with the upstream code.
+        let short_iv = integrity_message(&encrypted_write_message("AAECAwQFBgcICQoLDA0O"));
+        let error = validate_records_write_integrity(&short_iv, &signature)
+            .expect_err("must reject 15-byte IV");
+        assert!(
+            error.starts_with("RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid"),
+            "unexpected error: {error}"
+        );
     }
 }
