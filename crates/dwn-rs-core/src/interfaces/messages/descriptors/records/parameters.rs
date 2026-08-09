@@ -182,9 +182,9 @@ pub enum DateSort {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct WriteParameters {
     pub recipient: Option<String>,
-    pub protocol: String,
+    pub protocol: Option<String>,
     #[serde(rename = "protocolPath")]
-    pub protocol_path: String,
+    pub protocol_path: Option<String>,
     #[serde(rename = "protocolRole")]
     pub protocol_role: Option<String>,
     pub schema: Option<String>,
@@ -217,6 +217,18 @@ pub struct WriteParameters {
 
 impl MessageValidator for WriteParameters {
     fn validate(&self) -> Result<(), ValidationError> {
+        let Some(protocol) = self.protocol.clone() else {
+            return Err(ValidationError {
+                message: "protocol is required".to_string(),
+            });
+        };
+
+        if self.protocol_path.is_none() {
+            return Err(ValidationError {
+                message: "protocolPath is required".to_string(),
+            });
+        }
+
         if self.data.is_none() && self.data_cid.is_none()
             || self.data.is_some() && self.data_cid.is_some()
         {
@@ -239,7 +251,7 @@ impl MessageValidator for WriteParameters {
                 .iter()
                 .try_for_each(|input| {
                     if input.derivation_scheme() == DerivationScheme::ProtocolPath
-                        && self.protocol.is_empty()
+                        && protocol.is_empty()
                     {
                         return Err(ValidationError {
                             message: "'protocols' encryption requires a protocol".to_string(),
@@ -275,11 +287,23 @@ impl MessageParameters for WriteParameters {
 
         let now = chrono::Utc::now();
 
+        let Some(protocol) = &self.protocol else {
+            return Err(ValidationError {
+                message: "protocol is required".to_string(),
+            });
+        };
+
+        let Some(protocol_path) = self.protocol_path.clone() else {
+            return Err(ValidationError {
+                message: "protocolPath is required".to_string(),
+            });
+        };
+
         let mut descriptor = WriteDescriptor {
-            protocol: normalize_url(self.protocol.as_str()).map_err(|e| ValidationError {
+            protocol: normalize_url(protocol.as_str()).map_err(|e| ValidationError {
                 message: e.to_string(),
             })?,
-            protocol_path: self.protocol_path.clone(),
+            protocol_path,
             recipient: self.recipient.clone(),
             schema: self.schema.as_ref().and_then(|url| normalize_url(url).ok()),
             tags: self.tags.clone(),

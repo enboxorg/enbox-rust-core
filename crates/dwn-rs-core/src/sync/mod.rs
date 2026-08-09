@@ -2098,7 +2098,9 @@ mod tests {
             message: json!({
                 "descriptor": {
                     "interface": "Records",
-                    "method": "Write"
+                    "method": "Write",
+                    "protocol": "https://example.com/sync",
+                    "protocolPath": "entry"
                 },
                 "recordId": "parent-record"
             }),
@@ -2113,6 +2115,8 @@ mod tests {
                 "descriptor": {
                     "interface": "Records",
                     "method": "Write",
+                    "protocol": "https://example.com/sync",
+                    "protocolPath": "entry",
                     "parentId": "parent-record"
                 },
                 "recordId": "child-record"
@@ -2127,7 +2131,9 @@ mod tests {
             message: json!({
                 "descriptor": {
                     "interface": "Records",
-                    "method": "Write"
+                    "method": "Write",
+                    "protocol": "https://example.com/sync",
+                    "protocolPath": "entry"
                 },
                 "recordId": "local-record"
             }),
@@ -2149,6 +2155,8 @@ mod tests {
             descriptor: serde_json::from_value(json!({
                 "interface": "Records",
                 "method": "Write",
+                "protocol": "https://example.com/sync",
+                "protocolPath": "entry",
                 "messageTimestamp": "2025-01-01T00:00:00.000000Z",
                 "dataCid": "bafybeigdyrzt5sfp7udm7hu76fin73tazj24zpxtenqecq7z2xdha2f7mm",
                 "dataSize": 0,
