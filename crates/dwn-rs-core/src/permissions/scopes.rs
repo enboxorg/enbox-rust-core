@@ -138,6 +138,22 @@ impl PermissionScope {
             _ => None,
         }
     }
+
+    pub fn matches_protocol_target(&self, target: &ProtocolScopeTarget<'_>) -> bool {
+        let protocol_match = self.protocol().is_none() || self.protocol() == target.protocol;
+        let context_id_match = self.context_id().is_none()
+            || matches_subtree(self.context_id().unwrap_or(""), target.context_id);
+        let protocol_path_match = self.protocol_path().is_none()
+            || matches_subtree(self.protocol_path().unwrap_or(""), target.protocol_path);
+
+        protocol_match && context_id_match && protocol_path_match
+    }
+}
+
+fn matches_subtree(scope: &str, target: Option<&str>) -> bool {
+    target == Some(scope)
+        || target
+            .is_some_and(|v| v.starts_with(scope) && v.as_bytes().get(scope.len()) == Some(&b'/'))
 }
 
 #[derive(Serialize)]
@@ -167,6 +183,13 @@ impl Serialize for PermissionScope {
         }
         .serialize(serializer)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolScopeTarget<'a> {
+    pub protocol: Option<&'a str>,
+    pub context_id: Option<&'a str>,
+    pub protocol_path: Option<&'a str>,
 }
 
 #[cfg(test)]
@@ -267,6 +290,134 @@ mod tests {
             selector: Some(MessagesSelector::ContextId(ContextId("ctx-1".to_string()))),
         });
         assert!(serde_json::to_value(invalid).is_err());
+    }
+
+    #[test]
+    fn matches_protocol_target() {
+        let notes_scope = PermissionScope::Records(RecordsScope {
+            method: RecordsMethod::Read,
+            protocol: "https://example.com/notes".to_string(),
+            selector: None,
+        });
+        let notes_scope_with_context = PermissionScope::Records(RecordsScope {
+            method: RecordsMethod::Read,
+            protocol: "https://example.com/notes".to_string(),
+            selector: Some(RecordsSelector::ContextId(ContextId("c/1".to_string()))),
+        });
+
+        let notes_scope_with_protocol = PermissionScope::Records(RecordsScope {
+            method: RecordsMethod::Read,
+            protocol: "https://example.com/notes".to_string(),
+            selector: Some(RecordsSelector::ProtocolPath(ProtocolPath(
+                "a/b".to_string(),
+            ))),
+        });
+
+        let tt = [
+            // Records scope { protocol: notes }
+            (
+                &notes_scope,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: None,
+                    protocol_path: None,
+                },
+                true,
+            ),
+            (
+                &notes_scope,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: Some("ctx-1"),
+                    protocol_path: None,
+                },
+                true,
+            ),
+            (
+                &notes_scope,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/chat"),
+                    context_id: None,
+                    protocol_path: None,
+                },
+                false,
+            ),
+            // Records scope { protocol: notes, contextId: c/1 }
+            (
+                &notes_scope_with_context,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: Some("c/1"),
+                    protocol_path: None,
+                },
+                true,
+            ),
+            (
+                &notes_scope_with_context,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: Some("c/1/x"),
+                    protocol_path: None,
+                },
+                true,
+            ),
+            (
+                &notes_scope_with_context,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: Some("c/10"),
+                    protocol_path: None,
+                },
+                false,
+            ),
+            (
+                &notes_scope_with_context,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: None,
+                    protocol_path: None,
+                },
+                false,
+            ),
+            // Records scope { protocol: notes, protocolPath: a/b }
+            (
+                &notes_scope_with_protocol,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: None,
+                    protocol_path: Some("a/b"),
+                },
+                true,
+            ),
+            (
+                &notes_scope_with_protocol,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: None,
+                    protocol_path: Some("a/b/c"),
+                },
+                true,
+            ),
+            (
+                &notes_scope_with_protocol,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: None,
+                    protocol_path: Some("a/x"),
+                },
+                false,
+            ),
+        ];
+
+        for (scope, target, expected) in tt {
+            assert_eq!(
+                scope.matches_protocol_target(&target),
+                expected,
+                "scope: {:?}, target: {:?}",
+                scope,
+                target
+            );
+        }
     }
 }
 
