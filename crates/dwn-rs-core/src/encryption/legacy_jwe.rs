@@ -329,4 +329,64 @@ mod tests {
             encryption
         );
     }
+
+    #[test]
+    fn rejects_malformed_legacy_protected_header() {
+        let private_jwk = private_jwk();
+        let (mut encryption, _) = encrypt_legacy(
+            LegacyContentEncryptionAlgorithm::A256Gcm,
+            &private_jwk,
+            b"legacy plaintext",
+        );
+        encryption.protected = "not-base64url!".to_string();
+
+        assert!(matches!(
+            encryption.protected_header(),
+            Err(EncryptionError::InvalidBase64Url { label, .. }) if label == "protected"
+        ));
+    }
+
+    #[test]
+    fn rejects_legacy_aead_with_invalid_iv_or_tag() {
+        let private_jwk = private_jwk();
+        let (mut encryption, ciphertext) = encrypt_legacy(
+            LegacyContentEncryptionAlgorithm::A256Gcm,
+            &private_jwk,
+            b"legacy plaintext",
+        );
+        encryption.iv = base64url.encode([0; 11]);
+        assert!(matches!(
+            encryption.decrypt(&private_jwk, &ciphertext),
+            Err(EncryptionError::LegacyJwe(message)) if message.contains("A256GCM IV must be 12 bytes")
+        ));
+
+        let (mut encryption, ciphertext) = encrypt_legacy(
+            LegacyContentEncryptionAlgorithm::A256Gcm,
+            &private_jwk,
+            b"legacy plaintext",
+        );
+        encryption.tag = base64url.encode([0; 15]);
+        assert!(matches!(
+            encryption.decrypt(&private_jwk, &ciphertext),
+            Err(EncryptionError::LegacyJwe(message)) if message.contains("authentication tag must be 16 bytes")
+        ));
+    }
+
+    #[test]
+    fn rejects_legacy_recipient_with_non_x25519_ephemeral_key() {
+        let private_jwk = private_jwk();
+        let (encryption, ciphertext) = encrypt_legacy(
+            LegacyContentEncryptionAlgorithm::A256Gcm,
+            &private_jwk,
+            b"legacy plaintext",
+        );
+        let mut value = serde_json::to_value(encryption).unwrap();
+        value["recipients"][0]["header"]["epk"]["crv"] = serde_json::json!("Ed25519");
+        let encryption: LegacyJweEncryption = serde_json::from_value(value).unwrap();
+
+        assert!(matches!(
+            encryption.decrypt(&private_jwk, &ciphertext),
+            Err(EncryptionError::UnsupportedCurve { curve }) if curve == "Ed25519"
+        ));
+    }
 }
