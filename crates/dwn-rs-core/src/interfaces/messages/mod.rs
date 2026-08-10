@@ -86,7 +86,7 @@ where
                 &descriptor,
                 signer,
                 parameters.delegated_grant().clone(),
-                parameters.permission_grant_id().clone(),
+                parameters.permission_grant_invocation(),
                 parameters.protocol_rule().clone(),
             )
             .await?
@@ -105,7 +105,7 @@ where
         descriptor: &D,
         signer: S,
         delegated_grant: Option<Message<RecordsWriteDescriptor>>,
-        permission_grant_id: Option<String>,
+        permission_grant: jws::PermissionGrantInvocation,
         protocol_role: Option<String>,
     ) -> Result<Authorization, ValidationError> {
         let delegated_grant_id: Option<Cid> = if let Some(delegated_grant) = delegated_grant.clone()
@@ -121,7 +121,7 @@ where
             descriptor,
             signer,
             delegated_grant_id,
-            permission_grant_id,
+            permission_grant,
             protocol_role,
         )
         .await?;
@@ -142,7 +142,7 @@ where
         descriptor: &D,
         signer: S,
         delegated_grant_id: Option<Cid>,
-        permission_grant_id: Option<String>,
+        permission_grant: jws::PermissionGrantInvocation,
         protocol_role: Option<String>,
     ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
@@ -150,7 +150,7 @@ where
         let payload = jws::AuthorizationPayload::new(
             descriptor_cid,
             delegated_grant_id,
-            permission_grant_id,
+            permission_grant,
             protocol_role,
         )
         .map_err(|e| ValidationError {

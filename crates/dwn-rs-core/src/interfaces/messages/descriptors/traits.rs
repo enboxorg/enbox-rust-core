@@ -1,6 +1,7 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::auth::jws::PermissionGrantInvocation;
 use crate::cid::generate_cid_from_serialized;
 
 use super::super::{fields::MessageFields, Fields, Message};
@@ -31,6 +32,12 @@ pub trait MessageParameters {
 
     fn permission_grant_id(&self) -> Option<String> {
         None
+    }
+
+    fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        self.permission_grant_id()
+            .map(PermissionGrantInvocation::Single)
+            .unwrap_or(PermissionGrantInvocation::None)
     }
 
     fn protocol_rule(&self) -> Option<String> {

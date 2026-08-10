@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::auth::jws::PermissionGrantInvocation;
 use crate::auth::Authorization;
 use crate::descriptors::{MessageParameters, MessageValidator, ValidationError};
 use crate::filters::message_filters::Messages as MessagesFilter;
@@ -15,8 +16,8 @@ pub struct ReadParameters {
     pub message_cid: Cid,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
-    #[serde(rename = "permissionGrantId")]
-    pub permission_grant_id: Option<String>,
+    #[serde(rename = "permissionGrantIds")]
+    pub permission_grant_ids: Option<Vec<String>>,
 }
 
 impl MessageValidator for ReadParameters {}
@@ -29,14 +30,17 @@ impl MessageParameters for ReadParameters {
         let descriptor = ReadDescriptor {
             message_timestamp: self.message_timestamp,
             message_cid: Some(self.message_cid),
-            permission_grant_id: self.permission_grant_id.clone(),
+            permission_grant_ids: self.permission_grant_ids.clone(),
         };
 
         Ok((descriptor, None))
     }
 
-    fn permission_grant_id(&self) -> Option<String> {
-        self.permission_grant_id.clone()
+    fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        self.permission_grant_ids
+            .clone()
+            .map(PermissionGrantInvocation::Multi)
+            .unwrap_or(PermissionGrantInvocation::None)
     }
 }
 
@@ -46,8 +50,8 @@ pub struct QueryParameters {
     pub cursor: Option<crate::Cursor>,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
-    #[serde(rename = "permissionGrantId")]
-    pub permission_grant_id: Option<String>,
+    #[serde(rename = "permissionGrantIds")]
+    pub permission_grant_ids: Option<Vec<String>>,
 }
 
 impl MessageValidator for QueryParameters {}
@@ -66,13 +70,17 @@ impl MessageParameters for QueryParameters {
             message_timestamp: self.message_timestamp,
             cursor: self.cursor.clone(),
             filters,
+            permission_grant_ids: self.permission_grant_ids.clone(),
         };
 
         Ok((descriptor, None))
     }
 
-    fn permission_grant_id(&self) -> Option<String> {
-        self.permission_grant_id.clone()
+    fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        self.permission_grant_ids
+            .clone()
+            .map(PermissionGrantInvocation::Multi)
+            .unwrap_or(PermissionGrantInvocation::None)
     }
 }
 
@@ -81,8 +89,8 @@ pub struct SubscribeParameters {
     pub filters: Vec<MessagesFilter>,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
-    #[serde(rename = "permissionGrantId")]
-    pub permission_grant_id: Option<String>,
+    #[serde(rename = "permissionGrantIds")]
+    pub permission_grant_ids: Option<Vec<String>>,
     pub cursor: Option<crate::stores::ProgressToken>,
 }
 
@@ -98,15 +106,18 @@ impl MessageParameters for SubscribeParameters {
         let descriptor = SubscribeDescriptor {
             message_timestamp: self.message_timestamp,
             filters,
-            permission_grant_id: self.permission_grant_id.clone(),
+            permission_grant_ids: self.permission_grant_ids.clone(),
             cursor: self.cursor.clone(),
         };
 
         Ok((descriptor, None))
     }
 
-    fn permission_grant_id(&self) -> Option<String> {
-        self.permission_grant_id.clone()
+    fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        self.permission_grant_ids
+            .clone()
+            .map(PermissionGrantInvocation::Multi)
+            .unwrap_or(PermissionGrantInvocation::None)
     }
 }
 
@@ -127,8 +138,8 @@ pub struct SyncParameters {
     pub action: SyncAction,
     pub protocol: Option<String>,
     pub prefix: Option<String>,
-    #[serde(rename = "permissionGrantId")]
-    pub permission_grant_id: Option<String>,
+    #[serde(rename = "permissionGrantIds")]
+    pub permission_grant_ids: Option<Vec<String>>,
     pub hashes: Option<BTreeMap<String, String>>,
     pub depth: Option<u16>,
 }
@@ -145,7 +156,7 @@ impl MessageParameters for SyncParameters {
             action: self.action.clone(),
             protocol: self.protocol.clone(),
             prefix: self.prefix.clone(),
-            permission_grant_id: self.permission_grant_id.clone(),
+            permission_grant_ids: self.permission_grant_ids.clone(),
             hashes: self.hashes.clone(),
             depth: self.depth,
         };
@@ -153,7 +164,10 @@ impl MessageParameters for SyncParameters {
         Ok((descriptor, None))
     }
 
-    fn permission_grant_id(&self) -> Option<String> {
-        self.permission_grant_id.clone()
+    fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        self.permission_grant_ids
+            .clone()
+            .map(PermissionGrantInvocation::Multi)
+            .unwrap_or(PermissionGrantInvocation::None)
     }
 }

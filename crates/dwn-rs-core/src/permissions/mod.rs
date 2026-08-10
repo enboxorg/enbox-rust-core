@@ -1589,7 +1589,7 @@ mod tests {
                         protocol: Some("http://example.com/notes".to_string()),
                         ..Default::default()
                     }],
-                    permission_grant_id: Some("grant-1".to_string()),
+                    permission_grant_ids: Some(vec!["grant-1".to_string()]),
                     cursor: None,
                 },
             ))),

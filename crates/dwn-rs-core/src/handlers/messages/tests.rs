@@ -64,7 +64,7 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
         depth: Some(0),
         hashes: Some(BTreeMap::new()),
         signer: test_signer(),
-        permission_grant_id: None,
+        permission_grant_ids: None,
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -108,7 +108,7 @@ async fn messages_sync_is_not_authorized_by_messages_read_grant() {
         action: SyncAction::Root,
         protocol: Some("http://example.com/notes".to_string()),
         signer: bob_signer(),
-        permission_grant_id: Some("grant-sync-1".to_string()),
+        permission_grant_ids: Some(vec!["grant-sync-1".to_string()]),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -149,7 +149,7 @@ async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Root,
         signer: bob_signer(),
-        permission_grant_id: Some("grant-sync-2".to_string()),
+        permission_grant_ids: Some(vec!["grant-sync-2".to_string()]),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -331,7 +331,7 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
             protocol_path_prefix: Some("comment".to_string()),
             ..Default::default()
         }],
-        permission_grant_id: Some("grant-subscribe-path".to_string()),
+        permission_grant_ids: Some(vec!["grant-subscribe-path".to_string()]),
         signer: bob_signer(),
         ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
     })
@@ -469,7 +469,7 @@ async fn permission_grant_message_with_scope(
 struct SubscribeSpec {
     timestamp: String,
     filters: Vec<message_filters::Messages>,
-    permission_grant_id: Option<String>,
+    permission_grant_ids: Option<Vec<String>>,
     cursor: Option<crate::stores::ProgressToken>,
     signer: PrivateJwkSigner,
 }
@@ -479,7 +479,7 @@ impl SubscribeSpec {
         Self {
             timestamp: timestamp.to_string(),
             filters: Vec::new(),
-            permission_grant_id: None,
+            permission_grant_ids: None,
             cursor: None,
             signer: test_signer(),
         }
@@ -490,7 +490,7 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
     let descriptor = MessagesSubscribeDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         filters: spec.filters,
-        permission_grant_id: spec.permission_grant_id.clone(),
+        permission_grant_ids: spec.permission_grant_ids.clone(),
         cursor: spec.cursor,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
@@ -502,10 +502,10 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
                 .to_string(),
         ),
     )]);
-    if let Some(permission_grant_id) = spec.permission_grant_id {
+    if let Some(permission_grant_ids) = spec.permission_grant_ids {
         payload.insert(
-            "permissionGrantId".to_string(),
-            serde_json::Value::String(permission_grant_id),
+            "permissionGrantIds".to_string(),
+            serde_json::to_value(permission_grant_ids).unwrap(),
         );
     }
     let signature = Jws::create(
@@ -528,7 +528,7 @@ struct SyncSpec {
     action: SyncAction,
     protocol: Option<String>,
     prefix: Option<String>,
-    permission_grant_id: Option<String>,
+    permission_grant_ids: Option<Vec<String>>,
     hashes: Option<BTreeMap<String, String>>,
     depth: Option<u16>,
     signer: PrivateJwkSigner,
@@ -541,7 +541,7 @@ impl SyncSpec {
             action: SyncAction::Root,
             protocol: None,
             prefix: None,
-            permission_grant_id: None,
+            permission_grant_ids: None,
             hashes: None,
             depth: None,
             signer: test_signer(),
@@ -555,7 +555,7 @@ async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
         action: spec.action,
         protocol: spec.protocol,
         prefix: spec.prefix,
-        permission_grant_id: spec.permission_grant_id.clone(),
+        permission_grant_ids: spec.permission_grant_ids.clone(),
         hashes: spec.hashes,
         depth: spec.depth,
     };
@@ -568,10 +568,10 @@ async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
                 .to_string(),
         ),
     )]);
-    if let Some(permission_grant_id) = spec.permission_grant_id {
+    if let Some(permission_grant_ids) = spec.permission_grant_ids {
         payload.insert(
-            "permissionGrantId".to_string(),
-            serde_json::Value::String(permission_grant_id),
+            "permissionGrantIds".to_string(),
+            serde_json::to_value(permission_grant_ids).unwrap(),
         );
     }
     let signature = Jws::create(
