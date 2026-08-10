@@ -29,7 +29,7 @@ use crate::interfaces::messages::protocols::{
 use crate::ser::serialize_datetime;
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
-pub const PERMISSIONS_PROTOCOL_URI: &str = "https://identity.foundation/dwn/permissions";
+pub const PERMISSIONS_PROTOCOL_URI: &str = "https://tbd.website/dwn/permissions";
 pub const PERMISSIONS_REQUEST_PATH: &str = "request";
 pub const PERMISSIONS_GRANT_PATH: &str = "grant";
 pub const PERMISSIONS_REVOCATION_PATH: &str = "grant/revocation";
