@@ -4,10 +4,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::value::Value;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Copy, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum RangeFilter<T> {
     Numeric(Bound<T>, Bound<T>),
     Criterion(Bound<T>, Bound<T>),
+}
+
+impl Into<RangeFilter<Value>> for RangeFilter<String> {
+    fn into(self) -> RangeFilter<Value> {
+        match self {
+            RangeFilter::Numeric(beg, end) => RangeFilter::Numeric(
+                match beg {
+                    Bound::Included(v) => Bound::Included(Value::String(v)),
+                    Bound::Excluded(v) => Bound::Excluded(Value::String(v)),
+                    Bound::Unbounded => Bound::Unbounded,
+                },
+                match end {
+                    Bound::Included(v) => Bound::Included(Value::String(v)),
+                    Bound::Excluded(v) => Bound::Excluded(Value::String(v)),
+                    Bound::Unbounded => Bound::Unbounded,
+                },
+            ),
+            RangeFilter::Criterion(beg, end) => RangeFilter::Criterion(
+                match beg {
+                    Bound::Included(v) => Bound::Included(Value::String(v)),
+                    Bound::Excluded(v) => Bound::Excluded(Value::String(v)),
+                    Bound::Unbounded => Bound::Unbounded,
+                },
+                match end {
+                    Bound::Included(v) => Bound::Included(Value::String(v)),
+                    Bound::Excluded(v) => Bound::Excluded(Value::String(v)),
+                    Bound::Unbounded => Bound::Unbounded,
+                },
+            ),
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
