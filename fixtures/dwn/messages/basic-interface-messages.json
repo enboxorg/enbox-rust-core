@@ -95,17 +95,17 @@
     },
     {
       "id": "messages-read-permission-grant",
-      "description": "MessagesRead descriptor carrying a permissionGrantId.",
+      "description": "MessagesRead descriptor carrying permissionGrantIds.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreignqu5g7iy6yx3ejfxypwn5eqpfy6i67534ehpmvb334emorarqsu",
-      "messageCid": "bafyreihf2ij7dx3tpzadpg4wytwt6e5hn6of4hlfbkn6ylvbpknyan5edu",
+      "descriptorCid": "bafyreig2u7qhxe7qthi2b7ohbmhyybl6laubviixpou5un67skeym2ei5q",
+      "messageCid": "bafyreibefafezkgcw3pexkptkpwybeqexe2wm5wm52szicnwmjegxkgslm",
       "message": {
         "descriptor": {
           "interface": "Messages",
           "method": "Read",
           "messageTimestamp": "2025-01-01T00:00:12.000000Z",
           "messageCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
-          "permissionGrantId": "grant-message-read-123"
+          "permissionGrantIds": ["grant-message-read-123"]
         }
       }
     },
@@ -214,16 +214,16 @@
     },
     {
       "id": "messages-subscribe-permission-grant",
-      "description": "Unsigned MessagesSubscribe descriptor carrying a permissionGrantId.",
+      "description": "Unsigned MessagesSubscribe descriptor carrying permissionGrantIds.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreicnjt6omiw7av3orvhslzetpy3gw2kqdrb4sgxfpaqoocr26poxay",
-      "messageCid": "bafyreid3snduzfyvbqxzdm6iftxq4dluxo2nv4bg6jyaavop74m2ymtalq",
+      "descriptorCid": "bafyreid3in57rawrbk3ypenlky47uqpseunylioyd6ovqvge34wen2sgvy",
+      "messageCid": "bafyreig2umxjgk3uyoigaym67wrc2iiztco2kixrbowlhbsown5kgsggbm",
       "message": {
         "descriptor": {
           "interface": "Messages",
           "method": "Subscribe",
           "messageTimestamp": "2025-01-01T00:00:13.000000Z",
-          "permissionGrantId": "grant-message-subscribe-123"
+          "permissionGrantIds": ["grant-message-subscribe-123"]
         }
       }
     },

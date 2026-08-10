@@ -34,10 +34,11 @@ pub trait MessageParameters {
         None
     }
 
-    fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
-        self.permission_grant_id()
+    fn permission_grant_invocation(&self) -> Result<PermissionGrantInvocation, ValidationError> {
+        Ok(self
+            .permission_grant_id()
             .map(PermissionGrantInvocation::Single)
-            .unwrap_or(PermissionGrantInvocation::None)
+            .unwrap_or(PermissionGrantInvocation::None))
     }
 
     fn protocol_rule(&self) -> Option<String> {

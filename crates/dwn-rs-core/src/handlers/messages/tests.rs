@@ -352,6 +352,52 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
         .contains("MessagesGrantAuthorizationMismatchedProtocol"));
 }
 
+#[tokio::test]
+async fn messages_subscribe_allows_filters_covered_by_different_grants() {
+    let mut message_store = TestMessageStore::default();
+    let mut event_log = MemoryEventLog::default();
+    message_store.open().await.unwrap();
+    event_log.open().await.unwrap();
+
+    for (grant_id, protocol) in [
+        ("grant-notes", "http://example.com/notes"),
+        ("grant-chat", "http://example.com/chat"),
+    ] {
+        let grant = permission_grant_message(grant_id, Some(protocol)).await;
+        message_store
+            .insert("did:example:alice", grant_id, grant)
+            .await;
+    }
+
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let request = signed_subscribe_message(SubscribeSpec {
+        filters: vec![
+            message_filters::Messages {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            },
+            message_filters::Messages {
+                protocol: Some("http://example.com/chat".to_string()),
+                ..Default::default()
+            },
+        ],
+        permission_grant_ids: Some(vec!["grant-chat".to_string(), "grant-notes".to_string()]),
+        signer: bob_signer(),
+        ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+    })
+    .await;
+
+    let result = handler
+        .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+        .await;
+    assert_eq!(
+        result.reply.status.code, 200,
+        "{}",
+        result.reply.status.detail
+    );
+}
+
 fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
     let data = Bytes::from_static(b"hello");
     let descriptor = RecordsWriteDescriptor {

@@ -1729,6 +1729,7 @@ mod tests {
                 "recordId": "some-non-initial-record-id",
                 "contextId": "some-context-id",
             }),
+            permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
             author_delegated_grant: None,
         };
         validate_records_write_integrity(&ok, &signature).expect("16-byte IV must validate");

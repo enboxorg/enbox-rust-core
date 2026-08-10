@@ -86,7 +86,7 @@ where
                 &descriptor,
                 signer,
                 parameters.delegated_grant().clone(),
-                parameters.permission_grant_invocation(),
+                parameters.permission_grant_invocation()?,
                 parameters.protocol_rule().clone(),
             )
             .await?

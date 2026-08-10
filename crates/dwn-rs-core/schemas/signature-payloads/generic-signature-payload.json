@@ -16,6 +16,12 @@
     "permissionGrantId": {
       "type": "string"
     },
+    "permissionGrantIds": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
     "protocolRole": {
       "$comment": "Used in the Records interface to authorize role-authorized actions for protocol records",
       "type": "string"
