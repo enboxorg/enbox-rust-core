@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use crate::auth::resolver::DidResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
 use crate::dwn::{DwnReply, HandlerContext};
+use crate::permissions::scopes::ProtocolScopeTarget;
 use crate::permissions::{self};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
 use crate::Handler;
@@ -163,11 +163,16 @@ where
         let protocols = descriptor
             .filters
             .iter()
-            .filter_map(|filter| filter.protocol.clone())
-            .collect::<BTreeSet<_>>()
+            .filter_map(|filter| {
+                Some(ProtocolScopeTarget {
+                    protocol: filter.protocol.as_deref(),
+                    protocol_path: filter.protocol_path_prefix.as_deref(),
+                    context_id: filter.context_id_prefix.as_deref(),
+                })
+            })
             .into_iter()
             .collect::<Vec<_>>();
-        permissions::authorize_messages_subscribe_or_sync(
+        permissions::authorize_messages_subscribe(
             tenant,
             message,
             &protocols,
