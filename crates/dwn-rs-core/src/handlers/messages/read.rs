@@ -66,12 +66,10 @@ where
                         "MessagesReadAuthorizationFailed: message failed authorization",
                     )
                 }
-                Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
-                }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
             let stored_message = match self.message_store.get(tenant, &message_cid).await {
@@ -159,7 +157,8 @@ where
                 authorization,
                 &self.message_store,
             )
-            .await;
+            .await
+            .map_err(|error| error.to_string());
         }
         Err("MessagesReadAuthorizationFailed: protocol message failed authorization".to_string())
     }

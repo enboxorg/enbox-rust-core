@@ -85,6 +85,7 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
             if let Err(detail) = validate_records_write_integrity(&message, &signature) {
@@ -556,7 +557,8 @@ where
         auth: &AuthorizationContext,
     ) -> Result<(), String> {
         if permissions::authorize_delegated_records_write(message, auth, &self.message_store)
-            .await?
+            .await
+            .map_err(|error| error.to_string())?
         {
             return Ok(());
         }
@@ -569,7 +571,8 @@ where
             auth,
             &self.message_store,
         )
-        .await?
+        .await
+        .map_err(|error| error.to_string())?
         {
             return Ok(());
         }

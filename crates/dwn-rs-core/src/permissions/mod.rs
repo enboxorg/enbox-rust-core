@@ -1,3 +1,4 @@
+pub mod errors;
 pub mod scopes;
 
 use crate::auth::jws::PermissionGrantInvocation;
@@ -283,49 +284,47 @@ async fn validate_authorization_signature_inner(
     did_resolver: Option<&dyn DidResolver>,
     required: bool,
     validate_delegated_grant: bool,
-) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
+) -> Result<Option<AuthorizationContext>, GrantError> {
     let Some(authorization) = raw_message.get("authorization") else {
         return if required {
-            Err(AuthorizationValidationError::Unauthorized(
-                "AuthenticateJwsMissing: authorization signature is required".to_string(),
-            ))
+            Err(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::SignatureRequired,
+            )
+            .into())
         } else {
             Ok(None)
         };
     };
-    let signature = authorization.get("signature").ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "AuthenticateJwsMissing: authorization signature is required".to_string(),
-        )
-    })?;
-    let jws: Jws = serde_json::from_value(signature.clone()).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!("AuthenticationInvalidSignature: {err}"))
-    })?;
+    let signature =
+        authorization
+            .get("signature")
+            .ok_or(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::SignatureRequired,
+            ))?;
+    let jws: Jws = serde_json::from_value(signature.clone())
+        .map_err(AuthorizationValidationError::ParseFailed)?;
     let signature_count = jws.signatures.as_ref().map(Vec::len).unwrap_or(0);
     if signature_count != 1 {
         return Err(AuthorizationValidationError::BadRequest(
-            "AuthenticationMoreThanOneSignatureNotSupported: expected exactly one signature"
-                .to_string(),
-        ));
+            AuthorizationRequestError::ExpectedOneSignature,
+        )
+        .into());
     }
     let payload = decode_jws_payload(&jws)?;
     validate_descriptor_cid(raw_message, &payload)?;
     let permission_grants = validate_permission_grant(raw_message, &payload)?;
-    let unverified_signer = signer_did_from_jws(&jws)?;
+    let unverified_signer =
+        signer_did_from_jws(&jws).map_err(AuthorizationValidationError::BadRequest)?;
     let signer = match did_resolver {
         Some(resolver) => jws
             .verify_signatures(resolver)
             .await
-            .map_err(|err| {
-                AuthorizationValidationError::Unauthorized(format!("{}: {err}", err.code()))
-            })?
+            .map_err(|err| AuthorizationValidationError::BadRequest(err.into()))?
             .into_iter()
             .next()
-            .ok_or_else(|| {
-                AuthorizationValidationError::Unauthorized(
-                    "AuthenticateJwsMissing: no signer found".to_string(),
-                )
-            })?,
+            .ok_or(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::NoSignerFound,
+            ))?,
         None => unverified_signer,
     };
 
@@ -352,37 +351,31 @@ async fn validate_embedded_author_delegated_grant(
     authorization: &JsonValue,
     payload: &JsonValue,
     did_resolver: Option<&dyn DidResolver>,
-) -> Result<Option<PermissionGrant>, AuthorizationValidationError> {
+) -> Result<Option<PermissionGrant>, GrantError> {
     let Some(grant_value) = authorization.get("authorDelegatedGrant") else {
         if payload.get("delegatedGrantId").is_some() {
             return Err(AuthorizationValidationError::BadRequest(
-                "GrantAuthorizationGrantMissing: delegatedGrantId requires authorDelegatedGrant"
-                    .to_string(),
-            ));
+                AuthorizationRequestError::MissingAuthorDelegateGrant,
+            )
+            .into());
         }
         return Ok(None);
     };
 
-    let grant_message: Message<Descriptor> =
-        serde_json::from_value(grant_value.clone()).map_err(|err| {
-            AuthorizationValidationError::BadRequest(format!(
-                "GrantAuthorizationGrantInvalid: {err}"
-            ))
-        })?;
-    let grant_cid =
-        message_cid(&grant_message).map_err(AuthorizationValidationError::BadRequest)?;
+    let grant_message: Message<Descriptor> = serde_json::from_value(grant_value.clone())
+        .map_err(AuthorizationValidationError::ParseFailed)?;
+    let grant_cid = message_cid(&grant_message)?;
     let delegated_grant_id = payload
         .get("delegatedGrantId")
         .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "GrantAuthorizationGrantMissing: delegatedGrantId is required".to_string(),
-            )
-        })?;
+        .ok_or(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::DelegateGrantIDRequired,
+        ))?;
     if delegated_grant_id != grant_cid {
-        return Err(AuthorizationValidationError::BadRequest(format!(
-            "GrantAuthorizationGrantMismatch: delegatedGrantId {delegated_grant_id} does not match authorDelegatedGrant CID {grant_cid}"
-        )));
+        return Err(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::DelegateAuthorMismatch,
+        )
+        .into());
     }
 
     let grant_authorization = Box::pin(validate_authorization_signature_inner(
@@ -392,33 +385,23 @@ async fn validate_embedded_author_delegated_grant(
         false,
     ))
     .await?
-    .ok_or_else(|| {
-        AuthorizationValidationError::Unauthorized(
-            "AuthenticateJwsMissing: authorization signature is required".to_string(),
-        )
-    })?;
-    parse_permission_grant(&grant_message, &grant_authorization.author)
-        .map(Some)
-        .map_err(AuthorizationValidationError::BadRequest)
+    .ok_or(AuthorizationValidationError::BadRequest(
+        AuthorizationRequestError::SignatureRequired,
+    ))?;
+
+    parse_permission_grant(&grant_message, &grant_authorization.author).map(Some)
 }
 
 fn decode_jws_payload(jws: &Jws) -> Result<JsonValue, AuthorizationValidationError> {
-    let payload = jws.payload.as_deref().ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignaturePayload: {}",
-            JwsError::MissingPayload
-        ))
-    })?;
-    let payload = URL_SAFE_NO_PAD.decode(payload).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignaturePayload: {err}"
-        ))
-    })?;
-    serde_json::from_slice(&payload).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignaturePayload: {err}"
-        ))
-    })
+    let payload = jws
+        .payload
+        .as_deref()
+        .ok_or_else(|| AuthorizationValidationError::BadRequest(JwsError::MissingPayload.into()))?;
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|err| AuthorizationValidationError::BadRequest(err.into()))?;
+    serde_json::from_slice(&payload)
+        .map_err(|err| AuthorizationValidationError::BadRequest(err.into()))
 }
 
 fn validate_permission_grant(
@@ -426,16 +409,17 @@ fn validate_permission_grant(
     payload: &JsonValue,
 ) -> Result<PermissionGrantInvocation, AuthorizationValidationError> {
     let payload_invocation = parse_permission_grant_invocation(payload)?;
-    let descriptor = raw_message.get("descriptor").ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "GrantAuthorizationInvalidDescriptor: descriptor is required".to_string(),
-        )
-    })?;
+    let descriptor =
+        raw_message
+            .get("descriptor")
+            .ok_or(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::DescriptorRequired,
+            ))?;
     let descriptor_invocation = parse_permission_grant_invocation(descriptor)?;
 
     if payload_invocation != descriptor_invocation {
         return Err(AuthorizationValidationError::BadRequest(
-            "GrantAuthorizationDescriptorPayloadMismatch: permission grant invocation in descriptor does not match signature payload".to_string(),
+            AuthorizationRequestError::SignatureMismatch,
         ));
     }
 
@@ -450,14 +434,14 @@ fn parse_permission_grant_invocation(
 
     let permission_grant = match (permission_grant_id, permission_grant_ids) {
         (Some(_), Some(_)) => Err(AuthorizationValidationError::BadRequest(
-            "GrantAuthorizationInvalidGrantIdAndGrantIds: only one of permissionGrantId or permissionGrantIds can be present"
-                .to_string(),
+            AuthorizationRequestError::PermissionGrantIDsConflict,
         )),
         (Some(id), None) => {
             let id_str = id.as_str().ok_or_else(|| {
                 AuthorizationValidationError::BadRequest(
-                    "GrantAuthorizationInvalidGrantId: permissionGrantId must be a string"
-                        .to_string(),
+                    AuthorizationRequestError::ValidationError(
+                        "permissionGrantId must be a string".to_string(),
+                    ),
                 )
             })?;
             Ok(PermissionGrantInvocation::Single(id_str.to_string()))
@@ -465,16 +449,18 @@ fn parse_permission_grant_invocation(
         (None, Some(ids)) => {
             let ids_array = ids.as_array().ok_or_else(|| {
                 AuthorizationValidationError::BadRequest(
-                    "GrantAuthorizationInvalidGrantIds: permissionGrantIds must be an array"
-                        .to_string(),
+                    AuthorizationRequestError::ValidationError(
+                        "permissionGrantIds must be an array".to_string(),
+                    ),
                 )
             })?;
             let mut grant_ids = Vec::new();
             for id in ids_array {
                 let id_str = id.as_str().ok_or_else(|| {
                     AuthorizationValidationError::BadRequest(
-                        "GrantAuthorizationInvalidGrantIds: permissionGrantIds must be an array of strings"
-                            .to_string(),
+                        AuthorizationRequestError::ValidationError(
+                            "permissionGrantIds must be an array of strings".to_string(),
+                        ),
                     )
                 })?;
                 grant_ids.push(id_str.to_string());
@@ -482,23 +468,26 @@ fn parse_permission_grant_invocation(
 
             if grant_ids.is_empty() {
                 return Err(AuthorizationValidationError::BadRequest(
-                    "GrantAuthorizationInvalidGrantIds: permissionGrantIds must not be empty"
-                        .to_string(),
+                    AuthorizationRequestError::ValidationError(
+                        "permissionGrantIds must not be empty".to_string(),
+                    ),
                 ));
             }
 
             if !grant_ids.is_sorted() {
                 return Err(AuthorizationValidationError::BadRequest(
-                    "GrantAuthorizationInvalidGrantIds: permissionGrantIds must be sorted in ascending order"
-                        .to_string(),
+                    AuthorizationRequestError::ValidationError(
+                        "permissionGrantIds must be sorted in ascending order".to_string(),
+                    ),
                 ));
             }
 
             let is_deduped = grant_ids.windows(2).all(|w| w[0] != w[1]);
             if !is_deduped {
                 return Err(AuthorizationValidationError::BadRequest(
-                    "GrantAuthorizationInvalidGrantIds: permissionGrantIds must not contain duplicates"
-                        .to_string(),
+                    AuthorizationRequestError::ValidationError(
+                        "permissionGrantIds must not contain duplicates".to_string(),
+                    ),
                 ));
             }
 
@@ -517,72 +506,44 @@ fn validate_descriptor_cid(
     let descriptor_cid = payload
         .get("descriptorCid")
         .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignaturePayload: descriptorCid is required".to_string(),
-            )
-        })?;
-    let descriptor = raw_message.get("descriptor").ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "AuthenticationInvalidSignaturePayload: descriptor is required".to_string(),
-        )
-    })?;
-    let expected = generate_cid_from_json(descriptor)
-        .map_err(|err| {
-            AuthorizationValidationError::BadRequest(format!(
-                "AuthenticationInvalidSignaturePayload: {err}"
-            ))
-        })?
-        .to_string();
+        .ok_or(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::MissingCid,
+        ))?;
+    let descriptor =
+        raw_message
+            .get("descriptor")
+            .ok_or(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::DescriptorRequired,
+            ))?;
+    let expected = generate_cid_from_json(descriptor)?.to_string();
     if descriptor_cid != expected {
-        return Err(AuthorizationValidationError::BadRequest(format!(
-            "AuthenticateDescriptorCidMismatch: provided descriptorCid {descriptor_cid} does not match expected CID {expected}"
-        )));
+        return Err(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::CidMismatch,
+        ));
     }
     Ok(())
 }
 
-fn signer_did_from_jws(jws: &Jws) -> Result<String, AuthorizationValidationError> {
-    let signatures = jws.signatures.as_deref().ok_or_else(|| {
-        AuthorizationValidationError::BadRequest(
-            "AuthenticationInvalidSignatureProtectedHeader: signature is required".to_string(),
-        )
-    })?;
+fn signer_did_from_jws(jws: &Jws) -> Result<String, AuthorizationRequestError> {
+    let signatures = jws
+        .signatures
+        .as_deref()
+        .ok_or(AuthorizationRequestError::SignatureRequired)?;
     let protected = signatures
         .first()
         .and_then(|sig| sig.protected.as_deref())
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: signature is required".to_string(),
-            )
-        })?;
-    let protected = URL_SAFE_NO_PAD.decode(protected).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignatureProtectedHeader: {err}"
-        ))
-    })?;
-    let protected: JsonValue = serde_json::from_slice(&protected).map_err(|err| {
-        AuthorizationValidationError::BadRequest(format!(
-            "AuthenticationInvalidSignatureProtectedHeader: {err}"
-        ))
-    })?;
+        .ok_or(AuthorizationRequestError::SignatureRequired)?;
+    let protected = URL_SAFE_NO_PAD.decode(protected)?;
+    let protected: JsonValue = serde_json::from_slice(&protected)?;
     let kid = protected
         .get("kid")
         .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: kid is required".to_string(),
-            )
-        })?;
+        .ok_or(AuthorizationRequestError::KidRequired)?;
     kid.split('#')
         .next()
         .filter(|did| !did.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| {
-            AuthorizationValidationError::BadRequest(
-                "AuthenticationInvalidSignatureProtectedHeader: kid is required".to_string(),
-            )
-        })
+        .ok_or(AuthorizationRequestError::KidRequired)
 }
 
 pub fn message_author(message: &Message<Descriptor>) -> Option<String> {
@@ -607,7 +568,7 @@ fn authorization_from_message(message: &Message<Descriptor>) -> Option<JsonValue
         .cloned()
 }
 
-pub fn validate_permissions_record_schema(message: &Message<Descriptor>) -> Result<(), String> {
+pub fn validate_permissions_record_schema(message: &Message<Descriptor>) -> Result<(), GrantError> {
     let descriptor = records_write_descriptor(message)?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI {
         return Ok(());
@@ -615,25 +576,25 @@ pub fn validate_permissions_record_schema(message: &Message<Descriptor>) -> Resu
     let data = permission_record_data_bytes(message)?;
     match descriptor.protocol_path.as_str() {
         PERMISSIONS_REQUEST_PATH => {
-            let data: PermissionRequestData = serde_json::from_slice(&data).map_err(|err| {
-                format!("PermissionsProtocolValidateSchemaInvalidRequest: {err}")
-            })?;
-            validate_scope_and_tags(&data.scope, descriptor)
+            let data: PermissionRequestData = serde_json::from_slice(&data)
+                .map_err(|err| GrantError::InvalidGrant(err.into()))?;
+
+            Ok(validate_scope_and_tags(&data.scope, descriptor)?)
         }
         PERMISSIONS_GRANT_PATH => {
             let data: PermissionGrantData = serde_json::from_slice(&data)
-                .map_err(|err| format!("PermissionsProtocolValidateSchemaInvalidGrant: {err}"))?;
-            validate_scope_and_tags(&data.scope, descriptor)
+                .map_err(|err| GrantError::InvalidGrant(err.into()))?;
+            Ok(validate_scope_and_tags(&data.scope, descriptor)?)
         }
         PERMISSIONS_REVOCATION_PATH => {
-            let _: PermissionRevocationData = serde_json::from_slice(&data).map_err(|err| {
-                format!("PermissionsProtocolValidateSchemaInvalidRevocation: {err}")
-            })?;
+            let _: PermissionRevocationData = serde_json::from_slice(&data)
+                .map_err(|err| GrantError::InvalidGrant(err.into()))?;
             Ok(())
         }
-        protocol_path => Err(format!(
-            "PermissionsProtocolValidateSchemaUnexpectedRecord: Unexpected permission record: {protocol_path}"
-        )),
+        protocol_path => Err(AuthorizationValidationError::UnexpectedPermissionRecord(
+            protocol_path.to_string(),
+        )
+        .into()),
     }
 }
 
@@ -641,20 +602,22 @@ pub async fn pre_process_permissions_write<MessageStore>(
     tenant: &str,
     message: &Message<Descriptor>,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let descriptor = records_write_descriptor(message)?;
+    let descriptor = records_write_descriptor(message).map_err(GrantError::InvalidMessageType)?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
         || descriptor.protocol_path != PERMISSIONS_REVOCATION_PATH
     {
         return Ok(());
     }
-    let parent_id = descriptor.parent_id.as_deref().ok_or_else(|| {
-        "PermissionsProtocolValidateRevocationMissingGrant: revocation parentId is required"
-            .to_string()
-    })?;
+    let parent_id = descriptor
+        .parent_id
+        .as_deref()
+        .ok_or(GrantError::ProtocolValidationError(
+            ProtocolValidationError::MissingRevocationParentId,
+        ))?;
     let grant = fetch_grant(tenant, message_store, parent_id).await?;
     let revocation_protocol_tag = descriptor
         .tags
@@ -662,10 +625,10 @@ where
         .and_then(|tags| tags.get("protocol"))
         .and_then(index_value_as_str);
     if grant.scope.protocol() != revocation_protocol_tag {
-        return Err(format!(
-            "PermissionsProtocolValidateRevocationProtocolTagMismatch: Revocation protocol {:?} does not match grant protocol {:?}",
-            revocation_protocol_tag, grant.scope.protocol()
-        ));
+        return Err(GrantError::ProtocolValidationError(
+            ProtocolValidationError::MissingRevocationParentId,
+        )
+        .into());
     }
     Ok(())
 }
@@ -676,13 +639,14 @@ pub async fn post_process_permissions_write<MessageStore, DataStore, StateIndex>
     message_store: &MessageStore,
     data_store: &DataStore,
     state_index: &StateIndex,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
     DataStore: crate::stores::DataStore + Sync,
     StateIndex: crate::stores::StateIndex + Sync,
 {
-    let descriptor = records_write_descriptor(message)?;
+    let descriptor =
+        records_write_descriptor(message).map_err(|e| PermissionError::InvalidGrant(e.into()))?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
         || descriptor.protocol_path != PERMISSIONS_REVOCATION_PATH
     {
@@ -702,38 +666,28 @@ where
             None,
             None,
         )
-        .await
-        .map_err(|err| err.to_string())?;
+        .await?;
     let mut cids = Vec::new();
     for authorized_message in result.messages {
-        if message_timestamp(&authorized_message)
-            .ok()
-            .is_none_or(|timestamp| timestamp < revoke_timestamp)
-        {
+        if message_timestamp(&authorized_message) < revoke_timestamp {
             continue;
         }
+
         if let Ok(write) = records_write_descriptor(&authorized_message) {
             if write.data_size > MAX_ENCODED_DATA_SIZE {
                 if let Some(record_id) = record_id(&authorized_message) {
                     data_store
                         .delete(tenant, &record_id, &write.data_cid)
-                        .await
-                        .map_err(|err| err.to_string())?;
+                        .await?;
                 }
             }
         }
         let cid = message_cid(&authorized_message)?;
-        message_store
-            .delete(tenant, &cid)
-            .await
-            .map_err(|err| err.to_string())?;
+        message_store.delete(tenant, &cid).await?;
         cids.push(cid);
     }
     if !cids.is_empty() {
-        state_index
-            .delete(tenant, &cids)
-            .await
-            .map_err(|err| err.to_string())?;
+        state_index.delete(tenant, &cids).await?;
     }
     Ok(())
 }
@@ -742,7 +696,7 @@ pub async fn fetch_grant<MessageStore>(
     tenant: &str,
     message_store: &MessageStore,
     permission_grant_id: &str,
-) -> Result<PermissionGrant, String>
+) -> Result<PermissionGrant, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -756,24 +710,19 @@ where
             None,
             Some(Pagination::with_limit(1)),
         )
-        .await
-        .map_err(|err| err.to_string())?;
+        .await?;
     let Some(message) = result.messages.first() else {
-        return Err(format!(
-            "GrantAuthorizationGrantMissing: Could not find permission grant with record ID {permission_grant_id}."
-        ));
+        return Err(GrantError::NotFound(permission_grant_id.to_string()).into());
     };
-    let grantor = message_author(message).ok_or_else(|| {
-        "PermissionGrantParseMissingAuthorization: unable to extract grantor".to_string()
-    })?;
-    parse_permission_grant(message, &grantor)
+    let grantor = message_author(message).ok_or(GrantError::UnableToExtractGrantor)?;
+    Ok(parse_permission_grant(message, &grantor)?)
 }
 
 pub async fn authorize_delegated_records_write<MessageStore>(
     records_write_message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<bool, String>
+) -> Result<bool, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -796,7 +745,7 @@ pub async fn authorize_records_write_with_grant_id<MessageStore>(
     records_write_message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<bool, String>
+) -> Result<bool, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -821,7 +770,7 @@ pub async fn authorize_records_read_with_grant<MessageStore>(
     records_write_message_to_read: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<bool, String>
+) -> Result<bool, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -857,7 +806,7 @@ pub async fn authorize_records_query_or_subscribe_with_grant<MessageStore>(
     filter: &RecordsFilter,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<bool, String>
+) -> Result<bool, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -891,10 +840,7 @@ where
     };
 
     if !permission_grant.scope.matches_protocol_target(&target) {
-        return Err(format!(
-            "RecordsGrantAuthorizationQueryOrSubscribeProtocolScopeMismatch: Grant protocol scope {:?} does not match protocol in message {:?}",
-            permission_grant.scope, target
-        ));
+        return Err(GrantError::OutsideScope.into());
     }
 
     Ok(true)
@@ -906,7 +852,7 @@ pub async fn authorize_records_delete_with_grant<MessageStore>(
     records_write_to_delete: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<bool, String>
+) -> Result<bool, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -943,7 +889,7 @@ pub async fn authorize_protocols_configure<MessageStore>(
     protocols_configure_message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -973,7 +919,8 @@ where
         .await?;
         return Ok(());
     }
-    Err("ProtocolsConfigureAuthorizationFailed: message failed authorization".to_string())
+
+    Err(GrantError::Unauthorized.into())
 }
 
 pub async fn authorize_protocols_query<MessageStore>(
@@ -981,7 +928,7 @@ pub async fn authorize_protocols_query<MessageStore>(
     protocols_query_message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<bool, String>
+) -> Result<bool, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1001,15 +948,13 @@ where
     )
     .await?;
     let protocol_in_grant = permission_grant.scope.protocol();
-    let protocol_in_message = protocols_query_descriptor(protocols_query_message)?
+    let protocol_in_message = protocols_query_descriptor(protocols_query_message)
+        .map_err(GrantError::InvalidMessageType)?
         .filter
         .as_ref()
         .and_then(|filter| filter.protocol.as_deref());
     if protocol_in_grant.is_some() && protocol_in_message != protocol_in_grant {
-        return Err(format!(
-            "ProtocolsGrantAuthorizationQueryProtocolScopeMismatch: Grant protocol scope {:?} does not match protocol in message {:?}",
-            protocol_in_grant, protocol_in_message
-        ));
+        return Err(GrantError::OutsideScope.into());
     }
     Ok(true)
 }
@@ -1020,7 +965,7 @@ pub async fn authorize_messages_read<MessageStore>(
     message_to_read: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<MessagesReadGrantAccess, String>
+) -> Result<MessagesReadGrantAccess, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1028,71 +973,46 @@ where
         fetch_and_validate_messages_grants(tenant, messages_read_message, auth, message_store)
             .await?;
 
-    let mut scope_error = None;
-    let mut has_scoped_match = false;
-    for permission_grant in &permission_grants {
-        match verify_messages_protocol_scope(
-            tenant,
-            message_to_read,
-            &permission_grant.scope,
-            message_store,
-        )
-        .await
-        {
-            Ok(()) if permission_grant.scope.protocol().is_none() => {
-                return Ok(MessagesReadGrantAccess::Full)
-            }
-            Ok(()) => has_scoped_match = true,
-            Err(err) => scope_error = Some(err),
-        }
+    if !permission_grants
+        .covers_message(tenant, message_to_read, message_store)
+        .await?
+    {
+        return Err(GrantError::OutsideScope.into());
     }
 
-    if has_scoped_match {
-        return Ok(MessagesReadGrantAccess::MetadataOnly);
+    if permission_grants.has_unscoped_grants() {
+        Ok(MessagesReadGrantAccess::Full)
+    } else {
+        Ok(MessagesReadGrantAccess::MetadataOnly)
     }
-
-    Err(scope_error.unwrap_or_else(|| {
-        "MessagesGrantAuthorizationScopeMismatch: no invoked grant covers the requested message"
-            .to_string()
-    }))
 }
 
 pub async fn authorize_messages_subscribe<MessageStore>(
     tenant: &str,
     incoming_message: &Message<Descriptor>,
-    protocols_scope_targets: &[ProtocolScopeTarget<'_>],
+    filters: &[MessagesFilter],
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let permission_grants =
         fetch_and_validate_messages_grants(tenant, incoming_message, auth, message_store).await?;
 
-    if protocols_scope_targets.is_empty() {
-        if permission_grants
-            .iter()
-            .any(|grant| grant.scope.protocol().is_none())
-        {
-            return Ok(());
-        }
-        return Err(
-            "MessagesGrantAuthorizationMismatchedProtocol: an empty filter set requires an unscoped Messages grant"
-                .to_string(),
-        );
+    if filters.is_empty() {
+        return permission_grants
+            .has_unscoped_grants()
+            .then_some(())
+            .ok_or(GrantError::OutsideScope.into());
     }
 
-    for target in protocols_scope_targets {
-        if !permission_grants
-            .iter()
-            .any(|grant| grant.scope.matches_protocol_target(target))
-        {
-            return Err(format!(
-                "MessagesGrantAuthorizationMismatchedProtocol: no invoked grant covers filter {target}"
-            ));
+    for filter in filters {
+        if !permission_grants.covers_filter(filter).await {
+            return Err(GrantError::OutsideScope.into());
         }
     }
+
     Ok(())
 }
 
@@ -1101,12 +1021,15 @@ async fn fetch_and_validate_messages_grants<MessageStore>(
     incoming_message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<Vec<PermissionGrant>, String>
+) -> Result<ValidatedMessagesGrantSet, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let Some(permission_grant_ids) = auth.permission_grant_ids() else {
-        return Err("GrantAuthorizationGrantMissing: permissionGrantIds is required".to_string());
+        return Err(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::PermissionGrantIDsRequired,
+        )
+        .into());
     };
 
     let mut grants = Vec::with_capacity(permission_grant_ids.len());
@@ -1123,7 +1046,7 @@ where
         grants.push(permission_grant);
     }
 
-    Ok(grants)
+    Ok(ValidatedMessagesGrantSet { grants })
 }
 
 async fn authorize_records_write_with_grant<MessageStore>(
@@ -1132,7 +1055,7 @@ async fn authorize_records_write_with_grant<MessageStore>(
     expected_grantee: &str,
     permission_grant: &PermissionGrant,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1145,7 +1068,10 @@ where
     )
     .await?;
     verify_records_scope(records_write_message, &permission_grant.scope)?;
-    verify_records_write_conditions(records_write_message, permission_grant.conditions.as_ref())
+    Ok(verify_records_write_conditions(
+        records_write_message,
+        permission_grant.conditions.as_ref(),
+    )?)
 }
 
 async fn authorize_protocols_configure_with_grant<MessageStore>(
@@ -1154,7 +1080,7 @@ async fn authorize_protocols_configure_with_grant<MessageStore>(
     expected_grantee: &str,
     permission_grant: &PermissionGrant,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1168,12 +1094,13 @@ where
     .await?;
     let grant_protocol = permission_grant.scope.protocol();
     if let Some(grant_protocol) = grant_protocol {
-        let configured_protocol = protocols_configure_descriptor(protocols_configure_message)?
+        let configured_protocol = protocols_configure_descriptor(protocols_configure_message)
+            .map_err(GrantError::InvalidMessageType)?
             .definition
             .protocol
             .as_str();
         if configured_protocol != grant_protocol {
-            return Err("ProtocolsGrantAuthorizationScopeProtocolMismatch: Grant scope specifies different protocol than what appears in the configure message.".to_string());
+            return Err(GrantError::OutsideScope.into());
         }
     }
     Ok(())
@@ -1185,28 +1112,30 @@ async fn perform_base_validation<MessageStore>(
     expected_grantee: &str,
     permission_grant: &PermissionGrant,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     if expected_grantee != permission_grant.grantee {
-        return Err(format!(
-            "GrantAuthorizationNotGrantedToAuthor: Permission grant is granted to {}, but need to be granted to {expected_grantee}",
-            permission_grant.grantee
-        ));
+        return Err(AuthorizationValidationError::UnexpectedGrantee(
+            expected_grantee.to_string(),
+            permission_grant.grantee.clone(),
+        )
+        .into());
     }
     if expected_grantor != permission_grant.grantor {
-        return Err(format!(
-            "GrantAuthorizationNotGrantedForTenant: Permission grant is granted by {}, but need to be granted by {expected_grantor}",
-            permission_grant.grantor
-        ));
+        return Err(AuthorizationValidationError::UnexpectedGrantor(
+            expected_grantor.to_string(),
+            permission_grant.grantor.clone(),
+        )
+        .into());
     }
-    let incoming_timestamp = message_timestamp(incoming_message)?;
+    let incoming_timestamp = message_timestamp(incoming_message);
     if incoming_timestamp < permission_grant.date_granted {
-        return Err("GrantAuthorizationGrantNotYetActive: The message has a timestamp before the associated permission grant becomes active".to_string());
+        return Err(GrantError::NotActive.into());
     }
     if incoming_timestamp >= permission_grant.date_expires {
-        return Err("GrantAuthorizationGrantExpired: The message has timestamp after the expiry of the associated permission grant".to_string());
+        return Err(GrantError::Expired.into());
     }
     verify_grant_not_revoked(
         expected_grantor,
@@ -1215,31 +1144,36 @@ where
         message_store,
     )
     .await?;
-    let (interface, method) = message_interface_and_method(incoming_message)?;
+    let (interface, method) = message_interface_and_method(incoming_message);
     if interface != permission_grant.scope.interface() {
-        return Err(format!(
-            "GrantAuthorizationInterfaceMismatch: DWN Interface of incoming message is outside the scope of permission grant with ID {}",
-            permission_grant.id
-        ));
+        return Err(GrantError::OutsideScope.into());
     }
     if interface == MESSAGES_INTERFACE {
         if permission_grant.scope.method() != READ_METHOD {
-            return Err(format!(
-                "GrantAuthorizationMethodMismatch: messages permission grant must have method 'Read', got '{}' for grant {}",
-                permission_grant.scope.method(), permission_grant.id
-            ));
+            return Err(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::MismatchedGrant(
+                    permission_grant.scope.method().to_string(),
+                ),
+            )
+            .into());
         }
         if !matches!(method.as_str(), READ_METHOD | QUERY | SUBSCRIBE_METHOD) {
-            return Err(format!(
-                "GrantAuthorizationMethodMismatch: DWN Method of incoming message is outside the scope of permission grant with ID {}",
-                permission_grant.id
-            ));
+            return Err(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::GrantScopeMismatch(
+                    method.to_string(),
+                    permission_grant.id.clone(),
+                ),
+            )
+            .into());
         }
     } else if method != permission_grant.scope.method() {
-        return Err(format!(
-            "GrantAuthorizationMethodMismatch: DWN Method of incoming message is outside the scope of permission grant with ID {}",
-            permission_grant.id
-        ));
+        return Err(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::GrantScopeMismatch(
+                method.to_string(),
+                permission_grant.id.clone(),
+            ),
+        )
+        .into());
     }
     Ok(())
 }
@@ -1249,7 +1183,7 @@ async fn verify_grant_not_revoked<MessageStore>(
     incoming_timestamp: chrono::DateTime<chrono::Utc>,
     permission_grant: &PermissionGrant,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1264,15 +1198,13 @@ where
             Some(MessageSort::Timestamp(SortDirection::Ascending)),
             None,
         )
-        .await
-        .map_err(|err| err.to_string())?;
-    if result.messages.iter().any(|message| {
-        message_timestamp(message).is_ok_and(|timestamp| timestamp <= incoming_timestamp)
-    }) {
-        return Err(format!(
-            "GrantAuthorizationGrantRevoked: Permission grant with CID {} has been revoked",
-            permission_grant.id
-        ));
+        .await?;
+    if result
+        .messages
+        .iter()
+        .any(|message| message_timestamp(message) <= incoming_timestamp)
+    {
+        return Err(GrantError::Revoked.into());
     }
     Ok(())
 }
@@ -1280,7 +1212,7 @@ where
 fn verify_records_scope(
     records_write_message: &Message<Descriptor>,
     grant_scope: &PermissionScope,
-) -> Result<(), String> {
+) -> Result<(), GrantError> {
     let descriptor = records_write_descriptor(records_write_message)?;
     let context_id = context_id(records_write_message);
     let target = ProtocolScopeTarget {
@@ -1290,9 +1222,9 @@ fn verify_records_scope(
     };
 
     if !grant_scope.matches_protocol_target(&target) {
-        return Err(format!(
-            "RecordsGrantAuthorizationScopeMismatch: Grant scope {:?} does not match the target of the records write message {:?}",
-            grant_scope, target
+        return Err(GrantError::InvalidScopeForTarget(
+            format!("{:?}", grant_scope),
+            format!("{:?}", target),
         ));
     }
 
@@ -1302,139 +1234,54 @@ fn verify_records_scope(
 fn verify_records_write_conditions(
     records_write_message: &Message<Descriptor>,
     conditions: Option<&PermissionConditions>,
-) -> Result<(), String> {
+) -> Result<(), GrantError> {
     let descriptor = records_write_descriptor(records_write_message)?;
     match conditions.and_then(|conditions| conditions.publication.as_ref()) {
         Some(PermissionConditionPublication::Required) if descriptor.published != Some(true) => {
-            Err("RecordsGrantAuthorizationConditionPublicationRequired: Permission grant requires message to be published".to_string())
+            Err(GrantError::UnpublishedGrant)
         }
         Some(PermissionConditionPublication::Prohibited) if descriptor.published == Some(true) => {
-            Err("RecordsGrantAuthorizationConditionPublicationProhibited: Permission grant prohibits message from being published".to_string())
+            Err(GrantError::PublishProhibited)
         }
         _ => Ok(()),
     }
-}
-
-async fn verify_messages_protocol_scope<MessageStore>(
-    tenant: &str,
-    message_to_read: &Message<Descriptor>,
-    scope: &PermissionScope,
-    message_store: &MessageStore,
-) -> Result<(), String>
-where
-    MessageStore: crate::stores::MessageStore + Sync,
-{
-    let context_id = context_id(message_to_read);
-    let (protocol, protocol_path) = match &message_to_read.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Write(write) => {
-                if write.protocol == PERMISSIONS_PROTOCOL_URI {
-                    let permission_scope =
-                        get_scope_from_permission_record(tenant, message_store, message_to_read)
-                            .await?;
-
-                    (
-                        permission_scope.protocol().map(String::from),
-                        permission_scope.protocol_path().map(String::from),
-                    )
-                } else {
-                    (
-                        Some(write.protocol.clone()),
-                        Some(write.protocol_path.clone()),
-                    )
-                }
-            }
-            _ => (None, None),
-        },
-        _ => (None, None),
-    };
-
-    let target = match &message_to_read.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Write(_) => {
-                ProtocolScopeTarget {
-                    protocol: protocol.as_deref(),
-                    protocol_path: protocol_path.as_deref(),
-                    context_id: context_id.as_deref(),
-                }
-            }
-            Records::Delete(delete) => {
-                let newest_write =
-                    fetch_newest_write(tenant, &delete.record_id, message_store).await?;
-                return Box::pin(verify_messages_protocol_scope(
-                    tenant,
-                    &newest_write,
-                    scope,
-                    message_store,
-                ))
-                .await;
-            }
-            _ => {
-                return Err("MessagesReadVerifyScopeFailed: only RecordsWrite and RecordsDelete messages are supported for scope verification".to_string());
-            }
-        },
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            crate::descriptors::Protocols::Configure(configure) => {
-                ProtocolScopeTarget {
-                    protocol: Some(configure.definition.protocol.as_str()),
-                    protocol_path: None,
-                    context_id: None,
-                }
-            }
-            _ => {
-                return Err("MessagesReadVerifyScopeFailed: only ProtocolsConfigure messages are supported for scope verification".to_string());
-            }
-        },
-        _ => {
-            return Err("MessagesReadVerifyScopeFailed: only Records and Protocols messages are supported for scope verification".to_string())
-        }
-    };
-
-    if !scope.matches_protocol_target(&target) {
-        return Err(format!(
-            "MessagesGrantAuthorizationScopeMismatch: Grant scope {:?} does not match the target of the message to read {:?}",
-            scope, target
-        ));
-    }
-
-    Ok(())
 }
 
 async fn get_scope_from_permission_record<MessageStore>(
     tenant: &str,
     message_store: &MessageStore,
     incoming_message: &Message<Descriptor>,
-) -> Result<PermissionScope, String>
+) -> Result<PermissionScope, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let descriptor = records_write_descriptor(incoming_message)?;
+    let descriptor =
+        records_write_descriptor(incoming_message).map_err(GrantError::InvalidMessageType)?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI {
-        return Err(format!(
-            "PermissionsProtocolGetScopeInvalidProtocol: Unexpected protocol for permission record: {:?}",
-            descriptor.protocol
-        ));
+        return Err(GrantError::UnexpectedProtocol(descriptor.protocol.clone()).into());
     }
     match descriptor.protocol_path.as_str() {
         PERMISSIONS_REVOCATION_PATH => {
-            let parent_id = descriptor.parent_id.as_deref().ok_or_else(|| {
-                "PermissionsProtocolGetScopeInvalidRevocation: revocation parentId is required"
-                    .to_string()
-            })?;
-            fetch_grant(tenant, message_store, parent_id)
+            let parent_id = descriptor
+                .parent_id
+                .as_deref()
+                .ok_or(GrantError::RevocationParentIdRequired)?;
+
+            Ok(fetch_grant(tenant, message_store, parent_id)
                 .await
-                .map(|grant| grant.scope)
+                .map(|grant| grant.scope)?)
         }
         PERMISSIONS_GRANT_PATH => {
-            let grantor = message_author(incoming_message).ok_or_else(|| {
-                "PermissionGrantParseMissingAuthorization: unable to extract grantor".to_string()
-            })?;
-            parse_permission_grant(incoming_message, &grantor).map(|grant| grant.scope)
+            let grantor =
+                message_author(incoming_message).ok_or(GrantError::UnableToExtractGrantor)?;
+            Ok(parse_permission_grant(incoming_message, &grantor).map(|grant| grant.scope)?)
         }
         _ => {
-            let data: PermissionRequestData =
-                serde_json::from_slice(&permission_record_data_bytes(incoming_message)?)
-                    .map_err(|err| format!("PermissionRequestParseMissingScope: {err}"))?;
+            let data: PermissionRequestData = serde_json::from_slice(
+                &permission_record_data_bytes(incoming_message)
+                    .map_err(GrantError::ProtocolValidationError)?,
+            )
+            .map_err(AuthorizationValidationError::ParseFailed)?;
             Ok(data.scope)
         }
     }
@@ -1443,12 +1290,12 @@ where
 fn validate_scope_and_tags(
     scope: &PermissionScope,
     descriptor: &RecordsWriteDescriptor,
-) -> Result<(), String> {
+) -> Result<(), AuthorizationValidationError> {
     if let Some(protocol) = scope.protocol() {
         validate_permission_protocol_tag(descriptor, protocol)?;
     }
     if scope.interface() == RECORDS_INTERFACE && scope.protocol().is_none() {
-        return Err("PermissionsProtocolValidateScopeMissingProtocol: Permission grants for Records must have a scope with a `protocol` property".to_string());
+        return Err(AuthorizationValidationError::RecordsGrantMissingProtocol);
     }
     Ok(())
 }
@@ -1456,19 +1303,15 @@ fn validate_scope_and_tags(
 fn validate_permission_protocol_tag(
     descriptor: &RecordsWriteDescriptor,
     scoped_protocol: &str,
-) -> Result<(), String> {
+) -> Result<(), AuthorizationValidationError> {
     let tagged_protocol = descriptor
         .tags
         .as_ref()
         .and_then(|tags| tags.get("protocol"))
         .and_then(index_value_as_str)
-        .ok_or_else(|| {
-            "PermissionsProtocolValidateScopeMissingProtocolTag: Permission grants must have a `tags` property that contains a protocol tag".to_string()
-        })?;
+        .ok_or(AuthorizationValidationError::ProtocolInvalidTags)?;
     if tagged_protocol != scoped_protocol {
-        return Err(format!(
-            "PermissionsProtocolValidateScopeProtocolMismatch: Permission grants must have a scope with a protocol that matches the tagged protocol: {tagged_protocol}"
-        ));
+        return Err(AuthorizationValidationError::ProtocolInvalidTags);
     }
     Ok(())
 }
@@ -1476,21 +1319,21 @@ fn validate_permission_protocol_tag(
 fn parse_permission_grant(
     message: &Message<Descriptor>,
     grantor: &str,
-) -> Result<PermissionGrant, String> {
+) -> Result<PermissionGrant, GrantError> {
     let descriptor = records_write_descriptor(message)?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
         || descriptor.protocol_path != PERMISSIONS_GRANT_PATH
     {
-        return Err("GrantAuthorizationGrantMissing: permission grant must be a PermissionsProtocol grant RecordsWrite".to_string());
+        return Err(GrantMessageTypeError::InvalidMessageType.into());
     }
     let data: PermissionGrantData = serde_json::from_slice(&permission_record_data_bytes(message)?)
-        .map_err(|err| format!("PermissionGrantParseMissingScope: {err}"))?;
-    let id = record_id(message)
-        .ok_or_else(|| "PermissionGrantParseMissingRecordId: recordId is required".to_string())?;
+        .map_err(AuthorizationValidationError::ParseFailed)?;
+    let id = record_id(message).ok_or(GrantError::RecordIdRequired)?;
     let grantee = descriptor
         .recipient
         .clone()
-        .ok_or_else(|| "PermissionGrantParseMissingRecipient: recipient is required".to_string())?;
+        .ok_or(GrantError::UnableToExtractGrantor)?;
+
     Ok(PermissionGrant {
         id,
         grantor: grantor.to_string(),
@@ -1504,57 +1347,58 @@ fn parse_permission_grant(
     })
 }
 
-fn permission_record_data_bytes(message: &Message<Descriptor>) -> Result<Vec<u8>, String> {
+fn permission_record_data_bytes(
+    message: &Message<Descriptor>,
+) -> Result<Vec<u8>, ProtocolValidationError> {
     let fields = write_fields(message)?;
-    let encoded_data = fields.encoded_data.as_deref().ok_or_else(|| {
-        "PermissionsProtocolValidateSchemaMissingEncodedData: encodedData is required".to_string()
-    })?;
-    URL_SAFE_NO_PAD
-        .decode(encoded_data)
-        .map_err(|err| format!("PermissionsProtocolValidateSchemaInvalidEncodedData: {err}"))
+    let encoded_data = fields
+        .encoded_data
+        .as_deref()
+        .ok_or(ProtocolValidationError::MissingEncodedData)?;
+    Ok(URL_SAFE_NO_PAD.decode(encoded_data)?)
 }
 
 fn records_write_descriptor(
     message: &Message<Descriptor>,
-) -> Result<&RecordsWriteDescriptor, String> {
+) -> Result<&RecordsWriteDescriptor, GrantMessageTypeError> {
     match &message.descriptor {
         Descriptor::Records(records) => match records.as_ref() {
             Records::Write(descriptor) => Ok(descriptor),
-            _ => Err("expected RecordsWrite message".to_string()),
+            _ => Err(GrantMessageTypeError::InvalidRecordsWriteMessageType),
         },
-        _ => Err("expected RecordsWrite message".to_string()),
+        _ => Err(GrantMessageTypeError::InvalidMessageType),
     }
 }
 
 fn protocols_configure_descriptor(
     message: &Message<Descriptor>,
-) -> Result<&ConfigureDescriptor, String> {
+) -> Result<&ConfigureDescriptor, GrantMessageTypeError> {
     match &message.descriptor {
         Descriptor::Protocols(protocols) => match protocols.as_ref() {
             crate::descriptors::Protocols::Configure(descriptor) => Ok(descriptor),
-            _ => Err("expected ProtocolsConfigure message".to_string()),
+            _ => Err(GrantMessageTypeError::InvalidProtocolsConfigureMessageType),
         },
-        _ => Err("expected ProtocolsConfigure message".to_string()),
+        _ => Err(GrantMessageTypeError::InvalidProtocolsConfigureMessageType),
     }
 }
 
 fn protocols_query_descriptor(
     message: &Message<Descriptor>,
-) -> Result<&ProtocolQueryDescriptor, String> {
+) -> Result<&ProtocolQueryDescriptor, GrantMessageTypeError> {
     match &message.descriptor {
         Descriptor::Protocols(protocols) => match protocols.as_ref() {
             crate::descriptors::Protocols::Query(descriptor) => Ok(descriptor),
-            _ => Err("expected ProtocolsQuery message".to_string()),
+            _ => Err(GrantMessageTypeError::InvalidProtocolsQueryMessageType),
         },
-        _ => Err("expected ProtocolsQuery message".to_string()),
+        _ => Err(GrantMessageTypeError::InvalidProtocolsQueryMessageType),
     }
 }
 
-fn write_fields(message: &Message<Descriptor>) -> Result<&WriteFields, String> {
+fn write_fields(message: &Message<Descriptor>) -> Result<&WriteFields, ProtocolValidationError> {
     match &message.fields {
         Fields::Write(fields) => Ok(fields),
         Fields::InitialWriteField(fields) => Ok(&fields.write_fields),
-        _ => Err("RecordsWriteFieldsExpected: write fields are required".to_string()),
+        _ => Err(ProtocolValidationError::MissingWriteFields),
     }
 }
 
@@ -1570,7 +1414,7 @@ async fn fetch_newest_write<MessageStore>(
     tenant: &str,
     record_id: &str,
     message_store: &MessageStore,
-) -> Result<Message<Descriptor>, String>
+) -> Result<Message<Descriptor>, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1585,62 +1429,57 @@ where
             Some(MessageSort::Timestamp(SortDirection::Descending)),
             Some(Pagination::with_limit(1)),
         )
-        .await
-        .map_err(|err| err.to_string())?;
+        .await?;
+
     result
         .messages
         .into_iter()
         .next()
-        .ok_or_else(|| "RecordsWriteGetNewestWriteRecordNotFound: record not found".to_string())
+        .ok_or_else(|| GrantError::NotFound(record_id.to_string()).into())
 }
 
-fn message_timestamp(
-    message: &Message<Descriptor>,
-) -> Result<chrono::DateTime<chrono::Utc>, String> {
+fn message_timestamp(message: &Message<Descriptor>) -> chrono::DateTime<chrono::Utc> {
     match &message.descriptor {
         Descriptor::Records(records) => match records.as_ref() {
-            Records::Read(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Count(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Query(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Write(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Delete(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Subscribe(descriptor) => Ok(descriptor.message_timestamp),
+            Records::Read(descriptor) => descriptor.message_timestamp,
+            Records::Count(descriptor) => descriptor.message_timestamp,
+            Records::Query(descriptor) => descriptor.message_timestamp,
+            Records::Write(descriptor) => descriptor.message_timestamp,
+            Records::Delete(descriptor) => descriptor.message_timestamp,
+            Records::Subscribe(descriptor) => descriptor.message_timestamp,
         },
         Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            crate::descriptors::Protocols::Configure(descriptor) => {
-                Ok(descriptor.message_timestamp)
-            }
-            crate::descriptors::Protocols::Query(descriptor) => Ok(descriptor.message_timestamp),
+            crate::descriptors::Protocols::Configure(descriptor) => descriptor.message_timestamp,
+            crate::descriptors::Protocols::Query(descriptor) => descriptor.message_timestamp,
         },
         Descriptor::Messages(messages) => match messages.as_ref() {
-            crate::descriptors::Messages::Read(descriptor) => Ok(descriptor.message_timestamp),
-            crate::descriptors::Messages::Query(descriptor) => Ok(descriptor.message_timestamp),
-            crate::descriptors::Messages::Subscribe(descriptor) => Ok(descriptor.message_timestamp),
-            crate::descriptors::Messages::Sync(descriptor) => Ok(descriptor.message_timestamp),
+            crate::descriptors::Messages::Read(descriptor) => descriptor.message_timestamp,
+            crate::descriptors::Messages::Query(descriptor) => descriptor.message_timestamp,
+            crate::descriptors::Messages::Subscribe(descriptor) => descriptor.message_timestamp,
+            crate::descriptors::Messages::Sync(descriptor) => descriptor.message_timestamp,
         },
     }
 }
 
-fn message_interface_and_method(message: &Message<Descriptor>) -> Result<(String, String), String> {
+fn message_interface_and_method(message: &Message<Descriptor>) -> (String, String) {
     match &message.descriptor {
         Descriptor::Records(records) => {
-            Ok((RECORDS_INTERFACE.to_string(), records.method().to_string()))
+            (RECORDS_INTERFACE.to_string(), records.method().to_string())
         }
-        Descriptor::Protocols(protocols) => Ok((
+        Descriptor::Protocols(protocols) => (
             PROTOCOLS_INTERFACE.to_string(),
             protocols.method().to_string(),
-        )),
-        Descriptor::Messages(messages) => Ok((
+        ),
+        Descriptor::Messages(messages) => (
             MESSAGES_INTERFACE.to_string(),
             messages.method().to_string(),
-        )),
+        ),
     }
 }
 
-fn message_cid(message: &Message<Descriptor>) -> Result<String, String> {
-    serde_json::to_value(message)
-        .map_err(|err| err.to_string())
-        .and_then(|value| generate_message_cid_from_json(&value).map_err(|err| err.to_string()))
+fn message_cid(message: &Message<Descriptor>) -> Result<String, AuthorizationValidationError> {
+    Ok(serde_json::to_value(message)?)
+        .and_then(|value| Ok(generate_message_cid_from_json(&value)?))
         .map(|cid| cid.to_string())
 }
 

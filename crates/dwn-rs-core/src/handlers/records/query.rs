@@ -58,6 +58,7 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
             let (filters, author) = match self
@@ -145,7 +146,7 @@ where
             &self.message_store,
         )
         .await
-        .map_err(QueryAuthorizationResult::Unauthorized)?;
+        .map_err(|error| QueryAuthorizationResult::Unauthorized(error.to_string()))?;
         if should_protocol_authorize(&signature.payload) {
             authorize_protocol_query_or_subscribe(
                 tenant,

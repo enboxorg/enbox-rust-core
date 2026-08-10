@@ -68,6 +68,7 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
             let filters =
                 if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
@@ -244,6 +245,7 @@ where
             Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return records_subscribe_reply(DwnReply::unauthorized(detail), None)
             }
+            Err(error) => return records_subscribe_reply(DwnReply::bad_request(error), None),
         };
 
         let (event_filters, query_filters, author) = match self

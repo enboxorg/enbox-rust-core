@@ -842,7 +842,8 @@ where
             signature,
             message_store,
         )
-        .await?
+        .await
+        .map_err(|error| error.to_string())?
         {
             return Ok(());
         }
@@ -875,7 +876,8 @@ where
         signature,
         message_store,
     )
-    .await?
+    .await
+    .map_err(|error| error.to_string())?
     {
         return Ok(());
     }

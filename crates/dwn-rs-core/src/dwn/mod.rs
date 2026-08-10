@@ -110,12 +110,12 @@ impl DwnReply {
         Self::new(200, "OK")
     }
 
-    pub fn bad_request(detail: impl Into<String>) -> Self {
-        Self::new(400, detail)
+    pub fn bad_request(detail: impl std::fmt::Display) -> Self {
+        Self::new(400, detail.to_string())
     }
 
-    pub fn unauthorized(detail: impl Into<String>) -> Self {
-        Self::new(401, detail)
+    pub fn unauthorized(detail: impl std::fmt::Display) -> Self {
+        Self::new(401, detail.to_string())
     }
 
     pub fn not_implemented(detail: impl Into<String>) -> Self {

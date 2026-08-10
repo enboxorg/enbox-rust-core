@@ -110,6 +110,7 @@ where
             Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return subscribe_reply(DwnReply::unauthorized(detail), None)
             }
+            Err(error) => return subscribe_reply(DwnReply::bad_request(error), None),
         };
 
         if let Err(detail) = self

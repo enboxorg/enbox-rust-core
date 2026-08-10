@@ -61,6 +61,7 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
             let mut filter =
                 records_filter_to_filter_map(&descriptor.filter, descriptor.date_sort.as_ref());
