@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::descriptors::{CONFIGURE, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, WRITE};
 use serde::{Deserialize, Serialize};
 
@@ -190,6 +192,16 @@ pub struct ProtocolScopeTarget<'a> {
     pub protocol: Option<&'a str>,
     pub context_id: Option<&'a str>,
     pub protocol_path: Option<&'a str>,
+}
+
+impl Display for ProtocolScopeTarget<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ProtocolScopeTarget {{ protocol: {:?}, context_id: {:?}, protocol_path: {:?} }}",
+            self.protocol, self.context_id, self.protocol_path
+        )
+    }
 }
 
 #[cfg(test)]

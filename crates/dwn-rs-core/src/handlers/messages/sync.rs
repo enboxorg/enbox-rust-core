@@ -11,6 +11,7 @@ use crate::auth::resolver::DidResolver;
 use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
 use crate::dwn::{DwnReply, HandlerContext};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
+use crate::permissions::scopes::ProtocolScopeTarget;
 use crate::permissions::{self};
 use crate::stores::StateHash;
 use crate::Handler;
@@ -125,11 +126,15 @@ where
         if authorization.author == tenant {
             return Ok(());
         }
-        let protocols = descriptor.protocol.iter().cloned().collect::<Vec<String>>();
-        permissions::authorize_messages_subscribe_or_sync(
+        let target = ProtocolScopeTarget {
+            protocol: descriptor.protocol.as_deref(),
+            context_id: None,
+            protocol_path: None,
+        };
+        permissions::authorize_messages_subscribe(
             tenant,
             message,
-            &protocols,
+            &[target],
             authorization,
             &self.message_store,
         )

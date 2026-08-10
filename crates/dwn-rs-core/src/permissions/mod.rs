@@ -904,10 +904,10 @@ where
     .await
 }
 
-pub async fn authorize_messages_subscribe_or_sync<MessageStore>(
+pub async fn authorize_messages_subscribe<MessageStore>(
     tenant: &str,
     incoming_message: &Message<Descriptor>,
-    protocols_in_message: &[String],
+    protocols_scope_targets: &[ProtocolScopeTarget<'_>],
     auth: &AuthorizationContext,
     message_store: &MessageStore,
 ) -> Result<(), String>
@@ -917,7 +917,9 @@ where
     let Some(permission_grant_id) = auth.permission_grant_id() else {
         return Err("GrantAuthorizationGrantMissing: permissionGrantId is required".to_string());
     };
+
     let permission_grant = fetch_grant(tenant, message_store, permission_grant_id).await?;
+
     perform_base_validation(
         incoming_message,
         tenant,
@@ -926,14 +928,15 @@ where
         message_store,
     )
     .await?;
+
     if let Some(scoped_protocol) = permission_grant.scope.protocol() {
-        if protocols_in_message.is_empty() {
+        if protocols_scope_targets.is_empty() {
             return Err(format!(
                 "MessagesGrantAuthorizationMismatchedProtocol: The scoped protocol {scoped_protocol} is not present in the incoming message"
             ));
         }
-        for protocol in protocols_in_message {
-            if protocol != scoped_protocol {
+        for protocol in protocols_scope_targets {
+            if !permission_grant.scope.matches_protocol_target(protocol) {
                 return Err(format!(
                     "MessagesGrantAuthorizationMismatchedProtocol: The protocol {protocol} does not match the scoped protocol {scoped_protocol}"
                 ));
@@ -1142,28 +1145,36 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let context_id = context_id(message_to_read);
-    let permission_scope = get_scope_from_permission_record(
-            tenant,
-            message_store,
-            message_to_read,
-        )
-        .await?;
+    let (protocol, protocol_path) = match &message_to_read.descriptor {
+        Descriptor::Records(records) => match records.as_ref() {
+            Records::Write(write) => {
+                if write.protocol == PERMISSIONS_PROTOCOL_URI {
+                    let permission_scope =
+                        get_scope_from_permission_record(tenant, message_store, message_to_read)
+                            .await?;
 
+                    (
+                        permission_scope.protocol().map(String::from),
+                        permission_scope.protocol_path().map(String::from),
+                    )
+                } else {
+                    (
+                        Some(write.protocol.clone()),
+                        Some(write.protocol_path.clone()),
+                    )
+                }
+            }
+            _ => (None, None),
+        },
+        _ => (None, None),
+    };
 
     let target = match &message_to_read.descriptor {
         Descriptor::Records(records) => match records.as_ref() {
-            Records::Write(write) => {
-                let protocol = if write.protocol == PERMISSIONS_PROTOCOL_URI {
-                    
-
-                     permission_scope.protocol()
-                } else {
-                    Some(write.protocol.as_str())
-                };
-
+            Records::Write(_) => {
                 ProtocolScopeTarget {
-                    protocol,
-                    protocol_path: Some(write.protocol_path.as_str()),
+                    protocol: protocol.as_deref(),
+                    protocol_path: protocol_path.as_deref(),
                     context_id: context_id.as_deref(),
                 }
             }
