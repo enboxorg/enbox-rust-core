@@ -489,7 +489,7 @@ where
         } else {
             crate::handlers::protocols::configure::fetch_protocol_definition(
                 tenant,
-                &protocol_path,
+                &descriptor.protocol,
                 &self.message_store,
                 Some(&governing_timestamp),
             )

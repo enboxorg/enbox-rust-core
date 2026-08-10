@@ -324,6 +324,10 @@ mod tests {
                 "a/b".to_string(),
             ))),
         });
+        let unscoped_messages_scope = PermissionScope::Messages(MessagesScope {
+            protocol: None,
+            selector: None,
+        });
 
         let tt = [
             // Records scope { protocol: notes }
@@ -349,6 +353,15 @@ mod tests {
                 &notes_scope,
                 ProtocolScopeTarget {
                     protocol: Some("https://example.com/chat"),
+                    context_id: None,
+                    protocol_path: None,
+                },
+                false,
+            ),
+            (
+                &notes_scope,
+                ProtocolScopeTarget {
+                    protocol: None,
                     context_id: None,
                     protocol_path: None,
                 },
@@ -418,6 +431,33 @@ mod tests {
                     protocol_path: Some("a/x"),
                 },
                 false,
+            ),
+            (
+                &notes_scope_with_protocol,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: None,
+                    protocol_path: Some("a/bc"),
+                },
+                false,
+            ),
+            (
+                &unscoped_messages_scope,
+                ProtocolScopeTarget {
+                    protocol: Some("https://example.com/notes"),
+                    context_id: Some("ctx-1"),
+                    protocol_path: Some("note"),
+                },
+                true,
+            ),
+            (
+                &unscoped_messages_scope,
+                ProtocolScopeTarget {
+                    protocol: None,
+                    context_id: None,
+                    protocol_path: None,
+                },
+                true,
             ),
         ];
 

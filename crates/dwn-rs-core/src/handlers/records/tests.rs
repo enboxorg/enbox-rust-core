@@ -46,6 +46,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
     let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
@@ -75,7 +76,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
             Some(data.clone()),
         ))
         .await;
-    assert_eq!(reply.status.code, 202);
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let query = unsigned_query_message(json!({ "published": true }));
     let reply = query_handler
@@ -115,6 +116,7 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
@@ -189,6 +191,7 @@ async fn records_write_rejects_older_conflicting_write() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
@@ -248,6 +251,7 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
@@ -301,6 +305,7 @@ async fn records_delete_prune_purges_descendant_records() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
@@ -408,18 +413,15 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     })
     .await;
     let old_record_id = old["recordId"].as_str().unwrap().to_string();
-    assert_eq!(
-        handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &old,
-                Some(old_data)
-            ))
-            .await
-            .status
-            .code,
-        202
-    );
+    let resp = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &old,
+            Some(old_data),
+        ))
+        .await;
+
+    assert_eq!(resp.status.code, 202, "{}", resp.status.detail);
 
     let squash_data = Bytes::from_static(b"snapshot");
     let squash = signed_write_message(WriteSpec {

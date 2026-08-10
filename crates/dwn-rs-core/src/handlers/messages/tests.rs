@@ -302,6 +302,56 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
     assert!(result.subscription.is_none());
 }
 
+#[tokio::test]
+async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
+    let mut message_store = TestMessageStore::default();
+    let mut event_log = MemoryEventLog::default();
+    message_store.open().await.unwrap();
+    event_log.open().await.unwrap();
+
+    let grant = permission_grant_message_with_scope(
+        "grant-subscribe-path",
+        json!({
+            "interface": "Messages",
+            "method": "Read",
+            "protocol": "http://example.com/notes",
+            "protocolPath": "note",
+        }),
+    )
+    .await;
+    message_store
+        .insert("did:example:alice", "grant-subscribe-path", grant)
+        .await;
+
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let request = signed_subscribe_message(SubscribeSpec {
+        filters: vec![message_filters::Messages {
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path_prefix: Some("comment".to_string()),
+            ..Default::default()
+        }],
+        permission_grant_id: Some("grant-subscribe-path".to_string()),
+        signer: bob_signer(),
+        ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+    })
+    .await;
+
+    let result = handler
+        .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+        .await;
+    assert_eq!(
+        result.reply.status.code, 401,
+        "{}",
+        result.reply.status.detail
+    );
+    assert!(result
+        .reply
+        .status
+        .detail
+        .contains("MessagesGrantAuthorizationMismatchedProtocol"));
+}
+
 fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
     let data = Bytes::from_static(b"hello");
     let descriptor = RecordsWriteDescriptor {
@@ -359,9 +409,16 @@ async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Mes
             "method": "Read",
         }),
     };
+    permission_grant_message_with_scope(grant_id, scope).await
+}
+
+async fn permission_grant_message_with_scope(
+    grant_id: &str,
+    scope: serde_json::Value,
+) -> Message<Descriptor> {
     let data = serde_json::to_vec(&json!({
         "dateExpires": "2025-02-01T00:00:00.000000Z",
-        "scope": scope,
+        "scope": scope.clone(),
     }))
     .unwrap();
     let descriptor = RecordsWriteDescriptor {
@@ -369,9 +426,12 @@ async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Mes
         protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         schema: None,
-        tags: protocol.map(|protocol| {
-            MapValue::from([("protocol".to_string(), Value::String(protocol.to_string()))])
-        }),
+        tags: scope
+            .get("protocol")
+            .and_then(serde_json::Value::as_str)
+            .map(|protocol| {
+                MapValue::from([("protocol".to_string(), Value::String(protocol.to_string()))])
+            }),
         parent_id: None,
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
