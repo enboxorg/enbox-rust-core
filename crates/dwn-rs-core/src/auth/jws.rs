@@ -106,11 +106,18 @@ pub struct AuthorizationPayload {
     bytes: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PermissionGrantInvocation {
+    None,
+    Single(String),
+    Multi(Vec<String>),
+}
+
 impl AuthorizationPayload {
     pub fn new(
         descriptor_cid: Cid,
         delegated_grant_id: Option<Cid>,
-        permission_grant_id: Option<String>,
+        permission_grant: PermissionGrantInvocation,
         protocol_role: Option<String>,
     ) -> Result<Self, JwsError> {
         #[derive(Serialize)]
@@ -125,15 +132,24 @@ impl AuthorizationPayload {
             delegated_grant_id: Option<Cid>,
             #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
             permission_grant_id: Option<String>,
+            #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
+            permission_grant_ids: Option<Vec<String>>,
             #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
             protocol_role: Option<String>,
         }
-        let bytes = serde_json::to_vec(&Repr {
+        let (permission_grant_id, permission_grant_ids) = match permission_grant {
+            PermissionGrantInvocation::None => (None, None),
+            PermissionGrantInvocation::Single(id) => (Some(id), None),
+            PermissionGrantInvocation::Multi(ids) => (None, Some(ids)),
+        };
+        let repr = Repr {
             descriptor_cid,
             delegated_grant_id,
-            permission_grant_id,
             protocol_role,
-        })?;
+            permission_grant_id,
+            permission_grant_ids,
+        };
+        let bytes = serde_json::to_vec(&repr)?;
         Ok(Self { bytes })
     }
 }
@@ -1016,7 +1032,7 @@ mod tests {
         let payload = AuthorizationPayload::new(
             descriptor_cid,
             Some(delegated_grant_id),
-            Some("grant-123".to_string()),
+            PermissionGrantInvocation::Single("grant-123".to_string()),
             Some("adminRole".to_string()),
         )
         .unwrap();
@@ -1029,6 +1045,22 @@ mod tests {
                 "delegatedGrantId": delegated_grant_id.to_string(),
                 "permissionGrantId": "grant-123",
                 "protocolRole": "adminRole",
+            })
+        );
+
+        let payload = AuthorizationPayload::new(
+            descriptor_cid,
+            None,
+            PermissionGrantInvocation::Multi(vec!["grant-a".to_string(), "grant-b".to_string()]),
+            None,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&payload.payload_bytes()).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "descriptorCid": descriptor_cid.to_string(),
+                "permissionGrantIds": ["grant-a", "grant-b"],
             })
         );
     }
