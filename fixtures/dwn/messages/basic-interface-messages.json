@@ -113,17 +113,19 @@
       "id": "records-write-basic",
       "description": "Unsigned RecordsWrite descriptor with external data CID metadata.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreidgpqe6zujtci3k7gze4dh7e7prapj3tqer6cvpzhuyzil7ju6wo4",
-      "messageCid": "bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi",
+  "descriptorCid": "bafyreic3egt3yxbwrmyugk5yk5wjrkgv7phy7tv2vvk3qcofqb6vzzy7e4",
+  "messageCid": "bafyreifd2exiqxwvnvzrh4wxbke7oh5t3nl6nfykodjcx2mqix7plpyb5y",
       "message": {
         "descriptor": {
           "interface": "Records",
           "method": "Write",
           "messageTimestamp": "2025-01-01T00:00:06.000000Z",
           "dateCreated": "2025-01-01T00:00:06.000000Z",
-          "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
-          "dataSize": 11,
-          "dataFormat": "text/plain"
+      "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+      "dataSize": 11,
+      "dataFormat": "text/plain",
+      "protocol": "https://example.com/records",
+      "protocolPath": "record"
         }
       }
     },
@@ -131,8 +133,8 @@
       "id": "records-write-permission-grant-squash",
       "description": "Unsigned RecordsWrite descriptor carrying permissionGrantId and Enbox squash metadata.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreicmnd65x4tyw5y5gzndvcuogyeb7tl2ty2pgwcm6tcf2hz3jwaabe",
-      "messageCid": "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty",
+  "descriptorCid": "bafyreiar6wou3l3nj2brctphqh7cc5oae5bvzbn2swdom5dqf6masd3vji",
+  "messageCid": "bafyreidhpxlcq7ta2qcmfojmxbm5mqjaluo6dghw74fno7op655y5hz7ai",
       "message": {
         "descriptor": {
           "interface": "Records",
@@ -140,9 +142,11 @@
           "messageTimestamp": "2025-01-01T00:00:11.000000Z",
           "dateCreated": "2025-01-01T00:00:11.000000Z",
           "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
-          "dataSize": 11,
-          "dataFormat": "text/plain",
-          "permissionGrantId": "grant-write-123",
+      "dataSize": 11,
+      "dataFormat": "text/plain",
+      "protocol": "https://example.com/records",
+      "protocolPath": "record",
+      "permissionGrantId": "grant-write-123",
           "squash": true
         }
       }
