@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
 use crate::descriptors::{CONFIGURE, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, WRITE};
+use crate::filters::message_filters::Messages as MessagesFilter;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -8,6 +10,18 @@ pub enum PermissionScope {
     Protocols(ProtocolsScope),
     Messages(MessagesScope),
     Records(RecordsScope),
+}
+
+impl PermissionScope {
+    pub fn is_unscoped(&self) -> bool {
+        matches!(
+            self,
+            Self::Messages(MessagesScope {
+                protocol: None,
+                selector: None,
+            })
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,6 +215,129 @@ impl Display for ProtocolScopeTarget<'_> {
             "ProtocolScopeTarget {{ protocol: {:?}, context_id: {:?}, protocol_path: {:?} }}",
             self.protocol, self.context_id, self.protocol_path
         )
+    }
+}
+
+impl<'a> From<&'a MessagesFilter> for ProtocolScopeTarget<'a> {
+    fn from(value: &'a MessagesFilter) -> Self {
+        Self {
+            protocol: value.protocol.as_deref(),
+            context_id: value.context_id_prefix.as_deref(),
+            protocol_path: value.protocol_path_prefix.as_deref(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedProtocolScopeTarget {
+    pub protocol: Option<String>,
+    pub context_id: Option<String>,
+    pub protocol_path: Option<String>,
+}
+
+impl OwnedProtocolScopeTarget {
+    pub fn as_ref(&self) -> ProtocolScopeTarget<'_> {
+        ProtocolScopeTarget {
+            protocol: self.protocol.as_deref(),
+            context_id: self.context_id.as_deref(),
+            protocol_path: self.protocol_path.as_deref(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PermissionScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawPermissionScope {
+            interface: String,
+            method: String,
+            protocol: Option<String>,
+            #[serde(rename = "contextId")]
+            context_id: Option<String>,
+            #[serde(rename = "protocolPath")]
+            protocol_path: Option<String>,
+        }
+
+        let raw = RawPermissionScope::deserialize(deserializer)?;
+        let selector_count =
+            usize::from(raw.context_id.is_some()) + usize::from(raw.protocol_path.is_some());
+        if selector_count > 1 {
+            return Err(serde::de::Error::custom(
+                "permission scope cannot contain both contextId and protocolPath",
+            ));
+        }
+
+        match (raw.interface.as_str(), raw.method.as_str()) {
+            (PROTOCOLS, CONFIGURE) | (PROTOCOLS, QUERY) => {
+                if raw.context_id.is_some() || raw.protocol_path.is_some() {
+                    return Err(serde::de::Error::custom(
+                        "Protocols permission scopes cannot contain contextId or protocolPath",
+                    ));
+                }
+                let method = if raw.method == CONFIGURE {
+                    ProtocolsMethod::Configure
+                } else {
+                    ProtocolsMethod::Query
+                };
+                Ok(Self::Protocols(ProtocolsScope {
+                    method,
+                    protocol: raw.protocol,
+                }))
+            }
+            (MESSAGES, READ) => {
+                let protocol = raw.protocol;
+                let selector = match (raw.context_id, raw.protocol_path) {
+                    (Some(context_id), None) => {
+                        Some(MessagesSelector::ContextId(ContextId(context_id)))
+                    }
+                    (None, Some(protocol_path)) => {
+                        Some(MessagesSelector::ProtocolPath(ProtocolPath(protocol_path)))
+                    }
+                    (None, None) => None,
+                    (Some(_), Some(_)) => unreachable!("checked above"),
+                };
+                if selector.is_some() && protocol.is_none() {
+                    return Err(serde::de::Error::custom(
+                        "Messages permission scope selectors require protocol",
+                    ));
+                }
+                Ok(Self::Messages(MessagesScope { protocol, selector }))
+            }
+            (RECORDS, READ) | (RECORDS, WRITE) | (RECORDS, DELETE) => {
+                let method = match raw.method.as_str() {
+                    READ => RecordsMethod::Read,
+                    WRITE => RecordsMethod::Write,
+                    DELETE => RecordsMethod::Delete,
+                    _ => unreachable!("matched above"),
+                };
+                let protocol = raw.protocol.ok_or_else(|| {
+                    serde::de::Error::custom("Records permission scopes require protocol")
+                })?;
+                let selector = match (raw.context_id, raw.protocol_path) {
+                    (Some(context_id), None) => {
+                        Some(RecordsSelector::ContextId(ContextId(context_id)))
+                    }
+                    (None, Some(protocol_path)) => {
+                        Some(RecordsSelector::ProtocolPath(ProtocolPath(protocol_path)))
+                    }
+                    (None, None) => None,
+                    (Some(_), Some(_)) => unreachable!("checked above"),
+                };
+                Ok(Self::Records(RecordsScope {
+                    method,
+                    protocol,
+                    selector,
+                }))
+            }
+            _ => Err(serde::de::Error::custom(format!(
+                "unsupported permission scope interface/method pair: {}/{}",
+                raw.interface, raw.method
+            ))),
+        }
     }
 }
 
@@ -469,102 +606,6 @@ mod tests {
                 scope,
                 target
             );
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for PermissionScope {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawPermissionScope {
-            interface: String,
-            method: String,
-            protocol: Option<String>,
-            #[serde(rename = "contextId")]
-            context_id: Option<String>,
-            #[serde(rename = "protocolPath")]
-            protocol_path: Option<String>,
-        }
-
-        let raw = RawPermissionScope::deserialize(deserializer)?;
-        let selector_count =
-            usize::from(raw.context_id.is_some()) + usize::from(raw.protocol_path.is_some());
-        if selector_count > 1 {
-            return Err(serde::de::Error::custom(
-                "permission scope cannot contain both contextId and protocolPath",
-            ));
-        }
-
-        match (raw.interface.as_str(), raw.method.as_str()) {
-            (PROTOCOLS, CONFIGURE) | (PROTOCOLS, QUERY) => {
-                if raw.context_id.is_some() || raw.protocol_path.is_some() {
-                    return Err(serde::de::Error::custom(
-                        "Protocols permission scopes cannot contain contextId or protocolPath",
-                    ));
-                }
-                let method = if raw.method == CONFIGURE {
-                    ProtocolsMethod::Configure
-                } else {
-                    ProtocolsMethod::Query
-                };
-                Ok(Self::Protocols(ProtocolsScope {
-                    method,
-                    protocol: raw.protocol,
-                }))
-            }
-            (MESSAGES, READ) => {
-                let protocol = raw.protocol;
-                let selector = match (raw.context_id, raw.protocol_path) {
-                    (Some(context_id), None) => {
-                        Some(MessagesSelector::ContextId(ContextId(context_id)))
-                    }
-                    (None, Some(protocol_path)) => {
-                        Some(MessagesSelector::ProtocolPath(ProtocolPath(protocol_path)))
-                    }
-                    (None, None) => None,
-                    (Some(_), Some(_)) => unreachable!("checked above"),
-                };
-                if selector.is_some() && protocol.is_none() {
-                    return Err(serde::de::Error::custom(
-                        "Messages permission scope selectors require protocol",
-                    ));
-                }
-                Ok(Self::Messages(MessagesScope { protocol, selector }))
-            }
-            (RECORDS, READ) | (RECORDS, WRITE) | (RECORDS, DELETE) => {
-                let method = match raw.method.as_str() {
-                    READ => RecordsMethod::Read,
-                    WRITE => RecordsMethod::Write,
-                    DELETE => RecordsMethod::Delete,
-                    _ => unreachable!("matched above"),
-                };
-                let protocol = raw.protocol.ok_or_else(|| {
-                    serde::de::Error::custom("Records permission scopes require protocol")
-                })?;
-                let selector = match (raw.context_id, raw.protocol_path) {
-                    (Some(context_id), None) => {
-                        Some(RecordsSelector::ContextId(ContextId(context_id)))
-                    }
-                    (None, Some(protocol_path)) => {
-                        Some(RecordsSelector::ProtocolPath(ProtocolPath(protocol_path)))
-                    }
-                    (None, None) => None,
-                    (Some(_), Some(_)) => unreachable!("checked above"),
-                };
-                Ok(Self::Records(RecordsScope {
-                    method,
-                    protocol,
-                    selector,
-                }))
-            }
-            _ => Err(serde::de::Error::custom(format!(
-                "unsupported permission scope interface/method pair: {}/{}",
-                raw.interface, raw.method
-            ))),
         }
     }
 }

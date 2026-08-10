@@ -10,8 +10,8 @@ use serde_json::Value as JsonValue;
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
 use crate::dwn::{DwnReply, HandlerContext};
+use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
-use crate::permissions::scopes::ProtocolScopeTarget;
 use crate::permissions::{self};
 use crate::stores::StateHash;
 use crate::Handler;
@@ -127,15 +127,14 @@ where
         if authorization.author == tenant {
             return Ok(());
         }
-        let target = ProtocolScopeTarget {
-            protocol: descriptor.protocol.as_deref(),
-            context_id: None,
-            protocol_path: None,
+        let filter = MessagesFilter {
+            protocol: descriptor.protocol.clone(),
+            ..Default::default()
         };
         permissions::authorize_messages_subscribe(
             tenant,
             message,
-            &[target],
+            &[filter],
             authorization,
             &self.message_store,
         )

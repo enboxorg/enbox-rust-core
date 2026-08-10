@@ -2,11 +2,17 @@ pub mod errors;
 pub mod scopes;
 
 use crate::auth::jws::PermissionGrantInvocation;
-use crate::permissions::scopes::ProtocolScopeTarget;
+pub use crate::permissions::errors::AuthorizationValidationError;
+use crate::permissions::errors::{
+    AuthorizationRequestError, GrantError, GrantMessageTypeError, PermissionError,
+    ProtocolValidationError,
+};
 pub use crate::permissions::scopes::{
     ContextId, MessagesScope, MessagesSelector, PermissionScope, ProtocolPath, ProtocolsMethod,
     ProtocolsScope, RecordsMethod, RecordsScope, RecordsSelector,
 };
+use crate::permissions::scopes::{OwnedProtocolScopeTarget, ProtocolScopeTarget};
+use crate::stores::MessageStore;
 
 use std::collections::BTreeMap;
 
@@ -19,11 +25,13 @@ use crate::auth::resolver::DidResolver;
 use crate::auth::{Jws, JwsError};
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
-    ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Records, RecordsWriteDescriptor,
-    QUERY,
+    ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, Records,
+    RecordsWriteDescriptor, QUERY,
 };
 use crate::fields::{Fields, WriteFields};
-use crate::filters::message_filters::Records as RecordsFilter;
+use crate::filters::{
+    message_filters::Messages as MessagesFilter, message_filters::Records as RecordsFilter,
+};
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Size, Type, Who,
@@ -66,12 +74,6 @@ impl AuthorizationContext {
             _ => None,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AuthorizationValidationError {
-    BadRequest(String),
-    Unauthorized(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,6 +161,87 @@ struct PermissionGrantData {
     conditions: Option<PermissionConditions>,
     #[serde(rename = "connectSession", skip_serializing_if = "Option::is_none")]
     connect_session: Option<ConnectSessionMetadata>,
+}
+
+pub struct ValidatedMessagesGrantSet {
+    grants: Vec<PermissionGrant>,
+}
+
+impl ValidatedMessagesGrantSet {
+    fn has_unscoped_grants(&self) -> bool {
+        self.grants.iter().any(|grant| grant.scope.is_unscoped())
+    }
+
+    async fn covers_message<MS: MessageStore + Sync>(
+        &self,
+        tenant: &str,
+        message: &Message<Descriptor>,
+        message_store: &MS,
+    ) -> Result<bool, PermissionError> {
+        let target = resolve_messages_scope_target(tenant, message, message_store).await?;
+
+        Ok(self
+            .grants
+            .iter()
+            .any(|grant| grant.scope.matches_protocol_target(&target.as_ref())))
+    }
+
+    async fn covers_filter(&self, filter: &MessagesFilter) -> bool {
+        let target = filter.into();
+
+        self.grants
+            .iter()
+            .any(|grant| grant.scope.matches_protocol_target(&target))
+    }
+}
+
+async fn resolve_messages_scope_target<MS: MessageStore + Sync>(
+    tenant: &str,
+    message: &Message<Descriptor>,
+    message_store: &MS,
+) -> Result<OwnedProtocolScopeTarget, PermissionError> {
+    match &message.descriptor {
+        Descriptor::Records(records) => match records.as_ref() {
+            Records::Write(write) => {
+                let context_id = context_id(message);
+
+                let (protocol, protocol_path) = if write.protocol == PERMISSIONS_PROTOCOL_URI {
+                    let embedded_scope =
+                        get_scope_from_permission_record(tenant, message_store, message).await?;
+                    (
+                        embedded_scope.protocol().map(str::to_owned),
+                        embedded_scope.protocol_path().map(str::to_owned),
+                    )
+                } else {
+                    (
+                        Some(write.protocol.clone()),
+                        Some(write.protocol_path.clone()),
+                    )
+                };
+
+                Ok(OwnedProtocolScopeTarget {
+                    protocol,
+                    protocol_path,
+                    context_id,
+                })
+            }
+            Records::Delete(delete) => {
+                let newest_write =
+                    fetch_newest_write(tenant, &delete.record_id, message_store).await?;
+                resolve_messages_scope_target(tenant, &newest_write, message_store).await
+            }
+            _ => Err(GrantError::InvalidRecordsDescriptorType.into()),
+        },
+        Descriptor::Protocols(protocols) => match protocols.as_ref() {
+            Protocols::Configure(configure) => Ok(OwnedProtocolScopeTarget {
+                protocol: Some(configure.definition.protocol.clone()),
+                protocol_path: None,
+                context_id: None,
+            }),
+            _ => Err(GrantError::InvalidProtocolDescriptorType.into()),
+        },
+        _ => Err(GrantError::InvalidDescriptorType.into()),
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -276,7 +359,18 @@ pub async fn validate_authorization_signature(
     did_resolver: Option<&dyn DidResolver>,
     required: bool,
 ) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
-    validate_authorization_signature_inner(raw_message, did_resolver, required, true).await
+    validate_authorization_signature_inner(raw_message, did_resolver, required, true)
+        .await
+        .map_err(|error| match error {
+            // Authorization parsing/validation errors remain distinguishable to
+            // request handlers, preserving their 400 response behavior.
+            GrantError::InvalidGrant(error) => error,
+            // Grant parsing failures encountered while validating an embedded
+            // delegated grant are malformed authorization requests as well.
+            error => AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::ValidationError(error.to_string()),
+            ),
+        })
 }
 
 async fn validate_authorization_signature_inner(

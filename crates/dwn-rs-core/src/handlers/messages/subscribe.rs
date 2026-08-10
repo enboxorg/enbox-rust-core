@@ -7,7 +7,6 @@ use crate::auth::resolver::DidResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
 use crate::dwn::{DwnReply, HandlerContext};
-use crate::permissions::scopes::ProtocolScopeTarget;
 use crate::permissions::{self};
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
 use crate::Handler;
@@ -161,22 +160,10 @@ where
         if authorization.author == tenant {
             return Ok(());
         }
-        let protocols = descriptor
-            .filters
-            .iter()
-            .filter_map(|filter| {
-                Some(ProtocolScopeTarget {
-                    protocol: filter.protocol.as_deref(),
-                    protocol_path: filter.protocol_path_prefix.as_deref(),
-                    context_id: filter.context_id_prefix.as_deref(),
-                })
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
         permissions::authorize_messages_subscribe(
             tenant,
             message,
-            &protocols,
+            &descriptor.filters,
             authorization,
             &self.message_store,
         )
