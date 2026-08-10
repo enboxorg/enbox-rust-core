@@ -26,6 +26,7 @@ use crate::filters::{Filter, FilterKey, Filters};
 use crate::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Size, Type, Who,
 };
+use crate::ser::serialize_datetime;
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
 pub const PERMISSIONS_PROTOCOL_URI: &str = "https://identity.foundation/dwn/permissions";
@@ -96,6 +97,41 @@ struct PermissionRequestData {
     conditions: Option<PermissionConditions>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub enum ConnectSessionTransport {
+    Relay,
+    PostMessage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectSessionMetadata {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub languages: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ConnectSessionTransport>,
+    #[serde(serialize_with = "serialize_datetime")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(serialize_with = "serialize_datetime")]
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct PermissionGrantData {
     #[serde(rename = "dateExpires")]
@@ -109,11 +145,8 @@ struct PermissionGrantData {
     delegated: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     conditions: Option<PermissionConditions>,
-    #[serde(
-        rename = "delegateKeyDelivery",
-        skip_serializing_if = "Option::is_none"
-    )]
-    delegate_key_delivery: Option<JsonValue>,
+    #[serde(rename = "connectSession", skip_serializing_if = "Option::is_none")]
+    connect_session: Option<ConnectSessionMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
