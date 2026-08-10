@@ -73,6 +73,7 @@ pub struct PermissionGrant {
     pub delegated: Option<bool>,
     pub scope: PermissionScope,
     pub conditions: Option<PermissionConditions>,
+    pub connect_session: Option<ConnectSessionMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1353,6 +1354,7 @@ fn parse_permission_grant(
         delegated: data.delegated,
         scope: data.scope,
         conditions: data.conditions,
+        connect_session: data.connect_session,
     })
 }
 
