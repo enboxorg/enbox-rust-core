@@ -41,12 +41,14 @@ pub struct Records {
     pub date_updated: Option<RangeFilter<String>>,
 }
 
-#[skip_serializing_none()]
+#[skip_serializing_none]
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Messages {
     pub interface: Option<String>,
     pub method: Option<String>,
     pub protocol: Option<String>,
-    #[serde(rename = "messageTimestamp")]
-    pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub protocol_path_prefix: Option<String>,
+    pub context_id_prefix: Option<String>,
+    pub message_timestamp: Option<RangeFilter<String>>,
 }
