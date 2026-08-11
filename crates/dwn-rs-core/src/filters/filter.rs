@@ -10,9 +10,9 @@ pub enum RangeFilter<T> {
     Criterion(Bound<T>, Bound<T>),
 }
 
-impl Into<RangeFilter<Value>> for RangeFilter<String> {
-    fn into(self) -> RangeFilter<Value> {
-        match self {
+impl From<RangeFilter<String>> for RangeFilter<Value> {
+    fn from(filter: RangeFilter<String>) -> Self {
+        match filter {
             RangeFilter::Numeric(beg, end) => RangeFilter::Numeric(
                 match beg {
                     Bound::Included(v) => Bound::Included(Value::String(v)),
