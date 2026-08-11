@@ -3,22 +3,24 @@
 //! Mirrors TypeScript `StorageController` from `@enbox/dwn-sdk-js`.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 
-use crate::handlers::records::{resume_records_delete_from_task, resume_records_squash_from_task};
+use crate::{
+    handlers::records::{resume_records_delete_from_task, resume_records_squash_from_task},
+    Descriptor, Message,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumableRecordsDeleteData {
     pub tenant: String,
-    pub message: JsonValue,
+    pub message: Message<Descriptor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumableRecordsSquashData {
     pub tenant: String,
-    pub message: JsonValue,
+    pub message: Message<Descriptor>,
 }
 
 #[derive(Clone)]

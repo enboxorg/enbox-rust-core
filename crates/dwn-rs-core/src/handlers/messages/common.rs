@@ -20,13 +20,6 @@ const MAX_SYNC_DEPTH: usize = 256;
 
 static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 
-pub(crate) fn parse_message(
-    raw_message: &JsonValue,
-    prefix: &str,
-) -> Result<Message<Descriptor>, String> {
-    serde_json::from_value(raw_message.clone()).map_err(|err| format!("{prefix}: {err}"))
-}
-
 pub(crate) fn messages_subscribe_descriptor(
     message: &Message<Descriptor>,
 ) -> Result<&MessagesSubscribeDescriptor, String> {

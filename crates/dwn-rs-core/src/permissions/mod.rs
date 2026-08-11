@@ -25,8 +25,8 @@ use crate::auth::resolver::DidResolver;
 use crate::auth::{Jws, JwsError};
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
-    ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, Records,
-    RecordsWriteDescriptor, QUERY,
+    ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
+    Records, RecordsWriteDescriptor, QUERY,
 };
 use crate::fields::{Fields, WriteFields};
 use crate::filters::{
@@ -355,11 +355,14 @@ pub fn permissions_protocol_definition() -> Definition {
 }
 
 pub async fn validate_authorization_signature(
-    raw_message: &JsonValue,
+    message: &Message<Descriptor>,
     did_resolver: Option<&dyn DidResolver>,
     required: bool,
 ) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
-    validate_authorization_signature_inner(raw_message, did_resolver, required, true)
+    let raw_message =
+        serde_json::to_value(message).map_err(AuthorizationValidationError::ParseFailed)?;
+
+    validate_authorization_signature_inner(message, did_resolver, required, &raw_message, true)
         .await
         .map_err(|error| match error {
             // Authorization parsing/validation errors remain distinguishable to
@@ -374,9 +377,10 @@ pub async fn validate_authorization_signature(
 }
 
 async fn validate_authorization_signature_inner(
-    raw_message: &JsonValue,
+    _message: &Message<Descriptor>,
     did_resolver: Option<&dyn DidResolver>,
     required: bool,
+    raw_message: &JsonValue,
     validate_delegated_grant: bool,
 ) -> Result<Option<AuthorizationContext>, GrantError> {
     let Some(authorization) = raw_message.get("authorization") else {
@@ -473,9 +477,10 @@ async fn validate_embedded_author_delegated_grant(
     }
 
     let grant_authorization = Box::pin(validate_authorization_signature_inner(
-        grant_value,
+        &grant_message,
         did_resolver,
         true,
+        grant_value,
         false,
     ))
     .await?
@@ -1557,16 +1562,17 @@ fn message_timestamp(message: &Message<Descriptor>) -> chrono::DateTime<chrono::
 
 fn message_interface_and_method(message: &Message<Descriptor>) -> (String, String) {
     match &message.descriptor {
-        Descriptor::Records(records) => {
-            (RECORDS_INTERFACE.to_string(), records.method().to_string())
-        }
+        Descriptor::Records(records) => (
+            RECORDS_INTERFACE.to_string(),
+            MessageDescriptor::method(records.as_ref()).to_string(),
+        ),
         Descriptor::Protocols(protocols) => (
             PROTOCOLS_INTERFACE.to_string(),
-            protocols.method().to_string(),
+            MessageDescriptor::method(protocols.as_ref()).to_string(),
         ),
         Descriptor::Messages(messages) => (
             MESSAGES_INTERFACE.to_string(),
-            messages.method().to_string(),
+            MessageDescriptor::method(messages.as_ref()).to_string(),
         ),
     }
 }
@@ -1599,43 +1605,6 @@ fn filter_map<const N: usize>(
         .into_iter()
         .map(|(key, value)| (FilterKey::Index(key.to_string()), value))
         .collect()
-}
-
-trait DescriptorMethod {
-    fn method(&self) -> &'static str;
-}
-
-impl DescriptorMethod for Records {
-    fn method(&self) -> &'static str {
-        match self {
-            Records::Read(_) => "Read",
-            Records::Count(_) => "Count",
-            Records::Query(_) => "Query",
-            Records::Write(_) => "Write",
-            Records::Delete(_) => "Delete",
-            Records::Subscribe(_) => "Subscribe",
-        }
-    }
-}
-
-impl DescriptorMethod for crate::descriptors::Protocols {
-    fn method(&self) -> &'static str {
-        match self {
-            crate::descriptors::Protocols::Configure(_) => "Configure",
-            crate::descriptors::Protocols::Query(_) => "Query",
-        }
-    }
-}
-
-impl DescriptorMethod for crate::descriptors::Messages {
-    fn method(&self) -> &'static str {
-        match self {
-            crate::descriptors::Messages::Read(_) => "Read",
-            crate::descriptors::Messages::Query(_) => "Query",
-            crate::descriptors::Messages::Subscribe(_) => "Subscribe",
-            crate::descriptors::Messages::Sync(_) => "Sync",
-        }
-    }
 }
 
 #[cfg(test)]

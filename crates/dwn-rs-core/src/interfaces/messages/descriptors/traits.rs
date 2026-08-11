@@ -2,9 +2,7 @@ use cid::Cid;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::auth::jws::{
-    AuthorizationPayload, AuthorizationPayloadForm, PermissionGrantInvocation, SigningPayload,
-};
+use crate::auth::jws::{AuthorizationPayload, PermissionGrantInvocation, SigningPayload};
 use crate::cid::generate_cid_from_serialized;
 
 use super::super::{fields::MessageFields, Fields, Message};
@@ -133,20 +131,6 @@ pub trait MessageDescriptor: Serialize + DeserializeOwned + PartialEq {
     fn cid(&self) -> cid::Cid {
         generate_cid_from_serialized(self)
             .expect("Failed to generate CID from serialized message descriptor")
-    }
-}
-
-// AuthorizationDescriptor is a trait that describe the authorization details for message
-// descriptors. It provides the interface and method for the message descriptor. The generic
-// `Descriptor` implements this trait for use when the concrete type is not known. Concrete Descriptor
-// types implement this trait directly (or use the derive macro).
-pub trait AuthorizationDescriptor: MessageDescriptor {
-    fn authorization_payload_form(&self) -> AuthorizationPayloadForm {
-        AuthorizationPayloadForm::None
-    }
-
-    fn grant_invocation(&self) -> PermissionGrantInvocation {
-        PermissionGrantInvocation::None
     }
 }
 

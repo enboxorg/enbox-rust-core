@@ -1,4 +1,3 @@
-use serde_json::Value as JsonValue;
 use std::cmp::Ordering;
 use std::future::Future;
 use std::sync::Arc;
@@ -11,9 +10,8 @@ use crate::handlers::records::common::{
     accepted_reply, authorize_records_delete, can_perform_delete_against_record, compare_messages,
     conflict_reply, delete_from_data_store_if_needed, extract_author, fetch_record_messages,
     find_initial_write, is_initial_write, message_cid, newest_message, not_found_reply,
-    parse_message, purge_record_descendants, record_id, records_delete_descriptor,
-    records_delete_indexes, records_write_descriptor, records_write_indexes, set_encoded_data,
-    store_error_reply,
+    purge_record_descendants, record_id, records_delete_descriptor, records_delete_indexes,
+    records_write_descriptor, records_write_indexes, set_encoded_data, store_error_reply,
 };
 use crate::permissions::{self};
 use crate::Message;
@@ -44,14 +42,13 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
             } = ctx;
 
             let signature = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 true,
             )
@@ -239,14 +236,13 @@ pub(crate) async fn resume_records_delete_from_task<MessageStore, DataStore, Sta
     data_store: &DataStore,
     state_index: &StateIndex,
     tenant: &str,
-    raw_message: &JsonValue,
+    message: &Message<Descriptor>,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    let message = parse_message(raw_message)?;
     let descriptor = records_delete_descriptor(&message)?;
     let existing_messages =
         fetch_record_messages(tenant, &descriptor.record_id, message_store).await?;
@@ -286,13 +282,12 @@ pub(crate) async fn resume_records_squash_from_task<MessageStore, DataStore, Sta
     data_store: &DataStore,
     state_index: &StateIndex,
     tenant: &str,
-    raw_message: &JsonValue,
+    message: &Message<Descriptor>,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    let message = parse_message(raw_message)?;
     perform_records_squash(message_store, data_store, state_index, tenant, &message).await
 }

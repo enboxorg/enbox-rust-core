@@ -48,7 +48,7 @@ where
 
             let include_private = if raw_message.get("authorization").is_some() {
                 match permissions::validate_authorization_signature(
-                    raw_message,
+                    &message,
                     self.did_resolver.as_deref(),
                     false,
                 )

@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
@@ -7,7 +6,7 @@ use serde_json::Value as JsonValue;
 use crate::auth::resolver::DidResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, SubscribeDescriptor};
-use crate::dwn::{DwnReply, Handler, HandlerContext, MethodHandler, MethodHandlerRequest};
+use crate::dwn::{DwnReply, Handler, HandlerContext};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
@@ -19,6 +18,7 @@ use crate::handlers::records::common::{
 use crate::permissions::{self, AuthorizationContext};
 use crate::stores::EventSubscription;
 use crate::stores::{EventLogSubscribeOptions, SubscriptionListener};
+use crate::validation::validate_message;
 use crate::Message;
 
 use super::RecordsAuthorizationKind;
@@ -42,7 +42,6 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
@@ -55,7 +54,7 @@ where
             }
 
             let signature = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 false,
             )
@@ -179,24 +178,6 @@ pub struct RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
-impl<MessageStore, EventLog> MethodHandler
-    for RecordsEventLogSubscribeHandler<MessageStore, EventLog>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
-{
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        Box::pin(async move {
-            self.handle_subscribe(request.tenant, request.message, Box::new(|_| {}))
-                .await
-                .reply
-        })
-    }
-}
-
 impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
     pub fn new(
         message_store: MessageStore,
@@ -222,6 +203,12 @@ where
         raw_message: &JsonValue,
         listener: SubscriptionListener,
     ) -> RecordsSubscribeReply {
+        if validate_message(raw_message).is_err() {
+            return records_subscribe_reply(
+                DwnReply::bad_request("RecordsSubscribeValidationFailed: invalid message"),
+                None,
+            );
+        }
         let message = match parse_message(raw_message) {
             Ok(message) => message,
             Err(detail) => return records_subscribe_reply(DwnReply::bad_request(detail), None),
@@ -232,7 +219,7 @@ where
         };
 
         let signature = match permissions::validate_authorization_signature(
-            raw_message,
+            &message,
             self.did_resolver.as_deref(),
             false,
         )

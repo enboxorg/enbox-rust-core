@@ -46,7 +46,6 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
@@ -57,7 +56,7 @@ where
             }
 
             let authorization = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 true,
             )
