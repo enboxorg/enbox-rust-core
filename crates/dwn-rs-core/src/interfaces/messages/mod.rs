@@ -80,10 +80,13 @@ where
         signer: Option<S>,
     ) -> Result<Self, ValidationError> {
         let (descriptor, fields) = parameters.build().await?;
+        let mut fields = fields.unwrap_or_default();
 
         let auth = if let Some(signer) = signer {
             Self::create_authorization(
+                &parameters,
                 &descriptor,
+                &fields,
                 signer,
                 parameters.delegated_grant().clone(),
                 parameters.permission_grant_invocation()?,
@@ -95,14 +98,15 @@ where
         };
 
         // If the fields are None, we create an empty Fields instance.
-        let mut fields = fields.unwrap_or_default();
         fields.set_authorization(auth);
 
         Ok(Self { descriptor, fields })
     }
 
     async fn create_authorization<S: JwsSigner>(
+        parameters: &D::Parameters,
         descriptor: &D,
+        fields: &D::Fields,
         signer: S,
         delegated_grant: Option<Message<RecordsWriteDescriptor>>,
         permission_grant: jws::PermissionGrantInvocation,
@@ -118,7 +122,9 @@ where
         };
 
         let signature = Self::create_signature(
+            parameters,
             descriptor,
+            fields,
             signer,
             delegated_grant_id,
             permission_grant,
@@ -139,7 +145,9 @@ where
     }
 
     async fn create_signature<S: JwsSigner>(
+        parameters: &D::Parameters,
         descriptor: &D,
+        fields: &D::Fields,
         signer: S,
         delegated_grant_id: Option<Cid>,
         permission_grant: jws::PermissionGrantInvocation,
@@ -147,15 +155,17 @@ where
     ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
-        let payload = jws::AuthorizationPayload::new(
-            descriptor_cid,
-            delegated_grant_id,
-            permission_grant,
-            protocol_role,
-        )
-        .map_err(|e| ValidationError {
-            message: e.to_string(),
-        })?;
+        let payload = parameters
+            .authorization_payload(
+                descriptor_cid,
+                fields,
+                delegated_grant_id,
+                permission_grant,
+                protocol_role,
+            )
+            .map_err(|e| ValidationError {
+                message: e.to_string(),
+            })?;
 
         let signature = jws::Jws::create(&payload, std::slice::from_ref(&signer))
             .await

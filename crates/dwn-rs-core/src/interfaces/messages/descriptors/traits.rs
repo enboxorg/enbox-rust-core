@@ -1,7 +1,10 @@
+use cid::Cid;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::auth::jws::PermissionGrantInvocation;
+use crate::auth::jws::{
+    AuthorizationPayload, AuthorizationPayloadForm, PermissionGrantInvocation, SigningPayload,
+};
 use crate::cid::generate_cid_from_serialized;
 
 use super::super::{fields::MessageFields, Fields, Message};
@@ -43,6 +46,27 @@ pub trait MessageParameters {
 
     fn protocol_rule(&self) -> Option<String> {
         None
+    }
+
+    fn authorization_payload(
+        &self,
+        descriptor_cid: Cid,
+        fields: &Self::Fields,
+        delegated_grant_id: Option<Cid>,
+        permission_grant: PermissionGrantInvocation,
+        protocol_role: Option<String>,
+    ) -> Result<SigningPayload, ValidationError> {
+        let _ = fields;
+        AuthorizationPayload::new(
+            descriptor_cid,
+            delegated_grant_id,
+            permission_grant,
+            protocol_role,
+        )
+        .map(SigningPayload::Generic)
+        .map_err(|e| ValidationError {
+            message: format!("Failed to create authorization payload: {e}"),
+        })
     }
 }
 
@@ -109,6 +133,20 @@ pub trait MessageDescriptor: Serialize + DeserializeOwned + PartialEq {
     fn cid(&self) -> cid::Cid {
         generate_cid_from_serialized(self)
             .expect("Failed to generate CID from serialized message descriptor")
+    }
+}
+
+// AuthorizationDescriptor is a trait that describe the authorization details for message
+// descriptors. It provides the interface and method for the message descriptor. The generic
+// `Descriptor` implements this trait for use when the concrete type is not known. Concrete Descriptor
+// types implement this trait directly (or use the derive macro).
+pub trait AuthorizationDescriptor: MessageDescriptor {
+    fn authorization_payload_form(&self) -> AuthorizationPayloadForm {
+        AuthorizationPayloadForm::None
+    }
+
+    fn grant_invocation(&self) -> PermissionGrantInvocation {
+        PermissionGrantInvocation::None
     }
 }
 

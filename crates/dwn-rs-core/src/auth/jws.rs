@@ -97,6 +97,76 @@ pub struct Jws {
     pub extra: MapValue,
 }
 
+#[derive(Clone)]
+pub struct RecordsWriteAuthorizationPayload {
+    bytes: Vec<u8>,
+}
+
+impl RecordsWriteAuthorizationPayload {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        descriptor_cid: Cid,
+        record_id: String,
+        context_id: String,
+        attestation_cid: Option<Cid>,
+        encryption_cid: Option<Cid>,
+        permission_grant_id: Option<String>,
+        delegated_grant_id: Option<Cid>,
+        protocol_role: Option<String>,
+    ) -> Result<Self, JwsError> {
+        #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Repr {
+            descriptor_cid: String,
+            record_id: String,
+            context_id: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            attestation_cid: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            encryption_cid: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            permission_grant_id: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            delegated_grant_id: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            protocol_role: Option<String>,
+        }
+
+        let repr = Repr {
+            descriptor_cid: descriptor_cid.to_string(),
+            record_id,
+            context_id,
+            attestation_cid: attestation_cid.map(|cid| cid.to_string()),
+            encryption_cid: encryption_cid.map(|cid| cid.to_string()),
+            permission_grant_id,
+            delegated_grant_id: delegated_grant_id.map(|cid| cid.to_string()),
+            protocol_role,
+        };
+        let bytes = serde_json::to_vec(&repr)?;
+
+        Ok(Self { bytes })
+    }
+}
+
+impl JwsPayload for RecordsWriteAuthorizationPayload {
+    fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        std::borrow::Cow::Owned(self.bytes.clone())
+    }
+}
+
+// PermissionGrantInvocation is used to represent the invocation of a permission grant in the
+// context of authorization payloads. It can be one of three variants: None, Single, or Multi.
+// The None variant indicates that no permission grant is being invoked. The Single variant
+// represents a single permission grant invocation, identified by a string (e.g., an ID). The
+// Multi variant represents multiple permission grant invocations, each identified by a string
+// in a vector.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PermissionGrantInvocation {
+    None,
+    Single(String),
+    Multi(Vec<String>),
+}
+
 /// Pre-serialized JWS payload for a `RecordsWrite`/`ProtocolsConfigure`-style authorization
 /// signature. Serialization happens once in [`AuthorizationPayload::new`], which is fallible, so
 /// [`JwsPayload::payload_bytes`] (an infallible trait method defined upstream) never needs to
@@ -104,13 +174,6 @@ pub struct Jws {
 #[derive(Clone)]
 pub struct AuthorizationPayload {
     bytes: Vec<u8>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PermissionGrantInvocation {
-    None,
-    Single(String),
-    Multi(Vec<String>),
 }
 
 impl AuthorizationPayload {
@@ -157,6 +220,20 @@ impl AuthorizationPayload {
 impl JwsPayload for AuthorizationPayload {
     fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
         std::borrow::Cow::Borrowed(&self.bytes)
+    }
+}
+
+pub enum SigningPayload {
+    Generic(AuthorizationPayload),
+    RecordsWrite(RecordsWriteAuthorizationPayload),
+}
+
+impl JwsPayload for SigningPayload {
+    fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        match self {
+            SigningPayload::Generic(payload) => payload.payload_bytes(),
+            SigningPayload::RecordsWrite(payload) => payload.payload_bytes(),
+        }
     }
 }
 
