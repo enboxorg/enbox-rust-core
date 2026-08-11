@@ -10,7 +10,6 @@ use serde_json::Value as JsonValue;
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
 use crate::dwn::{DwnReply, HandlerContext};
-use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions::{self};
 use crate::stores::StateHash;
@@ -77,10 +76,7 @@ where
                 Err(error) => return DwnReply::bad_request(error),
             };
 
-            if let Err(detail) = self
-                .authorize_messages_sync(tenant, &message, &descriptor, &authorization)
-                .await
-            {
+            if let Err(detail) = self.authorize_messages_sync(tenant, &authorization).await {
                 return DwnReply::unauthorized(detail);
             }
 
@@ -119,26 +115,13 @@ where
     async fn authorize_messages_sync(
         &self,
         tenant: &str,
-        message: &Message<Descriptor>,
-        descriptor: &MessagesSyncDescriptor,
         authorization: &permissions::AuthorizationContext,
     ) -> Result<(), String> {
         if authorization.author == tenant {
             return Ok(());
         }
-        let filter = MessagesFilter {
-            protocol: descriptor.protocol.clone(),
-            ..Default::default()
-        };
-        permissions::authorize_messages_subscribe(
-            tenant,
-            message,
-            &[filter],
-            authorization,
-            &self.message_store,
-        )
-        .await
-        .map_err(|detail| format!("MessagesSyncAuthorizationFailed: {detail}"))
+
+        Err("MessagesSyncAuthorizationFailed: sync is disabled".to_string())
     }
 
     async fn handle_root(&self, tenant: &str, descriptor: &MessagesSyncDescriptor) -> DwnReply {
