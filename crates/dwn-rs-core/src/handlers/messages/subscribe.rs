@@ -79,13 +79,13 @@ where
         raw_message: &JsonValue,
         listener: SubscriptionListener,
     ) -> SubscribeReply {
-        let descriptor = match messages_subscribe_descriptor(&message) {
+        let descriptor = match messages_subscribe_descriptor(message) {
             Ok(descriptor) => descriptor,
             Err(detail) => return subscribe_reply(DwnReply::bad_request(detail), None),
         };
 
         let authorization = match permissions::validate_authorization_signature(
-            &message,
+            message,
             self.did_resolver.as_deref(),
             true,
         )
@@ -110,7 +110,7 @@ where
         };
 
         if let Err(detail) = self
-            .authorize_messages_subscribe(tenant, &message, descriptor, &authorization)
+            .authorize_messages_subscribe(tenant, message, descriptor, &authorization)
             .await
         {
             return subscribe_reply(DwnReply::unauthorized(detail), None);

@@ -243,13 +243,13 @@ where
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    let descriptor = records_delete_descriptor(&message)?;
+    let descriptor = records_delete_descriptor(message)?;
     let existing_messages =
         fetch_record_messages(tenant, &descriptor.record_id, message_store).await?;
     let Some(newest_existing) = newest_message(&existing_messages) else {
         return Ok(());
     };
-    if !can_perform_delete_against_record(&message, &newest_existing) {
+    if !can_perform_delete_against_record(message, &newest_existing) {
         return Ok(());
     }
     let initial_write = find_initial_write(
@@ -270,7 +270,7 @@ where
         data_store,
         state_index,
         tenant,
-        &message,
+        message,
         &existing_messages,
         &initial_write,
     )
@@ -289,5 +289,5 @@ where
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    perform_records_squash(message_store, data_store, state_index, tenant, &message).await
+    perform_records_squash(message_store, data_store, state_index, tenant, message).await
 }

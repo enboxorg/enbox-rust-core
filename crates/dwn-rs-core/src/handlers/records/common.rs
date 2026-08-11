@@ -1104,7 +1104,7 @@ where
     let mut protocol: String = record_chain
         .last()
         .and_then(|message| records_write_descriptor(message).ok())
-        .and_then(|descriptor| Some(descriptor.protocol.clone()))
+        .map(|descriptor| descriptor.protocol.clone())
         .unwrap_or_default();
 
     let mut protocol_path = role.to_string();

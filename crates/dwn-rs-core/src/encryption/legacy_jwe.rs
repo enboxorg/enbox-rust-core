@@ -81,7 +81,7 @@ pub struct LegacyJweEncryption {
 impl LegacyJweEncryption {
     pub fn protected_header(&self) -> Result<LegacyJweProtectedHeader, EncryptionError> {
         let protected = decode_base64url(&self.protected, "protected")?;
-        serde_json::from_slice(&protected).map_err(|error| legacy_error(error))
+        serde_json::from_slice(&protected).map_err(legacy_error)
     }
 
     pub fn decrypt(

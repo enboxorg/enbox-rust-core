@@ -191,7 +191,7 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
         .emit(
             "did:example:alice",
             MessageEvent {
-                message: stored_message,
+                message: stored_message.clone(),
                 initial_write: None,
             },
             event_indexes("http://example.com/notes"),
@@ -214,9 +214,11 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
     })
     .await;
 
+    let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
         .handle_subscribe(
             "did:example:alice",
+            &message,
             &request,
             Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
         )
@@ -293,8 +295,9 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
     })
     .await;
 
+    let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
-        .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
         .await;
     assert_eq!(result.reply.status.code, 410);
     assert_eq!(result.reply.body["error"]["code"], "ProgressGap");
@@ -337,8 +340,9 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
     })
     .await;
 
+    let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
-        .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
         .await;
     assert_eq!(
         result.reply.status.code, 401,
@@ -388,8 +392,9 @@ async fn messages_subscribe_allows_filters_covered_by_different_grants() {
     })
     .await;
 
+    let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
-        .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
         .await;
     assert_eq!(
         result.reply.status.code, 200,
