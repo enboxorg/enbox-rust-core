@@ -15,6 +15,7 @@ use crate::interfaces::messages::descriptors::{
     ConcreteDescriptor, FromDescriptor, InterfaceUnion, Messages, Protocols, Records,
 };
 use crate::interfaces::replies::Status;
+use crate::validation::validate_message;
 use crate::{Descriptor, Message};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +166,10 @@ pub trait Handler: Send + Sync {
                     return DwnReply::bad_request(format!("Failed to parse message: {error}"))
                 }
             };
+
+            if validate_message(request.message).is_err() {
+                return DwnReply::bad_request("Message validation failed");
+            }
 
             let descriptor = match Self::Descriptor::from_descriptor(&message.descriptor) {
                 Ok(descriptor) => descriptor.clone(),
