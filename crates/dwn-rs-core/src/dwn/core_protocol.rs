@@ -75,7 +75,7 @@ impl CoreProtocolRegistry {
         _data: Option<&[u8]>,
     ) -> Result<(), String> {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
-            validate_permissions_record_schema(message)?;
+            validate_permissions_record_schema(message).map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -90,7 +90,9 @@ impl CoreProtocolRegistry {
         MessageStore: crate::stores::MessageStore + Sync,
     {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
-            pre_process_permissions_write(tenant, message, message_store).await?;
+            pre_process_permissions_write(tenant, message, message_store)
+                .await
+                .map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -114,7 +116,8 @@ impl CoreProtocolRegistry {
                 stores.data_store,
                 stores.state_index,
             )
-            .await?;
+            .await
+            .map_err(|error| error.to_string())?;
         }
         Ok(())
     }

@@ -9,7 +9,7 @@ use crate::auth::resolver::DidResolver;
 use crate::descriptors::Descriptor;
 use crate::descriptors::MessagesReadDescriptor;
 use crate::dwn::{DwnReply, HandlerContext};
-use crate::permissions::{self, AuthorizationContext};
+use crate::permissions::{self, AuthorizationContext, MessagesReadGrantAccess};
 use crate::Handler;
 use crate::Message;
 
@@ -38,7 +38,6 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
@@ -54,7 +53,7 @@ where
             };
 
             let authorization = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 true,
             )
@@ -66,12 +65,10 @@ where
                         "MessagesReadAuthorizationFailed: message failed authorization",
                     )
                 }
-                Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
-                }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
             let stored_message = match self.message_store.get(tenant, &message_cid).await {
@@ -80,25 +77,31 @@ where
                 Err(err) => return store_error_reply(err.to_string()),
             };
 
-            if let Err(detail) = self
+            let grant_access = match self
                 .authorize_messages_read(tenant, &message, &authorization, &stored_message)
                 .await
             {
-                return DwnReply::unauthorized(detail);
-            }
+                Ok(access) => access,
+                Err(detail) => return DwnReply::unauthorized(detail),
+            };
 
             let mut message_json =
                 match serde_json::to_value(&stored_message).map_err(|err| err.to_string()) {
                     Ok(value) => value,
                     Err(detail) => return store_error_reply(detail),
                 };
-            let inline_data = strip_encoded_data(&mut message_json);
-            let encoded_data = match inline_data {
-                Some(encoded_data) => Some(encoded_data),
-                None => self
-                    .external_read_data(tenant, &stored_message)
-                    .await
-                    .unwrap_or(None),
+            let encoded_data = match grant_access {
+                MessagesReadGrantAccess::MetadataOnly => {
+                    strip_encoded_data(&mut message_json);
+                    None
+                }
+                MessagesReadGrantAccess::Full => match strip_encoded_data(&mut message_json) {
+                    Some(encoded_data) => Some(encoded_data),
+                    None => self
+                        .external_read_data(tenant, &stored_message)
+                        .await
+                        .unwrap_or(None),
+                },
             };
 
             let mut entry = serde_json::Map::new();
@@ -141,11 +144,11 @@ where
         incoming_message: &Message<Descriptor>,
         authorization: &AuthorizationContext,
         stored_message: &Message<Descriptor>,
-    ) -> Result<(), String> {
+    ) -> Result<MessagesReadGrantAccess, String> {
         if authorization.author == tenant {
-            return Ok(());
+            return Ok(MessagesReadGrantAccess::Full);
         }
-        if authorization.payload.get("permissionGrantId").is_some() {
+        if authorization.permission_grant_ids().is_some() {
             return permissions::authorize_messages_read(
                 tenant,
                 incoming_message,
@@ -153,7 +156,8 @@ where
                 authorization,
                 &self.message_store,
             )
-            .await;
+            .await
+            .map_err(|error| error.to_string());
         }
         Err("MessagesReadAuthorizationFailed: protocol message failed authorization".to_string())
     }

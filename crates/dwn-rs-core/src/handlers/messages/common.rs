@@ -14,18 +14,11 @@ use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::messages::subscribe::SubscribeReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::stores::{EventSubscription, StateHash};
-use crate::{canonical_rfc3339, Fields, Message};
+use crate::{Fields, Message, RangeFilter, Value};
 
 const MAX_SYNC_DEPTH: usize = 256;
 
 static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
-
-pub(crate) fn parse_message(
-    raw_message: &JsonValue,
-    prefix: &str,
-) -> Result<Message<Descriptor>, String> {
-    serde_json::from_value(raw_message.clone()).map_err(|err| format!("{prefix}: {err}"))
-}
 
 pub(crate) fn messages_subscribe_descriptor(
     message: &Message<Descriptor>,
@@ -60,12 +53,19 @@ pub(crate) fn messages_filter_to_filter_map(
     insert_messages_string_filter(&mut map, "interface", filter.interface.as_ref());
     insert_messages_string_filter(&mut map, "method", filter.method.as_ref());
     insert_messages_string_filter(&mut map, "protocol", filter.protocol.as_ref());
-    if let Some(message_timestamp) = filter.message_timestamp {
-        map.insert(
-            FilterKey::Index("messageTimestamp".to_string()),
-            Filter::Equal(crate::Value::String(canonical_rfc3339(message_timestamp))),
-        );
-    }
+    insert_messages_string_filter(
+        &mut map,
+        "protocolPathPrefix",
+        filter.protocol_path_prefix.as_ref(),
+    );
+    insert_messages_string_filter(&mut map, "contextId", filter.context_id_prefix.as_ref());
+
+    insert_message_range_filter(
+        &mut map,
+        "messageTimestamp",
+        filter.message_timestamp.clone().map(Into::into).clone(),
+    );
+
     map
 }
 
@@ -79,6 +79,16 @@ pub(crate) fn insert_messages_string_filter(
             FilterKey::Index(key.to_string()),
             Filter::Equal(crate::Value::String(value.clone())),
         );
+    }
+}
+
+pub(crate) fn insert_message_range_filter(
+    map: &mut BTreeMap<FilterKey, Filter<crate::Value>>,
+    key: &str,
+    range_filter: Option<RangeFilter<Value>>,
+) {
+    if let Some(range) = range_filter {
+        map.insert(FilterKey::Index(key.to_string()), Filter::Range(range));
     }
 }
 

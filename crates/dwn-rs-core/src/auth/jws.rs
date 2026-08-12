@@ -11,6 +11,8 @@ pub use ssi_jwk::Algorithm;
 pub use ssi_jws::JwsSigner;
 
 use crate::auth::resolver::{resolve_signing_key, DidResolver, ResolverError};
+use crate::permissions::errors::AuthorizationRequestError;
+use crate::permissions::AuthorizationValidationError;
 use crate::MapValue;
 
 #[derive(Error, Debug)]
@@ -97,7 +99,127 @@ pub struct Jws {
     pub extra: MapValue,
 }
 
-/// Pre-serialized JWS payload for a `RecordsWrite`/`ProtocolsConfigure`-style authorization
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RecordsWriteAuthorizationPayloadData {
+    pub(crate) descriptor_cid: String,
+    pub(crate) record_id: String,
+    pub(crate) context_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) attestation_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) encryption_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) permission_grant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) delegated_grant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) protocol_role: Option<String>,
+}
+
+pub(crate) fn permission_grant_invocation(
+    permission_grant_id: Option<&str>,
+    permission_grant_ids: Option<&[String]>,
+) -> Result<PermissionGrantInvocation, AuthorizationValidationError> {
+    match (permission_grant_id, permission_grant_ids) {
+        (Some(id), None) => Ok(PermissionGrantInvocation::Single(id.to_string())),
+        (None, Some(ids)) => Ok(PermissionGrantInvocation::Multi(ids.to_vec())),
+        (None, None) => Ok(PermissionGrantInvocation::None),
+        (Some(_), Some(_)) => Err(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::PermissionGrantIDsConflict,
+        )),
+    }
+}
+
+/// Pre-serialized JWS payload for a `RecordsWrite` authorization
+/// signature. Serialization happens once in [`AuthorizationPayload::new`], which is fallible, so
+/// [`JwsPayload::payload_bytes`] (an infallible trait method defined upstream) never needs to
+/// panic on a serialization failure.
+#[derive(Clone)]
+pub struct RecordsWriteAuthorizationPayload {
+    bytes: Vec<u8>,
+}
+
+impl RecordsWriteAuthorizationPayload {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        descriptor_cid: Cid,
+        record_id: String,
+        context_id: String,
+        attestation_cid: Option<Cid>,
+        encryption_cid: Option<Cid>,
+        permission_grant_id: Option<String>,
+        delegated_grant_id: Option<Cid>,
+        protocol_role: Option<String>,
+    ) -> Result<Self, JwsError> {
+        #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        pub(crate) struct Repr {
+            pub(crate) descriptor_cid: Cid,
+            pub(crate) record_id: String,
+            pub(crate) context_id: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub(crate) attestation_cid: Option<Cid>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub(crate) encryption_cid: Option<Cid>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub(crate) permission_grant_id: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub(crate) delegated_grant_id: Option<Cid>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub(crate) protocol_role: Option<String>,
+        }
+
+        let repr = Repr {
+            descriptor_cid,
+            record_id,
+            context_id,
+            attestation_cid,
+            encryption_cid,
+            permission_grant_id,
+            delegated_grant_id,
+            protocol_role,
+        };
+        let bytes = serde_json::to_vec(&repr)?;
+
+        Ok(Self { bytes })
+    }
+}
+
+impl JwsPayload for RecordsWriteAuthorizationPayload {
+    fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        std::borrow::Cow::Owned(self.bytes.clone())
+    }
+}
+
+// PermissionGrantInvocation is used to represent the invocation of a permission grant in the
+// context of authorization payloads. It can be one of three variants: None, Single, or Multi.
+// The None variant indicates that no permission grant is being invoked. The Single variant
+// represents a single permission grant invocation, identified by a string (e.g., an ID). The
+// Multi variant represents multiple permission grant invocations, each identified by a string
+// in a vector.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PermissionGrantInvocation {
+    None,
+    Single(String),
+    Multi(Vec<String>),
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+pub(crate) struct AuthorizationPayloadData {
+    #[serde(rename = "descriptorCid")]
+    pub(crate) descriptor_cid: String,
+    #[serde(rename = "delegatedGrantId", skip_serializing_if = "Option::is_none")]
+    pub(crate) delegated_grant_id: Option<String>,
+    #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+    pub(crate) permission_grant_id: Option<String>,
+    #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
+    pub(crate) permission_grant_ids: Option<Vec<String>>,
+    #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
+    pub(crate) protocol_role: Option<String>,
+}
+
+/// Pre-serialized JWS payload for a `ProtocolsConfigure`-style authorization
 /// signature. Serialization happens once in [`AuthorizationPayload::new`], which is fallible, so
 /// [`JwsPayload::payload_bytes`] (an infallible trait method defined upstream) never needs to
 /// panic on a serialization failure.
@@ -110,30 +232,40 @@ impl AuthorizationPayload {
     pub fn new(
         descriptor_cid: Cid,
         delegated_grant_id: Option<Cid>,
-        permission_grant_id: Option<String>,
+        permission_grant: PermissionGrantInvocation,
         protocol_role: Option<String>,
     ) -> Result<Self, JwsError> {
-        #[derive(Serialize)]
-        struct Repr {
+        #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
+        pub(crate) struct Repr {
             #[serde(rename = "descriptorCid", serialize_with = "crate::ser::serialize_cid")]
-            descriptor_cid: Cid,
+            pub(crate) descriptor_cid: Cid,
             #[serde(
                 rename = "delegatedGrantId",
                 skip_serializing_if = "Option::is_none",
                 serialize_with = "crate::ser::optional_cid_string::serialize"
             )]
-            delegated_grant_id: Option<Cid>,
+            pub(crate) delegated_grant_id: Option<Cid>,
             #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
-            permission_grant_id: Option<String>,
+            pub(crate) permission_grant_id: Option<String>,
+            #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
+            pub(crate) permission_grant_ids: Option<Vec<String>>,
             #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
-            protocol_role: Option<String>,
+            pub(crate) protocol_role: Option<String>,
         }
-        let bytes = serde_json::to_vec(&Repr {
+
+        let (permission_grant_id, permission_grant_ids) = match permission_grant {
+            PermissionGrantInvocation::None => (None, None),
+            PermissionGrantInvocation::Single(id) => (Some(id), None),
+            PermissionGrantInvocation::Multi(ids) => (None, Some(ids)),
+        };
+        let repr = Repr {
             descriptor_cid,
             delegated_grant_id,
-            permission_grant_id,
             protocol_role,
-        })?;
+            permission_grant_id,
+            permission_grant_ids,
+        };
+        let bytes = serde_json::to_vec(&repr)?;
         Ok(Self { bytes })
     }
 }
@@ -141,6 +273,20 @@ impl AuthorizationPayload {
 impl JwsPayload for AuthorizationPayload {
     fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
         std::borrow::Cow::Borrowed(&self.bytes)
+    }
+}
+
+pub enum SigningPayload {
+    Generic(AuthorizationPayload),
+    RecordsWrite(RecordsWriteAuthorizationPayload),
+}
+
+impl JwsPayload for SigningPayload {
+    fn payload_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
+        match self {
+            SigningPayload::Generic(payload) => payload.payload_bytes(),
+            SigningPayload::RecordsWrite(payload) => payload.payload_bytes(),
+        }
     }
 }
 
@@ -1016,7 +1162,7 @@ mod tests {
         let payload = AuthorizationPayload::new(
             descriptor_cid,
             Some(delegated_grant_id),
-            Some("grant-123".to_string()),
+            PermissionGrantInvocation::Single("grant-123".to_string()),
             Some("adminRole".to_string()),
         )
         .unwrap();
@@ -1029,6 +1175,22 @@ mod tests {
                 "delegatedGrantId": delegated_grant_id.to_string(),
                 "permissionGrantId": "grant-123",
                 "protocolRole": "adminRole",
+            })
+        );
+
+        let payload = AuthorizationPayload::new(
+            descriptor_cid,
+            None,
+            PermissionGrantInvocation::Multi(vec!["grant-a".to_string(), "grant-b".to_string()]),
+            None,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&payload.payload_bytes()).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "descriptorCid": descriptor_cid.to_string(),
+                "permissionGrantIds": ["grant-a", "grant-b"],
             })
         );
     }

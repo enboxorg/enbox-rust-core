@@ -13,7 +13,7 @@ use crate::identity::agent::{
 };
 use crate::identity::setup::protocol_requires_encryption;
 use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Who};
-use crate::permissions::PermissionScope;
+use crate::permissions::{PermissionScope, RecordsMethod, RecordsScope};
 use ssi_jwk::JWK;
 
 pub type ConnectFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
@@ -225,17 +225,17 @@ where
             if !is_read_like_scope(scope) {
                 continue;
             }
-            if scope.context_id.is_some() {
+            if scope.context_id().is_some() {
                 continue;
             }
             if multi_party {
-                if scope.protocol_path.is_none() {
+                if scope.protocol_path().is_none() {
                     multi_party_protocols.insert(request.protocol_definition.protocol.clone());
                 }
                 continue;
             }
             let protocol = request.protocol_definition.protocol.clone();
-            let (derivation_path, decryption_scope) = match &scope.protocol_path {
+            let (derivation_path, decryption_scope) = match scope.protocol_path() {
                 Some(protocol_path) => {
                     let mut derivation_path = vec![
                         PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
@@ -250,7 +250,7 @@ where
                     (
                         derivation_path,
                         DelegateDecryptionScope::ProtocolPath {
-                            protocol_path: protocol_path.clone(),
+                            protocol_path: protocol_path.to_string(),
                             match_: "exact".to_string(),
                         },
                     )
@@ -476,7 +476,7 @@ impl DelegateSessionCache {
         let Some(grant) = state.grants.remove(grant_id) else {
             return Ok(false);
         };
-        let revoked_protocol = grant.scope.protocol.clone();
+        let revoked_protocol = grant.scope.protocol().map(str::to_owned);
         state.decryption_keys.retain(|key| {
             revoked_protocol
                 .as_ref()
@@ -560,8 +560,12 @@ impl KeyDeliveryStore for MemoryKeyDeliveryStore {
 
 pub fn is_read_like_scope(scope: &PermissionScope) -> bool {
     matches!(
-        scope.method.as_str(),
-        "Read" | "Query" | "Subscribe" | "Sync"
+        scope,
+        PermissionScope::Messages(_)
+            | PermissionScope::Records(RecordsScope {
+                method: RecordsMethod::Read,
+                ..
+            })
     )
 }
 
@@ -649,6 +653,7 @@ mod tests {
         MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
     use crate::interfaces::messages::protocols::{ActionWho, Type};
+    use crate::permissions::{ProtocolPath, RecordsMethod, RecordsScope, RecordsSelector};
 
     #[tokio::test]
     async fn read_like_scope_receives_decryption_key_and_write_only_does_not() {
@@ -739,7 +744,7 @@ mod tests {
             Utc::now() + Duration::days(1),
             None,
         );
-        let protocol = grant.scope.protocol.clone().unwrap();
+        let protocol = grant.scope.protocol().unwrap().to_string();
         cache.insert_grant(grant.clone()).unwrap();
         cache
             .set_decryption_keys(vec![sample_decryption_key(&protocol)])
@@ -798,13 +803,17 @@ mod tests {
     }
 
     fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
-        PermissionScope {
-            interface: "Records".to_string(),
-            method: method.to_string(),
-            protocol: Some("https://protocol.example/notes".to_string()),
-            context_id: None,
-            protocol_path: protocol_path.map(ToString::to_string),
-        }
+        PermissionScope::Records(RecordsScope {
+            method: match method {
+                "Read" => RecordsMethod::Read,
+                "Write" => RecordsMethod::Write,
+                "Delete" => RecordsMethod::Delete,
+                _ => panic!("unsupported Records permission method in test: {method}"),
+            },
+            protocol: "https://protocol.example/notes".to_string(),
+            selector: protocol_path
+                .map(|path| RecordsSelector::ProtocolPath(ProtocolPath(path.to_string()))),
+        })
     }
 
     fn encrypted_protocol(multi_party: bool) -> Definition {

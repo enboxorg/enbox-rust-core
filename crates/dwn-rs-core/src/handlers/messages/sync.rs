@@ -45,7 +45,6 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
@@ -56,7 +55,7 @@ where
             }
 
             let authorization = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 true,
             )
@@ -74,12 +73,10 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
-            if let Err(detail) = self
-                .authorize_messages_sync(tenant, &message, &descriptor, &authorization)
-                .await
-            {
+            if let Err(detail) = self.authorize_messages_sync(tenant, &authorization).await {
                 return DwnReply::unauthorized(detail);
             }
 
@@ -118,23 +115,13 @@ where
     async fn authorize_messages_sync(
         &self,
         tenant: &str,
-        message: &Message<Descriptor>,
-        descriptor: &MessagesSyncDescriptor,
         authorization: &permissions::AuthorizationContext,
     ) -> Result<(), String> {
         if authorization.author == tenant {
             return Ok(());
         }
-        let protocols = descriptor.protocol.iter().cloned().collect::<Vec<String>>();
-        permissions::authorize_messages_subscribe_or_sync(
-            tenant,
-            message,
-            &protocols,
-            authorization,
-            &self.message_store,
-        )
-        .await
-        .map_err(|detail| format!("MessagesSyncAuthorizationFailed: {detail}"))
+
+        Err("MessagesSyncAuthorizationFailed: sync is disabled".to_string())
     }
 
     async fn handle_root(&self, tenant: &str, descriptor: &MessagesSyncDescriptor) -> DwnReply {

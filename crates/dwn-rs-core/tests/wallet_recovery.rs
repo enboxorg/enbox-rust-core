@@ -141,10 +141,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         Utc::now() + Duration::days(1),
         None,
     );
-    assert_eq!(
-        grant.scope.protocol.as_deref(),
-        Some(protocol.protocol.as_str())
-    );
+    assert_eq!(grant.scope.protocol(), Some(protocol.protocol.as_str()));
 
     let mut no_encryption_did = restored.portable_did.clone();
     no_encryption_did
@@ -289,13 +286,20 @@ impl TenantRegistrationClient for MockRegistrationClient {
 }
 
 fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
-    PermissionScope {
-        interface: "Records".to_string(),
-        method: method.to_string(),
-        protocol: Some("https://protocol.example/notes".to_string()),
-        context_id: None,
-        protocol_path: protocol_path.map(ToString::to_string),
-    }
+    PermissionScope::Records(dwn_rs_core::permissions::RecordsScope {
+        method: match method {
+            "Read" => dwn_rs_core::permissions::RecordsMethod::Read,
+            "Write" => dwn_rs_core::permissions::RecordsMethod::Write,
+            "Delete" => dwn_rs_core::permissions::RecordsMethod::Delete,
+            _ => panic!("unsupported Records permission method in test: {method}"),
+        },
+        protocol: "https://protocol.example/notes".to_string(),
+        selector: protocol_path.map(|path| {
+            dwn_rs_core::permissions::RecordsSelector::ProtocolPath(
+                dwn_rs_core::permissions::ProtocolPath(path.to_string()),
+            )
+        }),
+    })
 }
 
 fn encrypted_protocol() -> Definition {

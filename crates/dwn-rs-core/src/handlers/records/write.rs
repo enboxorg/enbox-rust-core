@@ -60,14 +60,14 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 mut message,
                 descriptor,
                 data,
+                ..
             } = ctx;
 
             let signature = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 true,
             )
@@ -85,6 +85,7 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
             if let Err(detail) = validate_records_write_integrity(&message, &signature) {
@@ -471,24 +472,36 @@ where
         author: &str,
     ) -> Result<(), String> {
         let descriptor = records_write_descriptor(message)?;
-        let Some(protocol) = &descriptor.protocol else {
-            return Ok(());
-        };
-        let protocol_path = descriptor.protocol_path.as_deref().ok_or_else(|| {
-            "ProtocolAuthorizationMissingProtocolPath: protocolPath is required for protocol records".to_string()
-        })?;
+        let protocol_path = descriptor.protocol_path.clone();
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
-        let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
-            tenant,
-            protocol,
-            &self.message_store,
-            Some(&governing_timestamp),
+
+        // check if protocol is defined in the core_protocol_registry and use that
+        // definition, otherwise fetch the protocol definition from the message store
+        let definition = if self.core_protocol_registry.has(&descriptor.protocol) {
+            self.core_protocol_registry
+                .get_definition(&descriptor.protocol)
+                .ok_or_else(|| {
+                    format!(
+                        "ProtocolAuthorizationInvalidProtocol: {} is not defined",
+                        &descriptor.protocol
+                    )
+                })?
+        } else {
+            crate::handlers::protocols::configure::fetch_protocol_definition(
+                tenant,
+                &descriptor.protocol,
+                &self.message_store,
+                Some(&governing_timestamp),
+            )
+            .await
+            .map_err(|err| err.to_string())?
+        };
+        let rule_set = protocol_types::get_rule_set_at_path(
+            descriptor.protocol_path.as_str(),
+            &definition.structure,
         )
-        .await
-        .map_err(|err| err.to_string())?;
-        let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
-            .ok_or_else(|| {
+        .ok_or_else(|| {
             format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
         })?;
 
@@ -544,7 +557,8 @@ where
         auth: &AuthorizationContext,
     ) -> Result<(), String> {
         if permissions::authorize_delegated_records_write(message, auth, &self.message_store)
-            .await?
+            .await
+            .map_err(|error| error.to_string())?
         {
             return Ok(());
         }
@@ -557,7 +571,8 @@ where
             auth,
             &self.message_store,
         )
-        .await?
+        .await
+        .map_err(|error| error.to_string())?
         {
             return Ok(());
         }
@@ -586,14 +601,9 @@ where
         message: &Message<Descriptor>,
     ) -> Result<(), String> {
         let descriptor = records_write_descriptor(message)?;
-        let (Some(protocol), Some(protocol_path)) =
-            (&descriptor.protocol, &descriptor.protocol_path)
-        else {
-            return Ok(());
-        };
         let definition = match crate::handlers::protocols::configure::fetch_protocol_definition(
             tenant,
-            protocol,
+            &descriptor.protocol,
             &self.message_store,
             None,
         )
@@ -603,7 +613,7 @@ where
             Err(_) => return Ok(()),
         };
         let Some(rule_set) =
-            protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
+            protocol_types::get_rule_set_at_path(&descriptor.protocol_path, &definition.structure)
         else {
             return Ok(());
         };
@@ -615,8 +625,8 @@ where
             ("interface", string_filter(RECORDS_INTERFACE)),
             ("method", string_filter(WRITE_METHOD)),
             ("isLatestBaseState", bool_filter(true)),
-            ("protocol", string_filter(protocol)),
-            ("protocolPath", string_filter(protocol_path)),
+            ("protocol", string_filter(&descriptor.protocol)),
+            ("protocolPath", string_filter(&descriptor.protocol_path)),
             ("squash", bool_filter(true)),
         ]);
         if let Some(parent_context) =
@@ -649,7 +659,7 @@ where
                 "ProtocolAuthorizationSquashBackstop: incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
                 canonical_rfc3339(descriptor.message_timestamp),
                 canonical_rfc3339(newest_timestamp),
-                protocol_path
+                &descriptor.protocol_path
             ));
         }
         Ok(())
@@ -711,16 +721,12 @@ where
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     let descriptor = records_write_descriptor(message)?;
-    let (Some(protocol), Some(protocol_path)) = (&descriptor.protocol, &descriptor.protocol_path)
-    else {
-        return Ok(());
-    };
     let record_id = record_id(message)
         .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
     let mut filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
-        ("protocol", string_filter(protocol)),
-        ("protocolPath", string_filter(protocol_path)),
+        ("protocol", string_filter(&descriptor.protocol)),
+        ("protocolPath", string_filter(&descriptor.protocol_path)),
     ]);
     if let Some(parent_context) =
         context_id(message).and_then(|context| parent_context_id(&context))

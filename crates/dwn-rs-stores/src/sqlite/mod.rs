@@ -47,7 +47,7 @@ mod tests {
         MessageStore::open(&mut store).await.unwrap();
         let message = message(
             "2025-01-01T00:00:00.000000Z",
-            Some("https://example.com/protocol/notes"),
+            "https://example.com/protocol/notes",
             Some("aGVsbG8"),
         );
         let mut cid_message = message.clone();
@@ -76,7 +76,11 @@ mod tests {
     async fn message_store_persists_across_reopen() {
         let path = temp_db_path("message-store");
         let _ = std::fs::remove_file(&path);
-        let message = message("2025-01-01T00:00:00.000000Z", None, None);
+        let message = message(
+            "2025-01-01T00:00:00.000000Z",
+            "https://example.com/protocols/notes",
+            None,
+        );
         let mut cid_message = message.clone();
         cid_message.fields.encoded_data();
         let cid = cid_message.cid().unwrap().to_string();
@@ -111,17 +115,17 @@ mod tests {
         MessageStore::open(&mut store).await.unwrap();
         let first = message(
             "2025-01-01T00:00:00.000000Z",
-            Some("https://example.com/protocol/notes"),
+            "https://example.com/protocol/notes",
             None,
         );
         let second = message(
             "2025-01-01T00:00:01.000000Z",
-            Some("https://example.com/protocol/notes"),
+            "https://example.com/protocol/notes",
             None,
         );
         let third = message(
             "2025-01-01T00:00:02.000000Z",
-            Some("https://example.com/protocol/tasks"),
+            "https://example.com/protocol/tasks",
             None,
         );
 
@@ -148,7 +152,7 @@ mod tests {
             .unwrap();
         let published = message(
             "2025-01-01T00:00:03.000000Z",
-            Some("https://example.com/protocol/published"),
+            "https://example.com/protocol/published",
             None,
         );
         let mut published_indexes = indexes(&published);
@@ -310,18 +314,14 @@ mod tests {
         );
     }
 
-    fn message(
-        timestamp: &str,
-        protocol: Option<&str>,
-        encoded_data: Option<&str>,
-    ) -> Message<Descriptor> {
+    fn message(timestamp: &str, protocol: &str, encoded_data: Option<&str>) -> Message<Descriptor> {
         let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
             .unwrap()
             .with_timezone(&chrono::Utc);
         let descriptor =
             Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-                protocol: protocol.map(ToString::to_string),
-                protocol_path: protocol.map(|_| "note".to_string()),
+                protocol: protocol.to_string(),
+                protocol_path: "note".to_string(),
                 recipient: None,
                 schema: None,
                 tags: None,

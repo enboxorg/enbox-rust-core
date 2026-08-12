@@ -93,8 +93,8 @@ async fn test_write_descriptor() {
     let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
     let wd = WriteDescriptor {
-        protocol: None,
-        protocol_path: None,
+        protocol: "https://example.com/test".to_string(),
+        protocol_path: "test".to_string(),
         recipient: None,
         schema: None,
         tags: None,
@@ -111,6 +111,8 @@ async fn test_write_descriptor() {
     };
 
     let (build_wd, _) = WriteParameters {
+        protocol: Some("https://example.com/test".to_string()),
+        protocol_path: Some("test".to_string()),
         data_cid: Some("test".to_string()),
         data_size: Some(0),
         date_created: Some(message_timestamp),

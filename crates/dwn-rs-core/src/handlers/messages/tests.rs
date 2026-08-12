@@ -61,10 +61,10 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Diff,
         protocol: Some("http://example.com/notes".to_string()),
-        depth: Some(0),
+        depth: Some(1),
         hashes: Some(BTreeMap::new()),
         signer: test_signer(),
-        permission_grant_id: None,
+        permission_grant_ids: None,
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -86,7 +86,7 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
 }
 
 #[tokio::test]
-async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
+async fn messages_sync_is_not_authorized_by_messages_read_grant() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore;
     let mut state_index = MemoryStateIndex::default();
@@ -108,7 +108,7 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
         action: SyncAction::Root,
         protocol: Some("http://example.com/notes".to_string()),
         signer: bob_signer(),
-        permission_grant_id: Some("grant-sync-1".to_string()),
+        permission_grant_ids: Some(vec!["grant-sync-1".to_string()]),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -120,12 +120,15 @@ async fn messages_sync_accepts_messages_read_grant_for_protocol_scope() {
             None,
         ))
         .await;
-    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
-    assert!(reply.body["root"].as_str().is_some());
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(reply
+        .status
+        .detail
+        .contains("authorization signature is mismatched"));
 }
 
 #[tokio::test]
-async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
+async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore;
     let mut state_index = MemoryStateIndex::default();
@@ -146,7 +149,7 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Root,
         signer: bob_signer(),
-        permission_grant_id: Some("grant-sync-2".to_string()),
+        permission_grant_ids: Some(vec!["grant-sync-2".to_string()]),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -158,11 +161,11 @@ async fn messages_sync_rejects_protocol_scoped_grant_for_unscoped_sync() {
             None,
         ))
         .await;
-    assert_eq!(reply.status.code, 401);
+    assert_eq!(reply.status.code, 400);
     assert!(reply
         .status
         .detail
-        .contains("MessagesGrantAuthorizationMismatchedProtocol"));
+        .contains("authorization signature is mismatched"));
 }
 
 #[tokio::test]
@@ -188,7 +191,7 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
         .emit(
             "did:example:alice",
             MessageEvent {
-                message: stored_message,
+                message: stored_message.clone(),
                 initial_write: None,
             },
             event_indexes("http://example.com/notes"),
@@ -211,9 +214,11 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
     })
     .await;
 
+    let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
         .handle_subscribe(
             "did:example:alice",
+            &message,
             &request,
             Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
         )
@@ -290,8 +295,9 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
     })
     .await;
 
+    let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
-        .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
+        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
         .await;
     assert_eq!(result.reply.status.code, 410);
     assert_eq!(result.reply.body["error"]["code"], "ProgressGap");
@@ -299,11 +305,109 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
     assert!(result.subscription.is_none());
 }
 
+#[tokio::test]
+async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
+    let mut message_store = TestMessageStore::default();
+    let mut event_log = MemoryEventLog::default();
+    message_store.open().await.unwrap();
+    event_log.open().await.unwrap();
+
+    let grant = permission_grant_message_with_scope(
+        "grant-subscribe-path",
+        json!({
+            "interface": "Messages",
+            "method": "Read",
+            "protocol": "http://example.com/notes",
+            "protocolPath": "note",
+        }),
+    )
+    .await;
+    message_store
+        .insert("did:example:alice", "grant-subscribe-path", grant)
+        .await;
+
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let request = signed_subscribe_message(SubscribeSpec {
+        filters: vec![message_filters::Messages {
+            protocol: Some("http://example.com/notes".to_string()),
+            protocol_path_prefix: Some("comment".to_string()),
+            ..Default::default()
+        }],
+        permission_grant_ids: Some(vec!["grant-subscribe-path".to_string()]),
+        signer: bob_signer(),
+        ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+    })
+    .await;
+
+    let message = serde_json::from_value(request.clone()).unwrap();
+    let result = handler
+        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
+        .await;
+    assert_eq!(
+        result.reply.status.code, 401,
+        "{}",
+        result.reply.status.detail
+    );
+    assert!(result
+        .reply
+        .status
+        .detail
+        .contains("grant is outside of scope"));
+}
+
+#[tokio::test]
+async fn messages_subscribe_allows_filters_covered_by_different_grants() {
+    let mut message_store = TestMessageStore::default();
+    let mut event_log = MemoryEventLog::default();
+    message_store.open().await.unwrap();
+    event_log.open().await.unwrap();
+
+    for (grant_id, protocol) in [
+        ("grant-notes", "http://example.com/notes"),
+        ("grant-chat", "http://example.com/chat"),
+    ] {
+        let grant = permission_grant_message(grant_id, Some(protocol)).await;
+        message_store
+            .insert("did:example:alice", grant_id, grant)
+            .await;
+    }
+
+    let handler =
+        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let request = signed_subscribe_message(SubscribeSpec {
+        filters: vec![
+            message_filters::Messages {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            },
+            message_filters::Messages {
+                protocol: Some("http://example.com/chat".to_string()),
+                ..Default::default()
+            },
+        ],
+        permission_grant_ids: Some(vec!["grant-chat".to_string(), "grant-notes".to_string()]),
+        signer: bob_signer(),
+        ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+    })
+    .await;
+
+    let message = serde_json::from_value(request.clone()).unwrap();
+    let result = handler
+        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
+        .await;
+    assert_eq!(
+        result.reply.status.code, 200,
+        "{}",
+        result.reply.status.detail
+    );
+}
+
 fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
     let data = Bytes::from_static(b"hello");
     let descriptor = RecordsWriteDescriptor {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         recipient: None,
         schema: None,
         tags: None,
@@ -356,19 +460,29 @@ async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Mes
             "method": "Read",
         }),
     };
+    permission_grant_message_with_scope(grant_id, scope).await
+}
+
+async fn permission_grant_message_with_scope(
+    grant_id: &str,
+    scope: serde_json::Value,
+) -> Message<Descriptor> {
     let data = serde_json::to_vec(&json!({
         "dateExpires": "2025-02-01T00:00:00.000000Z",
-        "scope": scope,
+        "scope": scope.clone(),
     }))
     .unwrap();
     let descriptor = RecordsWriteDescriptor {
-        protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
-        protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         schema: None,
-        tags: protocol.map(|protocol| {
-            MapValue::from([("protocol".to_string(), Value::String(protocol.to_string()))])
-        }),
+        tags: scope
+            .get("protocol")
+            .and_then(serde_json::Value::as_str)
+            .map(|protocol| {
+                MapValue::from([("protocol".to_string(), Value::String(protocol.to_string()))])
+            }),
         parent_id: None,
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
@@ -406,7 +520,7 @@ async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Mes
 struct SubscribeSpec {
     timestamp: String,
     filters: Vec<message_filters::Messages>,
-    permission_grant_id: Option<String>,
+    permission_grant_ids: Option<Vec<String>>,
     cursor: Option<crate::stores::ProgressToken>,
     signer: PrivateJwkSigner,
 }
@@ -416,7 +530,7 @@ impl SubscribeSpec {
         Self {
             timestamp: timestamp.to_string(),
             filters: Vec::new(),
-            permission_grant_id: None,
+            permission_grant_ids: None,
             cursor: None,
             signer: test_signer(),
         }
@@ -427,7 +541,7 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
     let descriptor = MessagesSubscribeDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         filters: spec.filters,
-        permission_grant_id: spec.permission_grant_id.clone(),
+        permission_grant_ids: spec.permission_grant_ids.clone(),
         cursor: spec.cursor,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
@@ -439,10 +553,10 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
                 .to_string(),
         ),
     )]);
-    if let Some(permission_grant_id) = spec.permission_grant_id {
+    if let Some(permission_grant_ids) = spec.permission_grant_ids {
         payload.insert(
-            "permissionGrantId".to_string(),
-            serde_json::Value::String(permission_grant_id),
+            "permissionGrantIds".to_string(),
+            serde_json::to_value(permission_grant_ids).unwrap(),
         );
     }
     let signature = Jws::create(
@@ -465,7 +579,7 @@ struct SyncSpec {
     action: SyncAction,
     protocol: Option<String>,
     prefix: Option<String>,
-    permission_grant_id: Option<String>,
+    permission_grant_ids: Option<Vec<String>>,
     hashes: Option<BTreeMap<String, String>>,
     depth: Option<u16>,
     signer: PrivateJwkSigner,
@@ -478,7 +592,7 @@ impl SyncSpec {
             action: SyncAction::Root,
             protocol: None,
             prefix: None,
-            permission_grant_id: None,
+            permission_grant_ids: None,
             hashes: None,
             depth: None,
             signer: test_signer(),
@@ -492,7 +606,7 @@ async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
         action: spec.action,
         protocol: spec.protocol,
         prefix: spec.prefix,
-        permission_grant_id: spec.permission_grant_id.clone(),
+        permission_grant_ids: spec.permission_grant_ids.clone(),
         hashes: spec.hashes,
         depth: spec.depth,
     };
@@ -505,10 +619,10 @@ async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
                 .to_string(),
         ),
     )]);
-    if let Some(permission_grant_id) = spec.permission_grant_id {
+    if let Some(permission_grant_ids) = spec.permission_grant_ids {
         payload.insert(
-            "permissionGrantId".to_string(),
-            serde_json::Value::String(permission_grant_id),
+            "permissionGrantIds".to_string(),
+            serde_json::to_value(permission_grant_ids).unwrap(),
         );
     }
     let signature = Jws::create(

@@ -99,15 +99,14 @@ pub(crate) fn validate_records_write_integrity(
     message: &Message<Descriptor>,
     signature: &AuthorizationContext,
 ) -> Result<(), String> {
+    let records_write_data_authdata = signature.payload.as_records_write().ok_or_else(|| {
+        "RecordsWriteValidateIntegrityAuthorizationPayloadMissing: authorization payload is required".to_string()
+    })?;
+
     let record_id = record_id(message).ok_or_else(|| {
         "RecordsWriteValidateIntegrityRecordIdMissing: recordId is required".to_string()
     })?;
-    if signature
-        .payload
-        .get("recordId")
-        .and_then(JsonValue::as_str)
-        != Some(record_id.as_str())
-    {
+    if records_write_data_authdata.record_id != record_id {
         return Err("RecordsWriteValidateIntegrityRecordIdUnauthorized: recordId in message does not match recordId in authorization".to_string());
     }
 
@@ -150,11 +149,8 @@ pub(crate) fn validate_records_write_integrity(
     // `We therefore treat it as optional and only require the value to agree with the
     // signature payload (both-absent is valid), matching upstream `validateIntegrity`.
     let context_id = context_id(message);
-    let signature_context_id = signature
-        .payload
-        .get("contextId")
-        .and_then(JsonValue::as_str);
-    if context_id.as_deref() != signature_context_id {
+    let signature_context_id = records_write_data_authdata.context_id.clone();
+    if context_id != Some(signature_context_id) {
         return Err("RecordsWriteValidateIntegrityContextIdNotInSignerSignaturePayload: contextId in message does not match contextId in authorization".to_string());
     }
 
@@ -171,10 +167,7 @@ pub(crate) fn validate_records_write_integrity(
         // `contextId == recordId`. Upstream gates this check on
         // `descriptor.protocol !== undefined`; a protocol-less record has no
         // contextId to validate.
-        if descriptor.protocol.is_some()
-            && descriptor.parent_id.is_none()
-            && context_id.as_deref() != Some(record_id.as_str())
-        {
+        if descriptor.parent_id.is_none() && context_id.as_deref() != Some(record_id.as_str()) {
             return Err("RecordsWriteValidateIntegrityContextIdMismatch: root contextId must match recordId".to_string());
         }
     }
@@ -259,8 +252,16 @@ pub(crate) fn verify_immutable_properties(
     .map(|(property, _, _)| property.to_string())
     .or_else(|| {
         [
-            ("protocol", &initial.protocol, &new.protocol),
-            ("protocolPath", &initial.protocol_path, &new.protocol_path),
+            (
+                "protocol",
+                &Some(initial.protocol.clone()),
+                &Some(new.protocol.clone()),
+            ),
+            (
+                "protocolPath",
+                &Some(initial.protocol_path.clone()),
+                &Some(new.protocol_path.clone()),
+            ),
             ("recipient", &initial.recipient, &new.recipient),
             ("schema", &initial.schema, &new.schema),
             ("parentId", &initial.parent_id, &new.parent_id),
@@ -393,15 +394,14 @@ pub(crate) fn records_delete_indexes(
     let mut indexes = descriptor_indexes(descriptor)?;
     indexes.insert("isLatestBaseState".to_string(), Value::Bool(true));
     indexes.insert("author".to_string(), Value::String(author.to_string()));
-    if let Some(protocol) = &initial.protocol {
-        indexes.insert("protocol".to_string(), Value::String(protocol.clone()));
-    }
-    if let Some(protocol_path) = &initial.protocol_path {
-        indexes.insert(
-            "protocolPath".to_string(),
-            Value::String(protocol_path.clone()),
-        );
-    }
+    indexes.insert(
+        "protocol".to_string(),
+        Value::String(initial.protocol.clone()),
+    );
+    indexes.insert(
+        "protocolPath".to_string(),
+        Value::String(initial.protocol_path.clone()),
+    );
     if let Some(recipient) = &initial.recipient {
         indexes.insert("recipient".to_string(), Value::String(recipient.clone()));
     }
@@ -774,11 +774,8 @@ pub(crate) fn should_build_recipient_filter(filter: &RecordsFilter, recipient: &
     })
 }
 
-pub(crate) fn should_protocol_authorize(payload: &JsonValue) -> bool {
-    payload
-        .get("protocolRole")
-        .and_then(JsonValue::as_str)
-        .is_some()
+pub(crate) fn should_protocol_authorize(ctx: &AuthorizationContext) -> bool {
+    ctx.payload.protocol_role().is_some()
 }
 
 pub(crate) fn date_sort_to_message_sort(
@@ -838,7 +835,8 @@ where
             signature,
             message_store,
         )
-        .await?
+        .await
+        .map_err(|error| error.to_string())?
         {
             return Ok(());
         }
@@ -871,7 +869,8 @@ where
         signature,
         message_store,
     )
-    .await?
+    .await
+    .map_err(|error| error.to_string())?
     {
         return Ok(());
     }
@@ -892,8 +891,7 @@ where
 pub(crate) async fn authorize_protocol_query_or_subscribe<MessageStore>(
     tenant: &str,
     filter: &RecordsFilter,
-    payload: &JsonValue,
-    author: &str,
+    auth_ctx: &AuthorizationContext,
     message_store: &MessageStore,
     kind: RecordsAuthorizationKind,
 ) -> Result<(), String>
@@ -926,8 +924,8 @@ where
     };
     authorize_actions(
         tenant,
-        author,
-        payload.get("protocolRole").and_then(JsonValue::as_str),
+        &auth_ctx.author,
+        auth_ctx.payload.protocol_role(),
         &[can],
         rule_set,
         &[],
@@ -948,22 +946,22 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(message)?;
-    let protocol = descriptor.protocol.as_deref().ok_or_else(|| {
-        "ProtocolAuthorizationProtocolNotFound: protocol-based authorization requires protocol"
-            .to_string()
-    })?;
-    let protocol_path = descriptor.protocol_path.as_deref().ok_or_else(|| {
-        "ProtocolAuthorizationMissingProtocolPath: protocolPath is required".to_string()
-    })?;
+    let protocol = descriptor.protocol.clone();
+    let protocol_path = descriptor.protocol_path.clone();
     let governing_timestamp = governing_timestamp(tenant, message, message_store, author).await?;
-    let definition =
-        fetch_protocol_definition(tenant, protocol, message_store, Some(&governing_timestamp))
-            .await
-            .map_err(|err| err.to_string())?;
-    let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
-        .ok_or_else(|| {
-            format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
-        })?;
+    let definition = fetch_protocol_definition(
+        tenant,
+        protocol.as_str(),
+        message_store,
+        Some(&governing_timestamp),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+    let rule_set =
+        protocol_types::get_rule_set_at_path(protocol_path.as_str(), &definition.structure)
+            .ok_or_else(|| {
+                format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
+            })?;
     let chain = construct_record_chain(tenant, message, message_store).await?;
     let actions = actions_for_message_kind(tenant, message, author, kind, message_store).await?;
     authorize_actions(
@@ -1067,11 +1065,11 @@ pub(crate) fn check_actor(
                 .and_then(|definition| definition.uses.as_ref())
                 .and_then(|uses| uses.get(parsed.alias))
                 .is_some_and(|protocol| {
-                    descriptor.protocol.as_deref() == Some(protocol.as_str())
-                        && descriptor.protocol_path.as_deref() == Some(parsed.protocol_path)
+                    descriptor.protocol == *protocol
+                        && descriptor.protocol_path == parsed.protocol_path
                 })
         } else {
-            descriptor.protocol_path.as_deref() == Some(of)
+            descriptor.protocol_path == of
         };
         if !path_matches {
             return false;
@@ -1095,11 +1093,12 @@ pub(crate) async fn matching_role_record_exists<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let mut protocol = record_chain
+    let mut protocol: String = record_chain
         .last()
         .and_then(|message| records_write_descriptor(message).ok())
-        .and_then(|descriptor| descriptor.protocol.clone())
+        .map(|descriptor| descriptor.protocol.clone())
         .unwrap_or_default();
+
     let mut protocol_path = role.to_string();
     if let Some(parsed) = protocol_types::parse_cross_protocol_ref(role) {
         protocol = definition
@@ -1720,10 +1719,19 @@ mod tests {
         let signature = AuthorizationContext {
             signer: "did:example:alice".to_string(),
             author: "did:example:alice".to_string(),
-            payload: json!({
-                "recordId": "some-non-initial-record-id",
-                "contextId": "some-context-id",
-            }),
+            payload: crate::permissions::VerifiedAuthorizationPayload::RecordsWrite(
+                crate::auth::jws::RecordsWriteAuthorizationPayloadData {
+                    descriptor_cid: String::new(),
+                    record_id: "some-non-initial-record-id".to_string(),
+                    context_id: "some-context-id".to_string(),
+                    attestation_cid: None,
+                    encryption_cid: None,
+                    permission_grant_id: None,
+                    delegated_grant_id: None,
+                    protocol_role: None,
+                },
+            ),
+            permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
             author_delegated_grant: None,
         };
         validate_records_write_integrity(&ok, &signature).expect("16-byte IV must validate");

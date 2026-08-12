@@ -46,6 +46,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
     let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
@@ -75,7 +76,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
             Some(data.clone()),
         ))
         .await;
-    assert_eq!(reply.status.code, 202);
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let query = unsigned_query_message(json!({ "published": true }));
     let reply = query_handler
@@ -115,6 +116,7 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
@@ -189,6 +191,7 @@ async fn records_write_rejects_older_conflicting_write() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store,
@@ -248,6 +251,7 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
@@ -301,6 +305,7 @@ async fn records_delete_prune_purges_descendant_records() {
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
         message_store.clone(),
         data_store.clone(),
@@ -399,8 +404,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
 
     let old_data = Bytes::from_static(b"old note");
     let old = signed_write_message(WriteSpec {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&old_data).to_string(),
         data_size: old_data.len() as u64,
         published: Some(true),
@@ -408,23 +413,20 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     })
     .await;
     let old_record_id = old["recordId"].as_str().unwrap().to_string();
-    assert_eq!(
-        handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &old,
-                Some(old_data)
-            ))
-            .await
-            .status
-            .code,
-        202
-    );
+    let resp = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &old,
+            Some(old_data),
+        ))
+        .await;
+
+    assert_eq!(resp.status.code, 202, "{}", resp.status.detail);
 
     let squash_data = Bytes::from_static(b"snapshot");
     let squash = signed_write_message(WriteSpec {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&squash_data).to_string(),
         data_size: squash_data.len() as u64,
         published: Some(true),
@@ -453,8 +455,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
 
     let late_old_data = Bytes::from_static(b"late old");
     let late_old = signed_write_message(WriteSpec {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&late_old_data).to_string(),
         data_size: late_old_data.len() as u64,
         published: Some(true),
@@ -490,8 +492,8 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"conditions":{"publication":"Required"}}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
-        protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         tags: Some(MapValue::from([(
             "protocol".to_string(),
@@ -500,6 +502,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
         data_size: grant_data.len() as u64,
         data_format: "application/json".to_string(),
+        published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
     })
     .await;
@@ -520,8 +523,8 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     let unpublished = signed_write_message(WriteSpec {
         author: "did:example:bob".to_string(),
         signer: bob_signer(),
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&unpublished_data).to_string(),
         data_size: unpublished_data.len() as u64,
         permission_grant_id: Some(grant_id.clone()),
@@ -535,18 +538,19 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
             Some(unpublished_data),
         ))
         .await;
-    assert_eq!(reply.status.code, 401);
-    assert!(reply
-        .status
-        .detail
-        .contains("RecordsGrantAuthorizationConditionPublicationRequired"));
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert!(
+        reply.status.detail.contains("grant is not published"),
+        "{}",
+        reply.status.detail
+    );
 
     let published_data = Bytes::from_static(b"published note");
     let published = signed_write_message(WriteSpec {
         author: "did:example:bob".to_string(),
         signer: bob_signer(),
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&published_data).to_string(),
         data_size: published_data.len() as u64,
         published: Some(true),
@@ -583,8 +587,8 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
-        protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         tags: Some(MapValue::from([(
             "protocol".to_string(),
@@ -596,18 +600,16 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
     })
     .await;
-    assert_eq!(
-        handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &grant,
-                Some(grant_data.clone())
-            ))
-            .await
-            .status
-            .code,
-        202
-    );
+
+    let resp = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &grant,
+            Some(grant_data.clone()),
+        ))
+        .await;
+
+    assert_eq!(resp.status.code, 202);
     let mut delegated_grant = grant.clone();
     delegated_grant["encodedData"] = serde_json::Value::String(URL_SAFE_NO_PAD.encode(&grant_data));
 
@@ -615,8 +617,8 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     let note = signed_write_message(WriteSpec {
         author: "did:example:alice".to_string(),
         signer: bob_signer(),
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
         data_size: note_data.len() as u64,
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
@@ -652,8 +654,8 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
 
     let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
-        protocol_path: Some(permissions::PERMISSIONS_GRANT_PATH.to_string()),
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         tags: Some(MapValue::from([(
             "protocol".to_string(),
@@ -683,8 +685,8 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     let note = signed_write_message(WriteSpec {
         author: "did:example:bob".to_string(),
         signer: bob_signer(),
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        protocol: "http://example.com/notes".to_string(),
+        protocol_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
         data_size: note_data.len() as u64,
         permission_grant_id: Some(grant_id.clone()),
@@ -707,8 +709,8 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
 
     let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
-        protocol: Some(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
-        protocol_path: Some(permissions::PERMISSIONS_REVOCATION_PATH.to_string()),
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
         parent_id: Some(grant_id.clone()),
         parent_context_id: Some(grant_id.clone()),
         tags: Some(MapValue::from([(
@@ -986,8 +988,8 @@ struct WriteSpec {
     context_id: Option<String>,
     parent_id: Option<String>,
     parent_context_id: Option<String>,
-    protocol: Option<String>,
-    protocol_path: Option<String>,
+    protocol: String,
+    protocol_path: String,
     recipient: Option<String>,
     tags: Option<MapValue>,
     data_cid: String,
@@ -1009,8 +1011,8 @@ impl WriteSpec {
             context_id: None,
             parent_id: None,
             parent_context_id: None,
-            protocol: None,
-            protocol_path: None,
+            protocol: "http://example.com/notes".to_string(),
+            protocol_path: "note".to_string(),
             recipient: None,
             tags: None,
             data_cid: generate_dag_pb_cid_from_bytes([]).to_string(),
@@ -1106,8 +1108,8 @@ async fn signed_delete_message(record_id: &str, prune: bool, timestamp: &str) ->
 async fn stored_note_message(timestamp: &str) -> Message<Descriptor> {
     serde_json::from_value(
         signed_write_message(WriteSpec {
-            protocol: Some("http://example.com/notes".to_string()),
-            protocol_path: Some("note".to_string()),
+            protocol: "http://example.com/notes".to_string(),
+            protocol_path: "note".to_string(),
             ..WriteSpec::new(timestamp)
         })
         .await,

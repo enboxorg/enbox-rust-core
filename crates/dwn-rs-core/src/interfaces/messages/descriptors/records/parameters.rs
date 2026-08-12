@@ -1,4 +1,8 @@
+use crate::auth::jws::{
+    PermissionGrantInvocation, RecordsWriteAuthorizationPayload, SigningPayload,
+};
 use crate::auth::Authorization;
+use crate::cid::generate_cid_from_serialized;
 use crate::descriptors::{MessageParameters, MessageValidator, ValidationError};
 use crate::encryption::{DerivationScheme, Encryption, EncryptionEnvelope, EncryptionInput};
 use crate::fields::WriteFields;
@@ -217,12 +221,15 @@ pub struct WriteParameters {
 
 impl MessageValidator for WriteParameters {
     fn validate(&self) -> Result<(), ValidationError> {
-        if self.protocol.is_none() && self.protocol_path.is_some()
-            || self.protocol.is_some() && self.protocol_path.is_none()
-        {
+        let Some(protocol) = self.protocol.clone() else {
             return Err(ValidationError {
-                message: "protocol and protocolPath must be either both set or both unset"
-                    .to_string(),
+                message: "protocol is required".to_string(),
+            });
+        };
+
+        if self.protocol_path.is_none() {
+            return Err(ValidationError {
+                message: "protocolPath is required".to_string(),
             });
         }
 
@@ -248,7 +255,7 @@ impl MessageValidator for WriteParameters {
                 .iter()
                 .try_for_each(|input| {
                     if input.derivation_scheme() == DerivationScheme::ProtocolPath
-                        && self.protocol.is_none()
+                        && protocol.is_empty()
                     {
                         return Err(ValidationError {
                             message: "'protocols' encryption requires a protocol".to_string(),
@@ -265,6 +272,67 @@ impl MessageValidator for WriteParameters {
 impl MessageParameters for WriteParameters {
     type Descriptor = WriteDescriptor;
     type Fields = WriteFields;
+
+    fn authorization_payload(
+        &self,
+        descriptor_cid: cid::Cid,
+        fields: &Self::Fields,
+        delegated_grant_id: Option<cid::Cid>,
+        permission_grant: PermissionGrantInvocation,
+        protocol_role: Option<String>,
+    ) -> Result<SigningPayload, ValidationError> {
+        let grant = match permission_grant {
+            PermissionGrantInvocation::Multi(_) => {
+                return Err(ValidationError {
+                    message:
+                        "Multi permission grant invocation is not supported for WriteParameters"
+                            .to_string(),
+                })
+            }
+            PermissionGrantInvocation::Single(single) => Some(single),
+            PermissionGrantInvocation::None => None,
+        };
+
+        let record_id = fields.record_id.clone().ok_or_else(|| ValidationError {
+            message: "recordId is required for authorization payload".to_string(),
+        })?;
+        let context_id = fields.context_id.clone().ok_or_else(|| ValidationError {
+            message: "contextId is required for authorization payload".to_string(),
+        })?;
+
+        let attestation_cid = fields
+            .attestation
+            .as_ref()
+            .map(generate_cid_from_serialized)
+            .transpose()
+            .map_err(|e| ValidationError {
+                message: format!("Failed to generate attestation CID: {e}"),
+            })?;
+
+        let encryption_cid = fields
+            .encryption
+            .as_ref()
+            .map(generate_cid_from_serialized)
+            .transpose()
+            .map_err(|e| ValidationError {
+                message: format!("Failed to generate encryption CID: {e}"),
+            })?;
+
+        RecordsWriteAuthorizationPayload::new(
+            descriptor_cid,
+            record_id,
+            context_id,
+            attestation_cid,
+            encryption_cid,
+            grant,
+            delegated_grant_id,
+            protocol_role,
+        )
+        .map(SigningPayload::RecordsWrite)
+        .map_err(|e| ValidationError {
+            message: format!("Failed to create RecordsWrite authorization payload: {e}"),
+        })
+    }
 
     async fn build(&self) -> Result<(Self::Descriptor, Option<Self::Fields>), ValidationError> {
         let data_cid = match &self.data_cid {
@@ -284,12 +352,23 @@ impl MessageParameters for WriteParameters {
 
         let now = chrono::Utc::now();
 
+        let Some(protocol) = &self.protocol else {
+            return Err(ValidationError {
+                message: "protocol is required".to_string(),
+            });
+        };
+
+        let Some(protocol_path) = self.protocol_path.clone() else {
+            return Err(ValidationError {
+                message: "protocolPath is required".to_string(),
+            });
+        };
+
         let mut descriptor = WriteDescriptor {
-            protocol: self
-                .protocol
-                .as_ref()
-                .and_then(|url| normalize_url(url).ok()),
-            protocol_path: self.protocol_path.clone(),
+            protocol: normalize_url(protocol.as_str()).map_err(|e| ValidationError {
+                message: e.to_string(),
+            })?,
+            protocol_path,
             recipient: self.recipient.clone(),
             schema: self.schema.as_ref().and_then(|url| normalize_url(url).ok()),
             tags: self.tags.clone(),

@@ -5,7 +5,7 @@ pub mod protocols;
 use std::collections::TryReserveError;
 
 use crate::auth::{jws, Jws};
-use crate::cid::generate_cid_from_serialized;
+use crate::cid::{generate_cid_from_serialized, generate_message_cid_from_json};
 use crate::fields::MessageFields;
 use crate::{auth::Authorization, interfaces::messages::descriptors::MessageParameters};
 use cid::Cid;
@@ -68,6 +68,13 @@ where
     pub fn cid(&self) -> Result<Cid, EncodeError<TryReserveError>> {
         generate_cid_from_serialized(self)
     }
+
+    /// Return the DWN message CID, excluding transport-only inline `encodedData`.
+    pub fn message_cid(&self) -> Result<Cid, EncodeError<TryReserveError>> {
+        let value =
+            serde_json::to_value(self).map_err(|error| EncodeError::Msg(error.to_string()))?;
+        generate_message_cid_from_json(&value)
+    }
 }
 
 impl<D> Message<D>
@@ -80,13 +87,16 @@ where
         signer: Option<S>,
     ) -> Result<Self, ValidationError> {
         let (descriptor, fields) = parameters.build().await?;
+        let mut fields = fields.unwrap_or_default();
 
         let auth = if let Some(signer) = signer {
             Self::create_authorization(
+                &parameters,
                 &descriptor,
+                &fields,
                 signer,
                 parameters.delegated_grant().clone(),
-                parameters.permission_grant_id().clone(),
+                parameters.permission_grant_invocation()?,
                 parameters.protocol_rule().clone(),
             )
             .await?
@@ -95,33 +105,40 @@ where
         };
 
         // If the fields are None, we create an empty Fields instance.
-        let mut fields = fields.unwrap_or_default();
         fields.set_authorization(auth);
 
         Ok(Self { descriptor, fields })
     }
 
     async fn create_authorization<S: JwsSigner>(
+        parameters: &D::Parameters,
         descriptor: &D,
+        fields: &D::Fields,
         signer: S,
         delegated_grant: Option<Message<RecordsWriteDescriptor>>,
-        permission_grant_id: Option<String>,
+        permission_grant: jws::PermissionGrantInvocation,
         protocol_role: Option<String>,
     ) -> Result<Authorization, ValidationError> {
         let delegated_grant_id: Option<Cid> = if let Some(delegated_grant) = delegated_grant.clone()
         {
-            Some(delegated_grant.cid().map_err(|err| ValidationError {
-                message: err.to_string(),
-            })?)
+            Some(
+                delegated_grant
+                    .message_cid()
+                    .map_err(|err| ValidationError {
+                        message: err.to_string(),
+                    })?,
+            )
         } else {
             None
         };
 
         let signature = Self::create_signature(
+            parameters,
             descriptor,
+            fields,
             signer,
             delegated_grant_id,
-            permission_grant_id,
+            permission_grant,
             protocol_role,
         )
         .await?;
@@ -139,23 +156,27 @@ where
     }
 
     async fn create_signature<S: JwsSigner>(
+        parameters: &D::Parameters,
         descriptor: &D,
+        fields: &D::Fields,
         signer: S,
         delegated_grant_id: Option<Cid>,
-        permission_grant_id: Option<String>,
+        permission_grant: jws::PermissionGrantInvocation,
         protocol_role: Option<String>,
     ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
-        let payload = jws::AuthorizationPayload::new(
-            descriptor_cid,
-            delegated_grant_id,
-            permission_grant_id,
-            protocol_role,
-        )
-        .map_err(|e| ValidationError {
-            message: e.to_string(),
-        })?;
+        let payload = parameters
+            .authorization_payload(
+                descriptor_cid,
+                fields,
+                delegated_grant_id,
+                permission_grant,
+                protocol_role,
+            )
+            .map_err(|e| ValidationError {
+                message: e.to_string(),
+            })?;
 
         let signature = jws::Jws::create(&payload, std::slice::from_ref(&signer))
             .await
@@ -408,5 +429,27 @@ mod test {
         let value = serde_json::to_value(&read).unwrap();
 
         assert!(Message::<RecordsWriteDescriptor>::from_value(value).is_err());
+    }
+
+    #[test]
+    fn typed_messages_convert_to_the_generic_envelope() {
+        let now = Utc::now();
+        let typed = Message {
+            descriptor: ReadDescriptor {
+                message_timestamp: now,
+                filter: crate::filters::Records::default(),
+                permission_grant_id: None,
+                date_sort: None,
+            },
+            fields: Authorization::default(),
+        };
+
+        let generic: Message<Descriptor> = typed.into();
+
+        assert!(matches!(
+            generic.descriptor,
+            Descriptor::Records(records) if matches!(records.as_ref(), Records::Read(_))
+        ));
+        assert!(matches!(generic.fields, Fields::Authorization(_)));
     }
 }

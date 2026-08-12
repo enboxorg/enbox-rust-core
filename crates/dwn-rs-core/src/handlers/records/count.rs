@@ -35,14 +35,13 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
             } = ctx;
 
             let signature = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 false,
             )
@@ -55,6 +54,7 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
             let filters =
@@ -79,12 +79,11 @@ where
                             Ok(grant_authorized) => grant_authorized,
                             Err(detail) => return DwnReply::unauthorized(detail),
                         };
-                    if should_protocol_authorize(&signature.payload) {
+                    if should_protocol_authorize(signature) {
                         if let Err(detail) = authorize_protocol_query_or_subscribe(
                             tenant,
                             &descriptor.filter,
-                            &signature.payload,
-                            &signature.author,
+                            signature,
                             &self.message_store,
                             RecordsAuthorizationKind::Count,
                         )
@@ -100,7 +99,7 @@ where
                             &descriptor.filter,
                             None,
                             &signature.author,
-                            should_protocol_authorize(&signature.payload) || grant_authorized,
+                            should_protocol_authorize(signature) || grant_authorized,
                         ))
                     }
                 };

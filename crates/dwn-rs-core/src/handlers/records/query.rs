@@ -38,14 +38,13 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
             } = ctx;
 
             let signature = match permissions::validate_authorization_signature(
-                raw_message,
+                &message,
                 self.did_resolver.as_deref(),
                 false,
             )
@@ -58,6 +57,7 @@ where
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                     return DwnReply::unauthorized(detail)
                 }
+                Err(error) => return DwnReply::bad_request(error),
             };
 
             let (filters, author) = match self
@@ -145,13 +145,12 @@ where
             &self.message_store,
         )
         .await
-        .map_err(QueryAuthorizationResult::Unauthorized)?;
-        if should_protocol_authorize(&signature.payload) {
+        .map_err(|error| QueryAuthorizationResult::Unauthorized(error.to_string()))?;
+        if should_protocol_authorize(signature) {
             authorize_protocol_query_or_subscribe(
                 tenant,
                 &descriptor.filter,
-                &signature.payload,
-                &signature.author,
+                signature,
                 &self.message_store,
                 RecordsAuthorizationKind::Query,
             )
@@ -172,7 +171,7 @@ where
                 &descriptor.filter,
                 descriptor.date_sort.as_ref(),
                 &signature.author,
-                should_protocol_authorize(&signature.payload) || grant_authorized,
+                should_protocol_authorize(signature) || grant_authorized,
             )),
             Some(signature.author.clone()),
         ))

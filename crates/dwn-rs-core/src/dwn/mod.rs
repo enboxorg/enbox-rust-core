@@ -15,6 +15,7 @@ use crate::interfaces::messages::descriptors::{
     ConcreteDescriptor, FromDescriptor, InterfaceUnion, Messages, Protocols, Records,
 };
 use crate::interfaces::replies::Status;
+use crate::validation::validate_message;
 use crate::{Descriptor, Message};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,12 +111,12 @@ impl DwnReply {
         Self::new(200, "OK")
     }
 
-    pub fn bad_request(detail: impl Into<String>) -> Self {
-        Self::new(400, detail)
+    pub fn bad_request(detail: impl std::fmt::Display) -> Self {
+        Self::new(400, detail.to_string())
     }
 
-    pub fn unauthorized(detail: impl Into<String>) -> Self {
-        Self::new(401, detail)
+    pub fn unauthorized(detail: impl std::fmt::Display) -> Self {
+        Self::new(401, detail.to_string())
     }
 
     pub fn not_implemented(detail: impl Into<String>) -> Self {
@@ -128,14 +129,34 @@ impl DwnReply {
     }
 }
 
+/// A typed implementation of one DWN interface/method.
+///
+/// `Handler` is the ergonomic, application-facing handler API. Its associated
+/// [`Descriptor`] determines which [`MessageKind`] it serves, and [`Dwn::register`]
+/// uses that fact to install it in the dispatch table. [`Handler::run`] deserializes
+/// the envelope, schema-validates the raw JSON, and converts the generic descriptor
+/// into `Self::Descriptor` before calling [`Handler::handle`]. Implementations thus
+/// receive a descriptor already typed for their method.
+///
+/// The returned future is deliberately not boxed. This keeps concrete handlers
+/// lightweight; [`HandlerAdapter`] boxes it only when the handler is stored behind
+/// the object-safe [`MethodHandler`] dispatch interface.
 pub trait Handler: Send + Sync {
+    /// The descriptor accepted by this handler, such as `RecordsQueryDescriptor`.
+    /// It supplies both the dispatch kind and conversion from the generic envelope.
     type Descriptor: ConcreteDescriptor + FromDescriptor + Clone;
 
+    /// Execute method-specific behavior after the shared request checks pass.
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
     ) -> impl Future<Output = DwnReply> + Send;
 
+    /// Run this typed handler from an untyped dispatch request.
+    ///
+    /// This supports direct tests as well as [`HandlerAdapter`]. Callers using
+    /// [`Dwn::process_message`] also get its earlier tenant and dispatch checks;
+    /// direct callers get the parsing and schema checks performed here.
     fn run(&self, request: MethodHandlerRequest<'_>) -> impl Future<Output = DwnReply> + Send {
         async move {
             let message: Message<Descriptor> = match serde_json::from_value(request.message.clone())
@@ -145,6 +166,10 @@ pub trait Handler: Send + Sync {
                     return DwnReply::bad_request(format!("Failed to parse message: {error}"))
                 }
             };
+
+            if validate_message(request.message).is_err() {
+                return DwnReply::bad_request("Message validation failed");
+            }
 
             let descriptor = match Self::Descriptor::from_descriptor(&message.descriptor) {
                 Ok(descriptor) => descriptor.clone(),
@@ -165,10 +190,22 @@ pub trait Handler: Send + Sync {
     }
 }
 
+/// Adapts a typed [`Handler`] for storage in the heterogeneous dispatch map.
+///
+/// Each typed handler has a different `HandlerContext` descriptor and opaque future
+/// type. This adapter erases those differences at the [`MethodHandler`] boundary
+/// while preserving the typed API inside the handler.
 pub struct HandlerAdapter<H: Handler>(pub H);
 
+/// The validated, method-specific input passed to [`Handler::handle`].
+///
+/// `tenant`, `raw_message`, and `data` borrow the request. `message` and
+/// `descriptor` are owned: handlers may mutate the generic message while retaining
+/// an independently typed descriptor for the method being handled.
 pub struct HandlerContext<'a, D> {
+    /// The DWN tenant on whose behalf this method is executing.
     pub tenant: &'a str,
+    /// Original JSON supplied by the caller, retained for exact wire data needs.
     pub raw_message: &'a Value,
     /// The parsed, untyped message — handlers still pass this to the permissions/store layer,
     /// which is `Message<Descriptor>`-based. Owned so handlers (e.g. records/write) can mutate it.
@@ -176,6 +213,7 @@ pub struct HandlerContext<'a, D> {
     /// The concrete descriptor, downcast from `message.descriptor`. Owned (cloned in `run`) so it
     /// doesn't borrow `message` — `message` then moves into the context alongside it.
     pub descriptor: D,
+    /// Optional binary payload accompanying the DWN message, notably record data.
     pub data: Option<bytes::Bytes>,
 }
 
@@ -190,11 +228,20 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
     }
 }
 
+/// An untyped request at the dispatch boundary.
+///
+/// This is the common input for every entry in [`MethodHandlerMap`]. `kind` is
+/// derived before lookup and is metadata for dispatch and diagnostics; it is not
+/// trusted or consulted by [`Handler::run`].
 #[derive(Clone)]
 pub struct MethodHandlerRequest<'a> {
+    /// Tenant to which the message is addressed.
     pub tenant: &'a str,
+    /// Raw message JSON; a typed adapter parses and validates it.
     pub message: &'a Value,
+    /// Interface/method selected by the dispatcher, when it could be derived.
     pub kind: Option<MessageKind>,
+    /// Optional binary payload accompanying the message.
     pub data: Option<bytes::Bytes>,
 }
 
@@ -213,6 +260,12 @@ impl<'a> MethodHandlerRequest<'a> {
     }
 }
 
+/// Object-safe handler interface used by the DWN dispatch registry.
+///
+/// Implement this directly only when a handler must work with raw
+/// [`MethodHandlerRequest`] values. Most method implementations should implement
+/// [`Handler`] instead, which supplies descriptor typing and shared validation; use
+/// [`HandlerAdapter`] (or [`Dwn::register`]) to make one dispatchable.
 pub trait MethodHandler: Send + Sync {
     fn handle<'a>(
         &'a self,
@@ -220,6 +273,10 @@ pub trait MethodHandler: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
 }
 
+/// Dispatch registry keyed by DWN `(interface, method)` kind.
+///
+/// Entries are shared trait objects so a [`Dwn`] can keep different concrete
+/// handler types in one map and serve concurrent immutable requests.
 pub type MethodHandlerMap = BTreeMap<MessageKind, Arc<dyn MethodHandler>>;
 
 pub struct DwnConfig<

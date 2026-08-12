@@ -35,6 +35,8 @@ async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_mess
         "descriptor": {
             "interface": "Records",
             "method": "Write",
+            "protocol": "https://example.com/legacy",
+            "protocolPath": "record",
             "dataCid": data_cid,
             "dataSize": ciphertext.len(),
             "dataFormat": "application/octet-stream",

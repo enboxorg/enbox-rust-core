@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -47,7 +46,7 @@ where
         // real listener), so it stays an inherent method and re-parses internally. Here we drive it
         // with a no-op listener for the one-shot request path.
         async move {
-            self.handle_subscribe(ctx.tenant, ctx.raw_message, Box::new(|_| {}))
+            self.handle_subscribe(ctx.tenant, &ctx.message, ctx.raw_message, Box::new(|_| {}))
                 .await
                 .reply
         }
@@ -76,20 +75,17 @@ where
     pub async fn handle_subscribe(
         &self,
         tenant: &str,
+        message: &Message<Descriptor>,
         raw_message: &JsonValue,
         listener: SubscriptionListener,
     ) -> SubscribeReply {
-        let message = match parse_message(raw_message, "MessagesSubscribeParseFailed") {
-            Ok(message) => message,
-            Err(detail) => return subscribe_reply(DwnReply::bad_request(detail), None),
-        };
-        let descriptor = match messages_subscribe_descriptor(&message) {
+        let descriptor = match messages_subscribe_descriptor(message) {
             Ok(descriptor) => descriptor,
             Err(detail) => return subscribe_reply(DwnReply::bad_request(detail), None),
         };
 
         let authorization = match permissions::validate_authorization_signature(
-            raw_message,
+            message,
             self.did_resolver.as_deref(),
             true,
         )
@@ -110,10 +106,11 @@ where
             Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
                 return subscribe_reply(DwnReply::unauthorized(detail), None)
             }
+            Err(error) => return subscribe_reply(DwnReply::bad_request(error), None),
         };
 
         if let Err(detail) = self
-            .authorize_messages_subscribe(tenant, &message, descriptor, &authorization)
+            .authorize_messages_subscribe(tenant, message, descriptor, &authorization)
             .await
         {
             return subscribe_reply(DwnReply::unauthorized(detail), None);
@@ -160,17 +157,10 @@ where
         if authorization.author == tenant {
             return Ok(());
         }
-        let protocols = descriptor
-            .filters
-            .iter()
-            .filter_map(|filter| filter.protocol.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        permissions::authorize_messages_subscribe_or_sync(
+        permissions::authorize_messages_subscribe(
             tenant,
             message,
-            &protocols,
+            &descriptor.filters,
             authorization,
             &self.message_store,
         )

@@ -319,8 +319,8 @@ async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
 async fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
     let data_cid = generate_dag_pb_cid_from_bytes(b"loopback-test-payload").to_string();
     let descriptor = WriteDescriptor {
-        protocol: Some("http://test-protocol.xyz".to_string()),
-        protocol_path: Some("testRecord".to_string()),
+        protocol: "http://test-protocol.xyz".to_string(),
+        protocol_path: "testRecord".to_string(),
         recipient: None,
         schema: Some("foo/bar".to_string()),
         tags: None,

@@ -40,8 +40,8 @@ mod inner {
             with = "crate::ser::optional_cid_string"
         )]
         pub message_cid: Option<Cid>,
-        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
-        pub permission_grant_id: Option<String>,
+        #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_ids: Option<Vec<String>>,
     }
 
     /// QueryDescriptor represents the MessagesQuery interface method for querying messages.
@@ -63,6 +63,8 @@ mod inner {
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub filters: Vec<MessagesFilter>,
+        #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cursor: Option<Cursor>,
     }
@@ -84,8 +86,8 @@ mod inner {
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub filters: Vec<MessagesFilter>,
-        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
-        pub permission_grant_id: Option<String>,
+        #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cursor: Option<crate::stores::ProgressToken>,
     }
@@ -109,8 +111,8 @@ mod inner {
         pub protocol: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub prefix: Option<String>,
-        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
-        pub permission_grant_id: Option<String>,
+        #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub hashes: Option<BTreeMap<String, String>>,
         #[serde(skip_serializing_if = "Option::is_none")]

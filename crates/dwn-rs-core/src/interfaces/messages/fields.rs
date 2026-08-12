@@ -82,6 +82,24 @@ impl MessageFields for Fields {
     }
 }
 
+impl From<Authorization> for Fields {
+    fn from(fields: Authorization) -> Self {
+        Self::Authorization(fields)
+    }
+}
+
+impl From<WriteFields> for Fields {
+    fn from(fields: WriteFields) -> Self {
+        Self::Write(fields)
+    }
+}
+
+impl From<InitialWriteField> for Fields {
+    fn from(fields: InitialWriteField) -> Self {
+        Self::InitialWriteField(fields)
+    }
+}
+
 impl MessageFields for Option<Fields> {
     fn encoded_data(&mut self) -> Option<Value> {
         match self {

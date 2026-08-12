@@ -19,7 +19,7 @@ fn test_read_descriptor() {
     let descriptor = ReadDescriptor {
         message_timestamp,
         message_cid: Some(message_cid),
-        permission_grant_id: None,
+        permission_grant_ids: None,
     };
     let json = json!({
         "messageTimestamp": message_timestamp,
@@ -43,6 +43,7 @@ fn test_query_descriptor() {
     let descriptor = QueryDescriptor {
         message_timestamp,
         filters,
+        permission_grant_ids: None,
         cursor: cursor.clone(),
     };
     let json = json!({
@@ -67,7 +68,7 @@ fn test_subscribe_descriptor() {
     let descriptor = SubscribeDescriptor {
         message_timestamp,
         filters,
-        permission_grant_id: None,
+        permission_grant_ids: None,
         cursor: None,
     };
     let json = json!({
@@ -92,7 +93,7 @@ fn test_sync_descriptor() {
         action: SyncAction::Diff,
         protocol: Some("http://example.com/protocol".to_string()),
         prefix: None,
-        permission_grant_id: Some("grant-1".to_string()),
+        permission_grant_ids: Some(vec!["grant-1".to_string()]),
         hashes: Some(BTreeMap::from([(
             "0101".to_string(),
             "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string(),
@@ -105,7 +106,7 @@ fn test_sync_descriptor() {
         "method": SYNC,
         "action": "diff",
         "protocol": "http://example.com/protocol",
-        "permissionGrantId": "grant-1",
+        "permissionGrantIds": ["grant-1"],
         "hashes": {
             "0101": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
         },

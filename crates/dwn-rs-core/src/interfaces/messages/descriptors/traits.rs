@@ -1,6 +1,8 @@
+use cid::Cid;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::auth::jws::{AuthorizationPayload, PermissionGrantInvocation, SigningPayload};
 use crate::cid::generate_cid_from_serialized;
 
 use super::super::{fields::MessageFields, Fields, Message};
@@ -33,8 +35,36 @@ pub trait MessageParameters {
         None
     }
 
+    fn permission_grant_invocation(&self) -> Result<PermissionGrantInvocation, ValidationError> {
+        Ok(self
+            .permission_grant_id()
+            .map(PermissionGrantInvocation::Single)
+            .unwrap_or(PermissionGrantInvocation::None))
+    }
+
     fn protocol_rule(&self) -> Option<String> {
         None
+    }
+
+    fn authorization_payload(
+        &self,
+        descriptor_cid: Cid,
+        fields: &Self::Fields,
+        delegated_grant_id: Option<Cid>,
+        permission_grant: PermissionGrantInvocation,
+        protocol_role: Option<String>,
+    ) -> Result<SigningPayload, ValidationError> {
+        let _ = fields;
+        AuthorizationPayload::new(
+            descriptor_cid,
+            delegated_grant_id,
+            permission_grant,
+            protocol_role,
+        )
+        .map(SigningPayload::Generic)
+        .map_err(|e| ValidationError {
+            message: format!("Failed to create authorization payload: {e}"),
+        })
     }
 }
 
