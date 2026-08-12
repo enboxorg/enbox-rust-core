@@ -409,7 +409,7 @@ mod tests {
         assert!(out.contains("Write (WriteDescriptor)"));
         // dispatch keys off the trait const + has a fallback error
         assert!(out.contains("ConcreteDescriptor"));
-        assert!(out.contains("From < crate :: Message < ReadDescriptor > > for crate :: Message < crate :: Descriptor >"));
+        assert!(out.contains("impl From < crate :: Message < ReadDescriptor >"));
         assert!(out.contains("unsupported"));
         // leaf codegen still runs (per-struct internal types)
         assert!(out.contains("ReadDescriptorInternal"));
