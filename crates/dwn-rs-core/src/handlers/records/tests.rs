@@ -502,6 +502,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
         data_size: grant_data.len() as u64,
         data_format: "application/json".to_string(),
+        published: Some(true),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
     })
     .await;
@@ -537,11 +538,12 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
             Some(unpublished_data),
         ))
         .await;
-    assert_eq!(reply.status.code, 401);
-    assert!(reply
-        .status
-        .detail
-        .contains("RecordsGrantAuthorizationConditionPublicationRequired"));
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert!(
+        reply.status.detail.contains("grant is not published"),
+        "{}",
+        reply.status.detail
+    );
 
     let published_data = Bytes::from_static(b"published note");
     let published = signed_write_message(WriteSpec {

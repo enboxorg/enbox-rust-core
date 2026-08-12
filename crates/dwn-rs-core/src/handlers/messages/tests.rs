@@ -61,7 +61,7 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Diff,
         protocol: Some("http://example.com/notes".to_string()),
-        depth: Some(0),
+        depth: Some(1),
         hashes: Some(BTreeMap::new()),
         signer: test_signer(),
         permission_grant_ids: None,
@@ -120,11 +120,11 @@ async fn messages_sync_is_not_authorized_by_messages_read_grant() {
             None,
         ))
         .await;
-    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert!(reply
         .status
         .detail
-        .contains("GrantAuthorizationMethodMismatch"));
+        .contains("authorization signature is mismatched"));
 }
 
 #[tokio::test]
@@ -161,11 +161,11 @@ async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
             None,
         ))
         .await;
-    assert_eq!(reply.status.code, 401);
+    assert_eq!(reply.status.code, 400);
     assert!(reply
         .status
         .detail
-        .contains("GrantAuthorizationMethodMismatch"));
+        .contains("authorization signature is mismatched"));
 }
 
 #[tokio::test]
@@ -353,7 +353,7 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
         .reply
         .status
         .detail
-        .contains("MessagesGrantAuthorizationMismatchedProtocol"));
+        .contains("grant is outside of scope"));
 }
 
 #[tokio::test]

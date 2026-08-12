@@ -645,7 +645,7 @@ fn validate_records_write_payload(
         .author_delegated_grant
         .as_ref()
         .map(|grant| {
-            generate_cid_from_serialized(grant).map_err(|err| {
+            grant.message_cid().map_err(|err| {
                 GrantError::InvalidGrant(
                     AuthorizationRequestError::ValidationError(err.to_string()).into(),
                 )
@@ -761,7 +761,7 @@ async fn validate_embedded_author_delegated_grant(
         return Ok(None);
     };
 
-    let grant_cid = generate_cid_from_serialized(grant_message).map_err(|err| {
+    let grant_cid = grant_message.message_cid().map_err(|err| {
         GrantError::InvalidGrant(AuthorizationRequestError::ValidationError(err.to_string()).into())
     })?;
     let delegated_grant_id =

@@ -5,7 +5,7 @@ pub mod protocols;
 use std::collections::TryReserveError;
 
 use crate::auth::{jws, Jws};
-use crate::cid::generate_cid_from_serialized;
+use crate::cid::{generate_cid_from_serialized, generate_message_cid_from_json};
 use crate::fields::MessageFields;
 use crate::{auth::Authorization, interfaces::messages::descriptors::MessageParameters};
 use cid::Cid;
@@ -68,6 +68,13 @@ where
     pub fn cid(&self) -> Result<Cid, EncodeError<TryReserveError>> {
         generate_cid_from_serialized(self)
     }
+
+    /// Return the DWN message CID, excluding transport-only inline `encodedData`.
+    pub fn message_cid(&self) -> Result<Cid, EncodeError<TryReserveError>> {
+        let value =
+            serde_json::to_value(self).map_err(|error| EncodeError::Msg(error.to_string()))?;
+        generate_message_cid_from_json(&value)
+    }
 }
 
 impl<D> Message<D>
@@ -114,9 +121,13 @@ where
     ) -> Result<Authorization, ValidationError> {
         let delegated_grant_id: Option<Cid> = if let Some(delegated_grant) = delegated_grant.clone()
         {
-            Some(delegated_grant.cid().map_err(|err| ValidationError {
-                message: err.to_string(),
-            })?)
+            Some(
+                delegated_grant
+                    .message_cid()
+                    .map_err(|err| ValidationError {
+                        message: err.to_string(),
+                    })?,
+            )
         } else {
             None
         };
