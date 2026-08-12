@@ -2,10 +2,10 @@ pub mod messages;
 pub mod protocols;
 pub mod records;
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::SubscriptionID;
+use crate::{stores::ProgressGapInfo, SubscriptionID};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Status {
@@ -14,10 +14,77 @@ pub struct Status {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Response {
+#[serde(bound(serialize = "R: Serialize", deserialize = "R: DeserializeOwned"))]
+pub struct Response<R> {
     pub status: Status,
     #[serde(flatten)]
-    pub reply: Reply,
+    pub reply: R,
+}
+
+impl<R> Response<R> {
+    pub fn new(status: Status, reply: R) -> Self {
+        Self { status, reply }
+    }
+
+    pub fn ok() -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status {
+                code: 200,
+                detail: "OK".to_string(),
+            },
+            reply: R::default(),
+        }
+    }
+
+    pub fn bad_request(detail: String) -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status { code: 400, detail },
+            reply: R::default(),
+        }
+    }
+
+    pub fn unauthorized(detail: String) -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status { code: 401, detail },
+            reply: R::default(),
+        }
+    }
+
+    pub fn not_implemented(detail: String) -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status { code: 501, detail },
+            reply: R::default(),
+        }
+    }
+
+    pub fn internal_error(detail: String) -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status { code: 500, detail },
+            reply: R::default(),
+        }
+    }
+
+    pub fn with_reply(&self, reply: R) -> Self {
+        Self {
+            status: self.status.clone(),
+            reply,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -30,13 +97,27 @@ pub struct Subscribe {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(tag = "code", rename_all = "camelCase")]
+pub enum Error {
+    ProgressGap(ProgressGapInfo),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum Reply {
     Empty(Empty),
+    Error(Error),
+    RecordsCount(Box<records::Count>),
     RecordsRead(Box<records::Read>),
     RecordsQuery(Box<records::Query>),
     MessageRead(Box<messages::Read>),
     MessageQuery(Box<messages::Query>),
     ProtocolsQuery(Box<protocols::Query>),
     Subscribe(Subscribe),
+}
+
+impl Default for Reply {
+    fn default() -> Self {
+        Reply::Empty(Empty {})
+    }
 }

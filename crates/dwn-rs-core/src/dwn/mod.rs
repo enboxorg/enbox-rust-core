@@ -7,6 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -16,7 +17,7 @@ use crate::interfaces::messages::descriptors::{
 };
 use crate::interfaces::replies::Status;
 use crate::validation::validate_message;
-use crate::{Descriptor, Message};
+use crate::{Descriptor, Message, Reply, Response};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantGateResult {
@@ -146,35 +147,45 @@ pub trait Handler: Send + Sync {
     /// It supplies both the dispatch kind and conversion from the generic envelope.
     type Descriptor: ConcreteDescriptor + FromDescriptor + Clone;
 
+    // Handler response type, which is serialized into the reply body. This is a generic parameter
+    // so that the handler can return a concrete type (e.g. `RecordsQueryReply`) without boxing it.
+    type Reply: Serialize + DeserializeOwned + Into<Reply> + Send + 'static + Default;
+
     /// Execute method-specific behavior after the shared request checks pass.
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send;
+    ) -> impl Future<Output = Response<Self::Reply>> + Send;
 
     /// Run this typed handler from an untyped dispatch request.
     ///
     /// This supports direct tests as well as [`HandlerAdapter`]. Callers using
     /// [`Dwn::process_message`] also get its earlier tenant and dispatch checks;
     /// direct callers get the parsing and schema checks performed here.
-    fn run(&self, request: MethodHandlerRequest<'_>) -> impl Future<Output = DwnReply> + Send {
+    fn run(
+        &self,
+        request: MethodHandlerRequest<'_>,
+    ) -> impl Future<Output = Response<Self::Reply>> + Send
+    where
+        <Self as Handler>::Reply: std::default::Default,
+    {
         async move {
             let message: Message<Descriptor> = match serde_json::from_value(request.message.clone())
             {
                 Ok(message) => message,
                 Err(error) => {
-                    return DwnReply::bad_request(format!("Failed to parse message: {error}"))
+                    return Response::bad_request(format!("Failed to parse message: {error}"))
                 }
             };
 
             if validate_message(request.message).is_err() {
-                return DwnReply::bad_request("Message validation failed");
+                return Response::bad_request("Message validation failed".to_string());
             }
 
             let descriptor = match Self::Descriptor::from_descriptor(&message.descriptor) {
                 Ok(descriptor) => descriptor.clone(),
                 Err(error) => {
-                    return DwnReply::bad_request(format!("Failed to parse descriptor: {error}"))
+                    return Response::bad_request(format!("Failed to parse descriptor: {error}"))
                 }
             };
 
@@ -221,10 +232,20 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
     fn handle<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>>
+    where
+        <H as Handler>::Reply: std::default::Default,
+    {
         // The dispatch registry is `Arc<dyn MethodHandler>`, so this is the single boundary where
         // the handler's `impl Future` is boxed into a `Send` trait object.
-        Box::pin(self.0.run(request))
+        Box::pin(async move {
+            let Response { status, reply } = self.0.run(request).await;
+
+            Response {
+                status,
+                reply: reply.into(),
+            }
+        })
     }
 }
 
@@ -270,7 +291,7 @@ pub trait MethodHandler: Send + Sync {
     fn handle<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>>;
 }
 
 /// Dispatch registry keyed by DWN `(interface, method)` kind.
@@ -472,9 +493,9 @@ impl MethodHandler for NotImplementedHandler {
     fn handle<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
         Box::pin(async move {
-            DwnReply::not_implemented(format!(
+            Response::not_implemented(format!(
                 "{} handler is not implemented",
                 request
                     .kind
