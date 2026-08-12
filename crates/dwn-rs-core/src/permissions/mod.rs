@@ -1,7 +1,10 @@
 pub mod errors;
 pub mod scopes;
 
-use crate::auth::jws::PermissionGrantInvocation;
+use crate::auth::jws::{
+    permission_grant_invocation, AuthorizationPayloadData, PermissionGrantInvocation,
+    RecordsWriteAuthorizationPayloadData,
+};
 pub use crate::permissions::errors::AuthorizationValidationError;
 use crate::permissions::errors::{
     AuthorizationRequestError, GrantError, GrantMessageTypeError, PermissionError,
@@ -18,12 +21,13 @@ use std::collections::BTreeMap;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::auth::resolver::DidResolver;
-use crate::auth::{Jws, JwsError};
-use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
+use crate::auth::{Authorization, Jws, JwsError};
+use crate::cid::{generate_cid_from_serialized, generate_message_cid_from_json};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
     Records, RecordsWriteDescriptor, QUERY,
@@ -52,10 +56,62 @@ const SUBSCRIBE_METHOD: &str = "Subscribe";
 const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum VerifiedAuthorizationPayload {
+    Generic(AuthorizationPayloadData),
+    RecordsWrite(RecordsWriteAuthorizationPayloadData),
+}
+
+impl VerifiedAuthorizationPayload {
+    pub fn descriptor_cid(&self) -> &str {
+        match self {
+            VerifiedAuthorizationPayload::Generic(payload) => payload.descriptor_cid.as_str(),
+            VerifiedAuthorizationPayload::RecordsWrite(payload) => payload.descriptor_cid.as_str(),
+        }
+    }
+
+    pub fn delegated_grant_id(&self) -> Option<&str> {
+        match self {
+            VerifiedAuthorizationPayload::Generic(payload) => payload.delegated_grant_id.as_deref(),
+            VerifiedAuthorizationPayload::RecordsWrite(payload) => {
+                payload.delegated_grant_id.as_deref()
+            }
+        }
+    }
+
+    pub fn permission_grant_invocation(&self) -> Result<PermissionGrantInvocation, GrantError> {
+        match self {
+            VerifiedAuthorizationPayload::Generic(payload) => permission_grant_invocation(
+                payload.permission_grant_id.as_deref(),
+                payload.permission_grant_ids.as_deref(),
+            )
+            .map_err(|err| GrantError::InvalidGrant(err.into())),
+            VerifiedAuthorizationPayload::RecordsWrite(payload) => {
+                permission_grant_invocation(payload.permission_grant_id.as_deref(), None)
+                    .map_err(|err| GrantError::InvalidGrant(err.into()))
+            }
+        }
+    }
+
+    pub fn protocol_role(&self) -> Option<&str> {
+        match self {
+            VerifiedAuthorizationPayload::Generic(payload) => payload.protocol_role.as_deref(),
+            VerifiedAuthorizationPayload::RecordsWrite(payload) => payload.protocol_role.as_deref(),
+        }
+    }
+
+    pub fn as_records_write(&self) -> Option<&RecordsWriteAuthorizationPayloadData> {
+        match self {
+            VerifiedAuthorizationPayload::RecordsWrite(payload) => Some(payload),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AuthorizationContext {
     pub signer: String,
     pub author: String,
-    pub payload: JsonValue,
+    pub payload: VerifiedAuthorizationPayload,
     pub permission_grant_invocation: PermissionGrantInvocation,
     pub author_delegated_grant: Option<PermissionGrant>,
 }
@@ -354,15 +410,124 @@ pub fn permissions_protocol_definition() -> Definition {
     }
 }
 
+pub enum AuthorizationPayloadKind {
+    RecordsWrite,
+    Direct,
+    MessageGrantSet,
+    NoGrant,
+}
+
+fn descriptor_permission_grant_invocation(
+    message: &Message<Descriptor>,
+) -> PermissionGrantInvocation {
+    match &message.descriptor {
+        Descriptor::Records(records) => match records.as_ref() {
+            Records::Read(read) => read
+                .permission_grant_id
+                .clone()
+                .map(PermissionGrantInvocation::Single)
+                .unwrap_or(PermissionGrantInvocation::None),
+            Records::Write(write) => write
+                .permission_grant_id
+                .clone()
+                .map(PermissionGrantInvocation::Single)
+                .unwrap_or(PermissionGrantInvocation::None),
+            Records::Count(_) | Records::Delete(_) | Records::Query(_) | Records::Subscribe(_) => {
+                PermissionGrantInvocation::None
+            }
+        },
+        Descriptor::Protocols(protocols) => match protocols.as_ref() {
+            Protocols::Configure(configure) => configure
+                .permission_grant_id
+                .clone()
+                .map(PermissionGrantInvocation::Single)
+                .unwrap_or(PermissionGrantInvocation::None),
+            Protocols::Query(query) => query
+                .permission_grant_id
+                .clone()
+                .map(PermissionGrantInvocation::Single)
+                .unwrap_or(PermissionGrantInvocation::None),
+        },
+        Descriptor::Messages(messages) => match messages.as_ref() {
+            crate::descriptors::Messages::Read(read) => read
+                .permission_grant_ids
+                .clone()
+                .map(PermissionGrantInvocation::Multi)
+                .unwrap_or(PermissionGrantInvocation::None),
+            crate::descriptors::Messages::Query(query) => query
+                .permission_grant_ids
+                .clone()
+                .map(PermissionGrantInvocation::Multi)
+                .unwrap_or(PermissionGrantInvocation::None),
+            crate::descriptors::Messages::Subscribe(subscribe) => subscribe
+                .permission_grant_ids
+                .clone()
+                .map(PermissionGrantInvocation::Multi)
+                .unwrap_or(PermissionGrantInvocation::None),
+            crate::descriptors::Messages::Sync(_) => PermissionGrantInvocation::None,
+        },
+    }
+}
+
+fn authorization_payload_kind(message: &Message<Descriptor>) -> AuthorizationPayloadKind {
+    match &message.descriptor {
+        Descriptor::Records(records) => match records.as_ref() {
+            Records::Write(_) => AuthorizationPayloadKind::RecordsWrite,
+            _ => AuthorizationPayloadKind::Direct,
+        },
+        Descriptor::Protocols(protocols) => match protocols.as_ref() {
+            Protocols::Configure(_) | Protocols::Query(_) => AuthorizationPayloadKind::Direct,
+        },
+        Descriptor::Messages(messages) => match messages.as_ref() {
+            crate::descriptors::Messages::Read(_)
+            | crate::descriptors::Messages::Query(_)
+            | crate::descriptors::Messages::Subscribe(_) => {
+                AuthorizationPayloadKind::MessageGrantSet
+            }
+            crate::descriptors::Messages::Sync(_) => AuthorizationPayloadKind::NoGrant,
+        },
+    }
+}
+
+fn validate_invocation_and_kind(
+    message: &Message<Descriptor>,
+    payload: &VerifiedAuthorizationPayload,
+) -> Result<PermissionGrantInvocation, GrantError> {
+    let descriptor_invocation = descriptor_permission_grant_invocation(message);
+    let payload_invocation = payload.permission_grant_invocation()?;
+
+    if descriptor_invocation != payload_invocation {
+        return Err(GrantError::InvalidGrant(
+            AuthorizationRequestError::SignatureMismatch.into(),
+        ));
+    }
+
+    match (authorization_payload_kind(message), &payload_invocation) {
+        (
+            AuthorizationPayloadKind::RecordsWrite,
+            PermissionGrantInvocation::None | PermissionGrantInvocation::Single(_),
+        )
+        | (
+            AuthorizationPayloadKind::Direct,
+            PermissionGrantInvocation::None | PermissionGrantInvocation::Single(_),
+        )
+        | (
+            AuthorizationPayloadKind::MessageGrantSet,
+            PermissionGrantInvocation::None | PermissionGrantInvocation::Multi(_),
+        )
+        | (AuthorizationPayloadKind::NoGrant, PermissionGrantInvocation::None) => {
+            Ok(payload_invocation)
+        }
+        _ => Err(GrantError::InvalidDescriptorType),
+    }
+}
+
 pub async fn validate_authorization_signature(
     message: &Message<Descriptor>,
     did_resolver: Option<&dyn DidResolver>,
     required: bool,
 ) -> Result<Option<AuthorizationContext>, AuthorizationValidationError> {
-    let raw_message =
-        serde_json::to_value(message).map_err(AuthorizationValidationError::ParseFailed)?;
-
-    validate_authorization_signature_inner(message, did_resolver, required, &raw_message, true)
+    validate_authorization_signature_inner(message, did_resolver, required, true)
         .await
         .map_err(|error| match error {
             // Authorization parsing/validation errors remain distinguishable to
@@ -376,31 +541,143 @@ pub async fn validate_authorization_signature(
         })
 }
 
+fn validate_records_write_payload(
+    message: &Message<Descriptor>,
+    payload: &VerifiedAuthorizationPayload,
+) -> Result<(), GrantError> {
+    let payload = payload.as_records_write().ok_or(GrantError::InvalidGrant(
+        AuthorizationRequestError::ValidationError("RecordsWrite payload expected".to_string())
+            .into(),
+    ))?;
+
+    let context_id = context_id(message).ok_or(GrantError::InvalidGrant(
+        AuthorizationRequestError::SignatureMismatch.into(),
+    ))?;
+    let record_id = record_id(message).ok_or(GrantError::InvalidGrant(
+        AuthorizationRequestError::SignatureMismatch.into(),
+    ))?;
+
+    if payload.context_id != context_id {
+        return Err(GrantError::InvalidGrant(
+            AuthorizationRequestError::SignatureMismatch.into(),
+        ));
+    }
+
+    if payload.record_id != record_id {
+        return Err(GrantError::InvalidGrant(
+            AuthorizationRequestError::SignatureMismatch.into(),
+        ));
+    }
+
+    let attestation_cid = write_fields(message)?
+        .attestation
+        .as_ref()
+        .map(|attestation| {
+            generate_cid_from_serialized(attestation).map_err(|err| {
+                GrantError::InvalidGrant(
+                    AuthorizationRequestError::ValidationError(err.to_string()).into(),
+                )
+            })
+        })
+        .transpose()?;
+
+    let encryption_cid = write_fields(message)?
+        .encryption
+        .as_ref()
+        .map(|encryption| {
+            generate_cid_from_serialized(encryption).map_err(|err| {
+                GrantError::InvalidGrant(
+                    AuthorizationRequestError::ValidationError(err.to_string()).into(),
+                )
+            })
+        })
+        .transpose()?;
+
+    payload
+        .attestation_cid
+        .as_ref()
+        .map(|payload_attestation_cid| {
+            attestation_cid
+                .ok_or(GrantError::InvalidGrant(
+                    AuthorizationRequestError::SignatureMismatch.into(),
+                ))
+                .and_then(|attestation| {
+                    if attestation.to_string() != *payload_attestation_cid {
+                        return Err(GrantError::InvalidGrant(
+                            AuthorizationRequestError::SignatureMismatch.into(),
+                        ));
+                    }
+                    Ok(())
+                })
+        })
+        .transpose()?;
+
+    match payload.encryption_cid.as_ref() {
+        Some(payload_encryption_cid) => {
+            let encryption_cid = encryption_cid.ok_or(GrantError::InvalidGrant(
+                AuthorizationRequestError::SignatureMismatch.into(),
+            ))?;
+            if encryption_cid.to_string() != *payload_encryption_cid {
+                return Err(GrantError::InvalidGrant(
+                    AuthorizationRequestError::SignatureMismatch.into(),
+                ));
+            }
+        }
+        None => {
+            if encryption_cid.is_some() {
+                return Err(GrantError::InvalidGrant(
+                    AuthorizationRequestError::SignatureMismatch.into(),
+                ));
+            }
+        }
+    }
+
+    // compute delegated grant Cid
+    let delegated_grant_cid = write_fields(message)?
+        .authorization
+        .author_delegated_grant
+        .as_ref()
+        .map(|grant| {
+            generate_cid_from_serialized(grant).map_err(|err| {
+                GrantError::InvalidGrant(
+                    AuthorizationRequestError::ValidationError(err.to_string()).into(),
+                )
+            })
+        })
+        .map(|c| c.map(|cid| cid.to_string()))
+        .transpose()?;
+
+    if payload.delegated_grant_id != delegated_grant_cid {
+        return Err(GrantError::InvalidGrant(
+            AuthorizationRequestError::SignatureMismatch.into(),
+        ));
+    }
+
+    Ok(())
+}
+
 async fn validate_authorization_signature_inner(
-    _message: &Message<Descriptor>,
+    message: &Message<Descriptor>,
     did_resolver: Option<&dyn DidResolver>,
     required: bool,
-    raw_message: &JsonValue,
     validate_delegated_grant: bool,
 ) -> Result<Option<AuthorizationContext>, GrantError> {
-    let Some(authorization) = raw_message.get("authorization") else {
-        return if required {
-            Err(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::SignatureRequired,
-            )
-            .into())
-        } else {
-            Ok(None)
-        };
+    let authorization = match &message.fields {
+        Fields::Write(fields) => &fields.authorization,
+        Fields::InitialWriteField(fields) => &fields.write_fields.authorization,
+        Fields::Authorization(auth) => auth,
     };
-    let signature =
-        authorization
-            .get("signature")
-            .ok_or(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::SignatureRequired,
-            ))?;
-    let jws: Jws = serde_json::from_value(signature.clone())
-        .map_err(AuthorizationValidationError::ParseFailed)?;
+
+    if authorization.is_empty() && required {
+        return Err(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::SignatureRequired,
+        )
+        .into());
+    } else if authorization.is_empty() {
+        return Ok(None);
+    }
+
+    let jws = &authorization.signature;
     let signature_count = jws.signatures.as_ref().map(Vec::len).unwrap_or(0);
     if signature_count != 1 {
         return Err(AuthorizationValidationError::BadRequest(
@@ -408,11 +685,28 @@ async fn validate_authorization_signature_inner(
         )
         .into());
     }
-    let payload = decode_jws_payload(&jws)?;
-    validate_descriptor_cid(raw_message, &payload)?;
-    let permission_grants = validate_permission_grant(raw_message, &payload)?;
+
+    let payload = match authorization_payload_kind(message) {
+        AuthorizationPayloadKind::RecordsWrite => {
+            let payload = VerifiedAuthorizationPayload::RecordsWrite(decode_jws_payload(&jws)?);
+            validate_descriptor_cid(message, payload.descriptor_cid().to_string())?;
+            validate_invocation_and_kind(message, &payload)?;
+            validate_records_write_payload(message, &payload)?;
+            payload
+        }
+        _ => {
+            let payload = VerifiedAuthorizationPayload::Generic(decode_jws_payload(&jws)?);
+            validate_descriptor_cid(message, payload.descriptor_cid().to_string())?;
+            validate_invocation_and_kind(message, &payload)?;
+            payload
+        }
+    };
+
+    validate_descriptor_cid(message, payload.descriptor_cid().to_string())?;
+
+    let permission_grants = validate_permission_grant(message, &payload)?;
     let unverified_signer =
-        signer_did_from_jws(&jws).map_err(AuthorizationValidationError::BadRequest)?;
+        signer_did_from_jws(jws).map_err(AuthorizationValidationError::BadRequest)?;
     let signer = match did_resolver {
         Some(resolver) => jws
             .verify_signatures(resolver)
@@ -446,12 +740,12 @@ async fn validate_authorization_signature_inner(
 }
 
 async fn validate_embedded_author_delegated_grant(
-    authorization: &JsonValue,
-    payload: &JsonValue,
+    authorization: &Authorization,
+    payload: &VerifiedAuthorizationPayload,
     did_resolver: Option<&dyn DidResolver>,
 ) -> Result<Option<PermissionGrant>, GrantError> {
-    let Some(grant_value) = authorization.get("authorDelegatedGrant") else {
-        if payload.get("delegatedGrantId").is_some() {
+    let Some(ref grant_message) = authorization.author_delegated_grant else {
+        if payload.delegated_grant_id().is_some() {
             return Err(AuthorizationValidationError::BadRequest(
                 AuthorizationRequestError::MissingAuthorDelegateGrant,
             )
@@ -460,27 +754,33 @@ async fn validate_embedded_author_delegated_grant(
         return Ok(None);
     };
 
-    let grant_message: Message<Descriptor> = serde_json::from_value(grant_value.clone())
-        .map_err(AuthorizationValidationError::ParseFailed)?;
-    let grant_cid = message_cid(&grant_message)?;
-    let delegated_grant_id = payload
-        .get("delegatedGrantId")
-        .and_then(JsonValue::as_str)
-        .ok_or(AuthorizationValidationError::BadRequest(
-            AuthorizationRequestError::DelegateGrantIDRequired,
-        ))?;
-    if delegated_grant_id != grant_cid {
+    let grant_cid = generate_cid_from_serialized(grant_message).map_err(|err| {
+        GrantError::InvalidGrant(AuthorizationRequestError::ValidationError(err.to_string()).into())
+    })?;
+    let delegated_grant_id =
+        payload
+            .delegated_grant_id()
+            .ok_or(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::DelegateGrantIDRequired,
+            ))?;
+    if delegated_grant_id != grant_cid.to_string() {
         return Err(AuthorizationValidationError::BadRequest(
             AuthorizationRequestError::DelegateAuthorMismatch,
         )
         .into());
     }
 
+    let grant_message_general = Message {
+        descriptor: Descriptor::Records(Box::new(Records::Write(Box::new(
+            grant_message.descriptor.clone(),
+        )))),
+        fields: Fields::Write(grant_message.fields.clone()),
+    };
+
     let grant_authorization = Box::pin(validate_authorization_signature_inner(
-        &grant_message,
+        &grant_message_general,
         did_resolver,
         true,
-        grant_value,
         false,
     ))
     .await?
@@ -488,10 +788,10 @@ async fn validate_embedded_author_delegated_grant(
         AuthorizationRequestError::SignatureRequired,
     ))?;
 
-    parse_permission_grant(&grant_message, &grant_authorization.author).map(Some)
+    parse_permission_grant(&grant_message_general, &grant_authorization.author).map(Some)
 }
 
-fn decode_jws_payload(jws: &Jws) -> Result<JsonValue, AuthorizationValidationError> {
+fn decode_jws_payload<T: DeserializeOwned>(jws: &Jws) -> Result<T, AuthorizationValidationError> {
     let payload = jws
         .payload
         .as_deref()
@@ -504,17 +804,16 @@ fn decode_jws_payload(jws: &Jws) -> Result<JsonValue, AuthorizationValidationErr
 }
 
 fn validate_permission_grant(
-    raw_message: &JsonValue,
-    payload: &JsonValue,
+    message: &Message<Descriptor>,
+    payload: &VerifiedAuthorizationPayload,
 ) -> Result<PermissionGrantInvocation, AuthorizationValidationError> {
-    let payload_invocation = parse_permission_grant_invocation(payload)?;
-    let descriptor =
-        raw_message
-            .get("descriptor")
-            .ok_or(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::DescriptorRequired,
-            ))?;
-    let descriptor_invocation = parse_permission_grant_invocation(descriptor)?;
+    let payload_invocation = payload.permission_grant_invocation().map_err(|err| {
+        AuthorizationValidationError::BadRequest(AuthorizationRequestError::ValidationError(
+            err.to_string(),
+        ))
+    })?;
+
+    let descriptor_invocation = descriptor_permission_grant_invocation(message);
 
     if payload_invocation != descriptor_invocation {
         return Err(AuthorizationValidationError::BadRequest(
@@ -525,101 +824,16 @@ fn validate_permission_grant(
     Ok(payload_invocation)
 }
 
-fn parse_permission_grant_invocation(
-    value: &JsonValue,
-) -> Result<PermissionGrantInvocation, AuthorizationValidationError> {
-    let permission_grant_id = value.get("permissionGrantId");
-    let permission_grant_ids = value.get("permissionGrantIds");
-
-    let permission_grant = match (permission_grant_id, permission_grant_ids) {
-        (Some(_), Some(_)) => Err(AuthorizationValidationError::BadRequest(
-            AuthorizationRequestError::PermissionGrantIDsConflict,
-        )),
-        (Some(id), None) => {
-            let id_str = id.as_str().ok_or_else(|| {
-                AuthorizationValidationError::BadRequest(
-                    AuthorizationRequestError::ValidationError(
-                        "permissionGrantId must be a string".to_string(),
-                    ),
-                )
-            })?;
-            Ok(PermissionGrantInvocation::Single(id_str.to_string()))
-        }
-        (None, Some(ids)) => {
-            let ids_array = ids.as_array().ok_or_else(|| {
-                AuthorizationValidationError::BadRequest(
-                    AuthorizationRequestError::ValidationError(
-                        "permissionGrantIds must be an array".to_string(),
-                    ),
-                )
-            })?;
-            let mut grant_ids = Vec::new();
-            for id in ids_array {
-                let id_str = id.as_str().ok_or_else(|| {
-                    AuthorizationValidationError::BadRequest(
-                        AuthorizationRequestError::ValidationError(
-                            "permissionGrantIds must be an array of strings".to_string(),
-                        ),
-                    )
-                })?;
-                grant_ids.push(id_str.to_string());
-            }
-
-            if grant_ids.is_empty() {
-                return Err(AuthorizationValidationError::BadRequest(
-                    AuthorizationRequestError::ValidationError(
-                        "permissionGrantIds must not be empty".to_string(),
-                    ),
-                ));
-            }
-
-            if !grant_ids.is_sorted() {
-                return Err(AuthorizationValidationError::BadRequest(
-                    AuthorizationRequestError::ValidationError(
-                        "permissionGrantIds must be sorted in ascending order".to_string(),
-                    ),
-                ));
-            }
-
-            let is_deduped = grant_ids.windows(2).all(|w| w[0] != w[1]);
-            if !is_deduped {
-                return Err(AuthorizationValidationError::BadRequest(
-                    AuthorizationRequestError::ValidationError(
-                        "permissionGrantIds must not contain duplicates".to_string(),
-                    ),
-                ));
-            }
-
-            Ok(PermissionGrantInvocation::Multi(grant_ids))
-        }
-        (None, None) => Ok(PermissionGrantInvocation::None),
-    }?;
-
-    Ok(permission_grant)
-}
-
 fn validate_descriptor_cid(
-    raw_message: &JsonValue,
-    payload: &JsonValue,
+    message: &Message<Descriptor>,
+    payload_descriptor_cid: String,
 ) -> Result<(), AuthorizationValidationError> {
-    let descriptor_cid = payload
-        .get("descriptorCid")
-        .and_then(JsonValue::as_str)
-        .ok_or(AuthorizationValidationError::BadRequest(
-            AuthorizationRequestError::MissingCid,
-        ))?;
-    let descriptor =
-        raw_message
-            .get("descriptor")
-            .ok_or(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::DescriptorRequired,
-            ))?;
-    let expected = generate_cid_from_json(descriptor)?.to_string();
-    if descriptor_cid != expected {
+    if payload_descriptor_cid != message.descriptor.cid().to_string() {
         return Err(AuthorizationValidationError::BadRequest(
             AuthorizationRequestError::CidMismatch,
         ));
     }
+
     Ok(())
 }
 

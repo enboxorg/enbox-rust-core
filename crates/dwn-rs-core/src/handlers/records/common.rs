@@ -99,15 +99,14 @@ pub(crate) fn validate_records_write_integrity(
     message: &Message<Descriptor>,
     signature: &AuthorizationContext,
 ) -> Result<(), String> {
+    let records_write_data_authdata = signature.payload.as_records_write().ok_or_else(|| {
+        "RecordsWriteValidateIntegrityAuthorizationPayloadMissing: authorization payload is required".to_string()
+    })?;
+
     let record_id = record_id(message).ok_or_else(|| {
         "RecordsWriteValidateIntegrityRecordIdMissing: recordId is required".to_string()
     })?;
-    if signature
-        .payload
-        .get("recordId")
-        .and_then(JsonValue::as_str)
-        != Some(record_id.as_str())
-    {
+    if records_write_data_authdata.record_id != record_id {
         return Err("RecordsWriteValidateIntegrityRecordIdUnauthorized: recordId in message does not match recordId in authorization".to_string());
     }
 
@@ -150,11 +149,8 @@ pub(crate) fn validate_records_write_integrity(
     // `We therefore treat it as optional and only require the value to agree with the
     // signature payload (both-absent is valid), matching upstream `validateIntegrity`.
     let context_id = context_id(message);
-    let signature_context_id = signature
-        .payload
-        .get("contextId")
-        .and_then(JsonValue::as_str);
-    if context_id.as_deref() != signature_context_id {
+    let signature_context_id = records_write_data_authdata.context_id.clone();
+    if context_id != Some(signature_context_id) {
         return Err("RecordsWriteValidateIntegrityContextIdNotInSignerSignaturePayload: contextId in message does not match contextId in authorization".to_string());
     }
 
@@ -778,11 +774,8 @@ pub(crate) fn should_build_recipient_filter(filter: &RecordsFilter, recipient: &
     })
 }
 
-pub(crate) fn should_protocol_authorize(payload: &JsonValue) -> bool {
-    payload
-        .get("protocolRole")
-        .and_then(JsonValue::as_str)
-        .is_some()
+pub(crate) fn should_protocol_authorize(ctx: &AuthorizationContext) -> bool {
+    ctx.payload.protocol_role().is_some()
 }
 
 pub(crate) fn date_sort_to_message_sort(
@@ -898,8 +891,7 @@ where
 pub(crate) async fn authorize_protocol_query_or_subscribe<MessageStore>(
     tenant: &str,
     filter: &RecordsFilter,
-    payload: &JsonValue,
-    author: &str,
+    auth_ctx: &AuthorizationContext,
     message_store: &MessageStore,
     kind: RecordsAuthorizationKind,
 ) -> Result<(), String>
@@ -932,8 +924,8 @@ where
     };
     authorize_actions(
         tenant,
-        author,
-        payload.get("protocolRole").and_then(JsonValue::as_str),
+        &auth_ctx.author,
+        auth_ctx.payload.protocol_role(),
         &[can],
         rule_set,
         &[],

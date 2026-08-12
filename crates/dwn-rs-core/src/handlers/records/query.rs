@@ -146,12 +146,11 @@ where
         )
         .await
         .map_err(|error| QueryAuthorizationResult::Unauthorized(error.to_string()))?;
-        if should_protocol_authorize(&signature.payload) {
+        if should_protocol_authorize(signature) {
             authorize_protocol_query_or_subscribe(
                 tenant,
                 &descriptor.filter,
-                &signature.payload,
-                &signature.author,
+                &signature,
                 &self.message_store,
                 RecordsAuthorizationKind::Query,
             )
@@ -172,7 +171,7 @@ where
                 &descriptor.filter,
                 descriptor.date_sort.as_ref(),
                 &signature.author,
-                should_protocol_authorize(&signature.payload) || grant_authorized,
+                should_protocol_authorize(signature) || grant_authorized,
             )),
             Some(signature.author.clone()),
         ))
