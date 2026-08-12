@@ -86,10 +86,10 @@ impl VerifiedAuthorizationPayload {
                 payload.permission_grant_id.as_deref(),
                 payload.permission_grant_ids.as_deref(),
             )
-            .map_err(|err| GrantError::InvalidGrant(err.into())),
+            .map_err(GrantError::InvalidGrant),
             VerifiedAuthorizationPayload::RecordsWrite(payload) => {
                 permission_grant_invocation(payload.permission_grant_id.as_deref(), None)
-                    .map_err(|err| GrantError::InvalidGrant(err.into()))
+                    .map_err(GrantError::InvalidGrant)
             }
         }
     }
@@ -695,14 +695,14 @@ async fn validate_authorization_signature_inner(
 
     let payload = match authorization_payload_kind(message) {
         AuthorizationPayloadKind::RecordsWrite => {
-            let payload = VerifiedAuthorizationPayload::RecordsWrite(decode_jws_payload(&jws)?);
+            let payload = VerifiedAuthorizationPayload::RecordsWrite(decode_jws_payload(jws)?);
             validate_descriptor_cid(message, payload.descriptor_cid().to_string())?;
             validate_invocation_and_kind(message, &payload)?;
             validate_records_write_payload(message, &payload)?;
             payload
         }
         _ => {
-            let payload = VerifiedAuthorizationPayload::Generic(decode_jws_payload(&jws)?);
+            let payload = VerifiedAuthorizationPayload::Generic(decode_jws_payload(jws)?);
             validate_descriptor_cid(message, payload.descriptor_cid().to_string())?;
             validate_invocation_and_kind(message, &payload)?;
             payload

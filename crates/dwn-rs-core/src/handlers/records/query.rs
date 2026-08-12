@@ -150,7 +150,7 @@ where
             authorize_protocol_query_or_subscribe(
                 tenant,
                 &descriptor.filter,
-                &signature,
+                signature,
                 &self.message_store,
                 RecordsAuthorizationKind::Query,
             )
