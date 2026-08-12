@@ -1834,32 +1834,53 @@ mod tests {
 
     #[test]
     fn permission_grant_invocation_requires_canonical_matching_plural_fields() {
-        let descriptor = serde_json::json!({
-            "interface": "Messages",
-            "method": "Subscribe",
-            "permissionGrantIds": ["grant-a", "grant-b"],
-        });
-        let message = serde_json::json!({ "descriptor": descriptor });
-        let valid_payload = serde_json::json!({
-            "permissionGrantIds": ["grant-a", "grant-b"],
+        let message: Message<Descriptor> = serde_json::from_value(serde_json::json!({
+            "descriptor": {
+                "interface": "Messages",
+                "method": "Subscribe",
+                "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                "filters": [],
+                "permissionGrantIds": ["grant-a", "grant-b"],
+            },
+            "signature": {},
+        }))
+        .unwrap();
+        let valid_payload = VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+            descriptor_cid: String::new(),
+            delegated_grant_id: None,
+            permission_grant_id: None,
+            permission_grant_ids: Some(vec!["grant-a".to_string(), "grant-b".to_string()]),
+            protocol_role: None,
         });
         assert_eq!(
             validate_permission_grant(&message, &valid_payload).unwrap(),
             PermissionGrantInvocation::Multi(vec!["grant-a".to_string(), "grant-b".to_string()]),
         );
 
-        for payload in [
-            serde_json::json!({ "permissionGrantIds": [] }),
-            serde_json::json!({ "permissionGrantIds": ["grant-b", "grant-a"] }),
-            serde_json::json!({ "permissionGrantIds": ["grant-a", "grant-a"] }),
-            serde_json::json!({
-                "permissionGrantId": "grant-a",
-                "permissionGrantIds": ["grant-a", "grant-b"],
-            }),
-            serde_json::json!({ "permissionGrantIds": ["grant-a", "grant-c"] }),
+        for permission_grant_ids in [
+            Some(vec![]),
+            Some(vec!["grant-b".to_string(), "grant-a".to_string()]),
+            Some(vec!["grant-a".to_string(), "grant-a".to_string()]),
+            Some(vec!["grant-a".to_string(), "grant-c".to_string()]),
         ] {
+            let payload = VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: None,
+                permission_grant_ids,
+                protocol_role: None,
+            });
             assert!(validate_permission_grant(&message, &payload).is_err());
         }
+
+        let conflicting_payload = VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+            descriptor_cid: String::new(),
+            delegated_grant_id: None,
+            permission_grant_id: Some("grant-a".to_string()),
+            permission_grant_ids: Some(vec!["grant-a".to_string(), "grant-b".to_string()]),
+            protocol_role: None,
+        });
+        assert!(validate_permission_grant(&message, &conflicting_payload).is_err());
     }
 
     #[tokio::test]

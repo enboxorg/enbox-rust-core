@@ -1719,10 +1719,18 @@ mod tests {
         let signature = AuthorizationContext {
             signer: "did:example:alice".to_string(),
             author: "did:example:alice".to_string(),
-            payload: json!({
-                "recordId": "some-non-initial-record-id",
-                "contextId": "some-context-id",
-            }),
+            payload: crate::permissions::VerifiedAuthorizationPayload::RecordsWrite(
+                crate::auth::jws::RecordsWriteAuthorizationPayloadData {
+                    descriptor_cid: String::new(),
+                    record_id: "some-non-initial-record-id".to_string(),
+                    context_id: "some-context-id".to_string(),
+                    attestation_cid: None,
+                    encryption_cid: None,
+                    permission_grant_id: None,
+                    delegated_grant_id: None,
+                    protocol_role: None,
+                },
+            ),
             permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
             author_delegated_grant: None,
         };
