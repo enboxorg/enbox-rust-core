@@ -419,4 +419,26 @@ mod test {
 
         assert!(Message::<RecordsWriteDescriptor>::from_value(value).is_err());
     }
+
+    #[test]
+    fn typed_messages_convert_to_the_generic_envelope() {
+        let now = Utc::now();
+        let typed = Message {
+            descriptor: ReadDescriptor {
+                message_timestamp: now,
+                filter: crate::filters::Records::default(),
+                permission_grant_id: None,
+                date_sort: None,
+            },
+            fields: Authorization::default(),
+        };
+
+        let generic: Message<Descriptor> = typed.into();
+
+        assert!(matches!(
+            generic.descriptor,
+            Descriptor::Records(records) if matches!(records.as_ref(), Records::Read(_))
+        ));
+        assert!(matches!(generic.fields, Fields::Authorization(_)));
+    }
 }

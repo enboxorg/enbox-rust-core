@@ -46,6 +46,7 @@ impl syn::parse::Parse for InterfaceArgs {
 struct VariantEntry {
     variant: syn::Ident,
     ty: syn::Ident,
+    fields: syn::Path,
     boxed: bool,
     has_handler: bool,
 }
@@ -77,6 +78,7 @@ pub fn expand_interface(args: InterfaceArgs, module: syn::ItemMod) -> syn::Resul
                         variants.push(VariantEntry {
                             variant,
                             ty: s.ident.clone(),
+                            fields: da.fields.clone(),
                             boxed,
                             has_handler,
                         });
@@ -188,6 +190,28 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
                             <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD
                         ),
                     })
+                }
+            }
+        }
+    });
+
+    // Generate the owned counterpart to `FromDescriptor`. The interface macro owns the
+    // descriptor-to-union mapping (including boxing), so generating this here ensures a newly
+    // declared descriptor cannot be omitted from generic-envelope conversion.
+    let into_message_impls = variants.iter().map(|v| {
+        let (vn, ty, fields) = (&v.variant, &v.ty, &v.fields);
+        let descriptor = if v.boxed {
+            quote!(Box::new(message.descriptor))
+        } else {
+            quote!(message.descriptor)
+        };
+        quote! {
+            impl From<crate::Message<#ty>> for crate::Message<crate::Descriptor> {
+                fn from(message: crate::Message<#ty>) -> Self {
+                    Self {
+                        descriptor: crate::Descriptor::#name(Box::new(#name::#vn(#descriptor))),
+                        fields: <#fields as Into<crate::Fields>>::into(message.fields),
+                    }
                 }
             }
         }
@@ -317,6 +341,7 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         }
 
         #(#from_descriptor_impls)*
+        #(#into_message_impls)*
     }
 }
 
@@ -384,6 +409,7 @@ mod tests {
         assert!(out.contains("Write (WriteDescriptor)"));
         // dispatch keys off the trait const + has a fallback error
         assert!(out.contains("ConcreteDescriptor"));
+        assert!(out.contains("From < crate :: Message < ReadDescriptor > > for crate :: Message < crate :: Descriptor >"));
         assert!(out.contains("unsupported"));
         // leaf codegen still runs (per-struct internal types)
         assert!(out.contains("ReadDescriptorInternal"));

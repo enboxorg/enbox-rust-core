@@ -770,12 +770,7 @@ async fn validate_embedded_author_delegated_grant(
         .into());
     }
 
-    let grant_message_general = Message {
-        descriptor: Descriptor::Records(Box::new(Records::Write(Box::new(
-            grant_message.descriptor.clone(),
-        )))),
-        fields: Fields::Write(grant_message.fields.clone()),
-    };
+    let grant_message_general: Message<Descriptor> = (**grant_message).clone().into();
 
     let grant_authorization = Box::pin(validate_authorization_signature_inner(
         &grant_message_general,
