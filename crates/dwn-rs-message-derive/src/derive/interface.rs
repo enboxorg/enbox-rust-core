@@ -48,7 +48,6 @@ struct VariantEntry {
     ty: syn::Ident,
     fields: syn::Path,
     boxed: bool,
-    has_handler: bool,
 }
 
 pub fn expand_interface(args: InterfaceArgs, module: syn::ItemMod) -> syn::Result<TokenStream> {
@@ -73,14 +72,12 @@ pub fn expand_interface(args: InterfaceArgs, module: syn::ItemMod) -> syn::Resul
                             )
                         })?;
                         let boxed = da.boxed;
-                        let has_handler = !da.no_handler;
                         da.interface = Some(args.interface.clone());
                         variants.push(VariantEntry {
                             variant,
                             ty: s.ident.clone(),
                             fields: da.fields.clone(),
                             boxed,
-                            has_handler,
                         });
                         out.push(impl_descriptor_macro_attr(da, quote!(#s)));
                     }
@@ -155,11 +152,10 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
     });
 
     let kinds = variants.iter().map(|v| {
-        let (ty, has_handler) = (&v.ty, v.has_handler);
+        let ty = &v.ty;
         quote!((
             #iface,
             <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD,
-            #has_handler
         ))
     });
 
@@ -335,7 +331,7 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
 
         impl crate::interfaces::messages::descriptors::InterfaceUnion for #name {
             const INTERFACE: &'static str = #iface;
-            const KINDS: &'static [(&'static str, &'static str, bool)] = &[
+            const KINDS: &'static [(&'static str, &'static str)] = &[
                 #(#kinds),*
             ];
         }
