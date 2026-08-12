@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use jsonschema::{Draft, Registry, Resource, Validator};
 use serde_json::Value;
 
+use crate::descriptors::MESSAGES_QUERY_SCHEMA;
 use crate::dwn::MessageKind;
 use crate::interfaces::messages::descriptors::{
     MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA,
@@ -89,6 +90,10 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
         MESSAGES_SYNC_SCHEMA,
         include_str!("../../schemas/interface-methods/messages-sync.json"),
+    ),
+    (
+        MESSAGES_QUERY_SCHEMA,
+        include_str!("../../schemas/interface-methods/messages-query.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/number-range-filter.json",

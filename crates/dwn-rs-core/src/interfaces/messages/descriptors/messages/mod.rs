@@ -17,6 +17,7 @@ pub(crate) fn record_id(message: &Message<Descriptor>) -> Option<String> {
 #[interface(MESSAGES, union = Messages)]
 mod inner {
     use super::SyncAction;
+    use crate::descriptors::MESSAGES_QUERY_SCHEMA;
     use crate::filters::message_filters::Messages as MessagesFilter;
     use crate::interfaces::messages::descriptors::{
         MESSAGES, MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA, QUERY,
@@ -52,13 +53,10 @@ mod inner {
     }
 
     /// QueryDescriptor represents the MessagesQuery interface method for querying messages.
-    ///
-    /// `no_handler`: deserializable for spec parity, but this implementation has no MessagesQuery
-    /// request handler, so it is excluded from `current_handler_kinds()`.
     #[descriptor(
         method = QUERY,
         variant = Query,
-        no_handler,
+        schema_id = MESSAGES_QUERY_SCHEMA,
         fields = crate::auth::Authorization,
         parameters = super::QueryParameters
     )]
