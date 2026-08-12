@@ -56,20 +56,20 @@ const SUBSCRIBE_METHOD: &str = "Subscribe";
 const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum VerifiedAuthorizationPayload {
+pub(crate) enum VerifiedAuthorizationPayload {
     Generic(AuthorizationPayloadData),
     RecordsWrite(RecordsWriteAuthorizationPayloadData),
 }
 
 impl VerifiedAuthorizationPayload {
-    pub fn descriptor_cid(&self) -> &str {
+    pub(crate) fn descriptor_cid(&self) -> &str {
         match self {
             VerifiedAuthorizationPayload::Generic(payload) => payload.descriptor_cid.as_str(),
             VerifiedAuthorizationPayload::RecordsWrite(payload) => payload.descriptor_cid.as_str(),
         }
     }
 
-    pub fn delegated_grant_id(&self) -> Option<&str> {
+    pub(crate) fn delegated_grant_id(&self) -> Option<&str> {
         match self {
             VerifiedAuthorizationPayload::Generic(payload) => payload.delegated_grant_id.as_deref(),
             VerifiedAuthorizationPayload::RecordsWrite(payload) => {
@@ -78,7 +78,9 @@ impl VerifiedAuthorizationPayload {
         }
     }
 
-    pub fn permission_grant_invocation(&self) -> Result<PermissionGrantInvocation, GrantError> {
+    pub(crate) fn permission_grant_invocation(
+        &self,
+    ) -> Result<PermissionGrantInvocation, GrantError> {
         match self {
             VerifiedAuthorizationPayload::Generic(payload) => permission_grant_invocation(
                 payload.permission_grant_id.as_deref(),
@@ -92,14 +94,14 @@ impl VerifiedAuthorizationPayload {
         }
     }
 
-    pub fn protocol_role(&self) -> Option<&str> {
+    pub(crate) fn protocol_role(&self) -> Option<&str> {
         match self {
             VerifiedAuthorizationPayload::Generic(payload) => payload.protocol_role.as_deref(),
             VerifiedAuthorizationPayload::RecordsWrite(payload) => payload.protocol_role.as_deref(),
         }
     }
 
-    pub fn as_records_write(&self) -> Option<&RecordsWriteAuthorizationPayloadData> {
+    pub(crate) fn as_records_write(&self) -> Option<&RecordsWriteAuthorizationPayloadData> {
         match self {
             VerifiedAuthorizationPayload::RecordsWrite(payload) => Some(payload),
             _ => None,
@@ -111,7 +113,7 @@ impl VerifiedAuthorizationPayload {
 pub struct AuthorizationContext {
     pub signer: String,
     pub author: String,
-    pub payload: VerifiedAuthorizationPayload,
+    pub(crate) payload: VerifiedAuthorizationPayload,
     pub permission_grant_invocation: PermissionGrantInvocation,
     pub author_delegated_grant: Option<PermissionGrant>,
 }
@@ -284,7 +286,12 @@ async fn resolve_messages_scope_target<MS: MessageStore + Sync>(
             Records::Delete(delete) => {
                 let newest_write =
                     fetch_newest_write(tenant, &delete.record_id, message_store).await?;
-                resolve_messages_scope_target(tenant, &newest_write, message_store).await
+                Box::pin(resolve_messages_scope_target(
+                    tenant,
+                    &newest_write,
+                    message_store,
+                ))
+                .await
             }
             _ => Err(GrantError::InvalidRecordsDescriptorType.into()),
         },
