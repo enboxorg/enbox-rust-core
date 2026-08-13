@@ -8,15 +8,18 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
+use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 
+use crate::auth::Authorization;
 use crate::descriptors::messages::SyncParameters;
 use crate::descriptors::{DELETE, MessageDescriptor};
 use crate::descriptors::{
     Descriptor, MessagesSyncDescriptor, Records, records::strip_encoded_data,
 };
 use crate::interfaces::messages::descriptors::messages::SyncAction;
+use crate::replies::Status;
 use crate::replies::messages::{self};
 use crate::runtime::desktop::server::{DwnProcessMessage, PROCESS_MESSAGE_METHOD};
 use crate::stores::{DataStore, MessageStore, StateHash, StateIndex};
@@ -24,7 +27,7 @@ use crate::sync::{
     MessagesSyncDiff, SyncEndpoint, SyncError, SyncFuture, SyncHashes, SyncMessageEntry,
     SyncResult, SyncScope,
 };
-use crate::{Message, Reply, Response};
+use crate::{Message, Response};
 
 const MAX_SYNC_DEPTH: usize = 16;
 
@@ -194,6 +197,12 @@ pub struct HttpSyncEndpoint<A> {
     authorizer: A,
 }
 
+#[derive(Serialize)]
+struct MessageSyncWire<'a> {
+    descriptor: &'a MessagesSyncDescriptor,
+    authorization: &'a Authorization,
+}
+
 impl<A> HttpSyncEndpoint<A>
 where
     A: SyncRequestAuthorizer,
@@ -218,11 +227,10 @@ where
         }
     }
 
-    async fn process_message(
-        &self,
-        tenant: &str,
-        message: Message<Descriptor>,
-    ) -> SyncResult<Response<Reply>> {
+    async fn send_process_message<M>(&self, tenant: &str, message: &M) -> SyncResult<JsonValue>
+    where
+        M: Serialize,
+    {
         let request = json!({
             "jsonrpc": "2.0",
             "id": ulid::Ulid::new().to_string(),
@@ -265,7 +273,27 @@ where
         let reply = envelope.pointer("/result/reply").cloned().ok_or_else(|| {
             SyncError::permanent("HttpResponseInvalid", "missing result.reply".to_string())
         })?;
-        parse_http_dwn_reply(reply)
+        Ok(reply)
+    }
+
+    async fn process_sync_message(
+        &self,
+        tenant: &str,
+        message: Message<MessagesSyncDescriptor>,
+    ) -> SyncResult<Response<messages::Sync>> {
+        let wire_message = MessageSyncWire {
+            descriptor: &message.descriptor,
+            authorization: &message.fields,
+        };
+        parse_http_messages_sync_reply(self.send_process_message(tenant, &wire_message).await?)
+    }
+
+    async fn process_apply_message(
+        &self,
+        tenant: &str,
+        message: &Message<Descriptor>,
+    ) -> SyncResult<Status> {
+        parse_http_reply_status(self.send_process_message(tenant, message).await?)
     }
 
     async fn sync_action(
@@ -280,23 +308,9 @@ where
         let message = self
             .authorizer
             .authorize_sync(tenant, scope, action, prefix, depth, hashes)
-            .await?
-            .into();
+            .await?;
 
-        let resp = self.process_message(tenant, message).await?;
-
-        Ok(Response {
-            status: resp.status,
-            reply: match resp.reply {
-                Reply::MessageSync(sync) => *sync,
-                _ => {
-                    return Err(SyncError::permanent(
-                        "MessagesSyncReplyInvalid",
-                        "expected MessagesSync reply".to_string(),
-                    ));
-                }
-            },
-        })
+        self.process_sync_message(tenant, message).await
     }
 }
 
@@ -354,11 +368,11 @@ where
         let this = self.clone();
         let tenant = tenant.to_string();
         Box::pin(async move {
-            let reply = this.process_message(&tenant, entry.message.clone()).await?;
-            if is_sync_apply_success(reply.status.code, &entry.message) {
+            let status = this.process_apply_message(&tenant, &entry.message).await?;
+            if is_sync_apply_success(status.code, &entry.message) {
                 Ok(())
             } else {
-                Err(map_apply_error(reply))
+                Err(map_apply_error(Response::new(status, ())))
             }
         })
     }
@@ -405,9 +419,23 @@ async fn collect_subtree_hashes_via_http<A: SyncRequestAuthorizer>(
     Ok(hashes)
 }
 
-fn parse_http_dwn_reply(reply: JsonValue) -> SyncResult<Response<Reply>> {
-    serde_json::from_value(reply)
-        .map_err(|err| SyncError::permanent("HttpResponseInvalid", err.to_string()))
+fn parse_http_messages_sync_reply(reply: JsonValue) -> SyncResult<Response<messages::Sync>> {
+    let status = parse_http_reply_status(reply.clone())?;
+    let body = reply.get("body").cloned().unwrap_or(reply);
+    let sync = if body.is_null() {
+        messages::Sync::default()
+    } else {
+        serde_json::from_value(body)
+            .map_err(|err| SyncError::permanent("MessagesSyncReplyInvalid", err.to_string()))?
+    };
+    Ok(Response::new(status, sync))
+}
+
+fn parse_http_reply_status(reply: JsonValue) -> SyncResult<Status> {
+    serde_json::from_value(reply.get("status").cloned().ok_or_else(|| {
+        SyncError::permanent("HttpResponseInvalid", "missing reply status".to_string())
+    })?)
+    .map_err(|err| SyncError::permanent("HttpResponseInvalid", err.to_string()))
 }
 
 fn reply_root(resp: Response<messages::Sync>) -> SyncResult<String> {
