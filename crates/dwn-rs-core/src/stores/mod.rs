@@ -71,6 +71,12 @@ pub enum ProgressGapReason {
     StreamMismatch,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum ProgressGapCode {
+    #[serde(rename = "ProgressGap")]
+    ProgressGap,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressGapInfo {
@@ -78,6 +84,7 @@ pub struct ProgressGapInfo {
     pub oldest_available: ProgressToken,
     pub latest_available: ProgressToken,
     pub reason: ProgressGapReason,
+    pub code: ProgressGapCode,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
