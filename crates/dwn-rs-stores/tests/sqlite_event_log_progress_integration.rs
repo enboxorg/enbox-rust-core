@@ -45,14 +45,14 @@ async fn sqlite_event_log_subscribe_replays_from_cursor_and_emits_eose() {
     match &messages[0] {
         SubscriptionMessage::Event { cursor, .. } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "cid-2");
+            assert_eq!(cursor.message_cid.as_deref(), Some("cid-2"));
         }
         other => panic!("expected event, got {other:?}"),
     }
     match &messages[1] {
         SubscriptionMessage::Eose { cursor } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "cid-2");
+            assert_eq!(cursor.message_cid.as_deref(), Some("cid-2"));
         }
         other => panic!("expected eose, got {other:?}"),
     }
@@ -92,7 +92,7 @@ async fn sqlite_event_log_read_returns_progress_gap_after_trim() {
         panic!("expected progress gap");
     };
     assert_eq!(gap.reason, ProgressGapReason::TokenTooOld);
-    assert_eq!(gap.oldest_available.message_cid, "cid-3");
+    assert_eq!(gap.oldest_available.message_cid.as_deref(), Some("cid-3"));
     assert_eq!(gap.latest_available, fourth);
 
     event_log
@@ -129,8 +129,8 @@ async fn sqlite_event_log_replay_bounds_survive_reopen() {
             .await
             .unwrap()
             .expect("replay bounds");
-        assert_eq!(bounds.oldest.message_cid, "cid-1");
-        assert_eq!(bounds.latest.message_cid, "cid-2");
+        assert_eq!(bounds.oldest.message_cid.as_deref(), Some("cid-1"));
+        assert_eq!(bounds.latest.message_cid.as_deref(), Some("cid-2"));
 
         let read = event_log
             .read(

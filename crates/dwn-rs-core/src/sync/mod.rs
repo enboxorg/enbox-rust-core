@@ -388,7 +388,10 @@ impl SyncMessageEntry {
         event: &MessageEvent<Descriptor>,
     ) -> Self {
         Self {
-            message_cid: cursor.message_cid.clone(),
+            // EventLog emission always supplies a message CID. Feed cursors can
+            // legitimately omit it at a high-water position, but cannot form a
+            // legacy sync entry.
+            message_cid: cursor.message_cid.clone().unwrap_or_default(),
             message: event.message.clone(),
             encoded_data: None,
         }
@@ -942,10 +945,10 @@ where
     ) -> SyncOnceResult {
         match message {
             SubscriptionMessage::Event { cursor, event } => {
-                if self
-                    .should_suppress_echo(tenant, remote, &cursor.message_cid)
-                    .await
-                {
+                if match cursor.message_cid.as_deref() {
+                    Some(cid) => self.should_suppress_echo(tenant, remote, cid).await,
+                    None => false,
+                } {
                     let checkpoint = self
                         .update_checkpoint(
                             tenant,
@@ -2184,7 +2187,7 @@ mod tests {
             stream_id: stream.to_string(),
             epoch: "epoch".to_string(),
             position: position.to_string(),
-            message_cid: message_cid.to_string(),
+            message_cid: Some(message_cid.to_string()),
         }
     }
 

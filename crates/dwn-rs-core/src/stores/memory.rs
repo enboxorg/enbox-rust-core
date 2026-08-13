@@ -370,7 +370,7 @@ impl EventLog for MemoryEventLog {
                     }
                 }
 
-                token = build_token(&tenant, &epoch, seq, &message_cid);
+                token = build_token(&tenant, &epoch, seq, Some(&message_cid));
 
                 for ((subscription_tenant, _), subscription) in &inner.subscriptions {
                     if subscription_tenant == &tenant
@@ -436,7 +436,7 @@ impl EventLog for MemoryEventLog {
                     &tenant,
                     &epoch,
                     entry.seq,
-                    entry.message_cid.as_deref().unwrap_or_default(),
+                    entry.message_cid.as_deref(),
                 ))
             });
             Ok(EventLogReadResult { events, cursor })
@@ -487,7 +487,7 @@ impl EventLog for MemoryEventLog {
                             &tenant,
                             &epoch,
                             entry.seq,
-                            entry.message_cid.as_deref().unwrap_or_default(),
+                            entry.message_cid.as_deref(),
                         ),
                         event: Box::new(entry.event),
                     });
@@ -523,8 +523,8 @@ impl EventLog for MemoryEventLog {
                 return Ok(None);
             };
             Ok(Some(EventLogReplayBounds {
-                oldest: build_token(&tenant, &epoch, *oldest_seq, &oldest_entry.message_cid),
-                latest: build_token(&tenant, &epoch, *latest_seq, &latest_entry.message_cid),
+                oldest: build_token(&tenant, &epoch, *oldest_seq, Some(&oldest_entry.message_cid)),
+                latest: build_token(&tenant, &epoch, *latest_seq, Some(&latest_entry.message_cid)),
             }))
         }
     }
@@ -755,7 +755,7 @@ fn read_events(
             tenant,
             epoch,
             entry.seq,
-            entry.message_cid.as_deref().unwrap_or_default(),
+            entry.message_cid.as_deref(),
         ))
     });
     Ok(EventLogReadResult { events, cursor })
@@ -807,12 +807,17 @@ fn validate_cursor(
     Ok(seq)
 }
 
-fn build_token(tenant: &str, epoch: &str, seq: u64, message_cid: &str) -> ProgressToken {
+fn build_token(
+    tenant: &str,
+    epoch: &str,
+    seq: u64,
+    message_cid: Option<impl Into<String>>,
+) -> ProgressToken {
     ProgressToken {
         stream_id: stream_id(tenant),
         epoch: epoch.to_string(),
         position: seq.to_string(),
-        message_cid: message_cid.to_string(),
+        message_cid: message_cid.map(|cid| cid.into()),
     }
 }
 
@@ -894,8 +899,8 @@ fn progress_gap_from_log(
             let (oldest_seq, oldest_entry) = log.first_key_value()?;
             let (latest_seq, latest_entry) = log.last_key_value()?;
             Some((
-                build_token(tenant, epoch, *oldest_seq, &oldest_entry.message_cid),
-                build_token(tenant, epoch, *latest_seq, &latest_entry.message_cid),
+                build_token(tenant, epoch, *oldest_seq, Some(&oldest_entry.message_cid)),
+                build_token(tenant, epoch, *latest_seq, Some(&latest_entry.message_cid)),
             ))
         })
         .unwrap_or_else(|| (requested.clone(), requested.clone()));
@@ -990,7 +995,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read.events.len(), 1);
-        assert_eq!(read.cursor.unwrap().message_cid, "cid-2");
+        assert_eq!(read.cursor.unwrap().message_cid.as_deref(), Some("cid-2"));
 
         let delivered = Arc::new(Mutex::new(Vec::new()));
         let delivered_listener = delivered.clone();
@@ -1036,7 +1041,7 @@ mod tests {
             panic!("expected progress gap");
         };
         assert_eq!(gap.reason, ProgressGapReason::TokenTooOld);
-        assert_eq!(gap.oldest_available.message_cid, "cid-3");
+        assert_eq!(gap.oldest_available.message_cid.as_deref(), Some("cid-3"));
         assert_eq!(gap.latest_available, fourth);
 
         log.trim("did:example:alice", EventLogTrimBound::Sequence(5))

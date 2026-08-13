@@ -818,14 +818,14 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
     match &delivered[0] {
         SubscriptionMessage::Event { cursor, .. } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "second-cid");
+            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
         }
         other => panic!("expected event, got {other:?}"),
     }
     match &delivered[1] {
         SubscriptionMessage::Eose { cursor } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "second-cid");
+            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
         }
         other => panic!("expected eose, got {other:?}"),
     }

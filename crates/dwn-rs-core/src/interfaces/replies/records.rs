@@ -147,7 +147,7 @@ mod tests {
             stream_id: "stream".to_string(),
             epoch: "epoch".to_string(),
             position: "1".to_string(),
-            message_cid: "cid".to_string(),
+            message_cid: Some("cid".to_string()),
         };
         let reply = Query::with_progress_gap_info(ProgressGapInfo {
             requested: token.clone(),

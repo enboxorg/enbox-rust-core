@@ -166,7 +166,7 @@
         "reply": {
           "status": { "code": 200, "detail": "OK" },
           "entries": [],
-          "cursor": { "position": "3", "messageCid": null },
+          "cursor": { "position": "3" },
           "drained": true
         }
       }

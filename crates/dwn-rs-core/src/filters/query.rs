@@ -33,7 +33,8 @@ pub struct ProgressToken {
     pub stream_id: String,
     pub epoch: String,
     pub position: String,
-    pub message_cid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_cid: Option<String>,
 }
 
 #[serde_as]

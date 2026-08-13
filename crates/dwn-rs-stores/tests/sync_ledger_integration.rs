@@ -172,7 +172,7 @@ fn sample_progress_token(position: &str, message_cid: &str) -> ProgressToken {
         stream_id: TENANT.to_string(),
         epoch: "1".to_string(),
         position: position.to_string(),
-        message_cid: message_cid.to_string(),
+        message_cid: Some(message_cid.to_string()),
     }
 }
 

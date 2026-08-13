@@ -418,7 +418,7 @@ mod enbox_store_contract_tests {
             stream_id: "local-dwn".to_string(),
             epoch: "epoch-1".to_string(),
             position: "10".to_string(),
-            message_cid: "bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i".to_string(),
+            message_cid: Some("bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i".to_string()),
         };
 
         assert_eq!(
@@ -428,6 +428,25 @@ mod enbox_store_contract_tests {
                 "epoch": "epoch-1",
                 "position": "10",
                 "messageCid": "bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i",
+            })
+        );
+    }
+
+    #[test]
+    fn progress_token_omits_missing_message_cid() {
+        let token = ProgressToken {
+            stream_id: "local-dwn".to_string(),
+            epoch: "epoch-1".to_string(),
+            position: "10".to_string(),
+            message_cid: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(token).unwrap(),
+            json!({
+                "streamId": "local-dwn",
+                "epoch": "epoch-1",
+                "position": "10",
             })
         );
     }
