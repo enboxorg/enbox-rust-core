@@ -73,7 +73,7 @@ where
             return Response::unauthorized(details.to_string());
         }
 
-        todo!()
+        Response::not_implemented("replication feed not supported")
     }
 }
 
