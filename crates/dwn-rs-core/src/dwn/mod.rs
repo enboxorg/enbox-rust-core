@@ -149,7 +149,7 @@ pub trait Handler: Send + Sync {
 
     // Handler response type, which is serialized into the reply body. This is a generic parameter
     // so that the handler can return a concrete type (e.g. `RecordsQueryReply`) without boxing it.
-    type Reply: Serialize + DeserializeOwned + Into<Reply> + Send + 'static + Default;
+    type Reply: Into<Reply> + Send + 'static + Default;
 
     /// Execute method-specific behavior after the shared request checks pass.
     fn handle(
@@ -165,10 +165,7 @@ pub trait Handler: Send + Sync {
     fn run(
         &self,
         request: MethodHandlerRequest<'_>,
-    ) -> impl Future<Output = Response<Self::Reply>> + Send
-    where
-        <Self as Handler>::Reply: std::default::Default,
-    {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let message: Message<Descriptor> = match serde_json::from_value(request.message.clone())
             {
@@ -232,10 +229,7 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
     fn handle<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>>
-    where
-        <H as Handler>::Reply: std::default::Default,
-    {
+    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
         // The dispatch registry is `Arc<dyn MethodHandler>`, so this is the single boundary where
         // the handler's `impl Future` is boxed into a `Send` trait object.
         Box::pin(async move {
