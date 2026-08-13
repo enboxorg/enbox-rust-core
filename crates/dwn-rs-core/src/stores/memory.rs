@@ -18,8 +18,8 @@ use crate::filters::Filters;
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
-    KeyValues, ManagedResumableTask, MessageQueryResult, MessageStore, ProgressGapInfo,
-    ProgressGapReason, ProgressToken, ResumableTaskStore, SubscriptionListener,
+    KeyValues, ManagedResumableTask, MessageQueryResult, MessageStore, ProgressGapCode,
+    ProgressGapInfo, ProgressGapReason, ProgressToken, ResumableTaskStore, SubscriptionListener,
     SubscriptionMessage,
 };
 use crate::{compare_values, Cursor, Descriptor, Message, MessageSort, SortDirection, Value};
@@ -905,6 +905,7 @@ fn progress_gap_from_log(
         oldest_available,
         latest_available,
         reason,
+        code: ProgressGapCode::ProgressGap,
     }))
 }
 
