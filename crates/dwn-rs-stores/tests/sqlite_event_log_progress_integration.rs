@@ -8,7 +8,7 @@ use dwn_rs_core::stores::{
     EventLog, EventLogReadOptions, EventLogSubscribeOptions, EventLogTrimBound, ProgressGapReason,
     SubscriptionMessage,
 };
-use dwn_rs_core::{Descriptor, Message, Value};
+use dwn_rs_core::{Descriptor, Message, ProgressToken, Value};
 use serde_json::json;
 
 use dwn_rs_stores::{SqliteEventLog, SqliteStore};
@@ -192,7 +192,7 @@ async fn emit(
     message_cid: &str,
     event: &MessageEvent<Descriptor>,
     indexes: &std::collections::BTreeMap<String, Value>,
-) -> dwn_rs_core::stores::ProgressToken {
+) -> ProgressToken {
     event_log
         .emit(TENANT, event.clone(), indexes.clone(), message_cid)
         .await

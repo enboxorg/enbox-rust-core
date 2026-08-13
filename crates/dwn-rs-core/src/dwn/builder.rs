@@ -11,6 +11,7 @@ use crate::dwn::{AllowAllTenantGate, Dwn, DwnConfig, TenantGate};
 use crate::errors::{
     DataStoreError, EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError,
 };
+use crate::handlers::messages::query::MessagesQueryHandler;
 use crate::handlers::{
     messages::{
         read::MessagesReadHandler, subscribe::MessagesSubscribeHandler, sync::MessagesSyncHandler,
@@ -220,6 +221,10 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
     dwn.register(MessagesReadHandler::new(
         message_store.clone(),
         data_store.clone(),
+        resolver.clone(),
+    ));
+    dwn.register(MessagesQueryHandler::new(
+        message_store.clone(),
         resolver.clone(),
     ));
     dwn.register(MessagesSubscribeHandler::new(

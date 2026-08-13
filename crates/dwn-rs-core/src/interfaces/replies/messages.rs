@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::{
-    replies::HasProgressGapInfo, stores::ProgressGapInfo, Cursor, Descriptor, Message, Reply,
+    replies::HasProgressGapInfo, stores::ProgressGapInfo, Descriptor, Message, ProgressToken, Reply,
 };
 
 #[skip_serializing_none]
@@ -30,9 +30,31 @@ impl From<Read> for Reply {
 
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryEntry {
+    pub seq: String,
+    #[serde(rename = "messageCid")]
+    pub cid: Cid,
+    pub is_latest_base_state: bool,
+    pub protocol: Option<String>,
+    pub message: Option<Message<Descriptor>>,
+    pub encoded_data: Option<String>,
+}
+
+#[skip_serializing_none]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct Query {
-    pub entries: Option<Vec<Cid>>,
-    pub cursor: Option<Cursor>,
+    pub entries: Option<Vec<QueryEntry>>,
+    pub cursor: Option<ProgressToken>,
+    pub drained: Option<bool>,
+    pub fingerprint: Option<String>,
+    pub error: Option<ProgressGapInfo>,
+}
+
+impl From<Query> for Reply {
+    fn from(val: Query) -> Self {
+        Reply::MessageQuery(Box::new(val))
+    }
 }
 
 #[skip_serializing_none]
