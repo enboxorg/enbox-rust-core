@@ -5,18 +5,18 @@ use std::sync::Arc;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use futures_util::TryStreamExt;
-use serde_json::Value as JsonValue;
 
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::{
     records::strip_encoded_data, Descriptor, MessagesSyncDescriptor, Records,
 };
-use crate::dwn::{DwnReply, HandlerContext};
+use crate::dwn::HandlerContext;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions::{self};
+use crate::replies::messages::{self, DiffEntries};
 use crate::stores::StateHash;
-use crate::Handler;
 use crate::Message;
+use crate::{Handler, Response};
 
 use super::common::*;
 
@@ -38,12 +38,13 @@ where
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
+    type Reply = messages::Sync;
     type Descriptor = MessagesSyncDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -53,7 +54,7 @@ where
             } = ctx;
 
             if let Err(detail) = validate_sync_descriptor(&descriptor) {
-                return DwnReply::bad_request(detail);
+                return Response::bad_request(detail.to_string());
             }
 
             let authorization = match permissions::validate_authorization_signature(
@@ -65,21 +66,21 @@ where
             {
                 Ok(Some(authorization)) => authorization,
                 Ok(None) => {
-                    return DwnReply::unauthorized(
-                        "MessagesSyncAuthorizationFailed: message failed authorization",
+                    return Response::unauthorized(
+                        "MessagesSyncAuthorizationFailed: message failed authorization".to_string(),
                     )
                 }
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
+                    return Response::bad_request(detail.to_string())
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
 
             if let Err(detail) = self.authorize_messages_sync(tenant, &authorization).await {
-                return DwnReply::unauthorized(detail);
+                return Response::unauthorized(detail.to_string());
             }
 
             match descriptor.action {
@@ -126,21 +127,32 @@ where
         Err("MessagesSyncAuthorizationFailed: sync is disabled".to_string())
     }
 
-    async fn handle_root(&self, tenant: &str, descriptor: &MessagesSyncDescriptor) -> DwnReply {
+    async fn handle_root(
+        &self,
+        tenant: &str,
+        descriptor: &MessagesSyncDescriptor,
+    ) -> Response<messages::Sync> {
         let root = match descriptor.protocol.as_deref() {
             Some(protocol) => self.state_index.get_protocol_root(tenant, protocol).await,
             None => self.state_index.get_root(tenant).await,
         };
         match root {
-            Ok(root) => DwnReply::ok().with_body("root", JsonValue::String(state_hash_hex(&root))),
+            Ok(root) => Response::ok().with_reply(messages::Sync {
+                root: Some(state_hash_hex(&root)),
+                ..Default::default()
+            }),
             Err(err) => store_error_reply(err.to_string()),
         }
     }
 
-    async fn handle_subtree(&self, tenant: &str, descriptor: &MessagesSyncDescriptor) -> DwnReply {
+    async fn handle_subtree(
+        &self,
+        tenant: &str,
+        descriptor: &MessagesSyncDescriptor,
+    ) -> Response<messages::Sync> {
         let prefix = match parse_bit_prefix(descriptor.prefix.as_deref().unwrap_or_default()) {
             Ok(prefix) => prefix,
-            Err(detail) => return DwnReply::bad_request(detail),
+            Err(detail) => return Response::bad_request(detail.to_string()),
         };
         let hash = match descriptor.protocol.as_deref() {
             Some(protocol) => {
@@ -151,34 +163,45 @@ where
             None => self.state_index.get_subtree_hash(tenant, &prefix).await,
         };
         match hash {
-            Ok(hash) => DwnReply::ok().with_body("hash", JsonValue::String(state_hash_hex(&hash))),
+            Ok(hash) => Response::ok().with_reply(messages::Sync {
+                hash: Some(state_hash_hex(&hash)),
+                ..Default::default()
+            }),
             Err(err) => store_error_reply(err.to_string()),
         }
     }
 
-    async fn handle_leaves(&self, tenant: &str, descriptor: &MessagesSyncDescriptor) -> DwnReply {
+    async fn handle_leaves(
+        &self,
+        tenant: &str,
+        descriptor: &MessagesSyncDescriptor,
+    ) -> Response<messages::Sync> {
         let prefix = match parse_bit_prefix(descriptor.prefix.as_deref().unwrap_or_default()) {
             Ok(prefix) => prefix,
-            Err(detail) => return DwnReply::bad_request(detail),
+            Err(detail) => return Response::bad_request(detail.to_string()),
         };
         match self
             .leaves(tenant, descriptor.protocol.as_deref(), &prefix)
             .await
         {
-            Ok(entries) => DwnReply::ok().with_body(
-                "entries",
-                JsonValue::Array(entries.into_iter().map(JsonValue::String).collect()),
-            ),
+            Ok(entries) => Response::ok().with_reply(messages::Sync {
+                entries: Some(entries),
+                ..Default::default()
+            }),
             Err(detail) => store_error_reply(detail),
         }
     }
 
-    async fn handle_diff(&self, tenant: &str, descriptor: &MessagesSyncDescriptor) -> DwnReply {
+    async fn handle_diff(
+        &self,
+        tenant: &str,
+        descriptor: &MessagesSyncDescriptor,
+    ) -> Response<messages::Sync> {
         let depth = usize::from(descriptor.depth.unwrap_or_default());
         let client_hashes = descriptor.hashes.as_ref().cloned().unwrap_or_default();
         let default_hash = match default_hash_hex(depth) {
             Ok(hash) => hash,
-            Err(detail) => return DwnReply::bad_request(detail),
+            Err(detail) => return Response::bad_request(detail.to_string()),
         };
         let server_hashes = match self
             .collect_subtree_hashes(tenant, descriptor.protocol.as_deref(), depth)
@@ -212,7 +235,7 @@ where
 
             let bit_prefix = match parse_bit_prefix(&prefix) {
                 Ok(prefix) => prefix,
-                Err(detail) => return DwnReply::bad_request(detail),
+                Err(detail) => return Response::bad_request(detail.to_string()),
             };
             match self
                 .leaves(tenant, descriptor.protocol.as_deref(), &bit_prefix)
@@ -231,12 +254,11 @@ where
             Err(detail) => return store_error_reply(detail),
         };
 
-        DwnReply::ok()
-            .with_body("onlyRemote", JsonValue::Array(only_remote))
-            .with_body(
-                "onlyLocal",
-                JsonValue::Array(only_local.into_iter().map(JsonValue::String).collect()),
-            )
+        Response::ok().with_reply(messages::Sync {
+            only_remote: Some(only_remote),
+            only_local: Some(only_local),
+            ..Default::default()
+        })
     }
 
     async fn collect_subtree_hashes(
@@ -307,7 +329,7 @@ where
         &self,
         tenant: &str,
         message_cids: &[String],
-    ) -> Result<Vec<JsonValue>, String> {
+    ) -> Result<Vec<DiffEntries>, String> {
         let mut entries = Vec::new();
         for message_cid in message_cids {
             let Some(mut message) = self
@@ -327,23 +349,19 @@ where
             } else {
                 None
             };
-            let message_json = serde_json::to_value(&message).map_err(|err| err.to_string())?;
 
             let encoded_data = match inline_data {
                 Some(encoded_data) => Some(encoded_data),
                 None => self.external_inline_data(tenant, &message).await?,
             };
 
-            let mut entry = serde_json::Map::new();
-            entry.insert(
-                "messageCid".to_string(),
-                JsonValue::String(message_cid.clone()),
-            );
-            entry.insert("message".to_string(), message_json);
-            if let Some(encoded_data) = encoded_data {
-                entry.insert("encodedData".to_string(), JsonValue::String(encoded_data));
-            }
-            entries.push(JsonValue::Object(entry));
+            let entry = DiffEntries {
+                message_cid: Some(message_cid.clone()),
+                message: Some(message),
+                encoded_data,
+            };
+
+            entries.push(entry);
         }
         Ok(entries)
     }

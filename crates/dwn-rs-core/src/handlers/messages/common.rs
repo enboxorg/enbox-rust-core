@@ -14,7 +14,7 @@ use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::messages::subscribe::SubscribeReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::stores::{EventSubscription, StateHash};
-use crate::{Fields, Message, RangeFilter, Value};
+use crate::{Fields, Message, RangeFilter, Response, Value};
 
 const MAX_SYNC_DEPTH: usize = 256;
 
@@ -232,6 +232,6 @@ pub(crate) fn state_hash_hex(hash: &StateHash) -> String {
     hash.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-pub(crate) fn store_error_reply(detail: String) -> DwnReply {
-    DwnReply::new(500, detail)
+pub(crate) fn store_error_reply<R: Default>(detail: String) -> Response<R> {
+    Response::internal_error(detail)
 }
