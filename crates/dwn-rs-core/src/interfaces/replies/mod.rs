@@ -2,6 +2,9 @@ pub mod messages;
 pub mod protocols;
 pub mod records;
 
+#[cfg(test)]
+use std::collections::BTreeMap;
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::stores::ProgressGapInfo;
@@ -192,6 +195,8 @@ pub enum Reply {
     MessageSubscription(Box<messages::Subscription>),
     ProtocolsQuery(Box<protocols::Query>),
     RecordsSubscribe(Box<records::Subscribe>),
+    #[cfg(test)]
+    General(BTreeMap<String, String>),
 }
 
 impl From<()> for Reply {

@@ -695,7 +695,7 @@ mod tests {
         fn handle<'a>(
             &'a self,
             request: MethodHandlerRequest<'a>,
-        ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
             let calls = self.calls.clone();
             let tenant = request.tenant.to_string();
             let kind = request
@@ -705,7 +705,10 @@ mod tests {
 
             Box::pin(async move {
                 calls.lock().unwrap().push((tenant, kind.clone()));
-                DwnReply::ok().with_body("handler", json!(kind.as_str()))
+                Response::ok().with_reply(Reply::General(BTreeMap::from([(
+                    "handler".to_string(),
+                    kind.as_str().to_string().into(),
+                )])))
             })
         }
     }

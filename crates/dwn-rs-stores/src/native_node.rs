@@ -16,6 +16,7 @@ use dwn_rs_core::sync::{
     NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
     SyncRunStatus,
 };
+use dwn_rs_core::{Reply, Response};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -116,7 +117,7 @@ impl SqliteNativeDwn {
         tenant: &str,
         message: serde_json::Value,
         data: Option<bytes::Bytes>,
-    ) -> dwn_rs_core::dwn::DwnReply {
+    ) -> Response<Reply> {
         self.dwn
             .process_message_with_data(tenant, message, data)
             .await
