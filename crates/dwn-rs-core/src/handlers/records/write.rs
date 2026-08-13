@@ -14,11 +14,11 @@ use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsWriteDescriptor;
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
-use crate::dwn::{DwnReply, Handler, HandlerContext};
+use crate::dwn::{Handler, HandlerContext};
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::records::common::{
-    accepted_reply, authorize_against_protocol, bool_filter, compare_messages, conflict_reply,
-    context_id, core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
+    authorize_against_protocol, bool_filter, compare_messages, context_id,
+    core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
     event_log_error_reply, existing_initial_lacks_data, fetch_newest_write, filter_map,
     find_initial_write, governing_timestamp, is_initial_write, message_as_write_descriptor,
     message_cid, message_record_id, message_timestamp, newest_message, parent_context_id,
@@ -29,6 +29,9 @@ use crate::handlers::records::common::{
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
+use crate::replies::records::Write;
+use crate::replies::Status;
+use crate::Response;
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
@@ -51,12 +54,13 @@ where
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
     EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
+    type Reply = Write;
     type Descriptor = RecordsWriteDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -75,42 +79,42 @@ where
             {
                 Ok(Some(signature)) => signature,
                 Ok(None) => {
-                    return DwnReply::unauthorized(
-                        "AuthenticateJwsMissing: authorization signature is required",
+                    return Response::unauthorized(
+                        "AuthenticateJwsMissing: authorization signature is required".to_string(),
                     )
                 }
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
+                    return Response::bad_request(detail.to_string())
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
 
             if let Err(detail) = validate_records_write_integrity(&message, &signature) {
-                return DwnReply::bad_request(detail);
+                return Response::bad_request(detail);
             }
 
             if let Err(detail) = self
                 .validate_referential_integrity(tenant, &message, &signature.author)
                 .await
             {
-                return DwnReply::bad_request(detail);
+                return Response::bad_request(detail);
             }
 
             if let Err(detail) = self
                 .authorize_records_write(tenant, &message, &signature)
                 .await
             {
-                return DwnReply::unauthorized(detail);
+                return Response::unauthorized(detail);
             }
 
             let record_id = match record_id(&message) {
                 Some(record_id) => record_id,
                 None => {
-                    return DwnReply::bad_request(
-                        "RecordsWriteMissingRecordId: recordId is required",
+                    return Response::bad_request(
+                        "RecordsWriteMissingRecordId: recordId is required".to_string(),
                     )
                 }
             };
@@ -121,23 +125,24 @@ where
 
             let incoming_is_initial = match is_initial_write(&message, &signature.author) {
                 Ok(is_initial) => is_initial,
-                Err(detail) => return DwnReply::bad_request(detail),
+                Err(detail) => return Response::bad_request(detail),
             };
 
             if !incoming_is_initial {
                 let Some(initial_write) = find_initial_write(&existing_messages, &signature.author)
                 else {
-                    return DwnReply::bad_request(
-                        "RecordsWriteGetInitialWriteNotFound: Initial write is not found.",
+                    return Response::bad_request(
+                        "RecordsWriteGetInitialWriteNotFound: Initial write is not found."
+                            .to_string(),
                     );
                 };
                 if let Err(detail) = verify_immutable_properties(&initial_write, &message) {
-                    return DwnReply::bad_request(detail);
+                    return Response::bad_request(detail);
                 }
             }
 
             if let Err(detail) = self.enforce_squash_backstop(tenant, &message).await {
-                return DwnReply::new(409, detail);
+                return Response::new(Status { code: 409, detail }, Write::default());
             }
 
             let newest_existing = newest_message(&existing_messages);
@@ -155,7 +160,7 @@ where
                 )
                 .await
             {
-                return conflict_reply();
+                return Response::conflict();
             }
 
             if newest_existing
@@ -163,7 +168,7 @@ where
                 .and_then(|message| records_delete_descriptor(message).ok())
                 .is_some()
             {
-                return DwnReply::bad_request("RecordsWriteNotAllowedAfterDelete: RecordsWrite is not allowed after a RecordsDelete.");
+                return Response::bad_request("RecordsWriteNotAllowedAfterDelete: RecordsWrite is not allowed after a RecordsDelete.".to_string());
             }
 
             let mut is_latest_base_state = false;
@@ -172,7 +177,7 @@ where
                     .process_message_with_data_stream(tenant, &mut message, data)
                     .await
                 {
-                    return DwnReply::bad_request(detail);
+                    return Response::bad_request(detail);
                 }
                 is_latest_base_state = true;
             } else if !incoming_is_initial {
@@ -180,7 +185,7 @@ where
                     .as_ref()
                     .filter(|message| records_write_descriptor(message).is_ok())
                 else {
-                    return DwnReply::bad_request("RecordsWriteMissingDataInPrevious: No dataStream was provided and unable to get data from previous message");
+                    return Response::bad_request("RecordsWriteMissingDataInPrevious: No dataStream was provided and unable to get data from previous message".to_string());
                 };
                 if let Err(detail) = self
                     .process_message_without_data_stream(
@@ -190,7 +195,7 @@ where
                     )
                     .await
                 {
-                    return DwnReply::bad_request(detail);
+                    return Response::bad_request(detail);
                 }
                 is_latest_base_state = true;
             }
@@ -209,7 +214,7 @@ where
             let indexes =
                 match records_write_indexes(&message, &signature.author, is_latest_base_state) {
                     Ok(indexes) => indexes,
-                    Err(detail) => return DwnReply::bad_request(detail),
+                    Err(detail) => return Response::bad_request(detail),
                 };
             if let Err(err) = self
                 .message_store
@@ -220,7 +225,7 @@ where
             }
             let incoming_cid = match message_cid(&message) {
                 Ok(cid) => cid,
-                Err(detail) => return DwnReply::bad_request(detail),
+                Err(detail) => return Response::bad_request(detail),
             };
             if let Err(err) = self
                 .state_index
@@ -290,7 +295,7 @@ where
                     is_latest_base_state,
                 ) {
                     Ok(indexes) => indexes,
-                    Err(detail) => return DwnReply::bad_request(detail),
+                    Err(detail) => return Response::bad_request(detail),
                 };
                 let event = crate::events::MessageEvent {
                     message: message.clone(),
@@ -302,9 +307,9 @@ where
             }
 
             if incoming_is_initial && !is_latest_base_state {
-                DwnReply::new(204, "No Content")
+                Response::no_content()
             } else {
-                accepted_reply()
+                Response::accepted()
             }
         }
     }
@@ -369,7 +374,7 @@ where
         &self,
         tenant: &str,
         record_id: &str,
-    ) -> Result<Vec<Message<Descriptor>>, DwnReply> {
+    ) -> Result<Vec<Message<Descriptor>>, Response<Write>> {
         let filter = filter_map([
             ("interface", string_filter(RECORDS_INTERFACE)),
             ("recordId", string_filter(record_id)),

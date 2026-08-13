@@ -25,8 +25,9 @@ use crate::interfaces::messages::protocols::{
 };
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
+use crate::replies::records::{HasProgressGapInfo, QueryEntry, Subscribe};
 use crate::stores::{EventSubscription, KeyValues};
-use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
+use crate::{canonical_rfc3339, Message, MessageSort, Pagination, Response, SortDirection, Value};
 
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
@@ -1253,13 +1254,18 @@ pub(crate) async fn attach_initial_writes<MessageStore>(
     messages: Vec<Message<Descriptor>>,
     message_store: &MessageStore,
     author_hint: Option<&str>,
-) -> Vec<JsonValue>
+) -> Vec<QueryEntry>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let mut entries = Vec::new();
     for message in messages {
-        let mut entry = serde_json::to_value(&message).unwrap_or(JsonValue::Null);
+        let mut entry = QueryEntry {
+            message: message.clone(),
+            initial_write: None,
+            encoded_data: None,
+        };
+
         let author = extract_author(&message).or_else(|| author_hint.map(str::to_string));
         let is_initial = author
             .as_deref()
@@ -1270,12 +1276,7 @@ where
                 if let Ok(Some(initial_write)) =
                     fetch_initial_write_message(tenant, &record_id, message_store).await
                 {
-                    if let Some(object) = entry.as_object_mut() {
-                        object.insert(
-                            "initialWrite".to_string(),
-                            serde_json::to_value(initial_write).unwrap_or(JsonValue::Null),
-                        );
-                    }
+                    entry.initial_write = Some(initial_write.clone());
                 }
             }
         }
@@ -1588,14 +1589,14 @@ pub(crate) fn accepted_reply() -> DwnReply {
     DwnReply::new(202, "Accepted")
 }
 
-pub(crate) fn core_protocol_error_reply(
+pub(crate) fn core_protocol_error_reply<R: Default>(
     registry: &CoreProtocolRegistry,
     detail: String,
-) -> DwnReply {
+) -> Response<R> {
     if registry.map_error_to_status_code(&detail) == Some(401) {
-        DwnReply::unauthorized(detail)
+        Response::unauthorized(detail)
     } else {
-        DwnReply::bad_request(detail)
+        Response::bad_request(detail)
     }
 }
 
@@ -1607,18 +1608,18 @@ pub(crate) fn not_found_reply() -> DwnReply {
     DwnReply::new(404, "Not Found")
 }
 
-pub(crate) fn store_error_reply(detail: impl Into<String>) -> DwnReply {
-    DwnReply {
+pub(crate) fn store_error_reply<R: Default>(detail: impl Into<String>) -> Response<R> {
+    Response {
         status: Status {
             code: 500,
             detail: detail.into(),
         },
-        body: BTreeMap::new(),
+        reply: R::default(),
     }
 }
 
 pub(crate) fn records_subscribe_reply(
-    reply: DwnReply,
+    reply: Response<Subscribe>,
     subscription: Option<EventSubscription>,
 ) -> RecordsSubscribeReply {
     RecordsSubscribeReply {
@@ -1627,20 +1628,19 @@ pub(crate) fn records_subscribe_reply(
     }
 }
 
-pub(crate) fn event_log_error_reply(error: EventLogError) -> DwnReply {
+pub(crate) fn event_log_error_reply<R>(error: EventLogError) -> Response<R>
+where
+    R: Default + HasProgressGapInfo,
+{
     match error {
-        EventLogError::ProgressGap(gap_info) => {
-            let mut error = serde_json::to_value(&*gap_info)
-                .unwrap_or_else(|_| JsonValue::Object(serde_json::Map::new()));
-            if let Some(error) = error.as_object_mut() {
-                error.insert(
-                    "code".to_string(),
-                    JsonValue::String("ProgressGap".to_string()),
-                );
-            }
-            DwnReply::new(410, "Progress token gap").with_body("error", error)
-        }
-        error => store_error_reply(error.to_string()),
+        EventLogError::ProgressGap(gap_info) => Response {
+            status: Status {
+                code: 410,
+                detail: "Progress token gap".to_string(),
+            },
+            reply: R::with_progress_gap_info(*gap_info),
+        },
+        other => Response::internal_error(other.to_string()),
     }
 }
 

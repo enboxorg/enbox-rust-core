@@ -6,7 +6,7 @@ use serde_json::Value as JsonValue;
 use crate::auth::resolver::DidResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, SubscribeDescriptor};
-use crate::dwn::{DwnReply, Handler, HandlerContext};
+use crate::dwn::{Handler, HandlerContext};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
@@ -16,10 +16,12 @@ use crate::handlers::records::common::{
     records_subscribe_reply, should_protocol_authorize, store_error_reply,
 };
 use crate::permissions::{self, AuthorizationContext};
+use crate::replies::records::Subscribe;
 use crate::stores::EventSubscription;
 use crate::stores::{EventLogSubscribeOptions, SubscriptionListener};
 use crate::validation::validate_message;
 use crate::Message;
+use crate::Response;
 
 use super::RecordsAuthorizationKind;
 
@@ -33,12 +35,13 @@ impl<MessageStore> Handler for RecordsSubscribeHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
+    type Reply = Subscribe;
     type Descriptor = SubscribeDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -48,8 +51,8 @@ where
             } = ctx;
 
             if descriptor.cursor.is_some() {
-                return DwnReply::not_implemented(
-                    "RecordsSubscribe cursor replay requires EventLog integration",
+                return Response::not_implemented(
+                    "RecordsSubscribe cursor replay requires EventLog integration".to_string(),
                 );
             }
 
@@ -62,65 +65,66 @@ where
             {
                 Ok(signature) => signature,
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
+                    return Response::bad_request(detail.to_string())
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
-            let filters =
-                if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
-                    Filters::from(published_records_filter(
+            let filters = if filter_includes_published_records(&descriptor.filter)
+                && signature.is_none()
+            {
+                Filters::from(published_records_filter(
+                    &descriptor.filter,
+                    descriptor.date_sort.as_ref(),
+                ))
+            } else {
+                let Some(signature) = signature.as_ref() else {
+                    return Response::unauthorized(
+                        "AuthenticateJwsMissing: authorization signature is required".to_string(),
+                    );
+                };
+                let grant_authorized =
+                    match permissions::authorize_records_query_or_subscribe_with_grant(
+                        tenant,
+                        &message,
+                        &descriptor.filter,
+                        signature,
+                        &self.message_store,
+                    )
+                    .await
+                    {
+                        Ok(grant_authorized) => grant_authorized,
+                        Err(detail) => return Response::unauthorized(detail.to_string()),
+                    };
+                if should_protocol_authorize(signature) {
+                    if let Err(detail) = authorize_protocol_query_or_subscribe(
+                        tenant,
+                        &descriptor.filter,
+                        signature,
+                        &self.message_store,
+                        RecordsAuthorizationKind::Subscribe,
+                    )
+                    .await
+                    {
+                        return Response::unauthorized(detail);
+                    }
+                }
+                if signature.author == tenant {
+                    Filters::from(owner_records_filter(
                         &descriptor.filter,
                         descriptor.date_sort.as_ref(),
                     ))
                 } else {
-                    let Some(signature) = signature.as_ref() else {
-                        return DwnReply::unauthorized(
-                            "AuthenticateJwsMissing: authorization signature is required",
-                        );
-                    };
-                    let grant_authorized =
-                        match permissions::authorize_records_query_or_subscribe_with_grant(
-                            tenant,
-                            &message,
-                            &descriptor.filter,
-                            signature,
-                            &self.message_store,
-                        )
-                        .await
-                        {
-                            Ok(grant_authorized) => grant_authorized,
-                            Err(detail) => return DwnReply::unauthorized(detail),
-                        };
-                    if should_protocol_authorize(signature) {
-                        if let Err(detail) = authorize_protocol_query_or_subscribe(
-                            tenant,
-                            &descriptor.filter,
-                            signature,
-                            &self.message_store,
-                            RecordsAuthorizationKind::Subscribe,
-                        )
-                        .await
-                        {
-                            return DwnReply::unauthorized(detail);
-                        }
-                    }
-                    if signature.author == tenant {
-                        Filters::from(owner_records_filter(
-                            &descriptor.filter,
-                            descriptor.date_sort.as_ref(),
-                        ))
-                    } else {
-                        Filters::from(non_owner_records_filters(
-                            &descriptor.filter,
-                            descriptor.date_sort.as_ref(),
-                            &signature.author,
-                            should_protocol_authorize(signature) || grant_authorized,
-                        ))
-                    }
-                };
+                    Filters::from(non_owner_records_filters(
+                        &descriptor.filter,
+                        descriptor.date_sort.as_ref(),
+                        &signature.author,
+                        should_protocol_authorize(signature) || grant_authorized,
+                    ))
+                }
+            };
             let result = match self
                 .message_store
                 .query(
@@ -146,18 +150,18 @@ where
                     .map(|signature| signature.author.as_str()),
             )
             .await;
-            DwnReply::ok()
-                .with_body("entries", JsonValue::Array(entries))
-                .with_body(
-                    "cursor",
-                    serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
-                )
+            Response::ok().with_reply(Subscribe {
+                subscription_id: None,
+                entries: Some(entries.clone()),
+                cursor: result.cursor,
+                error: None,
+            })
         }
     }
 }
 
 pub struct RecordsSubscribeReply {
-    pub reply: DwnReply,
+    pub reply: Response<Subscribe>,
     pub subscription: Option<EventSubscription>,
 }
 
@@ -204,17 +208,19 @@ where
     ) -> RecordsSubscribeReply {
         if validate_message(raw_message).is_err() {
             return records_subscribe_reply(
-                DwnReply::bad_request("RecordsSubscribeValidationFailed: invalid message"),
+                Response::bad_request(
+                    "RecordsSubscribeValidationFailed: invalid message".to_string(),
+                ),
                 None,
             );
         }
         let message = match parse_message(raw_message) {
             Ok(message) => message,
-            Err(detail) => return records_subscribe_reply(DwnReply::bad_request(detail), None),
+            Err(detail) => return records_subscribe_reply(Response::bad_request(detail), None),
         };
         let descriptor = match records_subscribe_descriptor(&message) {
             Ok(descriptor) => descriptor.clone(),
-            Err(detail) => return records_subscribe_reply(DwnReply::bad_request(detail), None),
+            Err(detail) => return records_subscribe_reply(Response::bad_request(detail), None),
         };
 
         let signature = match permissions::validate_authorization_signature(
@@ -226,12 +232,14 @@ where
         {
             Ok(signature) => signature,
             Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                return records_subscribe_reply(DwnReply::bad_request(detail), None)
+                return records_subscribe_reply(Response::bad_request(detail.to_string()), None)
             }
             Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                return records_subscribe_reply(DwnReply::unauthorized(detail), None)
+                return records_subscribe_reply(Response::unauthorized(detail.to_string()), None)
             }
-            Err(error) => return records_subscribe_reply(DwnReply::bad_request(error), None),
+            Err(error) => {
+                return records_subscribe_reply(Response::bad_request(error.to_string()), None)
+            }
         };
 
         let (event_filters, query_filters, author) = match self
@@ -246,7 +254,7 @@ where
             Ok(cid) => cid.to_string(),
             Err(err) => {
                 return records_subscribe_reply(
-                    DwnReply::bad_request(format!("RecordsSubscribeCidFailed: {err}")),
+                    Response::bad_request(format!("RecordsSubscribeCidFailed: {err}")),
                     None,
                 )
             }
@@ -270,8 +278,12 @@ where
         };
 
         if descriptor.cursor.is_some() {
-            let reply = DwnReply::ok()
-                .with_body("subscriptionId", JsonValue::String(subscription.id.clone()));
+            let reply = Response::ok().with_reply(Subscribe {
+                subscription_id: Some(subscription.id.clone()),
+                entries: None,
+                cursor: None,
+                error: None,
+            });
             return records_subscribe_reply(reply, Some(subscription));
         }
 
@@ -301,13 +313,13 @@ where
             author.as_deref(),
         )
         .await;
-        let reply = DwnReply::ok()
-            .with_body("subscriptionId", JsonValue::String(subscription.id.clone()))
-            .with_body("entries", JsonValue::Array(entries))
-            .with_body(
-                "cursor",
-                serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
-            );
+        let reply = Response::ok().with_reply(Subscribe {
+            subscription_id: Some(subscription.id.clone()),
+            entries: Some(entries.clone()),
+            cursor: result.cursor.clone(),
+            error: None,
+        });
+
         records_subscribe_reply(reply, Some(subscription))
     }
 
@@ -317,7 +329,7 @@ where
         message: &Message<Descriptor>,
         descriptor: &SubscribeDescriptor,
         signature: Option<&AuthorizationContext>,
-    ) -> Result<(Filters, Filters, Option<String>), DwnReply> {
+    ) -> Result<(Filters, Filters, Option<String>), Response<Subscribe>> {
         if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
             return Ok((
                 Filters::from(published_records_event_filter(&descriptor.filter)),
@@ -330,8 +342,8 @@ where
         }
 
         let Some(signature) = signature else {
-            return Err(DwnReply::unauthorized(
-                "AuthenticateJwsMissing: authorization signature is required",
+            return Err(Response::unauthorized(
+                "AuthenticateJwsMissing: authorization signature is required".to_string(),
             ));
         };
         let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
@@ -342,7 +354,7 @@ where
             &self.message_store,
         )
         .await
-        .map_err(DwnReply::unauthorized)?;
+        .map_err(|err| Response::unauthorized(err.to_string()))?;
         if should_protocol_authorize(signature) {
             authorize_protocol_query_or_subscribe(
                 tenant,
@@ -352,7 +364,7 @@ where
                 RecordsAuthorizationKind::Subscribe,
             )
             .await
-            .map_err(DwnReply::unauthorized)?;
+            .map_err(Response::unauthorized)?;
         }
         if signature.author == tenant {
             Ok((

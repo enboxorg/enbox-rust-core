@@ -1,13 +1,10 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use serde_json::Value as JsonValue;
-
 use super::RecordsAuthorizationKind;
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsQueryDescriptor;
-use crate::dwn::DwnReply;
 use crate::dwn::{Handler, HandlerContext};
 use crate::filters::Filters;
 use crate::handlers::records::common::{
@@ -17,7 +14,9 @@ use crate::handlers::records::common::{
     QueryAuthorizationResult,
 };
 use crate::permissions::{self, AuthorizationContext};
+use crate::replies::records::Query;
 use crate::Message;
+use crate::Response;
 
 #[derive(Clone)]
 pub struct RecordsQueryHandler<MessageStore> {
@@ -29,12 +28,13 @@ impl<MessageStore> Handler for RecordsQueryHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
+    type Reply = Query;
     type Descriptor = RecordsQueryDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -52,12 +52,12 @@ where
             {
                 Ok(signature) => signature,
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
+                    return Response::bad_request(detail.to_string())
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
 
             let (filters, author) = match self
@@ -66,7 +66,7 @@ where
             {
                 Ok(result) => result,
                 Err(QueryAuthorizationResult::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail)
                 }
             };
             let result = match self
@@ -93,12 +93,12 @@ where
                 author.as_deref(),
             )
             .await;
-            DwnReply::ok()
-                .with_body("entries", JsonValue::Array(entries))
-                .with_body(
-                    "cursor",
-                    serde_json::to_value(result.cursor).unwrap_or(JsonValue::Null),
-                )
+
+            Response::ok().with_reply(Query {
+                entries: Some(entries),
+                cursor: result.cursor,
+                error: None,
+            })
         }
     }
 }

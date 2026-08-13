@@ -1,42 +1,142 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::{
-    descriptors::{records::WriteDescriptor, DeleteDescriptor},
-    Cursor, Message,
-};
+use crate::{errors::EventLogError, stores::ProgressGapInfo, Cursor, Descriptor, Message, Reply};
+
+pub type Delete = ();
 
 #[skip_serializing_none]
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
+pub struct Write {
+    error: Option<super::Error>,
+}
+
+impl Into<Reply> for () {
+    fn into(self) -> Reply {
+        Reply::Empty
+    }
+}
+
+impl Into<Reply> for Write {
+    fn into(self) -> Reply {
+        Reply::RecordsWrite(Box::new(self))
+    }
+}
+
+#[skip_serializing_none]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct ReadEntry {
     #[serde(rename = "recordsWrite")]
-    pub records_write: Option<Message<WriteDescriptor>>,
+    pub records_write: Option<Message<Descriptor>>,
     #[serde(rename = "recordsDelete")]
-    pub records_delete: Option<Message<DeleteDescriptor>>,
+    pub records_delete: Option<Message<Descriptor>>,
     #[serde(rename = "initialWrite")]
-    pub initial_write: Option<Message<WriteDescriptor>>,
+    pub initial_write: Option<Message<Descriptor>>,
+    #[serde(rename = "encodedData")]
+    pub encoded_data: Option<String>,
+}
+
+#[skip_serializing_none]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
+pub struct Read {
+    pub entry: Option<ReadEntry>,
+}
+
+impl Into<Reply> for Read {
+    fn into(self) -> Reply {
+        Reply::RecordsRead(Box::new(self))
+    }
+}
+
+#[skip_serializing_none]
+#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Clone)]
+pub struct Count {
+    pub count: Option<u64>,
+}
+
+impl Into<Reply> for Count {
+    fn into(self) -> Reply {
+        Reply::RecordsCount(Box::new(self))
+    }
 }
 
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Read {
-    pub entry: Option<ReadEntry>,
+pub struct EventLogReplyError {
+    pub error: Option<ProgressGapInfo>,
 }
 
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct QueryEntry {
     #[serde(rename = "initialWrite")]
-    pub initial_write: Option<Message<WriteDescriptor>>,
+    pub initial_write: Option<Message<Descriptor>>,
     #[serde(rename = "encodedData")]
     pub encoded_data: Option<String>,
     #[serde(flatten)]
-    pub message: Message<WriteDescriptor>,
+    pub message: Message<Descriptor>,
 }
 
 #[skip_serializing_none]
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct Query {
     pub entries: Option<Vec<QueryEntry>>,
     pub cursor: Option<Cursor>,
+    pub error: Option<super::Error>,
+}
+
+impl Into<Reply> for Query {
+    fn into(self) -> Reply {
+        Reply::RecordsQuery(Box::new(self))
+    }
+}
+
+#[skip_serializing_none]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone)]
+pub struct Subscribe {
+    pub entries: Option<Vec<QueryEntry>>,
+    pub subscription_id: Option<String>,
+    pub cursor: Option<Cursor>,
+    pub error: Option<super::Error>,
+}
+
+impl Into<Reply> for Subscribe {
+    fn into(self) -> Reply {
+        Reply::RecordsSubscribe(Box::new(self))
+    }
+}
+
+pub trait HasProgressGapInfo: Default {
+    fn with_progress_gap_info(error: ProgressGapInfo) -> Self;
+}
+
+impl HasProgressGapInfo for Query {
+    fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
+        Self {
+            error: Some(super::Error::ProgressGap(error)),
+            ..Default::default()
+        }
+    }
+}
+
+impl HasProgressGapInfo for Subscribe {
+    fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
+        Self {
+            error: Some(super::Error::ProgressGap(error)),
+            ..Default::default()
+        }
+    }
+}
+
+pub trait HasEventLogError: Default {
+    fn with_event_log_error(error: EventLogError) -> Self;
+}
+
+impl HasProgressGapInfo for Write {
+    fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
+        Self {
+            error: Some(super::Error::ProgressGap(error)),
+            ..Default::default()
+        }
+    }
 }

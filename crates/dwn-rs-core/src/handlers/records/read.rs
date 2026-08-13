@@ -1,22 +1,23 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use futures_util::TryStreamExt;
-use serde_json::{json, Value as JsonValue};
 use std::future::Future;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::ReadDescriptor;
-use crate::dwn::{DwnReply, Handler, HandlerContext};
+use crate::dwn::{Handler, HandlerContext};
 use crate::filters::{FilterKey, Filters};
 use crate::handlers::records::common::{
     authorize_records_read, bool_filter, date_sort_to_message_sort, extract_author,
     fetch_initial_write_message, fetch_newest_write, is_initial_write, message_record_id,
-    not_found_reply, record_id, records_delete_descriptor, records_filter_to_filter_map,
-    records_write_descriptor, store_error_reply, string_filter, write_fields,
+    record_id, records_delete_descriptor, records_filter_to_filter_map, records_write_descriptor,
+    set_encoded_data, store_error_reply, string_filter, write_fields,
 };
 use crate::permissions::{self};
-use crate::Pagination;
+use crate::replies::records::{Read, ReadEntry};
+use crate::Response;
+use crate::{replies, Pagination};
 
 use super::RECORDS_INTERFACE;
 
@@ -32,12 +33,13 @@ where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
 {
+    type Reply = Read;
     type Descriptor = ReadDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -55,12 +57,12 @@ where
             {
                 Ok(signature) => signature,
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
+                    return Response::bad_request(detail.to_string())
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
             let mut filter =
                 records_filter_to_filter_map(&descriptor.filter, descriptor.date_sort.as_ref());
@@ -88,12 +90,12 @@ where
                 Ok(result) => result,
                 Err(err) => return store_error_reply(err.to_string()),
             };
-            let Some(matched_message) = result.messages.first() else {
-                return not_found_reply();
+            let Some(mut matched_message) = result.messages.into_iter().next() else {
+                return Response::not_found();
             };
 
-            if records_delete_descriptor(matched_message).is_ok() {
-                let record_id = message_record_id(matched_message).unwrap_or_default();
+            if records_delete_descriptor(&matched_message).is_ok() {
+                let record_id = message_record_id(&matched_message).unwrap_or_default();
                 let initial_write = match fetch_initial_write_message(
                     tenant,
                     &record_id,
@@ -102,8 +104,8 @@ where
                 .await
                 {
                     Ok(Some(message)) => message,
-                    Ok(None) => return DwnReply::bad_request(
-                        "RecordsReadInitialWriteNotFound: initial write for deleted record not found",
+                    Ok(None) => return Response::bad_request(
+                        "RecordsReadInitialWriteNotFound: initial write for deleted record not found".to_string(),
                     ),
                     Err(detail) => return store_error_reply(detail),
                 };
@@ -119,14 +121,21 @@ where
                 )
                 .await
                 {
-                    return DwnReply::unauthorized(detail);
+                    return Response::unauthorized(detail);
                 }
-                return DwnReply::new(404, "Not Found").with_body(
-                    "entry",
-                    json!({
-                        "recordsDelete": matched_message,
-                        "initialWrite": initial_write,
-                    }),
+                return Response::new(
+                    replies::Status {
+                        code: 404,
+                        detail: "Not Found".to_string(),
+                    },
+                    Read {
+                        entry: Some(ReadEntry {
+                            records_delete: Some(matched_message.clone()),
+                            initial_write: Some(initial_write),
+                            records_write: None,
+                            encoded_data: None,
+                        }),
+                    },
                 );
             }
 
@@ -134,42 +143,44 @@ where
                 tenant,
                 &message,
                 signature.as_ref(),
-                matched_message,
+                &matched_message,
                 &self.message_store,
             )
             .await
             {
-                return DwnReply::unauthorized(detail);
+                return Response::unauthorized(detail);
             }
 
-            let mut entry = serde_json::Map::new();
-            let mut records_write =
-                serde_json::to_value(matched_message).unwrap_or(JsonValue::Null);
-            if let Some(encoded_data) = write_fields(matched_message)
+            let mut entry = ReadEntry::default();
+            if let Some(encoded_data) = write_fields(&matched_message)
                 .ok()
                 .and_then(|fields| fields.encoded_data.clone())
             {
-                if let Some(object) = records_write.as_object_mut() {
-                    object.remove("encodedData");
-                }
-                entry.insert("encodedData".to_string(), JsonValue::String(encoded_data));
+                entry.encoded_data = Some(encoded_data.clone());
             } else {
-                let Some(record_id) = record_id(matched_message) else {
-                    return DwnReply::bad_request(
-                        "RecordsReadMissingRecordId: recordId is required",
+                let Some(record_id) = record_id(&matched_message) else {
+                    return Response::bad_request(
+                        "RecordsReadMissingRecordId: recordId is required".to_string(),
                     );
                 };
-                let data_cid = match records_write_descriptor(matched_message) {
+                let data_cid = match records_write_descriptor(&matched_message) {
                     Ok(descriptor) => descriptor.data_cid.clone(),
-                    Err(detail) => return DwnReply::bad_request(detail),
+                    Err(detail) => return Response::bad_request(detail),
                 };
                 let data = match self.data_store.get(tenant, &record_id, &data_cid).await {
                     Ok(Some(data)) => data,
                     Ok(None) => {
-                        return DwnReply::new(410, "Record data not available")
-                            .with_body("entry", json!({ "recordsWrite": matched_message }))
+                        return Response::gone(
+                            "Record data not available".to_string(),
+                            Read {
+                                entry: Some(ReadEntry {
+                                    records_write: Some(matched_message.clone()),
+                                    ..Default::default()
+                                }),
+                            },
+                        )
                     }
-                    Err(err) => return store_error_reply(err.to_string()),
+                    Err(err) => return Response::internal_error(err.to_string()),
                 };
                 let mut data_stream = data.data_stream;
                 let mut bytes = Vec::new();
@@ -180,34 +191,31 @@ where
                         Err(err) => return store_error_reply(err.to_string()),
                     }
                 }
-                entry.insert(
-                    "encodedData".to_string(),
-                    JsonValue::String(URL_SAFE_NO_PAD.encode(bytes)),
-                );
+                entry.encoded_data = Some(URL_SAFE_NO_PAD.encode(&bytes));
             }
-            entry.insert("recordsWrite".to_string(), records_write);
+            if let Err(details) = set_encoded_data(&mut matched_message, None) {
+                return Response::bad_request(details.to_string());
+            }
+            entry.records_write = Some(matched_message.clone());
 
             if !is_initial_write(
-                matched_message,
-                extract_author(matched_message)
+                &matched_message,
+                extract_author(&matched_message)
                     .as_deref()
                     .unwrap_or_default(),
             )
             .unwrap_or(false)
             {
-                if let Some(record_id) = record_id(matched_message) {
+                if let Some(record_id) = record_id(&matched_message) {
                     if let Ok(Some(initial_write)) =
                         fetch_initial_write_message(tenant, &record_id, &self.message_store).await
                     {
-                        entry.insert(
-                            "initialWrite".to_string(),
-                            serde_json::to_value(initial_write).unwrap(),
-                        );
+                        entry.initial_write = Some(initial_write.clone());
                     }
                 }
             }
 
-            DwnReply::ok().with_body("entry", JsonValue::Object(entry))
+            Response::ok().with_reply(Read { entry: Some(entry) })
         }
     }
 }

@@ -5,16 +5,17 @@ use std::sync::Arc;
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::DeleteDescriptor;
 use crate::descriptors::Descriptor;
-use crate::dwn::{DwnReply, Handler, HandlerContext};
+use crate::dwn::{Handler, HandlerContext};
 use crate::handlers::records::common::{
-    accepted_reply, authorize_records_delete, can_perform_delete_against_record, compare_messages,
-    conflict_reply, delete_from_data_store_if_needed, extract_author, fetch_record_messages,
-    find_initial_write, is_initial_write, message_cid, newest_message, not_found_reply,
-    purge_record_descendants, record_id, records_delete_descriptor, records_delete_indexes,
-    records_write_descriptor, records_write_indexes, set_encoded_data, store_error_reply,
+    authorize_records_delete, can_perform_delete_against_record, compare_messages,
+    delete_from_data_store_if_needed, extract_author, fetch_record_messages, find_initial_write,
+    is_initial_write, message_cid, newest_message, purge_record_descendants, record_id,
+    records_delete_descriptor, records_delete_indexes, records_write_descriptor,
+    records_write_indexes, set_encoded_data, store_error_reply,
 };
 use crate::permissions::{self};
 use crate::Message;
+use crate::Response;
 
 use super::write::perform_records_squash;
 
@@ -33,12 +34,13 @@ where
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
+    type Reply = ();
     type Descriptor = DeleteDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -56,17 +58,17 @@ where
             {
                 Ok(Some(signature)) => signature,
                 Ok(None) => {
-                    return DwnReply::unauthorized(
-                        "AuthenticateJwsMissing: authorization signature is required",
+                    return Response::unauthorized(
+                        "AuthenticateJwsMissing: authorization signature is required".to_string(),
                     )
                 }
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
+                    return Response::bad_request(detail.to_string())
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
 
             let existing_messages =
@@ -77,13 +79,13 @@ where
                     Err(detail) => return store_error_reply(detail),
                 };
             let Some(newest_existing) = newest_message(&existing_messages) else {
-                return not_found_reply();
+                return Response::not_found();
             };
             if !can_perform_delete_against_record(&message, &newest_existing) {
-                return not_found_reply();
+                return Response::not_found();
             }
             if compare_messages(&message, &newest_existing) != Ordering::Greater {
-                return conflict_reply();
+                return Response::conflict();
             }
 
             let initial_write = match find_initial_write(
@@ -100,8 +102,8 @@ where
             }) {
                 Some(message) => message,
                 None => {
-                    return DwnReply::unauthorized(
-                        "RecordsDeleteAuthorizationFailed: initial write not found",
+                    return Response::unauthorized(
+                        "RecordsDeleteAuthorizationFailed: initial write not found".to_string(),
                     )
                 }
             };
@@ -114,7 +116,7 @@ where
             )
             .await
             {
-                return DwnReply::unauthorized(detail);
+                return Response::unauthorized(detail);
             }
 
             if let Err(detail) = perform_records_delete(
@@ -130,7 +132,8 @@ where
             {
                 return store_error_reply(detail);
             }
-            accepted_reply()
+
+            Response::accepted()
         }
     }
 }
