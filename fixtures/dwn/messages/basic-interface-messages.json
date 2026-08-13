@@ -186,15 +186,16 @@
     },
     {
       "id": "messages-query-basic",
-      "description": "Unsigned MessagesQuery descriptor without filters.",
+      "description": "Unsigned MessagesQuery descriptor requesting the full tenant feed.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreibxw2t36ke7rhzmifwcda3ecg27almbsxucnc3jclxc4xcdxn6f5m",
-      "messageCid": "bafyreicgs3cmrlllymyfxnvw3caxsicq3we447azoyphpe6a7xcpnqj2yu",
+      "descriptorCid": "bafyreidfchrxpc7ym74mukqvombzhmmmfsenqhhk5kyqp7ipvlwkovcl34",
+      "messageCid": "bafyreiakdfage7cdbetssitbbzaencp36ir33k4ogig3sb6ngtkpmp54li",
       "message": {
         "descriptor": {
           "interface": "Messages",
           "method": "Query",
-          "messageTimestamp": "2025-01-01T00:00:09.000000Z"
+          "messageTimestamp": "2025-01-01T00:00:09.000000Z",
+          "filters": []
         }
       }
     },

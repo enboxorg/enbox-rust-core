@@ -52,8 +52,8 @@
     },
     {
       "id": "process-messages-query-valid",
-      "description": "MessagesQuery empty-feed request; it must be served by the durable-feed handler rather than a route stub.",
-      "rustStatus": "supported",
+      "description": "MessagesQuery owner feed request; kept as a known gap until a signed owner fixture is captured.",
+      "rustStatus": "known_gap",
       "descriptorCid": "bafyreidurpzbravdzznzpzccs5mjkclienhcsk73hot7qrlgubxqngo7hu",
       "messageCid": "bafyreidxd5caypo2hwk6m5b2cvkwauuoetdvucyrzist4lvwclo5ehb63u",
       "process": {
