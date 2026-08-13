@@ -23,7 +23,7 @@ mod inner {
         MESSAGES, MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA, QUERY,
         READ, SUBSCRIBE, SYNC,
     };
-    use crate::Cursor;
+    use crate::ProgressToken;
     use cid::Cid;
     use std::collections::BTreeMap;
 
@@ -71,7 +71,7 @@ mod inner {
         #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
         pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub cursor: Option<Cursor>,
+        pub cursor: Option<ProgressToken>,
     }
 
     /// SubscribeDescriptor represents the MessagesSubscribe interface method for subscribing to
@@ -94,7 +94,7 @@ mod inner {
         #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
         pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub cursor: Option<crate::stores::ProgressToken>,
+        pub cursor: Option<ProgressToken>,
     }
 
     /// SyncDescriptor represents the MessagesSync interface method for synchronizing message state.

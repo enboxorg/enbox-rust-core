@@ -20,9 +20,9 @@ use crate::descriptors::records::{records_write_descriptor, strip_encoded_data, 
 use crate::descriptors::Records;
 use crate::events::MessageEvent;
 use crate::replies::messages::{self, DiffEntries};
-use crate::stores::{ProgressToken, SubscriptionMessage};
+use crate::stores::SubscriptionMessage;
 use crate::sync::ledger::{MemorySyncLedger, SyncLedger};
-use crate::{Descriptor, Message, Response};
+use crate::{Descriptor, Message, ProgressToken, Response};
 
 pub type SyncResult<T> = Result<T, SyncError>;
 pub type SyncFuture<'a, T> = Pin<Box<dyn Future<Output = SyncResult<T>> + Send + 'a>>;

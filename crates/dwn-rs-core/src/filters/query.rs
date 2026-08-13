@@ -27,6 +27,15 @@ impl Pagination {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressToken {
+    pub stream_id: String,
+    pub epoch: String,
+    pub position: String,
+    pub message_cid: String,
+}
+
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct Cursor {

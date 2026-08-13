@@ -4,6 +4,7 @@ use crate::auth::jws::PermissionGrantInvocation;
 use crate::auth::Authorization;
 use crate::descriptors::{MessageParameters, MessageValidator, ValidationError};
 use crate::filters::message_filters::Messages as MessagesFilter;
+use crate::ProgressToken;
 
 use cid::Cid;
 use serde::{Deserialize, Serialize};
@@ -63,7 +64,7 @@ impl MessageParameters for ReadParameters {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct QueryParameters {
     pub filter: Option<Vec<MessagesFilter>>,
-    pub cursor: Option<crate::Cursor>,
+    pub cursor: Option<ProgressToken>,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(rename = "permissionGrantIds")]
@@ -107,7 +108,7 @@ pub struct SubscribeParameters {
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(rename = "permissionGrantIds")]
     pub permission_grant_ids: Option<Vec<String>>,
-    pub cursor: Option<crate::stores::ProgressToken>,
+    pub cursor: Option<ProgressToken>,
 }
 
 impl MessageValidator for SubscribeParameters {}

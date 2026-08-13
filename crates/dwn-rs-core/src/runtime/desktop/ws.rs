@@ -16,8 +16,8 @@ use crate::runtime::desktop::server::{SharedDesktopMessageProcessor, PROCESS_MES
 use crate::runtime::desktop::{
     DesktopError, DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult,
 };
-use crate::stores::{ProgressToken, SubscriptionMessage};
-use crate::Response as DWNResponse;
+use crate::stores::SubscriptionMessage;
+use crate::{ProgressToken, Response as DWNResponse};
 
 pub const SUBSCRIBE_PROCESS_MESSAGE_METHOD: &str = "rpc.subscribe.dwn.processMessage";
 pub const SUBSCRIBE_CLOSE_METHOD: &str = "rpc.subscribe.close";

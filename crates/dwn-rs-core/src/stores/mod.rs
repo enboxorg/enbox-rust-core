@@ -16,7 +16,7 @@ use crate::{
     filters::filter_key::Filters,
     Cursor,
 };
-use crate::{Descriptor, MapValue, Message, MessageSort, Pagination};
+use crate::{Descriptor, MapValue, Message, MessageSort, Pagination, ProgressToken};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
@@ -51,16 +51,6 @@ pub struct DataStorePutResult {
 pub struct DataStoreGetResult {
     pub data_size: usize,
     pub data_stream: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProgressToken {
-    pub stream_id: String,
-    pub epoch: String,
-    /// Monotonic decimal string. Compare numerically, not lexicographically.
-    pub position: String,
-    pub message_cid: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
