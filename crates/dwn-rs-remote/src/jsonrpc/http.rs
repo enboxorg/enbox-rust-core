@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
-use dwn_rs_core::Response as DWNResponse;
+use dwn_rs_core::{Reply, Response as DWNResponse};
 use futures_core::{stream::BoxStream, TryStream};
 use futures_util::TryStreamExt;
 use http::header;
@@ -34,7 +34,10 @@ where
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     Bytes: From<S::Ok>,
 {
-    type Response = Response<(DWNResponse, BoxStream<'static, Result<Bytes, JSONRpcError>>)>;
+    type Response = Response<(
+        DWNResponse<Reply>,
+        BoxStream<'static, Result<Bytes, JSONRpcError>>,
+    )>;
     type Error = JSONRpcError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -68,7 +71,8 @@ where
 
             let resp = match res.headers().get("dwn-response") {
                 Some(h) => {
-                    let resp = serde_json::from_slice::<Response<DWNResponse>>(h.as_bytes())?;
+                    let resp =
+                        serde_json::from_slice::<Response<DWNResponse<Reply>>>(h.as_bytes())?;
                     let body = Box::pin(
                         res.bytes_stream()
                             .map_err(JSONRpcError::from)
@@ -82,7 +86,7 @@ where
                 None => {
                     let body = res.bytes().await?;
 
-                    let resp: Response<DWNResponse> = serde_json::from_slice(&body)?;
+                    let resp: Response<DWNResponse<Reply>> = serde_json::from_slice(&body)?;
                     trace!(?resp, "Response in body");
                     let empty =
                         Box::pin(futures_util::stream::empty::<Result<Bytes, JSONRpcError>>())

@@ -1,7 +1,7 @@
 use std::{any::Any, fmt::Debug};
 
 use bytes::Bytes;
-use dwn_rs_core::Response as DWNResponse;
+use dwn_rs_core::{Reply, Response as DWNResponse};
 use futures_core::{stream::BoxStream, Stream, TryStream};
 use serde::{Deserialize, Serialize};
 use tower::Service;
@@ -120,7 +120,10 @@ impl<T, S> Client<T, S>
 where
     T: Service<
         (Request, Option<S>),
-        Response = Response<(DWNResponse, BoxStream<'static, Result<Bytes, JSONRpcError>>)>,
+        Response = Response<(
+            DWNResponse<Reply>,
+            BoxStream<'static, Result<Bytes, JSONRpcError>>,
+        )>,
         Error = JSONRpcError,
     >,
     S: TryStream + Send + 'static,
@@ -143,7 +146,10 @@ where
         params: P,
         data: Option<S>,
     ) -> Result<
-        Response<(DWNResponse, impl Stream<Item = Result<Bytes, JSONRpcError>>)>,
+        Response<(
+            DWNResponse<Reply>,
+            impl Stream<Item = Result<Bytes, JSONRpcError>>,
+        )>,
         JSONRpcError,
     > {
         let id = Some(self.ulid.generate()?.into());

@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use tower::Service;
 
-use dwn_rs_core::{descriptors::MessageDescriptor, Message, Response as DWNResponse};
+use dwn_rs_core::{descriptors::MessageDescriptor, Message, Reply, Response as DWNResponse};
 
 pub struct RemoteDWNInstance<T, S>
 where
@@ -27,7 +27,7 @@ where
     T: Service<
         (jsonrpc::Request, Option<S>),
         Response = jsonrpc::Response<(
-            DWNResponse,
+            DWNResponse<Reply>,
             BoxStream<'static, Result<Bytes, JSONRpcError>>,
         )>,
         Error = jsonrpc::JSONRpcError,
@@ -47,7 +47,10 @@ where
         tenant: &str,
         message: Message<D>,
         data: Option<S>,
-    ) -> ClientResult<(DWNResponse, Option<impl Stream<Item = ClientResult<Bytes>>>)>
+    ) -> ClientResult<(
+        DWNResponse<Reply>,
+        Option<impl Stream<Item = ClientResult<Bytes>>>,
+    )>
     where
         D: MessageDescriptor + Serialize + Send + 'static,
     {
