@@ -12,15 +12,17 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use tokio::sync::RwLock;
 use ulid::Ulid;
 
-use crate::dwn::DwnReply;
+use crate::descriptors::messages::record_id;
+use crate::descriptors::records::{records_write_descriptor, strip_encoded_data, WriteFieldsError};
+use crate::descriptors::Records;
 use crate::events::MessageEvent;
+use crate::replies::messages::{self, DiffEntries};
 use crate::stores::{ProgressToken, SubscriptionMessage};
 use crate::sync::ledger::{MemorySyncLedger, SyncLedger};
-use crate::Descriptor;
+use crate::{Descriptor, Message, Response};
 
 pub type SyncResult<T> = Result<T, SyncError>;
 pub type SyncFuture<'a, T> = Pin<Box<dyn Future<Output = SyncResult<T>> + Send + 'a>>;
@@ -299,7 +301,7 @@ impl SyncOnceResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DeadLetterCategory {
     PullApply,
@@ -309,7 +311,7 @@ pub enum DeadLetterCategory {
     Transient,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeadLetterEntry {
     pub id: String,
@@ -325,7 +327,7 @@ pub struct DeadLetterEntry {
     pub last_attempt_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncHealthSummary {
     pub tenant: String,
@@ -336,24 +338,58 @@ pub struct SyncHealthSummary {
     pub last_status: Option<SyncRunStatus>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncMessageEntry {
     #[serde(rename = "messageCid")]
     pub message_cid: String,
-    pub message: JsonValue,
+    pub message: Message<Descriptor>,
     #[serde(rename = "encodedData", skip_serializing_if = "Option::is_none")]
     pub encoded_data: Option<String>,
 }
 
+impl TryFrom<DiffEntries> for SyncMessageEntry {
+    type Error = WriteFieldsError;
+
+    fn try_from(diff_entry: DiffEntries) -> Result<Self, Self::Error> {
+        let message_cid = diff_entry.message_cid.ok_or_else(|| WriteFieldsError)?;
+        let message = diff_entry.message.ok_or_else(|| WriteFieldsError)?;
+
+        let encoded_data = diff_entry.encoded_data;
+        Ok(Self {
+            message_cid,
+            message,
+            encoded_data,
+        })
+    }
+}
+
 impl SyncMessageEntry {
+    pub fn new(
+        message_cid: impl Into<String>,
+        mut message: Message<Descriptor>,
+    ) -> Result<Self, WriteFieldsError> {
+        let encoded_data = match &message.descriptor {
+            Descriptor::Records(records) if matches!(records.as_ref(), Records::Write { .. }) => {
+                strip_encoded_data(&mut message)?
+            }
+            _ => None,
+        };
+
+        Ok(Self {
+            message_cid: message_cid.into(),
+            message,
+            encoded_data,
+        })
+    }
+
     pub fn from_subscription_event(
         cursor: &ProgressToken,
         event: &MessageEvent<Descriptor>,
     ) -> Self {
         Self {
             message_cid: cursor.message_cid.clone(),
-            message: serde_json::to_value(&event.message).unwrap_or(JsonValue::Null),
+            message: event.message.clone(),
             encoded_data: None,
         }
     }
@@ -367,28 +403,33 @@ pub struct MessagesSyncDiff {
 }
 
 impl MessagesSyncDiff {
-    pub fn from_reply(reply: DwnReply) -> SyncResult<Self> {
-        if !(200..300).contains(&reply.status.code) {
+    pub fn from_reply(resp: Response<messages::Sync>) -> SyncResult<Self> {
+        if !(200..300).contains(&resp.status.code) {
             return Err(SyncError::transient(
                 "MessagesSyncFailed",
-                reply.status.detail,
+                resp.status.detail,
             ));
         }
-        let only_remote = reply
-            .body
-            .get("onlyRemote")
-            .cloned()
-            .unwrap_or_else(|| JsonValue::Array(Vec::new()));
-        let only_local = reply
-            .body
-            .get("onlyLocal")
-            .cloned()
-            .unwrap_or_else(|| JsonValue::Array(Vec::new()));
+        let only_remote = resp
+            .reply
+            .only_remote
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        SyncMessageEntry::try_from(entry)
+                            .map_err(|e| SyncError::permanent("InvalidDiffEntry", e.to_string()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_else(|| Vec::new());
+
+        let only_local = resp.reply.only_local.unwrap_or_else(|| Vec::new());
+
         Ok(Self {
-            only_remote: serde_json::from_value(only_remote)
-                .map_err(|err| SyncError::permanent("MessagesSyncReplyInvalid", err.to_string()))?,
-            only_local: serde_json::from_value(only_local)
-                .map_err(|err| SyncError::permanent("MessagesSyncReplyInvalid", err.to_string()))?,
+            only_remote,
+            only_local,
         })
     }
 }
@@ -1553,28 +1594,14 @@ fn sort_diff_entries_topologically(entries: Vec<SyncMessageEntry>) -> Vec<SyncMe
 }
 
 fn entry_record_id(entry: &SyncMessageEntry) -> Option<String> {
-    entry
-        .message
-        .get("recordId")
-        .and_then(JsonValue::as_str)
-        .map(ToString::to_string)
-        .or_else(|| {
-            entry
-                .message
-                .get("descriptor")
-                .and_then(|descriptor| descriptor.get("recordId"))
-                .and_then(JsonValue::as_str)
-                .map(ToString::to_string)
-        })
+    record_id(&entry.message)
 }
 
 fn entry_parent_id(entry: &SyncMessageEntry) -> Option<String> {
-    entry
-        .message
-        .get("descriptor")
-        .and_then(|descriptor| descriptor.get("parentId"))
-        .and_then(JsonValue::as_str)
-        .map(ToString::to_string)
+    records_write_descriptor(&entry.message)
+        .ok()?
+        .parent_id
+        .clone()
 }
 
 impl SyncMessageEntry {
@@ -1628,7 +1655,9 @@ mod tests {
     use base64::Engine as _;
     use serde_json::json;
 
+    use crate::descriptors::RecordsWriteDescriptor;
     use crate::events::MessageEvent;
+    use crate::fields::WriteFields;
     use crate::stores::ProgressToken;
     use crate::{Descriptor, Fields, Message};
 
@@ -2095,15 +2124,19 @@ mod tests {
     fn parent_entry() -> SyncMessageEntry {
         SyncMessageEntry {
             message_cid: "parent-cid".to_string(),
-            message: json!({
-                "descriptor": {
-                    "interface": "Records",
-                    "method": "Write",
-                    "protocol": "https://example.com/sync",
-                    "protocolPath": "entry"
+            message: Message::new(
+                RecordsWriteDescriptor {
+                    protocol: "https://example.com/sync".to_string(),
+                    protocol_path: "entry".to_string(),
+                    ..Default::default()
                 },
-                "recordId": "parent-record"
-            }),
+                WriteFields {
+                    record_id: Some("parent-record".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap() // pre-built, failure should not happen
+            .into(),
             encoded_data: Some(URL_SAFE_NO_PAD.encode(b"parent")),
         }
     }
@@ -2111,16 +2144,20 @@ mod tests {
     fn child_entry() -> SyncMessageEntry {
         SyncMessageEntry {
             message_cid: "child-cid".to_string(),
-            message: json!({
-                "descriptor": {
-                    "interface": "Records",
-                    "method": "Write",
-                    "protocol": "https://example.com/sync",
-                    "protocolPath": "entry",
-                    "parentId": "parent-record"
+            message: Message::new(
+                RecordsWriteDescriptor {
+                    protocol: "https://example.com/sync".to_string(),
+                    protocol_path: "entry".to_string(),
+                    parent_id: Some("parent-record".to_string()),
+                    ..Default::default()
                 },
-                "recordId": "child-record"
-            }),
+                WriteFields {
+                    record_id: Some("child-record".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap() // pre-built, failure should not happen
+            .into(),
             encoded_data: Some(URL_SAFE_NO_PAD.encode(b"child")),
         }
     }
@@ -2128,15 +2165,19 @@ mod tests {
     fn local_entry() -> SyncMessageEntry {
         SyncMessageEntry {
             message_cid: "local-cid".to_string(),
-            message: json!({
-                "descriptor": {
-                    "interface": "Records",
-                    "method": "Write",
-                    "protocol": "https://example.com/sync",
-                    "protocolPath": "entry"
+            message: Message::new(
+                RecordsWriteDescriptor {
+                    protocol: "https://example.com/sync".to_string(),
+                    protocol_path: "entry".to_string(),
+                    ..Default::default()
                 },
-                "recordId": "local-record"
-            }),
+                WriteFields {
+                    record_id: Some("local-record".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap() // pre-built, failure should not happen
+            .into(),
             encoded_data: None,
         }
     }

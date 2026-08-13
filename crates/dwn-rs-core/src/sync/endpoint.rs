@@ -11,36 +11,32 @@ use futures_util::TryStreamExt;
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 
-use crate::canonical_rfc3339;
-use crate::descriptors::{records::strip_encoded_data, Descriptor, Records};
-use crate::dwn::DwnReply;
+use crate::descriptors::messages::SyncParameters;
+use crate::descriptors::{
+    records::strip_encoded_data, Descriptor, MessagesSyncDescriptor, Records,
+};
+use crate::descriptors::{MessageDescriptor, DELETE};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
-use crate::interfaces::replies::Status;
+use crate::replies::messages::{self};
 use crate::runtime::desktop::server::{DwnProcessMessage, PROCESS_MESSAGE_METHOD};
 use crate::stores::{DataStore, MessageStore, StateHash, StateIndex};
 use crate::sync::{
     MessagesSyncDiff, SyncEndpoint, SyncError, SyncFuture, SyncHashes, SyncMessageEntry,
     SyncResult, SyncScope,
 };
+use crate::{Message, Reply, Response};
 
 const MAX_SYNC_DEPTH: usize = 16;
 
 static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 
 /// Returns true when an applied sync message should be treated as success (TS parity).
-pub fn is_sync_apply_success(status_code: i32, message: &JsonValue) -> bool {
+pub fn is_sync_apply_success(status_code: i32, message: &Message<Descriptor>) -> bool {
     match status_code {
         200 | 202 | 204 | 409 => true,
-        404 => message_method(message) == Some("Delete"),
+        404 => message.descriptor.method() == DELETE,
         _ => false,
     }
-}
-
-fn message_method(message: &JsonValue) -> Option<&str> {
-    message
-        .get("descriptor")
-        .and_then(|descriptor| descriptor.get("method"))
-        .and_then(JsonValue::as_str)
 }
 
 /// Builds signed MessagesSync requests for remote HTTP peers.
@@ -53,7 +49,7 @@ pub trait SyncRequestAuthorizer: Clone + Send + Sync + 'static {
         prefix: Option<&'a str>,
         depth: Option<u8>,
         hashes: Option<SyncHashes>,
-    ) -> SyncFuture<'a, JsonValue>;
+    ) -> SyncFuture<'a, Message<MessagesSyncDescriptor>>;
 }
 
 /// In-process sync endpoint backed by local store traits.
@@ -222,7 +218,11 @@ where
         }
     }
 
-    async fn process_message(&self, tenant: &str, message: JsonValue) -> SyncResult<DwnReply> {
+    async fn process_message(
+        &self,
+        tenant: &str,
+        message: Message<Descriptor>,
+    ) -> SyncResult<Response<Reply>> {
         let request = json!({
             "jsonrpc": "2.0",
             "id": ulid::Ulid::new().to_string(),
@@ -276,12 +276,27 @@ where
         prefix: Option<&str>,
         depth: Option<u8>,
         hashes: Option<SyncHashes>,
-    ) -> SyncResult<DwnReply> {
+    ) -> SyncResult<Response<messages::Sync>> {
         let message = self
             .authorizer
             .authorize_sync(tenant, scope, action, prefix, depth, hashes)
-            .await?;
-        self.process_message(tenant, message).await
+            .await?
+            .into();
+
+        let resp = self.process_message(tenant, message).await?;
+
+        Ok(Response {
+            status: resp.status,
+            reply: match resp.reply {
+                Reply::MessageSync(sync) => *sync,
+                _ => {
+                    return Err(SyncError::permanent(
+                        "MessagesSyncReplyInvalid",
+                        "expected MessagesSync reply".to_string(),
+                    ))
+                }
+            },
+        })
     }
 }
 
@@ -390,45 +405,28 @@ async fn collect_subtree_hashes_via_http<A: SyncRequestAuthorizer>(
     Ok(hashes)
 }
 
-fn parse_http_dwn_reply(reply: JsonValue) -> SyncResult<DwnReply> {
-    if reply.get("body").is_some() {
-        let status: Status =
-            serde_json::from_value(reply.get("status").cloned().unwrap_or(JsonValue::Null))
-                .map_err(|err| SyncError::permanent("HttpResponseInvalid", err.to_string()))?;
-        let mut body = BTreeMap::new();
-        if let Some(object) = reply.get("body").and_then(JsonValue::as_object) {
-            for (key, value) in object {
-                body.insert(key.clone(), value.clone());
-            }
-        }
-        return Ok(DwnReply { status, body });
-    }
+fn parse_http_dwn_reply(reply: JsonValue) -> SyncResult<Response<Reply>> {
     serde_json::from_value(reply)
         .map_err(|err| SyncError::permanent("HttpResponseInvalid", err.to_string()))
 }
 
-fn reply_root(reply: DwnReply) -> SyncResult<String> {
-    if !(200..300).contains(&reply.status.code) {
+fn reply_root(resp: Response<messages::Sync>) -> SyncResult<String> {
+    if !(200..300).contains(&resp.status.code) {
         return Err(SyncError::transient(
             "MessagesSyncFailed",
-            reply.status.detail,
+            resp.status.detail,
         ));
     }
-    reply
-        .body
-        .get("root")
-        .or_else(|| reply.body.get("hash"))
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            SyncError::permanent(
-                "MessagesSyncReplyInvalid",
-                "missing root/hash in MessagesSync reply".to_string(),
-            )
-        })
+
+    resp.reply.root.or_else(|| resp.reply.hash).ok_or_else(|| {
+        SyncError::permanent(
+            "MessagesSyncReplyInvalid",
+            "missing root/hash in MessagesSync reply".to_string(),
+        )
+    })
 }
 
-fn map_apply_error(reply: DwnReply) -> SyncError {
+fn map_apply_error<R: Default>(reply: Response<R>) -> SyncError {
     let retryable = reply.status.code >= 500;
     SyncError::new(
         "SyncApplyFailed",
@@ -583,14 +581,13 @@ where
     } else {
         None
     };
-    let message_json = serde_json::to_value(&message).map_err(|err| err.to_string())?;
     let encoded_data = match inline_data {
         Some(encoded_data) => Some(encoded_data),
         None => external_inline_data(data_store, tenant, &message).await?,
     };
     Ok(SyncMessageEntry {
         message_cid: message_cid.to_string(),
-        message: message_json,
+        message,
         encoded_data,
     })
 }
@@ -730,111 +727,51 @@ impl SyncRequestAuthorizer for JwsSyncAuthorizer {
         prefix: Option<&'a str>,
         depth: Option<u8>,
         hashes: Option<SyncHashes>,
-    ) -> SyncFuture<'a, JsonValue> {
+    ) -> SyncFuture<'a, Message<MessagesSyncDescriptor>> {
         let signer = self.signer.clone();
         let permission_grant_id = self.permission_grant_id.clone();
         let scope = scope.clone();
         Box::pin(async move {
-            let descriptor = build_messages_sync_descriptor(
+            let parameters = SyncParameters {
+                message_timestamp: Self::timestamp(),
                 action,
-                scope.protocol_uri(),
-                prefix,
-                permission_grant_id.as_deref(),
-                depth,
-                hashes.as_ref(),
-                canonical_rfc3339(Self::timestamp()).as_str(),
-            )?;
-            sign_descriptor_message(&signer, descriptor, permission_grant_id.as_deref()).await
+                protocol: scope.protocol_uri().map(|s| s.to_string()),
+                prefix: prefix.map(|s| s.to_string()),
+                permission_grant_ids: permission_grant_id.map(|s| vec![s]),
+                hashes,
+                depth: depth.map(|d| d as u16),
+            };
+
+            let message = Message::<MessagesSyncDescriptor>::create(parameters, Some(signer))
+                .await
+                .map_err(|err| SyncError::permanent("SyncRequestSigningFailed", err.to_string()));
+
+            message
         })
     }
 }
 
-fn build_messages_sync_descriptor(
-    action: SyncAction,
-    protocol: Option<&str>,
-    prefix: Option<&str>,
-    permission_grant_id: Option<&str>,
-    depth: Option<u8>,
-    hashes: Option<&SyncHashes>,
-    message_timestamp: &str,
-) -> SyncResult<JsonValue> {
-    let mut descriptor = serde_json::Map::new();
-    descriptor.insert("interface".into(), JsonValue::String("Messages".into()));
-    descriptor.insert("method".into(), JsonValue::String("Sync".into()));
-    descriptor.insert(
-        "messageTimestamp".into(),
-        JsonValue::String(message_timestamp.to_string()),
-    );
-    descriptor.insert(
-        "action".into(),
-        serde_json::to_value(action)
-            .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?,
-    );
-    if let Some(protocol) = protocol {
-        descriptor.insert("protocol".into(), JsonValue::String(protocol.to_string()));
-    }
-    if let Some(prefix) = prefix {
-        descriptor.insert("prefix".into(), JsonValue::String(prefix.to_string()));
-    }
-    if let Some(permission_grant_id) = permission_grant_id {
-        descriptor.insert(
-            "permissionGrantId".into(),
-            JsonValue::String(permission_grant_id.to_string()),
-        );
-    }
-    if let Some(depth) = depth {
-        descriptor.insert("depth".into(), JsonValue::from(depth));
-    }
-    if let Some(hashes) = hashes {
-        descriptor.insert(
-            "hashes".into(),
-            serde_json::to_value(hashes)
-                .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?,
-        );
-    }
-    Ok(JsonValue::Object(descriptor))
-}
-
-async fn sign_descriptor_message(
-    signer: &crate::auth::PrivateJwkSigner,
-    descriptor: JsonValue,
-    permission_grant_id: Option<&str>,
-) -> SyncResult<JsonValue> {
-    use crate::auth::Jws;
-    use crate::cid::generate_cid_from_json;
-
-    let mut payload = json!({
-        "descriptorCid": generate_cid_from_json(&descriptor)
-            .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?
-            .to_string(),
-    });
-    if let Some(permission_grant_id) = permission_grant_id {
-        payload["permissionGrantId"] = JsonValue::String(permission_grant_id.to_string());
-    }
-    let signature = Jws::create(
-        serde_json::to_vec(&payload)
-            .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?
-            .as_slice(),
-        std::slice::from_ref(signer),
-    )
-    .await
-    .map_err(|err| SyncError::permanent("SyncMessageBuildFailed", err.to_string()))?;
-    Ok(json!({
-        "descriptor": descriptor,
-        "authorization": { "signature": signature },
-    }))
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::{descriptors::RecordsWriteDescriptor, fields::WriteFields, Fields};
+
     use super::*;
 
     #[test]
     fn apply_success_matches_typescript_semantics() {
-        let write = json!({ "descriptor": { "method": "Write" } });
+        let write = Message::new(
+            Descriptor::Records(Box::new(Records::Write(Default::default()))),
+            Fields::Write(Default::default()),
+        )
+        .unwrap();
         assert!(is_sync_apply_success(202, &write));
         assert!(is_sync_apply_success(409, &write));
-        let delete = json!({ "descriptor": { "method": "Delete" } });
+
+        let delete = Message::new(
+            Descriptor::Records(Box::new(Records::Delete(Default::default()))),
+            Fields::Delete(Default::default()),
+        )
+        .unwrap();
         assert!(is_sync_apply_success(404, &delete));
         assert!(!is_sync_apply_success(404, &write));
     }

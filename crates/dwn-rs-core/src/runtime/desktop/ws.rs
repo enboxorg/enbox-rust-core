@@ -17,6 +17,7 @@ use crate::runtime::desktop::{
     DesktopError, DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult,
 };
 use crate::stores::{ProgressToken, SubscriptionMessage};
+use crate::Response as DWNResponse;
 
 pub const SUBSCRIBE_PROCESS_MESSAGE_METHOD: &str = "rpc.subscribe.dwn.processMessage";
 pub const SUBSCRIBE_CLOSE_METHOD: &str = "rpc.subscribe.close";
@@ -521,13 +522,13 @@ fn json_rpc_error(id: JsonValue, code: i32, message: String) -> JsonRpcResponse 
     }
 }
 
-fn dwn_reply_json(reply: &crate::dwn::DwnReply) -> JsonValue {
+fn dwn_reply_json<R: Serialize>(reply: &DWNResponse<R>) -> JsonValue {
     json!({
         "status": {
             "code": reply.status.code,
             "detail": reply.status.detail,
         },
-        "body": reply.body,
+        "body": reply.reply,
     })
 }
 

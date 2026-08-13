@@ -21,12 +21,19 @@ use serde_json::{json, Value as JsonValue};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::dwn::{Dwn, TenantGate};
-use crate::runtime::desktop::ws as desktop_ws;
-use crate::runtime::desktop::{
-    DesktopError, DesktopFuture, DesktopLocalServer, DesktopMessageProcessor,
-    DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult, DesktopServerConfig,
-    DesktopServerStatus, LOCAL_DWN_SERVER_NAME,
+use crate::Response as DWNResponse;
+use crate::{
+    dwn::{Dwn, TenantGate},
+    Reply,
+};
+use crate::{runtime::desktop::ws as desktop_ws, Descriptor};
+use crate::{
+    runtime::desktop::{
+        DesktopError, DesktopFuture, DesktopLocalServer, DesktopMessageProcessor,
+        DesktopProcessMessageRequest, DesktopProcessMessageResult, DesktopResult,
+        DesktopServerConfig, DesktopServerStatus, LOCAL_DWN_SERVER_NAME,
+    },
+    Message,
 };
 
 pub const PROCESS_MESSAGE_METHOD: &str = "dwn.processMessage";
@@ -105,18 +112,25 @@ where
     ) -> DesktopFuture<'a, DesktopProcessMessageResult> {
         let dwn = self.dwn.clone();
         Box::pin(async move {
+            let message: Message<Descriptor> = serde_json::from_value(request.message.clone())
+                .map_err(|err| {
+                    DesktopError::new(
+                        "DesktopInvalidMessage",
+                        format!("failed to deserialize message: {err}"),
+                    )
+                })?;
             let data = request.data.clone();
             let reply = dwn
                 .process_message_with_data(
                     &request.tenant,
-                    request.message,
+                    message,
                     data.clone().map(bytes::Bytes::from),
                 )
                 .await;
             Ok(DesktopProcessMessageResult {
                 status_code: reply.status.code as u16,
                 status_detail: reply.status.detail,
-                body: serde_json::to_value(&reply.body)
+                body: serde_json::to_value(&reply.reply)
                     .unwrap_or_else(|err| json!({ "serializationError": err.to_string() })),
                 data,
             })
@@ -128,15 +142,15 @@ pub trait DwnProcessMessage: Send + Sync {
     fn process_message(
         &self,
         tenant: &str,
-        message: JsonValue,
-    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>>;
+        message: Message<Descriptor>,
+    ) -> Pin<Box<dyn Future<Output = DWNResponse<Reply>> + Send + '_>>;
 
     fn process_message_with_data(
         &self,
         tenant: &str,
-        message: JsonValue,
+        message: Message<Descriptor>,
         data: Option<bytes::Bytes>,
-    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = DWNResponse<Reply>> + Send + '_>> {
         let _ = data;
         self.process_message(tenant, message)
     }
@@ -155,20 +169,22 @@ where
     fn process_message(
         &self,
         tenant: &str,
-        message: JsonValue,
-    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        message: Message<Descriptor>,
+    ) -> Pin<Box<dyn Future<Output = DWNResponse<Reply>> + Send + '_>> {
         let tenant = tenant.to_string();
-        Box::pin(async move { self.process_message(&tenant, message).await })
+        let raw = serde_json::to_value(&message).expect("failed to serialize message to JSON");
+        Box::pin(async move { self.process_message(&tenant, raw).await })
     }
 
     fn process_message_with_data(
         &self,
         tenant: &str,
-        message: JsonValue,
+        message: Message<Descriptor>,
         data: Option<bytes::Bytes>,
-    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = DWNResponse<Reply>> + Send + '_>> {
         let tenant = tenant.to_string();
-        Box::pin(async move { self.process_message_with_data(&tenant, message, data).await })
+        let raw = serde_json::to_value(&message).expect("failed to serialize message to JSON");
+        Box::pin(async move { self.process_message_with_data(&tenant, raw, data).await })
     }
 }
 
@@ -185,24 +201,25 @@ where
     fn process_message(
         &self,
         tenant: &str,
-        _message: JsonValue,
-    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        message: Message<Descriptor>,
+    ) -> Pin<Box<dyn Future<Output = DWNResponse<Reply>> + Send + '_>> {
         let tenant = tenant.to_string();
         let dwn = Arc::clone(self);
-        Box::pin(async move { dwn.process_message(&tenant, _message).await })
+        Box::pin(
+            async move { DwnProcessMessage::process_message(dwn.as_ref(), &tenant, message).await },
+        )
     }
 
     fn process_message_with_data(
         &self,
         tenant: &str,
-        _message: JsonValue,
-        _data: Option<bytes::Bytes>,
-    ) -> Pin<Box<dyn Future<Output = crate::dwn::DwnReply> + Send + '_>> {
+        message: Message<Descriptor>,
+        data: Option<bytes::Bytes>,
+    ) -> Pin<Box<dyn Future<Output = DWNResponse<Reply>> + Send + '_>> {
         let tenant = tenant.to_string();
         let dwn = Arc::clone(self);
         Box::pin(async move {
-            dwn.process_message_with_data(&tenant, _message, _data)
-                .await
+            DwnProcessMessage::process_message_with_data(dwn.as_ref(), &tenant, message, data).await
         })
     }
 }
