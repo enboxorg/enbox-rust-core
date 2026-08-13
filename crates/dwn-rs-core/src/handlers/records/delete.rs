@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::{
-    messages::record_id,
-    records::records_write_descriptor,
-    DeleteDescriptor, Descriptor,
+    messages::record_id, records::records_write_descriptor, DeleteDescriptor, Descriptor,
 };
 use crate::dwn::{Handler, HandlerContext};
 use crate::handlers::records::common::{

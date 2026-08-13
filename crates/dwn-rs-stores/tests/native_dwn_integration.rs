@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use dwn_rs_core::auth::{
-    Jws, PrivateJwkSigner, StaticPublicKeyResolver, ed25519_jwk, jws::Algorithm,
+    ed25519_jwk, jws::Algorithm, Jws, PrivateJwkSigner, StaticPublicKeyResolver,
 };
 use dwn_rs_core::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use dwn_rs_core::descriptors::ConfigureDescriptor;
@@ -15,7 +15,7 @@ use dwn_rs_core::interfaces::messages::protocols::ActionWho;
 use dwn_rs_core::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Type, Who};
 use dwn_rs_core::stores::MessageStore;
 use dwn_rs_core::{Reply, Value};
-use serde_json::{Value as JsonValue, json};
+use serde_json::{json, Value as JsonValue};
 
 use dwn_rs_stores::SqliteNativeDwn;
 

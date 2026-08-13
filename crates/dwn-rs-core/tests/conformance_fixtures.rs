@@ -1,9 +1,9 @@
-use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use bytes::Bytes;
 use dwn_rs_core::auth::resolver::DidResolver;
 use dwn_rs_core::auth::{
-    JWK, Jws, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver, UniversalResolver,
+    Jws, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver, UniversalResolver, JWK,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -16,11 +16,11 @@ use dwn_rs_core::descriptors::{
 };
 use dwn_rs_core::dwn::validation as message_validation;
 use dwn_rs_core::dwn::{
-    Dwn, MessageKind, MethodHandler, MethodHandlerRequest, current_handler_kinds,
+    current_handler_kinds, Dwn, MessageKind, MethodHandler, MethodHandlerRequest,
 };
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
-use dwn_rs_core::stores::StateIndex;
 use dwn_rs_core::stores::state_index::MemoryStateIndex;
+use dwn_rs_core::stores::StateIndex;
 use dwn_rs_core::{Reply, Response};
 use dwn_rs_stores::SqliteNativeDwn;
 use futures_util::stream;

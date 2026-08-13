@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use crate::auth::StaticPublicKeyResolver;
 use crate::auth::resolver::{DidResolver, UniversalResolver};
+use crate::auth::StaticPublicKeyResolver;
 use crate::dwn::{AllowAllTenantGate, Dwn, DwnConfig, TenantGate};
 use crate::errors::{
     DataStoreError, EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError,

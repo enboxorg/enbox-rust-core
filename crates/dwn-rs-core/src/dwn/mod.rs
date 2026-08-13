@@ -667,11 +667,9 @@ mod tests {
         let kinds = current_handler_kinds();
 
         // `MessagesQuery` is a deserializable descriptor variant on the `Messages` union...
-        assert!(
-            Messages::KINDS
-                .iter()
-                .any(|&(_, method, _)| method == QUERY)
-        );
+        assert!(Messages::KINDS
+            .iter()
+            .any(|&(_, method, _)| method == QUERY));
         // ...but it is marked `no_handler`, so it is excluded from the dispatch set.
         assert!(!kinds.contains(&MessageKind::Messages(MessagesMethod::Query)));
         // The other Messages methods remain handler-backed.

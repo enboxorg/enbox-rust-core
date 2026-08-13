@@ -5,7 +5,7 @@ pub mod records;
 #[cfg(test)]
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::stores::ProgressGapInfo;
 

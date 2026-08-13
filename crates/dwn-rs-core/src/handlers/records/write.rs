@@ -26,9 +26,8 @@ use crate::handlers::records::common::{
     find_initial_write, governing_timestamp, is_initial_write, message_as_write_descriptor,
     message_cid, message_record_id, message_timestamp, newest_message, parent_context_id,
     purge_record_messages, records_delete_descriptor, records_write_event_log_indexes,
-    records_write_indexes, set_encoded_data, store_error_reply,
-    string_filter, validate_data_integrity, validate_records_write_integrity,
-    verify_immutable_properties,
+    records_write_indexes, set_encoded_data, store_error_reply, string_filter,
+    validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};

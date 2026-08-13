@@ -3,18 +3,18 @@ use std::future::Future;
 use std::ops::Bound;
 use std::sync::{Arc, RwLock};
 
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{stream, Stream, StreamExt};
 use serde_json::json;
 use ssi_jwk::Algorithm;
 
-use crate::auth::{JWK, Jws, PrivateJwkSigner, StaticPublicKeyResolver, ed25519_jwk};
+use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
-    ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor, Records,
-    RecordsWriteDescriptor, SubscribeDescriptor, records::write_fields,
+    records::write_fields, ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor,
+    Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::{Handler, MethodHandlerRequest};
 use crate::errors::{DataStoreError, MessageStoreError, StoreError};
@@ -29,11 +29,11 @@ use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, KeyValues, MessageQueryResult,
     MessageStore, StateIndex, SubscriptionMessage,
 };
-use crate::{Descriptor, Value};
 use crate::{
-    Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination, RangeFilter,
-    SortDirection, permissions,
+    permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
+    RangeFilter, SortDirection,
 };
+use crate::{Descriptor, Value};
 
 use super::common::*;
 use super::*;

@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::{
-    Cursor, Descriptor, Message, Reply, errors::EventLogError, replies::HasProgressGapInfo,
-    stores::ProgressGapInfo,
+    errors::EventLogError, replies::HasProgressGapInfo, stores::ProgressGapInfo, Cursor,
+    Descriptor, Message, Reply,
 };
 
 pub type Delete = ();

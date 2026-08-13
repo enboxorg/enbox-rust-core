@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use dwn_rs_core::auth::jws::Algorithm;
-use dwn_rs_core::auth::{Jws, PrivateJwkSigner, StaticPublicKeyResolver, ed25519_jwk};
+use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use dwn_rs_core::descriptors::ConfigureDescriptor;
 use dwn_rs_core::interfaces::messages::descriptors::records::WriteDescriptor;
@@ -14,8 +14,8 @@ use dwn_rs_core::interfaces::messages::protocols::{
 use dwn_rs_core::runtime::desktop::server::{LoopbackDwnServer, SharedDesktopMessageProcessor};
 use dwn_rs_core::runtime::desktop::{
     DesktopLocalNode, DesktopNodeConfig, DesktopProcessMessageResult, DesktopServerConfig,
-    DesktopStartMode, DesktopStartRequest, LOCAL_DWN_SERVER_NAME, MemoryDesktopDeliveryQueue,
-    MemoryDesktopDiscoveryRegistry,
+    DesktopStartMode, DesktopStartRequest, MemoryDesktopDeliveryQueue,
+    MemoryDesktopDiscoveryRegistry, LOCAL_DWN_SERVER_NAME,
 };
 use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
 use dwn_rs_core::sync::ledger::SyncLedger;
@@ -23,7 +23,7 @@ use dwn_rs_core::sync::{
     StartSyncParams, SyncDirection, SyncIdentityOptions, SyncMode, SyncOnceRequest, SyncProtocols,
     SyncRunStatus, SyncStatusQuery,
 };
-use serde_json::{Value as JsonValue, json};
+use serde_json::{json, Value as JsonValue};
 use tokio::sync::Mutex;
 
 use dwn_rs_stores::SqliteNativeDwn;
