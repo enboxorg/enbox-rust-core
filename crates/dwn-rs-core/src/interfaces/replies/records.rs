@@ -11,7 +11,7 @@ pub type Delete = ();
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct Write {
-    error: Option<super::Error>,
+    error: Option<ProgressGapInfo>,
 }
 
 impl From<Write> for Reply {
@@ -80,7 +80,7 @@ pub struct Query {
     pub entries: Option<Vec<QueryEntry>>,
     pub cursor: Option<Cursor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<super::Error>,
+    pub error: Option<ProgressGapInfo>,
 }
 
 impl From<Query> for Reply {
@@ -97,7 +97,7 @@ pub struct Subscribe {
     pub subscription_id: Option<String>,
     pub cursor: Option<Cursor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<super::Error>,
+    pub error: Option<ProgressGapInfo>,
 }
 
 impl From<Subscribe> for Reply {
@@ -109,7 +109,7 @@ impl From<Subscribe> for Reply {
 impl HasProgressGapInfo for Query {
     fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
         Self {
-            error: Some(super::Error::ProgressGap(error)),
+            error: Some(error),
             ..Default::default()
         }
     }
@@ -118,7 +118,7 @@ impl HasProgressGapInfo for Query {
 impl HasProgressGapInfo for Subscribe {
     fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
         Self {
-            error: Some(super::Error::ProgressGap(error)),
+            error: Some(error),
             ..Default::default()
         }
     }
@@ -130,8 +130,35 @@ pub trait HasEventLogError: Default {
 
 impl HasProgressGapInfo for Write {
     fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
-        Self {
-            error: Some(super::Error::ProgressGap(error)),
-        }
+        Self { error: Some(error) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::stores::{ProgressGapCode, ProgressGapReason, ProgressToken};
+
+    use super::*;
+
+    #[test]
+    fn progress_gap_error_keeps_its_wire_code() {
+        let token = ProgressToken {
+            stream_id: "stream".to_string(),
+            epoch: "epoch".to_string(),
+            position: "1".to_string(),
+            message_cid: "cid".to_string(),
+        };
+        let reply = Query::with_progress_gap_info(ProgressGapInfo {
+            requested: token.clone(),
+            oldest_available: token.clone(),
+            latest_available: token,
+            reason: ProgressGapReason::TokenTooOld,
+            code: ProgressGapCode::ProgressGap,
+        });
+
+        assert_eq!(
+            serde_json::to_value(reply).unwrap()["error"]["code"],
+            "ProgressGap"
+        );
     }
 }

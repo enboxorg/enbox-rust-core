@@ -5,7 +5,7 @@ pub mod records;
 #[cfg(test)]
 use std::collections::BTreeMap;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::stores::ProgressGapInfo;
 
@@ -172,19 +172,12 @@ impl<R> Response<R> {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[serde(tag = "code", rename_all = "camelCase")]
-pub enum Error {
-    ProgressGap(ProgressGapInfo),
-}
-
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
 pub enum Reply {
     #[default]
     Empty,
-    Error(Error),
     RecordsCount(Box<records::Count>),
     RecordsRead(Box<records::Read>),
     RecordsWrite(Box<records::Write>),

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::{
-    replies::HasProgressGapInfo, stores::ProgressGapInfo, Cursor, Descriptor, Message, Reply,
+    Cursor, Descriptor, Message, Reply, replies::HasProgressGapInfo, stores::ProgressGapInfo,
 };
 
 #[skip_serializing_none]

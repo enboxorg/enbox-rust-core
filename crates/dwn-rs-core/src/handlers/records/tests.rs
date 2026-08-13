@@ -884,7 +884,7 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
         .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
         .await;
     assert_eq!(result.reply.status.code, 410);
-    let crate::replies::Error::ProgressGap(error) = result.reply.reply.error.as_ref().unwrap();
+    let error = result.reply.reply.error.as_ref().unwrap();
     assert_eq!(error.code, crate::stores::ProgressGapCode::ProgressGap);
     assert_eq!(error.reason, crate::stores::ProgressGapReason::TokenTooOld);
     assert!(result.subscription.is_none());
