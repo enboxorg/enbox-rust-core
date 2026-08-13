@@ -46,7 +46,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "entry.messageCid = {}",
-        read_reply.body["entry"]["messageCid"]
+        match read_reply.reply {
+            dwn_rs_core::Reply::MessageRead(reply) => reply
+                .entry
+                .as_ref()
+                .map(|entry| entry.cid.to_string())
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
     );
 
     Ok(())

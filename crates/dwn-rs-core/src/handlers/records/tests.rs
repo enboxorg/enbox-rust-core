@@ -85,8 +85,9 @@ async fn records_write_read_query_and_count_published_inline_data() {
     assert_eq!(reply.status.code, 200);
     let entries = reply.reply.entries.as_ref().unwrap();
     assert_eq!(entries.len(), 1);
+    let entry = serde_json::to_value(&entries[0]).unwrap();
     assert_eq!(
-        entries[0].encoded_data.as_deref(),
+        entry["encodedData"].as_str(),
         Some(URL_SAFE_NO_PAD.encode(&data).as_str()),
     );
 
