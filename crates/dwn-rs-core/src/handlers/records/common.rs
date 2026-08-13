@@ -9,7 +9,8 @@ use serde_json::Value as JsonValue;
 
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
-    records::{write_fields, write_fields_mut},
+    records::{records_write_descriptor, write_fields, write_fields_mut},
+    messages::record_id,
     DeleteDescriptor, Descriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
@@ -38,18 +39,6 @@ pub(crate) enum QueryAuthorizationResult {
 
 pub(crate) fn parse_message(raw_message: &JsonValue) -> Result<Message<Descriptor>, String> {
     serde_json::from_value(raw_message.clone()).map_err(|err| format!("MessageParseFailed: {err}"))
-}
-
-pub(crate) fn records_write_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&RecordsWriteDescriptor, String> {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Write(descriptor) => Ok(descriptor),
-            _ => Err("RecordsWriteDescriptorExpected: message is not RecordsWrite".to_string()),
-        },
-        _ => Err("RecordsWriteDescriptorExpected: message is not RecordsWrite".to_string()),
-    }
 }
 
 pub(crate) fn records_delete_descriptor(
@@ -159,10 +148,6 @@ pub(crate) fn validate_records_write_integrity(
         }
     }
     Ok(())
-}
-
-pub(crate) fn record_id(message: &Message<Descriptor>) -> Option<String> {
-    write_fields(message).ok()?.record_id.clone()
 }
 
 pub(crate) fn context_id(message: &Message<Descriptor>) -> Option<String> {

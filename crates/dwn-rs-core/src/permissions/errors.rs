@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     auth::JwsError,
-    descriptors::records::WriteFieldsError,
+    descriptors::records::{RecordsWriteDescriptorError, WriteFieldsError},
     errors::{DataStoreError, MessageStoreError, StoreError},
 };
 
@@ -85,6 +85,21 @@ pub enum GrantMessageTypeError {
 
     #[error("invalid message type: must be PermissionsProtocol grant ProtocolsConfigure")]
     InvalidProtocolsConfigureMessageType,
+}
+
+impl From<RecordsWriteDescriptorError> for GrantMessageTypeError {
+    fn from(error: RecordsWriteDescriptorError) -> Self {
+        match error {
+            RecordsWriteDescriptorError::NotRecords => Self::InvalidMessageType,
+            RecordsWriteDescriptorError::NotWrite => Self::InvalidRecordsWriteMessageType,
+        }
+    }
+}
+
+impl From<RecordsWriteDescriptorError> for GrantError {
+    fn from(error: RecordsWriteDescriptorError) -> Self {
+        Self::InvalidMessageType(error.into())
+    }
 }
 
 #[derive(Error, Debug)]

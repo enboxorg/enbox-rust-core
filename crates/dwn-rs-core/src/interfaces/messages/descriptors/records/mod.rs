@@ -8,7 +8,6 @@ pub use parameters::*;
 pub use crate::encryption::{EncryptionInput, KeyEncryptionInput};
 
 use dwn_rs_message_derive::interface;
-use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::{fields::WriteFields, Descriptor, Fields, Message};
@@ -18,6 +17,32 @@ use crate::{fields::WriteFields, Descriptor, Fields, Message};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("RecordsWriteFieldsExpected: write fields are required")]
 pub struct WriteFieldsError;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum RecordsWriteDescriptorError {
+    #[error("RecordsWriteDescriptorExpected: message is not a Records message")]
+    NotRecords,
+    #[error("RecordsWriteDescriptorExpected: message is not RecordsWrite")]
+    NotWrite,
+}
+
+impl From<RecordsWriteDescriptorError> for String {
+    fn from(error: RecordsWriteDescriptorError) -> Self {
+        error.to_string()
+    }
+}
+
+pub(crate) fn records_write_descriptor(
+    message: &Message<Descriptor>,
+) -> Result<&WriteDescriptor, RecordsWriteDescriptorError> {
+    match &message.descriptor {
+        Descriptor::Records(records) => match records.as_ref() {
+            Records::Write(descriptor) => Ok(descriptor),
+            _ => Err(RecordsWriteDescriptorError::NotWrite),
+        },
+        _ => Err(RecordsWriteDescriptorError::NotRecords),
+    }
+}
 
 /// Returns the fields carried by a RecordsWrite message.
 ///

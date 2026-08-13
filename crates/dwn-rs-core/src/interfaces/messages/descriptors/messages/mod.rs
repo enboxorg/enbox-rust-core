@@ -7,6 +7,13 @@ pub use parameters::*;
 
 use dwn_rs_message_derive::interface;
 
+use crate::descriptors::records::write_fields;
+use crate::{Descriptor, Message};
+
+pub(crate) fn record_id(message: &Message<Descriptor>) -> Option<String> {
+    write_fields(message).ok()?.record_id.clone()
+}
+
 #[interface(MESSAGES, union = Messages)]
 mod inner {
     use super::SyncAction;

@@ -10,7 +10,11 @@ use futures_util::stream;
 
 use crate::auth::resolver::DidResolver;
 use crate::cid::generate_dag_pb_cid_from_bytes;
-use crate::descriptors::{records::write_fields, Descriptor, RecordsWriteDescriptor};
+use crate::descriptors::{
+    messages::record_id,
+    records::{records_write_descriptor, write_fields},
+    Descriptor, RecordsWriteDescriptor,
+};
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
@@ -21,8 +25,8 @@ use crate::handlers::records::common::{
     event_log_error_reply, existing_initial_lacks_data, fetch_newest_write, filter_map,
     find_initial_write, governing_timestamp, is_initial_write, message_as_write_descriptor,
     message_cid, message_record_id, message_timestamp, newest_message, parent_context_id,
-    purge_record_messages, record_id, records_delete_descriptor, records_write_descriptor,
-    records_write_event_log_indexes, records_write_indexes, set_encoded_data, store_error_reply,
+    purge_record_messages, records_delete_descriptor, records_write_event_log_indexes,
+    records_write_indexes, set_encoded_data, store_error_reply,
     string_filter, validate_data_integrity, validate_records_write_integrity,
     verify_immutable_properties,
 };

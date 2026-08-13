@@ -29,8 +29,10 @@ use crate::auth::resolver::DidResolver;
 use crate::auth::{Authorization, Jws, JwsError};
 use crate::cid::{generate_cid_from_serialized, generate_message_cid_from_json};
 use crate::descriptors::{
-    records::write_fields, ConfigureDescriptor, Descriptor, MessageDescriptor,
-    ProtocolQueryDescriptor, Protocols, Records, RecordsWriteDescriptor, QUERY,
+    messages::record_id,
+    records::{records_write_descriptor, write_fields},
+    ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
+    Records, RecordsWriteDescriptor, QUERY,
 };
 use crate::fields::Fields;
 use crate::filters::{
@@ -924,7 +926,8 @@ pub async fn pre_process_permissions_write<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let descriptor = records_write_descriptor(message).map_err(GrantError::InvalidMessageType)?;
+    let descriptor =
+        records_write_descriptor(message).map_err(|e| PermissionError::InvalidGrant(e.into()))?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
         || descriptor.protocol_path != PERMISSIONS_REVOCATION_PATH
     {
@@ -1573,8 +1576,8 @@ async fn get_scope_from_permission_record<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let descriptor =
-        records_write_descriptor(incoming_message).map_err(GrantError::InvalidMessageType)?;
+    let descriptor = records_write_descriptor(incoming_message)
+        .map_err(|e| PermissionError::InvalidGrant(e.into()))?;
     if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI {
         return Err(GrantError::UnexpectedProtocol(descriptor.protocol.clone()).into());
     }
@@ -1676,18 +1679,6 @@ fn permission_record_data_bytes(
     Ok(URL_SAFE_NO_PAD.decode(encoded_data)?)
 }
 
-fn records_write_descriptor(
-    message: &Message<Descriptor>,
-) -> Result<&RecordsWriteDescriptor, GrantMessageTypeError> {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Write(descriptor) => Ok(descriptor),
-            _ => Err(GrantMessageTypeError::InvalidRecordsWriteMessageType),
-        },
-        _ => Err(GrantMessageTypeError::InvalidMessageType),
-    }
-}
-
 fn protocols_configure_descriptor(
     message: &Message<Descriptor>,
 ) -> Result<&ConfigureDescriptor, GrantMessageTypeError> {
@@ -1710,10 +1701,6 @@ fn protocols_query_descriptor(
         },
         _ => Err(GrantMessageTypeError::InvalidProtocolsQueryMessageType),
     }
-}
-
-fn record_id(message: &Message<Descriptor>) -> Option<String> {
-    write_fields(message).ok()?.record_id.clone()
 }
 
 fn context_id(message: &Message<Descriptor>) -> Option<String> {
