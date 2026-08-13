@@ -2135,8 +2135,7 @@ mod tests {
                     ..Default::default()
                 }),
             )
-            .unwrap() // pre-built, failure should not happen
-            .into(),
+            .unwrap(),
             encoded_data: Some(URL_SAFE_NO_PAD.encode(b"parent")),
         }
     }
@@ -2156,8 +2155,7 @@ mod tests {
                     ..Default::default()
                 }),
             )
-            .unwrap() // pre-built, failure should not happen
-            .into(),
+            .unwrap(),
             encoded_data: Some(URL_SAFE_NO_PAD.encode(b"child")),
         }
     }
@@ -2176,8 +2174,7 @@ mod tests {
                     ..Default::default()
                 }),
             )
-            .unwrap() // pre-built, failure should not happen
-            .into(),
+            .unwrap(),
             encoded_data: None,
         }
     }
