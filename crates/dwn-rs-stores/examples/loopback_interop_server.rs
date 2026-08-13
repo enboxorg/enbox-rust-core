@@ -11,13 +11,13 @@ use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use dwn_rs_core::auth::{ed25519_jwk, StaticPublicKeyResolver};
+use dwn_rs_core::auth::{StaticPublicKeyResolver, ed25519_jwk};
 use dwn_rs_core::runtime::desktop::server::{LoopbackDwnServer, SharedDesktopMessageProcessor};
 use dwn_rs_core::runtime::desktop::ws::SharedDesktopSubscribeProcessor;
 use dwn_rs_core::runtime::desktop::{
     DesktopLocalNode, DesktopNodeConfig, DesktopProcessMessageResult, DesktopServerConfig,
-    DesktopStartMode, DesktopStartRequest, MemoryDesktopDeliveryQueue,
-    MemoryDesktopDiscoveryRegistry, LOCAL_DWN_SERVER_NAME,
+    DesktopStartMode, DesktopStartRequest, LOCAL_DWN_SERVER_NAME, MemoryDesktopDeliveryQueue,
+    MemoryDesktopDiscoveryRegistry,
 };
 use dwn_rs_core::stores::SubscriptionListener;
 use dwn_rs_stores::SqliteNativeDwn;

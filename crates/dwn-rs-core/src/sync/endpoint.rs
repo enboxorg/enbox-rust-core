@@ -4,18 +4,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 
 use crate::descriptors::messages::SyncParameters;
+use crate::descriptors::{DELETE, MessageDescriptor};
 use crate::descriptors::{
-    records::strip_encoded_data, Descriptor, MessagesSyncDescriptor, Records,
+    Descriptor, MessagesSyncDescriptor, Records, records::strip_encoded_data,
 };
-use crate::descriptors::{MessageDescriptor, DELETE};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::replies::messages::{self};
 use crate::runtime::desktop::server::{DwnProcessMessage, PROCESS_MESSAGE_METHOD};
@@ -293,7 +293,7 @@ where
                     return Err(SyncError::permanent(
                         "MessagesSyncReplyInvalid",
                         "expected MessagesSync reply".to_string(),
-                    ))
+                    ));
                 }
             },
         })
@@ -597,9 +597,9 @@ async fn external_inline_data<DS: DataStore>(
     tenant: &str,
     message: &crate::Message<crate::Descriptor>,
 ) -> Result<Option<String>, String> {
-    use crate::interfaces::messages::descriptors::Records as RecordsDescriptor;
     use crate::Descriptor;
     use crate::Fields;
+    use crate::interfaces::messages::descriptors::Records as RecordsDescriptor;
 
     const MAX_INLINE_DATA_SIZE: u64 = 102_400;
     let descriptor = match &message.descriptor {

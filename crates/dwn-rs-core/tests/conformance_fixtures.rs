@@ -1,9 +1,9 @@
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use dwn_rs_core::auth::resolver::DidResolver;
 use dwn_rs_core::auth::{
-    Jws, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver, UniversalResolver, JWK,
+    JWK, Jws, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver, UniversalResolver,
 };
 use dwn_rs_core::cid::{
     generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_dag_pb_cid_from_stream,
@@ -16,13 +16,13 @@ use dwn_rs_core::descriptors::{
 };
 use dwn_rs_core::dwn::validation as message_validation;
 use dwn_rs_core::dwn::{
-    current_handler_kinds, Dwn, MessageKind, MethodHandler, MethodHandlerRequest,
+    Dwn, MessageKind, MethodHandler, MethodHandlerRequest, current_handler_kinds,
 };
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
-use dwn_rs_core::stores::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
-use dwn_rs_stores::SqliteNativeDwn;
+use dwn_rs_core::stores::state_index::MemoryStateIndex;
 use dwn_rs_core::{Reply, Response};
+use dwn_rs_stores::SqliteNativeDwn;
 use futures_util::stream;
 use serde::Deserialize;
 use serde_json::Value;

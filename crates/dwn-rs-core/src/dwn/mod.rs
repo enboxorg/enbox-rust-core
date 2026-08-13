@@ -170,7 +170,7 @@ pub trait Handler: Send + Sync {
             {
                 Ok(message) => message,
                 Err(error) => {
-                    return Response::bad_request(format!("Failed to parse message: {error}"))
+                    return Response::bad_request(format!("Failed to parse message: {error}"));
                 }
             };
 
@@ -181,7 +181,7 @@ pub trait Handler: Send + Sync {
             let descriptor = match Self::Descriptor::from_descriptor(&message.descriptor) {
                 Ok(descriptor) => descriptor.clone(),
                 Err(error) => {
-                    return Response::bad_request(format!("Failed to parse descriptor: {error}"))
+                    return Response::bad_request(format!("Failed to parse descriptor: {error}"));
                 }
             };
 
@@ -538,7 +538,10 @@ mod tests {
             )
             .await;
 
-        assert_eq!(reply, Response::<Reply>::unauthorized("tenant disabled".to_string()));
+        assert_eq!(
+            reply,
+            Response::<Reply>::unauthorized("tenant disabled".to_string())
+        );
         assert!(calls.lock().unwrap().is_empty());
     }
 
@@ -664,9 +667,11 @@ mod tests {
         let kinds = current_handler_kinds();
 
         // `MessagesQuery` is a deserializable descriptor variant on the `Messages` union...
-        assert!(Messages::KINDS
-            .iter()
-            .any(|&(_, method, _)| method == QUERY));
+        assert!(
+            Messages::KINDS
+                .iter()
+                .any(|&(_, method, _)| method == QUERY)
+        );
         // ...but it is marked `no_handler`, so it is excluded from the dispatch set.
         assert!(!kinds.contains(&MessageKind::Messages(MessagesMethod::Query)));
         // The other Messages methods remain handler-backed.

@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::Bytes;
 use futures_util::stream;
 use serde_json::json;
 use ssi_jwk::Algorithm;
 
-use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
+use crate::auth::{JWK, Jws, PrivateJwkSigner, StaticPublicKeyResolver, ed25519_jwk};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     MessagesSubscribeDescriptor, MessagesSyncDescriptor, RecordsWriteDescriptor,
@@ -25,7 +25,7 @@ use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult, MessageStore,
     StateIndex, SubscriptionMessage,
 };
-use crate::{message_filters, permissions, Descriptor, MapValue, Message, Value};
+use crate::{Descriptor, MapValue, Message, Value, message_filters, permissions};
 
 #[tokio::test]
 async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
@@ -81,10 +81,12 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
     assert_eq!(only_remote.len(), 1);
     assert_eq!(only_remote[0].message_cid.as_deref(), Some(cid.as_str()));
     assert_eq!(only_remote[0].encoded_data.as_deref(), Some("aGVsbG8"));
-    assert!(serde_json::to_value(only_remote[0].message.as_ref().unwrap())
-        .unwrap()
-        .get("encodedData")
-        .is_none());
+    assert!(
+        serde_json::to_value(only_remote[0].message.as_ref().unwrap())
+            .unwrap()
+            .get("encodedData")
+            .is_none()
+    );
     assert!(reply.reply.only_local.as_ref().unwrap().is_empty());
 }
 
@@ -124,10 +126,12 @@ async fn messages_sync_is_not_authorized_by_messages_read_grant() {
         ))
         .await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert!(reply
-        .status
-        .detail
-        .contains("authorization signature is mismatched"));
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("authorization signature is mismatched")
+    );
 }
 
 #[tokio::test]
@@ -165,10 +169,12 @@ async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
         ))
         .await;
     assert_eq!(reply.status.code, 400);
-    assert!(reply
-        .status
-        .detail
-        .contains("authorization signature is mismatched"));
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("authorization signature is mismatched")
+    );
 }
 
 #[tokio::test]
@@ -353,11 +359,13 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
         "{}",
         result.reply.status.detail
     );
-    assert!(result
-        .reply
-        .status
-        .detail
-        .contains("grant is outside of scope"));
+    assert!(
+        result
+            .reply
+            .status
+            .detail
+            .contains("grant is outside of scope")
+    );
 }
 
 #[tokio::test]
