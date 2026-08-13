@@ -12,6 +12,7 @@ use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 
 use crate::canonical_rfc3339;
+use crate::descriptors::{records::strip_encoded_data, Descriptor, Records};
 use crate::dwn::DwnReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::interfaces::replies::Status;
@@ -567,15 +568,22 @@ where
     MS: MessageStore + Clone,
     DS: DataStore + Clone,
 {
-    let Some(message) = message_store
+    let Some(mut message) = message_store
         .get(tenant, message_cid)
         .await
         .map_err(|err| err.to_string())?
     else {
         return Err(format!("missing message for cid {message_cid}"));
     };
-    let mut message_json = serde_json::to_value(&message).map_err(|err| err.to_string())?;
-    let inline_data = strip_encoded_data(&mut message_json);
+    let inline_data = if matches!(
+        &message.descriptor,
+        Descriptor::Records(records) if matches!(records.as_ref(), Records::Write(_))
+    ) {
+        strip_encoded_data(&mut message).map_err(|error| error.to_string())?
+    } else {
+        None
+    };
+    let message_json = serde_json::to_value(&message).map_err(|err| err.to_string())?;
     let encoded_data = match inline_data {
         Some(encoded_data) => Some(encoded_data),
         None => external_inline_data(data_store, tenant, &message).await?,
@@ -631,14 +639,6 @@ async fn external_inline_data<DS: DataStore>(
         }
     }
     Ok(Some(URL_SAFE_NO_PAD.encode(bytes)))
-}
-
-fn strip_encoded_data(message: &mut JsonValue) -> Option<String> {
-    message
-        .as_object_mut()?
-        .remove("encodedData")?
-        .as_str()
-        .map(str::to_string)
 }
 
 fn parse_bit_prefix(prefix: &str) -> Result<Vec<bool>, String> {

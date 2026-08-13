@@ -8,7 +8,9 @@ use futures_util::TryStreamExt;
 use serde_json::Value as JsonValue;
 
 use crate::auth::resolver::DidResolver;
-use crate::descriptors::{Descriptor, MessagesSyncDescriptor};
+use crate::descriptors::{
+    records::strip_encoded_data, Descriptor, MessagesSyncDescriptor, Records,
+};
 use crate::dwn::{DwnReply, HandlerContext};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::permissions::{self};
@@ -308,7 +310,7 @@ where
     ) -> Result<Vec<JsonValue>, String> {
         let mut entries = Vec::new();
         for message_cid in message_cids {
-            let Some(message) = self
+            let Some(mut message) = self
                 .message_store
                 .get(tenant, message_cid)
                 .await
@@ -317,8 +319,15 @@ where
                 continue;
             };
 
-            let mut message_json = serde_json::to_value(&message).map_err(|err| err.to_string())?;
-            let inline_data = strip_encoded_data(&mut message_json);
+            let inline_data = if matches!(
+                &message.descriptor,
+                Descriptor::Records(records) if matches!(records.as_ref(), Records::Write(_))
+            ) {
+                strip_encoded_data(&mut message).map_err(|error| error.to_string())?
+            } else {
+                None
+            };
+            let message_json = serde_json::to_value(&message).map_err(|err| err.to_string())?;
 
             let encoded_data = match inline_data {
                 Some(encoded_data) => Some(encoded_data),

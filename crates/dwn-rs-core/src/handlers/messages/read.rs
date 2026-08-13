@@ -6,8 +6,9 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
-use crate::descriptors::Descriptor;
-use crate::descriptors::MessagesReadDescriptor;
+use crate::descriptors::{
+    records::strip_encoded_data, Descriptor, MessagesReadDescriptor, Records,
+};
 use crate::dwn::{DwnReply, HandlerContext};
 use crate::permissions::{self, AuthorizationContext, MessagesReadGrantAccess};
 use crate::Handler;
@@ -71,7 +72,7 @@ where
                 Err(error) => return DwnReply::bad_request(error),
             };
 
-            let stored_message = match self.message_store.get(tenant, &message_cid).await {
+            let mut stored_message = match self.message_store.get(tenant, &message_cid).await {
                 Ok(Some(message)) => message,
                 Ok(None) => return DwnReply::new(404, "Not Found"),
                 Err(err) => return store_error_reply(err.to_string()),
@@ -85,17 +86,25 @@ where
                 Err(detail) => return DwnReply::unauthorized(detail),
             };
 
-            let mut message_json =
+            let inline_data = if matches!(
+                &stored_message.descriptor,
+                Descriptor::Records(records) if matches!(records.as_ref(), Records::Write(_))
+            ) {
+                match strip_encoded_data(&mut stored_message) {
+                    Ok(encoded_data) => encoded_data,
+                    Err(error) => return store_error_reply(error.to_string()),
+                }
+            } else {
+                None
+            };
+            let message_json =
                 match serde_json::to_value(&stored_message).map_err(|err| err.to_string()) {
                     Ok(value) => value,
                     Err(detail) => return store_error_reply(detail),
                 };
             let encoded_data = match grant_access {
-                MessagesReadGrantAccess::MetadataOnly => {
-                    strip_encoded_data(&mut message_json);
-                    None
-                }
-                MessagesReadGrantAccess::Full => match strip_encoded_data(&mut message_json) {
+                MessagesReadGrantAccess::MetadataOnly => None,
+                MessagesReadGrantAccess::Full => match inline_data {
                     Some(encoded_data) => Some(encoded_data),
                     None => self
                         .external_read_data(tenant, &stored_message)

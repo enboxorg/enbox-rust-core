@@ -8,6 +8,7 @@ pub use parameters::*;
 pub use crate::encryption::{EncryptionInput, KeyEncryptionInput};
 
 use dwn_rs_message_derive::interface;
+use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::{fields::WriteFields, Descriptor, Fields, Message};
@@ -41,6 +42,13 @@ pub(crate) fn write_fields_mut(
         Fields::InitialWriteField(fields) => Ok(&mut fields.write_fields),
         _ => Err(WriteFieldsError),
     }
+}
+
+/// Removes and returns inline RecordsWrite data from a typed message.
+pub(crate) fn strip_encoded_data(
+    message: &mut Message<Descriptor>,
+) -> Result<Option<String>, WriteFieldsError> {
+    Ok(write_fields_mut(message)?.encoded_data.take())
 }
 
 #[interface(RECORDS, union = Records)]

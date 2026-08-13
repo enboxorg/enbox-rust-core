@@ -178,14 +178,6 @@ pub(crate) fn parse_bit_prefix(prefix: &str) -> Result<Vec<bool>, String> {
     Ok(bits)
 }
 
-pub(crate) fn strip_encoded_data(message: &mut JsonValue) -> Option<String> {
-    message
-        .as_object_mut()?
-        .remove("encodedData")?
-        .as_str()
-        .map(str::to_string)
-}
-
 pub(crate) fn records_write_data_reference(
     message: &Message<Descriptor>,
 ) -> Option<(String, String, u64)> {
