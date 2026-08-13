@@ -29,10 +29,10 @@ use crate::auth::resolver::DidResolver;
 use crate::auth::{Authorization, Jws, JwsError};
 use crate::cid::{generate_cid_from_serialized, generate_message_cid_from_json};
 use crate::descriptors::{
-    ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
-    Records, RecordsWriteDescriptor, QUERY,
+    records::write_fields, ConfigureDescriptor, Descriptor, MessageDescriptor,
+    ProtocolQueryDescriptor, Protocols, Records, RecordsWriteDescriptor, QUERY,
 };
-use crate::fields::{Fields, WriteFields};
+use crate::fields::Fields;
 use crate::filters::{
     message_filters::Messages as MessagesFilter, message_filters::Records as RecordsFilter,
 };
@@ -576,7 +576,8 @@ fn validate_records_write_payload(
         ));
     }
 
-    let attestation_cid = write_fields(message)?
+    let attestation_cid = write_fields(message)
+        .map_err(ProtocolValidationError::from)?
         .attestation
         .as_ref()
         .map(|attestation| {
@@ -588,7 +589,8 @@ fn validate_records_write_payload(
         })
         .transpose()?;
 
-    let encryption_cid = write_fields(message)?
+    let encryption_cid = write_fields(message)
+        .map_err(ProtocolValidationError::from)?
         .encryption
         .as_ref()
         .map(|encryption| {
@@ -640,7 +642,8 @@ fn validate_records_write_payload(
     }
 
     // compute delegated grant Cid
-    let delegated_grant_cid = write_fields(message)?
+    let delegated_grant_cid = write_fields(message)
+        .map_err(ProtocolValidationError::from)?
         .authorization
         .author_delegated_grant
         .as_ref()
@@ -1706,14 +1709,6 @@ fn protocols_query_descriptor(
             _ => Err(GrantMessageTypeError::InvalidProtocolsQueryMessageType),
         },
         _ => Err(GrantMessageTypeError::InvalidProtocolsQueryMessageType),
-    }
-}
-
-fn write_fields(message: &Message<Descriptor>) -> Result<&WriteFields, ProtocolValidationError> {
-    match &message.fields {
-        Fields::Write(fields) => Ok(fields),
-        Fields::InitialWriteField(fields) => Ok(&fields.write_fields),
-        _ => Err(ProtocolValidationError::MissingWriteFields),
     }
 }
 

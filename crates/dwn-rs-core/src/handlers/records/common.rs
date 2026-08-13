@@ -9,13 +9,13 @@ use serde_json::Value as JsonValue;
 
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
+    records::{write_fields, write_fields_mut},
     DeleteDescriptor, Descriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::DwnReply;
 use crate::encryption::Encryption;
 use crate::errors::EventLogError;
-use crate::fields::{Fields, WriteFields};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::handlers::configure::fetch_protocol_definition;
@@ -78,24 +78,6 @@ pub(crate) fn records_subscribe_descriptor(
     }
 }
 
-pub(crate) fn write_fields(message: &Message<Descriptor>) -> Result<&WriteFields, String> {
-    match &message.fields {
-        Fields::Write(fields) => Ok(fields),
-        Fields::InitialWriteField(fields) => Ok(&fields.write_fields),
-        _ => Err("RecordsWriteFieldsExpected: write fields are required".to_string()),
-    }
-}
-
-pub(crate) fn write_fields_mut(
-    message: &mut Message<Descriptor>,
-) -> Result<&mut WriteFields, String> {
-    match &mut message.fields {
-        Fields::Write(fields) => Ok(fields),
-        Fields::InitialWriteField(fields) => Ok(&mut fields.write_fields),
-        _ => Err("RecordsWriteFieldsExpected: write fields are required".to_string()),
-    }
-}
-
 pub(crate) fn validate_records_write_integrity(
     message: &Message<Descriptor>,
     signature: &AuthorizationContext,
@@ -117,7 +99,11 @@ pub(crate) fn validate_records_write_integrity(
     // via `Encryption.validateEncryptionProperty`; mirror that so an inbound message
     // with a malformed IV or ephemeral key is rejected at admission rather than failing
     // decryption later.
-    if let Some(encryption) = write_fields(message)?.encryption.as_ref() {
+    if let Some(encryption) = write_fields(message)
+        .map_err(|error| error.to_string())?
+        .encryption
+        .as_ref()
+    {
         match encryption {
             Encryption::Envelope(envelope) => {
                 envelope.validate().map_err(|error| match error {
@@ -307,7 +293,8 @@ pub(crate) fn validate_data_integrity(
 }
 
 pub(crate) fn encoded_data_bytes(message: &Message<Descriptor>) -> Result<Option<Bytes>, String> {
-    write_fields(message)?
+    write_fields(message)
+        .map_err(|error| error.to_string())?
         .encoded_data
         .as_ref()
         .map(|encoded| {
@@ -323,7 +310,9 @@ pub(crate) fn set_encoded_data(
     message: &mut Message<Descriptor>,
     encoded_data: Option<String>,
 ) -> Result<(), String> {
-    write_fields_mut(message)?.encoded_data = encoded_data;
+    write_fields_mut(message)
+        .map_err(|error| error.to_string())?
+        .encoded_data = encoded_data;
     Ok(())
 }
 

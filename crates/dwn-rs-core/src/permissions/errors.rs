@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use crate::{
     auth::JwsError,
+    descriptors::records::WriteFieldsError,
     errors::{DataStoreError, MessageStoreError, StoreError},
 };
 
@@ -112,8 +113,8 @@ pub enum ProtocolValidationError {
     #[error("invalid base64 encoded data: {0}")]
     InvalidBase64(#[from] DecodeError),
 
-    #[error("write fields are required for grant")]
-    MissingWriteFields,
+    #[error(transparent)]
+    WriteFields(#[from] WriteFieldsError),
 
     #[error("revocation parentId is required")]
     MissingRevocationParentId,

@@ -10,8 +10,7 @@ use futures_util::stream;
 
 use crate::auth::resolver::DidResolver;
 use crate::cid::generate_dag_pb_cid_from_bytes;
-use crate::descriptors::Descriptor;
-use crate::descriptors::RecordsWriteDescriptor;
+use crate::descriptors::{records::write_fields, Descriptor, RecordsWriteDescriptor};
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
@@ -25,7 +24,7 @@ use crate::handlers::records::common::{
     purge_record_messages, record_id, records_delete_descriptor, records_write_descriptor,
     records_write_event_log_indexes, records_write_indexes, set_encoded_data, store_error_reply,
     string_filter, validate_data_integrity, validate_records_write_integrity,
-    verify_immutable_properties, write_fields,
+    verify_immutable_properties,
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
@@ -447,7 +446,8 @@ where
         )?;
 
         if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
-            let encoded_data = write_fields(newest_existing_write)?
+            let encoded_data = write_fields(newest_existing_write)
+                .map_err(|error| error.to_string())?
                 .encoded_data
                 .clone()
                 .ok_or_else(|| "RecordsWriteMissingEncodedDataInPrevious: No dataStream was provided and unable to get data from previous message".to_string())?;
@@ -541,9 +541,13 @@ where
                 "ProtocolAuthorizationParentContextMissing: parent contextId is required"
                     .to_string()
             })?;
-            let context_id = write_fields(message)?.context_id.clone().ok_or_else(|| {
-                "ProtocolAuthorizationContextMissing: contextId is required".to_string()
-            })?;
+            let context_id = write_fields(message)
+                .map_err(|error| error.to_string())?
+                .context_id
+                .clone()
+                .ok_or_else(|| {
+                    "ProtocolAuthorizationContextMissing: contextId is required".to_string()
+                })?;
             if !context_id.starts_with(&format!("{parent_context}/")) {
                 return Err(
                     "ProtocolAuthorizationContextMismatch: contextId must be under parent context"

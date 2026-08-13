@@ -8,6 +8,40 @@ pub use parameters::*;
 pub use crate::encryption::{EncryptionInput, KeyEncryptionInput};
 
 use dwn_rs_message_derive::interface;
+use thiserror::Error;
+
+use crate::{fields::WriteFields, Descriptor, Fields, Message};
+
+/// A message does not carry the RecordsWrite transport fields required by a
+/// RecordsWrite-only operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("RecordsWriteFieldsExpected: write fields are required")]
+pub struct WriteFieldsError;
+
+/// Returns the fields carried by a RecordsWrite message.
+///
+/// `InitialWriteField` wraps the same write fields when a reply includes an
+/// `initialWrite`, so callers can handle both envelope shapes uniformly.
+pub(crate) fn write_fields(
+    message: &Message<Descriptor>,
+) -> Result<&WriteFields, WriteFieldsError> {
+    match &message.fields {
+        Fields::Write(fields) => Ok(fields),
+        Fields::InitialWriteField(fields) => Ok(&fields.write_fields),
+        _ => Err(WriteFieldsError),
+    }
+}
+
+/// Mutable counterpart to [`write_fields`].
+pub(crate) fn write_fields_mut(
+    message: &mut Message<Descriptor>,
+) -> Result<&mut WriteFields, WriteFieldsError> {
+    match &mut message.fields {
+        Fields::Write(fields) => Ok(fields),
+        Fields::InitialWriteField(fields) => Ok(&mut fields.write_fields),
+        _ => Err(WriteFieldsError),
+    }
+}
 
 #[interface(RECORDS, union = Records)]
 mod inner {

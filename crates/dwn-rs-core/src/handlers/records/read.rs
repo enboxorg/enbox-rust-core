@@ -5,14 +5,14 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
-use crate::descriptors::ReadDescriptor;
+use crate::descriptors::{records::write_fields, ReadDescriptor};
 use crate::dwn::{Handler, HandlerContext};
 use crate::filters::{FilterKey, Filters};
 use crate::handlers::records::common::{
     authorize_records_read, bool_filter, date_sort_to_message_sort, extract_author,
     fetch_initial_write_message, fetch_newest_write, is_initial_write, message_record_id,
     record_id, records_delete_descriptor, records_filter_to_filter_map, records_write_descriptor,
-    set_encoded_data, store_error_reply, string_filter, write_fields,
+    set_encoded_data, store_error_reply, string_filter,
 };
 use crate::permissions::{self};
 use crate::replies::records::{Read, ReadEntry};
