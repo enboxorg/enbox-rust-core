@@ -74,11 +74,12 @@ pub struct QueryEntry {
     pub message: Message<Descriptor>,
 }
 
-#[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct Query {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<QueryEntry>>,
     pub cursor: Option<Cursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<super::Error>,
 }
 
@@ -88,12 +89,14 @@ impl From<Query> for Reply {
     }
 }
 
-#[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct Subscribe {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<QueryEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription_id: Option<String>,
     pub cursor: Option<Cursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<super::Error>,
 }
 
