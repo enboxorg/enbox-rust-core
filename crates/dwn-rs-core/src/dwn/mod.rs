@@ -396,7 +396,7 @@ where
         &self.config.handlers
     }
 
-    pub async fn process_message(&self, tenant: &str, raw_message: Value) -> DwnReply {
+    pub async fn process_message(&self, tenant: &str, raw_message: Value) -> Response<Reply> {
         self.process_message_with_data(tenant, raw_message, None)
             .await
     }
@@ -406,7 +406,7 @@ where
         tenant: &str,
         raw_message: Value,
         data: Option<bytes::Bytes>,
-    ) -> DwnReply {
+    ) -> Response<Reply> {
         if let Some(reply) = self.validate_tenant(tenant).await {
             return reply;
         }
@@ -414,23 +414,23 @@ where
         let kind = match MessageKind::from_message(&raw_message) {
             Ok(kind) => kind,
             Err(DwnValidationError::MissingInterfaceMethod { interface, method }) => {
-                return DwnReply::bad_request(format!(
+                return Response::bad_request(format!(
                     "Both interface and method must be present, interface: {interface}, method: {method}"
                 ));
             }
             Err(DwnValidationError::UnknownInterfaceMethod { interface, method }) => {
-                return DwnReply::bad_request(format!(
+                return Response::bad_request(format!(
                     "Unknown interface/method combination, interface: {interface}, method: {method}"
                 ));
             }
         };
 
         if let Err(error) = validation::validate_message(&raw_message) {
-            return DwnReply::bad_request(error.to_string());
+            return Response::bad_request(error.to_string());
         }
 
         let Some(handler) = self.config.handlers.get(&kind) else {
-            return DwnReply::not_implemented(format!(
+            return Response::not_implemented(format!(
                 "No handler registered for {}",
                 kind.as_str()
             ));
@@ -446,13 +446,13 @@ where
             .await
     }
 
-    async fn validate_tenant(&self, tenant: &str) -> Option<DwnReply> {
+    async fn validate_tenant(&self, tenant: &str) -> Option<Response<Reply>> {
         let result = self.config.tenant_gate.is_active_tenant(tenant).await;
         if result.is_active_tenant {
             return None;
         }
 
-        Some(DwnReply::unauthorized(result.detail.unwrap_or_else(|| {
+        Some(Response::unauthorized(result.detail.unwrap_or_else(|| {
             format!("DID {tenant} is not an active tenant.")
         })))
     }
