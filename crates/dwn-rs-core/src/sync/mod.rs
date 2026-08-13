@@ -2125,15 +2125,15 @@ mod tests {
         SyncMessageEntry {
             message_cid: "parent-cid".to_string(),
             message: Message::new(
-                RecordsWriteDescriptor {
+                Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
                     protocol: "https://example.com/sync".to_string(),
                     protocol_path: "entry".to_string(),
                     ..Default::default()
-                },
-                WriteFields {
+                })))),
+                Fields::Write(WriteFields {
                     record_id: Some("parent-record".to_string()),
                     ..Default::default()
-                },
+                }),
             )
             .unwrap() // pre-built, failure should not happen
             .into(),
@@ -2145,16 +2145,16 @@ mod tests {
         SyncMessageEntry {
             message_cid: "child-cid".to_string(),
             message: Message::new(
-                RecordsWriteDescriptor {
+                Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
                     protocol: "https://example.com/sync".to_string(),
                     protocol_path: "entry".to_string(),
                     parent_id: Some("parent-record".to_string()),
                     ..Default::default()
-                },
-                WriteFields {
+                })))),
+                Fields::Write(WriteFields {
                     record_id: Some("child-record".to_string()),
                     ..Default::default()
-                },
+                }),
             )
             .unwrap() // pre-built, failure should not happen
             .into(),
@@ -2166,15 +2166,15 @@ mod tests {
         SyncMessageEntry {
             message_cid: "local-cid".to_string(),
             message: Message::new(
-                RecordsWriteDescriptor {
+                Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
                     protocol: "https://example.com/sync".to_string(),
                     protocol_path: "entry".to_string(),
                     ..Default::default()
-                },
-                WriteFields {
+                })))),
+                Fields::Write(WriteFields {
                     record_id: Some("local-record".to_string()),
                     ..Default::default()
-                },
+                }),
             )
             .unwrap() // pre-built, failure should not happen
             .into(),

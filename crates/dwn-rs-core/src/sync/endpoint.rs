@@ -753,7 +753,7 @@ impl SyncRequestAuthorizer for JwsSyncAuthorizer {
 
 #[cfg(test)]
 mod tests {
-    use crate::{descriptors::RecordsWriteDescriptor, fields::WriteFields, Fields};
+    use crate::Fields;
 
     use super::*;
 
@@ -769,7 +769,7 @@ mod tests {
 
         let delete = Message::new(
             Descriptor::Records(Box::new(Records::Delete(Default::default()))),
-            Fields::Delete(Default::default()),
+            Fields::default(),
         )
         .unwrap();
         assert!(is_sync_apply_success(404, &delete));

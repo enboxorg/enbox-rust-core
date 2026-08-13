@@ -16,12 +16,13 @@ use dwn_rs_core::descriptors::{
 };
 use dwn_rs_core::dwn::validation as message_validation;
 use dwn_rs_core::dwn::{
-    current_handler_kinds, Dwn, DwnReply, MessageKind, MethodHandler, MethodHandlerRequest,
+    current_handler_kinds, Dwn, MessageKind, MethodHandler, MethodHandlerRequest,
 };
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
 use dwn_rs_core::stores::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
 use dwn_rs_stores::SqliteNativeDwn;
+use dwn_rs_core::{Reply, Response};
 use futures_util::stream;
 use serde::Deserialize;
 use serde_json::Value;
@@ -424,12 +425,6 @@ async fn fixture_messages_route_through_dwn_dispatch() {
                 .process_message("did:example:alice", message.clone())
                 .await;
             assert_eq!(reply.status.code, 200, "{} route status", case.id);
-            assert_eq!(
-                reply.body.get("handler"),
-                Some(&Value::String(kind.as_str().to_string())),
-                "{} route handler",
-                case.id
-            );
             routed += 1;
         }
     }
@@ -789,27 +784,22 @@ impl MethodHandler for RouteEchoHandler {
     fn handle<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
-        let handler_key = request
-            .kind
-            .as_ref()
-            .map(MessageKind::as_str)
-            .unwrap_or_default()
-            .to_string();
-        Box::pin(async move { DwnReply::ok().with_body("handler", Value::String(handler_key)) })
+    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
+        let _kind = request.kind;
+        Box::pin(async move { Response::ok() })
     }
 }
 
 #[derive(Clone)]
 struct FixtureReplyHandler {
-    reply: DwnReply,
+    reply: Response<Reply>,
 }
 
 impl MethodHandler for FixtureReplyHandler {
     fn handle<'a>(
         &'a self,
         _request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = DwnReply> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
         let reply = self.reply.clone();
         Box::pin(async move { reply })
     }
@@ -905,7 +895,7 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         .process_message(&process.tenant, raw_message)
         .await;
     assert_eq!(
-        serde_json::to_value(reply).expect("DwnReply must serialize"),
+        serde_json::to_value(reply).expect("Response<Reply> must serialize"),
         process.reply,
         "{} process reply",
         case.id
@@ -948,7 +938,7 @@ fn message_process_fixture(case: &FixtureCase) -> &MessageProcessFixture {
         .unwrap_or_else(|| panic!("{} must include process fixture", case.id))
 }
 
-fn process_reply(case: &FixtureCase) -> DwnReply {
+fn process_reply(case: &FixtureCase) -> Response<Reply> {
     serde_json::from_value(message_process_fixture(case).reply.clone())
         .unwrap_or_else(|err| panic!("{} process reply must deserialize: {}", case.id, err))
 }

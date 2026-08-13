@@ -538,7 +538,7 @@ mod tests {
             )
             .await;
 
-        assert_eq!(reply, DwnReply::unauthorized("tenant disabled"));
+        assert_eq!(reply, Response::<Reply>::unauthorized("tenant disabled".to_string()));
         assert!(calls.lock().unwrap().is_empty());
     }
 
@@ -559,8 +559,9 @@ mod tests {
 
         assert_eq!(
             reply,
-            DwnReply::bad_request(
+            Response::<Reply>::bad_request(
                 "Both interface and method must be present, interface: Records, method: undefined"
+                    .to_string(),
             )
         );
     }
@@ -615,7 +616,6 @@ mod tests {
             .await;
 
         assert_eq!(reply.status.code, 200);
-        assert_eq!(reply.body["handler"], "RecordsQuery");
         assert_eq!(
             calls.lock().unwrap().as_slice(),
             &[(
@@ -705,10 +705,7 @@ mod tests {
 
             Box::pin(async move {
                 calls.lock().unwrap().push((tenant, kind.clone()));
-                Response::ok().with_reply(Reply::General(BTreeMap::from([(
-                    "handler".to_string(),
-                    kind.as_str().to_string().into(),
-                )])))
+                Response::ok()
             })
         }
     }

@@ -384,7 +384,7 @@ async fn start_loopback_peer_server(resolver: StaticPublicKeyResolver) -> Loopba
             Ok(DesktopProcessMessageResult {
                 status_code: reply.status.code as u16,
                 status_detail: reply.status.detail,
-                body: serde_json::to_value(&reply.body).unwrap_or(JsonValue::Null),
+                body: serde_json::to_value(&reply.reply).unwrap_or(JsonValue::Null),
                 data,
             })
         }
@@ -495,12 +495,10 @@ async fn published_record_count(node: &SqliteNativeDwn) -> usize {
         )
         .await;
     assert_eq!(reply.status.code, 200, "{reply:?}");
-    reply
-        .body
-        .get("entries")
-        .and_then(JsonValue::as_array)
-        .map(|entries| entries.len())
-        .unwrap_or(0)
+    match reply.reply {
+        dwn_rs_core::Reply::RecordsQuery(reply) => reply.entries.map_or(0, |entries| entries.len()),
+        other => panic!("expected RecordsQuery reply, got {other:?}"),
+    }
 }
 
 async fn assert_nodes_converged(local: &SqliteNativeDwn, peer: &SqliteNativeDwn, context: &str) {

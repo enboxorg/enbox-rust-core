@@ -83,11 +83,11 @@ async fn records_write_read_query_and_count_published_inline_data() {
         .run(MethodHandlerRequest::new("did:example:alice", &query, None))
         .await;
     assert_eq!(reply.status.code, 200);
-    let entries = reply.body["entries"].as_array().unwrap();
+    let entries = reply.reply.entries.as_ref().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(
-        entries[0]["encodedData"].as_str(),
-        Some(URL_SAFE_NO_PAD.encode(&data).as_str())
+        entries[0].encoded_data.as_deref(),
+        Some(URL_SAFE_NO_PAD.encode(&data).as_str()),
     );
 
     let count = unsigned_count_message(json!({ "published": true }));
@@ -95,7 +95,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
         .run(MethodHandlerRequest::new("did:example:alice", &count, None))
         .await;
     assert_eq!(reply.status.code, 200);
-    assert_eq!(reply.body["count"], json!(1));
+    assert_eq!(reply.reply.count, Some(1));
 
     let read = unsigned_read_message(json!({ "recordId": record_id }));
     let reply = read_handler
@@ -103,7 +103,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
         .await;
     assert_eq!(reply.status.code, 200);
     assert_eq!(
-        reply.body["entry"]["encodedData"].as_str(),
+        reply.reply.entry.as_ref().unwrap().encoded_data.as_deref(),
         Some(URL_SAFE_NO_PAD.encode(&data).as_str())
     );
 }
@@ -807,10 +807,10 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
         "{}",
         result.reply.status.detail
     );
-    assert!(!result.reply.body.contains_key("entries"));
+    assert!(result.reply.reply.entries.is_none());
     assert_eq!(
-        result.reply.body["subscriptionId"],
-        result.subscription.as_ref().unwrap().id
+        result.reply.reply.subscription_id.as_deref(),
+        Some(result.subscription.as_ref().unwrap().id.as_str())
     );
     let delivered = delivered.read().unwrap();
     assert_eq!(delivered.len(), 2);
@@ -883,8 +883,9 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
         .handle_subscribe("did:example:alice", &request, Box::new(|_| {}))
         .await;
     assert_eq!(result.reply.status.code, 410);
-    assert_eq!(result.reply.body["error"]["code"], "ProgressGap");
-    assert_eq!(result.reply.body["error"]["reason"], "token_too_old");
+    let crate::replies::Error::ProgressGap(error) = result.reply.reply.error.as_ref().unwrap();
+    assert_eq!(error.code, crate::stores::ProgressGapCode::ProgressGap);
+    assert_eq!(error.reason, crate::stores::ProgressGapReason::TokenTooOld);
     assert!(result.subscription.is_none());
 }
 
@@ -931,7 +932,7 @@ async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_su
         "{}",
         result.reply.status.detail
     );
-    assert_eq!(result.reply.body["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(result.reply.reply.entries.as_ref().unwrap().len(), 1);
     assert!(result.subscription.is_some());
 
     event_log

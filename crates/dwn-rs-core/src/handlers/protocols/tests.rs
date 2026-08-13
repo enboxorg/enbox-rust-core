@@ -142,7 +142,8 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
         ))
         .await;
     assert_eq!(reply.status.code, 200);
-    let entries = reply.body["entries"].as_array().unwrap();
+    let body = serde_json::to_value(&reply.reply).unwrap();
+    let entries = body["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0]["descriptor"]["definition"]["protocol"].as_str(),
@@ -185,7 +186,8 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
         ))
         .await;
     assert_eq!(reply.status.code, 200);
-    let entries = reply.body["entries"].as_array().unwrap();
+    let body = serde_json::to_value(&reply.reply).unwrap();
+    let entries = body["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0]["descriptor"]["definition"]["published"].as_bool(),
@@ -242,7 +244,8 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
         ))
         .await;
     assert_eq!(reply.status.code, 200);
-    let entries = reply.body["entries"].as_array().unwrap();
+    let body = serde_json::to_value(&reply.reply).unwrap();
+    let entries = body["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0]["descriptor"]["definition"]["protocol"].as_str(),
@@ -299,7 +302,8 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
         ))
         .await;
     assert_eq!(reply.status.code, 200);
-    let entries = reply.body["entries"].as_array().unwrap();
+    let body = serde_json::to_value(&reply.reply).unwrap();
+    let entries = body["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0]["descriptor"]["definition"]["published"].as_bool(),
@@ -521,7 +525,10 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
         .process_message("did:example:alice", unsigned_query_message(None))
         .await;
     assert_eq!(query_reply.status.code, 200);
-    assert_eq!(query_reply.body["entries"].as_array().unwrap().len(), 1);
+    let crate::Reply::ProtocolsQuery(reply) = query_reply.reply else {
+        panic!("expected ProtocolsQuery reply");
+    };
+    assert_eq!(reply.entries.as_ref().unwrap().len(), 1);
 }
 
 #[derive(Clone, Default)]

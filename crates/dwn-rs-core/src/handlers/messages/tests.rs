@@ -77,12 +77,15 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
         ))
         .await;
     assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
-    let only_remote = reply.body["onlyRemote"].as_array().unwrap();
+    let only_remote = reply.reply.only_remote.as_ref().unwrap();
     assert_eq!(only_remote.len(), 1);
-    assert_eq!(only_remote[0]["messageCid"], cid);
-    assert_eq!(only_remote[0]["encodedData"], "aGVsbG8");
-    assert!(only_remote[0]["message"].get("encodedData").is_none());
-    assert!(reply.body["onlyLocal"].as_array().unwrap().is_empty());
+    assert_eq!(only_remote[0].message_cid.as_deref(), Some(cid.as_str()));
+    assert_eq!(only_remote[0].encoded_data.as_deref(), Some("aGVsbG8"));
+    assert!(serde_json::to_value(only_remote[0].message.as_ref().unwrap())
+        .unwrap()
+        .get("encodedData")
+        .is_none());
+    assert!(reply.reply.only_local.as_ref().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -219,7 +222,6 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
         .handle_subscribe(
             "did:example:alice",
             &message,
-            &request,
             Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
         )
         .await;
@@ -228,8 +230,9 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
         "{}",
         result.reply.status.detail
     );
+    let reply_body = serde_json::to_value(&result.reply.reply).unwrap();
     assert_eq!(
-        result.reply.body["subscriptionId"],
+        reply_body["subscriptionId"],
         result.subscription.as_ref().unwrap().id
     );
     let delivered = delivered.read().unwrap();
@@ -297,11 +300,12 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
 
     let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
-        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
+        .handle_subscribe("did:example:alice", &message, Box::new(|_| {}))
         .await;
     assert_eq!(result.reply.status.code, 410);
-    assert_eq!(result.reply.body["error"]["code"], "ProgressGap");
-    assert_eq!(result.reply.body["error"]["reason"], "token_too_old");
+    let reply_body = serde_json::to_value(&result.reply.reply).unwrap();
+    assert_eq!(reply_body["error"]["code"], "ProgressGap");
+    assert_eq!(reply_body["error"]["reason"], "token_too_old");
     assert!(result.subscription.is_none());
 }
 
@@ -342,7 +346,7 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
 
     let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
-        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
+        .handle_subscribe("did:example:alice", &message, Box::new(|_| {}))
         .await;
     assert_eq!(
         result.reply.status.code, 401,
@@ -394,7 +398,7 @@ async fn messages_subscribe_allows_filters_covered_by_different_grants() {
 
     let message = serde_json::from_value(request.clone()).unwrap();
     let result = handler
-        .handle_subscribe("did:example:alice", &message, &request, Box::new(|_| {}))
+        .handle_subscribe("did:example:alice", &message, Box::new(|_| {}))
         .await;
     assert_eq!(
         result.reply.status.code, 200,

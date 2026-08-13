@@ -14,7 +14,7 @@ use dwn_rs_core::interfaces::messages::descriptors::records::WriteDescriptor;
 use dwn_rs_core::interfaces::messages::protocols::ActionWho;
 use dwn_rs_core::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Type, Who};
 use dwn_rs_core::stores::MessageStore;
-use dwn_rs_core::Value;
+use dwn_rs_core::{Reply, Value};
 use serde_json::{json, Value as JsonValue};
 
 use dwn_rs_stores::SqliteNativeDwn;
@@ -85,11 +85,12 @@ async fn native_dwn_processes_protocols_configure_and_messages_read() {
     let read = signed_messages_read(&configure_cid, "2025-01-01T00:00:01.000000Z").await;
     let read_reply = node.dwn().process_message(TENANT, read).await;
     assert_eq!(read_reply.status.code, 200, "{read_reply:?}");
-    assert_eq!(
-        read_reply.body["entry"]["messageCid"].as_str(),
-        Some(configure_cid.as_str())
-    );
-    assert!(read_reply.body["entry"]["message"].is_object());
+    let Reply::MessageRead(reply) = read_reply.reply else {
+        panic!("expected MessagesRead reply");
+    };
+    let entry = reply.entry.as_ref().expect("MessagesRead entry");
+    assert_eq!(entry.cid.to_string(), configure_cid);
+    assert!(entry.message.is_some());
 }
 
 async fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> JsonValue {
