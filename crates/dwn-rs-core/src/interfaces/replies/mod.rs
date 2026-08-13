@@ -175,9 +175,11 @@ pub enum Error {
     ProgressGap(ProgressGapInfo),
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum Reply {
+    #[default]
     Empty,
     Error(Error),
     RecordsCount(Box<records::Count>),
@@ -192,14 +194,8 @@ pub enum Reply {
     RecordsSubscribe(Box<records::Subscribe>),
 }
 
-impl Default for Reply {
-    fn default() -> Self {
-        Reply::Empty
-    }
-}
-
-impl Into<Reply> for () {
-    fn into(self) -> Reply {
+impl From<()> for Reply {
+    fn from(_: ()) -> Self {
         Reply::Empty
     }
 }

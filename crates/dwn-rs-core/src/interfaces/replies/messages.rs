@@ -22,9 +22,9 @@ pub struct Read {
     pub entry: Option<ReadEntry>,
 }
 
-impl Into<Reply> for Read {
-    fn into(self) -> Reply {
-        Reply::MessageRead(Box::new(self))
+impl From<Read> for Reply {
+    fn from(val: Read) -> Self {
+        Reply::MessageRead(Box::new(val))
     }
 }
 
@@ -46,9 +46,9 @@ pub struct Sync {
     pub only_local: Option<Vec<String>>,
 }
 
-impl Into<crate::Reply> for Sync {
-    fn into(self) -> crate::Reply {
-        crate::Reply::MessageSync(Box::new(self))
+impl From<Sync> for Reply {
+    fn from(val: Sync) -> Self {
+        crate::Reply::MessageSync(Box::new(val))
     }
 }
 
@@ -69,9 +69,9 @@ pub struct Subscription {
     pub error: Option<ProgressGapInfo>,
 }
 
-impl Into<Reply> for Subscription {
-    fn into(self) -> Reply {
-        Reply::MessageSubscription(Box::new(self))
+impl From<Subscription> for Reply {
+    fn from(val: Subscription) -> Self {
+        Reply::MessageSubscription(Box::new(val))
     }
 }
 

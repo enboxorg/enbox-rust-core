@@ -418,7 +418,7 @@ fn reply_root(resp: Response<messages::Sync>) -> SyncResult<String> {
         ));
     }
 
-    resp.reply.root.or_else(|| resp.reply.hash).ok_or_else(|| {
+    resp.reply.root.or(resp.reply.hash).ok_or_else(|| {
         SyncError::permanent(
             "MessagesSyncReplyInvalid",
             "missing root/hash in MessagesSync reply".to_string(),

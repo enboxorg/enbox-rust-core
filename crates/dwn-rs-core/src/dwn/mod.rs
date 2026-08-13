@@ -7,7 +7,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

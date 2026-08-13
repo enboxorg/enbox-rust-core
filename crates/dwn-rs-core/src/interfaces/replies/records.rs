@@ -14,9 +14,9 @@ pub struct Write {
     error: Option<super::Error>,
 }
 
-impl Into<Reply> for Write {
-    fn into(self) -> Reply {
-        Reply::RecordsWrite(Box::new(self))
+impl From<Write> for Reply {
+    fn from(val: Write) -> Self {
+        Reply::RecordsWrite(Box::new(val))
     }
 }
 
@@ -39,9 +39,9 @@ pub struct Read {
     pub entry: Option<ReadEntry>,
 }
 
-impl Into<Reply> for Read {
-    fn into(self) -> Reply {
-        Reply::RecordsRead(Box::new(self))
+impl From<Read> for Reply {
+    fn from(val: Read) -> Self {
+        Reply::RecordsRead(Box::new(val))
     }
 }
 
@@ -51,9 +51,9 @@ pub struct Count {
     pub count: Option<u64>,
 }
 
-impl Into<Reply> for Count {
-    fn into(self) -> Reply {
-        Reply::RecordsCount(Box::new(self))
+impl From<Count> for Reply {
+    fn from(val: Count) -> Self {
+        Reply::RecordsCount(Box::new(val))
     }
 }
 
@@ -82,9 +82,9 @@ pub struct Query {
     pub error: Option<super::Error>,
 }
 
-impl Into<Reply> for Query {
-    fn into(self) -> Reply {
-        Reply::RecordsQuery(Box::new(self))
+impl From<Query> for Reply {
+    fn from(val: Query) -> Self {
+        Reply::RecordsQuery(Box::new(val))
     }
 }
 
@@ -97,9 +97,9 @@ pub struct Subscribe {
     pub error: Option<super::Error>,
 }
 
-impl Into<Reply> for Subscribe {
-    fn into(self) -> Reply {
-        Reply::RecordsSubscribe(Box::new(self))
+impl From<Subscribe> for Reply {
+    fn from(val: Subscribe) -> Self {
+        Reply::RecordsSubscribe(Box::new(val))
     }
 }
 
@@ -129,7 +129,6 @@ impl HasProgressGapInfo for Write {
     fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
         Self {
             error: Some(super::Error::ProgressGap(error)),
-            ..Default::default()
         }
     }
 }

@@ -352,8 +352,8 @@ impl TryFrom<DiffEntries> for SyncMessageEntry {
     type Error = WriteFieldsError;
 
     fn try_from(diff_entry: DiffEntries) -> Result<Self, Self::Error> {
-        let message_cid = diff_entry.message_cid.ok_or_else(|| WriteFieldsError)?;
-        let message = diff_entry.message.ok_or_else(|| WriteFieldsError)?;
+        let message_cid = diff_entry.message_cid.ok_or(WriteFieldsError)?;
+        let message = diff_entry.message.ok_or(WriteFieldsError)?;
 
         let encoded_data = diff_entry.encoded_data;
         Ok(Self {
@@ -423,9 +423,9 @@ impl MessagesSyncDiff {
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?
-            .unwrap_or_else(|| Vec::new());
+            .unwrap_or(Vec::new());
 
-        let only_local = resp.reply.only_local.unwrap_or_else(|| Vec::new());
+        let only_local = resp.reply.only_local.unwrap_or_default();
 
         Ok(Self {
             only_remote,

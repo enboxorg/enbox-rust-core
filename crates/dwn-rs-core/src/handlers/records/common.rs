@@ -9,12 +9,11 @@ use serde_json::Value as JsonValue;
 
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
 use crate::descriptors::{
-    records::{records_write_descriptor, write_fields, write_fields_mut},
     messages::record_id,
+    records::{records_write_descriptor, write_fields, write_fields_mut},
     DeleteDescriptor, Descriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
-use crate::dwn::DwnReply;
 use crate::encryption::Encryption;
 use crate::errors::EventLogError;
 use crate::filters::message_filters::Records as RecordsFilter;
@@ -1560,10 +1559,6 @@ pub(crate) fn filter_map<const N: usize>(
         .collect()
 }
 
-pub(crate) fn accepted_reply() -> DwnReply {
-    DwnReply::new(202, "Accepted")
-}
-
 pub(crate) fn core_protocol_error_reply<R: Default>(
     registry: &CoreProtocolRegistry,
     detail: String,
@@ -1573,14 +1568,6 @@ pub(crate) fn core_protocol_error_reply<R: Default>(
     } else {
         Response::bad_request(detail)
     }
-}
-
-pub(crate) fn conflict_reply() -> DwnReply {
-    DwnReply::new(409, "Conflict")
-}
-
-pub(crate) fn not_found_reply() -> DwnReply {
-    DwnReply::new(404, "Not Found")
 }
 
 pub(crate) fn store_error_reply<R: Default>(detail: impl Into<String>) -> Response<R> {
