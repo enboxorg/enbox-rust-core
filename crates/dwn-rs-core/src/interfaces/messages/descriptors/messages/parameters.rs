@@ -69,6 +69,8 @@ pub struct QueryParameters {
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     #[serde(rename = "permissionGrantIds")]
     pub permission_grant_ids: Option<Vec<String>>,
+    pub limit: Option<u64>,
+    pub cids_only: Option<bool>,
 }
 
 impl MessageValidator for QueryParameters {}
@@ -89,6 +91,8 @@ impl MessageParameters for QueryParameters {
             cursor: self.cursor.clone(),
             filters,
             permission_grant_ids,
+            limit: self.limit,
+            cids_only: self.cids_only,
         };
 
         Ok((descriptor, None))

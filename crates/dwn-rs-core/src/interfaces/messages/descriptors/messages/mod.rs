@@ -66,12 +66,16 @@ mod inner {
             serialize_with = "crate::ser::serialize_datetime"
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         pub filters: Vec<MessagesFilter>,
         #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
         pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub cursor: Option<ProgressToken>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub limit: Option<u64>,
+        #[serde(rename = "cidsOnly", skip_serializing_if = "Option::is_none")]
+        pub cids_only: Option<bool>,
     }
 
     /// SubscribeDescriptor represents the MessagesSubscribe interface method for subscribing to
