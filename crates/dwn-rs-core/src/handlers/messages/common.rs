@@ -2,17 +2,16 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use k256::sha2::{Digest, Sha256};
-use serde_json::Value as JsonValue;
 
 use crate::descriptors::{
     Descriptor, Messages, MessagesSubscribeDescriptor, MessagesSyncDescriptor, Records,
 };
-use crate::dwn::DwnReply;
 use crate::errors::EventLogError;
 use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::messages::subscribe::SubscribeReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
+use crate::replies::{messages, HasProgressGapInfo};
 use crate::stores::{EventSubscription, StateHash};
 use crate::{Fields, Message, RangeFilter, Response, Value};
 
@@ -93,7 +92,7 @@ pub(crate) fn insert_message_range_filter(
 }
 
 pub(crate) fn subscribe_reply(
-    reply: DwnReply,
+    reply: Response<messages::Subscription>,
     subscription: Option<EventSubscription>,
 ) -> SubscribeReply {
     SubscribeReply {
@@ -102,19 +101,15 @@ pub(crate) fn subscribe_reply(
     }
 }
 
-pub(crate) fn event_log_error_reply(error: EventLogError) -> DwnReply {
+pub(crate) fn event_log_error_reply<R>(error: EventLogError) -> Response<R>
+where
+    R: Default + HasProgressGapInfo,
+{
     match error {
-        EventLogError::ProgressGap(gap_info) => {
-            let mut error = serde_json::to_value(&*gap_info)
-                .unwrap_or_else(|_| JsonValue::Object(serde_json::Map::new()));
-            if let Some(error) = error.as_object_mut() {
-                error.insert(
-                    "code".to_string(),
-                    JsonValue::String("ProgressGap".to_string()),
-                );
-            }
-            DwnReply::new(410, "Progress token gap").with_body("error", error)
-        }
+        EventLogError::ProgressGap(gap_info) => Response::gone(
+            "Progress token gap".to_string(),
+            R::with_progress_gap_info(*gap_info),
+        ),
         error => store_error_reply(error.to_string()),
     }
 }

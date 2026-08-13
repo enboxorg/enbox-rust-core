@@ -1,7 +1,6 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use futures_util::TryStreamExt;
-use serde_json::Value as JsonValue;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -9,10 +8,11 @@ use crate::auth::resolver::DidResolver;
 use crate::descriptors::{
     records::strip_encoded_data, Descriptor, MessagesReadDescriptor, Records,
 };
-use crate::dwn::{DwnReply, HandlerContext};
+use crate::dwn::HandlerContext;
 use crate::permissions::{self, AuthorizationContext, MessagesReadGrantAccess};
-use crate::Handler;
+use crate::replies::messages;
 use crate::Message;
+use crate::{Handler, Response};
 
 use super::common::*;
 
@@ -30,12 +30,13 @@ where
     MS: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DS: crate::stores::DataStore + Clone + Send + Sync + 'static,
 {
+    type Reply = messages::Read;
     type Descriptor = MessagesReadDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -47,8 +48,9 @@ where
             let message_cid = match descriptor.message_cid.as_ref() {
                 Some(message_cid) => message_cid.to_string(),
                 None => {
-                    return DwnReply::bad_request(
-                        "MessagesReadMissingMessageCid: descriptor.messageCid is required",
+                    return Response::bad_request(
+                        "MessagesReadMissingMessageCid: descriptor.messageCid is required"
+                            .to_string(),
                     )
                 }
             };
@@ -62,19 +64,19 @@ where
             {
                 Ok(Some(authorization)) => authorization,
                 Ok(None) => {
-                    return DwnReply::unauthorized(
-                        "MessagesReadAuthorizationFailed: message failed authorization",
+                    return Response::unauthorized(
+                        "MessagesReadAuthorizationFailed: message failed authorization".to_string(),
                     )
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
 
             let mut stored_message = match self.message_store.get(tenant, &message_cid).await {
                 Ok(Some(message)) => message,
-                Ok(None) => return DwnReply::new(404, "Not Found"),
+                Ok(None) => return Response::not_found(),
                 Err(err) => return store_error_reply(err.to_string()),
             };
 
@@ -83,7 +85,7 @@ where
                 .await
             {
                 Ok(access) => access,
-                Err(detail) => return DwnReply::unauthorized(detail),
+                Err(detail) => return Response::unauthorized(detail.to_string()),
             };
 
             let inline_data = if matches!(
@@ -97,11 +99,6 @@ where
             } else {
                 None
             };
-            let message_json =
-                match serde_json::to_value(&stored_message).map_err(|err| err.to_string()) {
-                    Ok(value) => value,
-                    Err(detail) => return store_error_reply(detail),
-                };
             let encoded_data = match grant_access {
                 MessagesReadGrantAccess::MetadataOnly => None,
                 MessagesReadGrantAccess::Full => match inline_data {
@@ -113,17 +110,13 @@ where
                 },
             };
 
-            let mut entry = serde_json::Map::new();
-            entry.insert(
-                "messageCid".to_string(),
-                JsonValue::String(message_cid.to_owned()),
-            );
-            entry.insert("message".to_string(), message_json);
-            if let Some(encoded_data) = encoded_data {
-                entry.insert("encodedData".to_string(), JsonValue::String(encoded_data));
-            }
+            let entry = messages::ReadEntry {
+                cid: message_cid,
+                message: Some(message),
+                encoded_data,
+            };
 
-            DwnReply::ok().with_body("entry", JsonValue::Object(entry))
+            Response::ok().with_reply(messages::Read { entry: Some(entry) })
         }
     }
 }

@@ -1,16 +1,14 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use serde_json::Value as JsonValue;
-
 use crate::auth::resolver::DidResolver;
-use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
-use crate::dwn::{DwnReply, HandlerContext};
+use crate::dwn::HandlerContext;
 use crate::permissions::{self};
+use crate::replies::messages;
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
-use crate::Handler;
 use crate::Message;
+use crate::{Handler, Response};
 
 use super::common::*;
 
@@ -22,7 +20,7 @@ pub struct MessagesSubscribeHandler<MessageStore, EventLog> {
 }
 
 pub struct SubscribeReply {
-    pub reply: DwnReply,
+    pub reply: Response<messages::Subscription>,
     /// The live subscription handle from the store-driven path. The one-shot request handler reads
     /// only `reply`, so this is unread within the lib build (it is exercised by tests and mirrors
     /// [`super::super::records::RecordsSubscribeReply`], whose handle is consumed by the desktop
@@ -36,17 +34,18 @@ where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
+    type Reply = messages::Subscription;
     type Descriptor = MessagesSubscribeDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<messages::Subscription>> + Send {
         // `handle_subscribe` is shared with the store-driven subscription path (which supplies a
         // real listener), so it stays an inherent method and re-parses internally. Here we drive it
         // with a no-op listener for the one-shot request path.
         async move {
-            self.handle_subscribe(ctx.tenant, &ctx.message, ctx.raw_message, Box::new(|_| {}))
+            self.handle_subscribe(ctx.tenant, &ctx.message, Box::new(|_| {}))
                 .await
                 .reply
         }
@@ -76,12 +75,11 @@ where
         &self,
         tenant: &str,
         message: &Message<Descriptor>,
-        raw_message: &JsonValue,
         listener: SubscriptionListener,
     ) -> SubscribeReply {
         let descriptor = match messages_subscribe_descriptor(message) {
             Ok(descriptor) => descriptor,
-            Err(detail) => return subscribe_reply(DwnReply::bad_request(detail), None),
+            Err(detail) => return subscribe_reply(Response::bad_request(detail.to_string()), None),
         };
 
         let authorization = match permissions::validate_authorization_signature(
@@ -94,37 +92,39 @@ where
             Ok(Some(authorization)) => authorization,
             Ok(None) => {
                 return subscribe_reply(
-                    DwnReply::unauthorized(
-                        "MessagesSubscribeAuthorizationFailed: message failed authorization",
+                    Response::unauthorized(
+                        "MessagesSubscribeAuthorizationFailed: message failed authorization"
+                            .to_string(),
                     ),
                     None,
                 )
             }
             Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                return subscribe_reply(DwnReply::bad_request(detail), None)
+                return subscribe_reply(Response::bad_request(detail.to_string()), None)
             }
             Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                return subscribe_reply(DwnReply::unauthorized(detail), None)
+                return subscribe_reply(Response::unauthorized(detail.to_string()), None)
             }
-            Err(error) => return subscribe_reply(DwnReply::bad_request(error), None),
+            Err(error) => return subscribe_reply(Response::bad_request(error.to_string()), None),
         };
 
         if let Err(detail) = self
             .authorize_messages_subscribe(tenant, message, descriptor, &authorization)
             .await
         {
-            return subscribe_reply(DwnReply::unauthorized(detail), None);
+            return subscribe_reply(Response::unauthorized(detail), None);
         }
 
-        let subscription_id = match generate_cid_from_json(raw_message) {
+        let subscription_id = match message.cid() {
             Ok(cid) => cid.to_string(),
             Err(err) => {
                 return subscribe_reply(
-                    DwnReply::bad_request(format!("MessagesSubscribeCidFailed: {err}")),
+                    Response::bad_request(format!("MessagesSubscribeCidFailed: {err}")),
                     None,
                 )
             }
         };
+
         let filters = messages_filters_to_filters(&descriptor.filters);
         let subscription = match self
             .event_log
@@ -142,8 +142,10 @@ where
             Ok(subscription) => subscription,
             Err(err) => return subscribe_reply(event_log_error_reply(err), None),
         };
-        let reply =
-            DwnReply::ok().with_body("subscriptionId", JsonValue::String(subscription.id.clone()));
+        let reply = Response::ok().with_reply(messages::Subscription {
+            subscription_id: Some(subscription.id.clone()),
+            ..Default::default()
+        });
         subscribe_reply(reply, Some(subscription))
     }
 

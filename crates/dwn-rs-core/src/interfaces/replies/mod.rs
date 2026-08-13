@@ -181,6 +181,7 @@ pub enum Reply {
     MessageRead(Box<messages::Read>),
     MessageQuery(Box<messages::Query>),
     MessageSync(Box<messages::Sync>),
+    MessageSubscription(Box<messages::Subscription>),
     ProtocolsQuery(Box<protocols::Query>),
     RecordsSubscribe(Box<records::Subscribe>),
 }
