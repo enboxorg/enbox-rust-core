@@ -3,9 +3,8 @@ pub mod protocols;
 pub mod records;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_with::skip_serializing_none;
 
-use crate::{stores::ProgressGapInfo, SubscriptionID};
+use crate::stores::ProgressGapInfo;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Status {
@@ -79,21 +78,84 @@ impl<R> Response<R> {
         }
     }
 
+    pub fn not_found() -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status {
+                code: 404,
+                detail: "Not Found".into(),
+            },
+            reply: R::default(),
+        }
+    }
+
+    pub fn not_found_with_reply(reply: R) -> Self {
+        Self {
+            status: Status {
+                code: 404,
+                detail: "Not Found".into(),
+            },
+            reply,
+        }
+    }
+
+    pub fn gone(detail: String, reply: R) -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status { code: 410, detail },
+            reply,
+        }
+    }
+
+    pub fn conflict() -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status {
+                code: 409,
+                detail: "Conflict".into(),
+            },
+            reply: R::default(),
+        }
+    }
+
+    pub fn no_content() -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status {
+                code: 204,
+                detail: "No Content".into(),
+            },
+            reply: R::default(),
+        }
+    }
+
+    pub fn accepted() -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status {
+                code: 202,
+                detail: "Accepted".into(),
+            },
+            reply: R::default(),
+        }
+    }
+
     pub fn with_reply(&self, reply: R) -> Self {
         Self {
             status: self.status.clone(),
             reply,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Empty {}
-
-#[skip_serializing_none]
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Subscribe {
-    pub subscription: Option<SubscriptionID>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -105,19 +167,20 @@ pub enum Error {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(untagged)]
 pub enum Reply {
-    Empty(Empty),
+    Empty,
     Error(Error),
     RecordsCount(Box<records::Count>),
     RecordsRead(Box<records::Read>),
+    RecordsWrite(Box<records::Write>),
     RecordsQuery(Box<records::Query>),
     MessageRead(Box<messages::Read>),
     MessageQuery(Box<messages::Query>),
     ProtocolsQuery(Box<protocols::Query>),
-    Subscribe(Subscribe),
+    RecordsSubscribe(Box<records::Subscribe>),
 }
 
 impl Default for Reply {
     fn default() -> Self {
-        Reply::Empty(Empty {})
+        Reply::Empty
     }
 }
