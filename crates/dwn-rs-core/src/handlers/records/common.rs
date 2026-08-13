@@ -26,7 +26,8 @@ use crate::interfaces::messages::protocols::{
 };
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
-use crate::replies::records::{HasProgressGapInfo, QueryEntry, Subscribe};
+use crate::replies::records::{QueryEntry, Subscribe};
+use crate::replies::HasProgressGapInfo;
 use crate::stores::{EventSubscription, KeyValues};
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, Response, SortDirection, Value};
 

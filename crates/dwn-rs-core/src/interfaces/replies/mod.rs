@@ -6,6 +6,11 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::stores::ProgressGapInfo;
 
+/// Implemented by reply bodies that can report a state-index progress gap.
+pub trait HasProgressGapInfo: Default {
+    fn with_progress_gap_info(error: ProgressGapInfo) -> Self;
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Status {
     pub code: i32,

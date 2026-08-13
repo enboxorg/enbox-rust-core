@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::{errors::EventLogError, stores::ProgressGapInfo, Cursor, Descriptor, Message, Reply};
+use crate::{
+    errors::EventLogError, replies::HasProgressGapInfo, stores::ProgressGapInfo, Cursor,
+    Descriptor, Message, Reply,
+};
 
 pub type Delete = ();
 
@@ -104,10 +107,6 @@ impl Into<Reply> for Subscribe {
     fn into(self) -> Reply {
         Reply::RecordsSubscribe(Box::new(self))
     }
-}
-
-pub trait HasProgressGapInfo: Default {
-    fn with_progress_gap_info(error: ProgressGapInfo) -> Self;
 }
 
 impl HasProgressGapInfo for Query {
