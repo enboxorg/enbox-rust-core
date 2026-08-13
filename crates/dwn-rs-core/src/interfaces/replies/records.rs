@@ -136,7 +136,8 @@ impl HasProgressGapInfo for Write {
 
 #[cfg(test)]
 mod tests {
-    use crate::stores::{ProgressGapCode, ProgressGapReason, ProgressToken};
+    use crate::stores::{ProgressGapCode, ProgressGapReason};
+    use crate::ProgressToken;
 
     use super::*;
 

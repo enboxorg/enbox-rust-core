@@ -1658,7 +1658,7 @@ mod tests {
     use crate::descriptors::RecordsWriteDescriptor;
     use crate::events::MessageEvent;
     use crate::fields::WriteFields;
-    use crate::stores::ProgressToken;
+    use crate::ProgressToken;
     use crate::{Descriptor, Fields, Message};
 
     use super::*;

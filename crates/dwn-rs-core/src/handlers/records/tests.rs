@@ -31,7 +31,7 @@ use crate::stores::{
 };
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
-    RangeFilter, SortDirection,
+    ProgressToken, RangeFilter, SortDirection,
 };
 use crate::{Descriptor, Value};
 
@@ -1132,7 +1132,7 @@ fn record_event_indexes(protocol: &str, method: &str) -> KeyValues {
 
 async fn signed_records_subscribe_message(
     filter: RecordsFilter,
-    cursor: Option<crate::stores::ProgressToken>,
+    cursor: Option<ProgressToken>,
     timestamp: &str,
 ) -> serde_json::Value {
     let descriptor = SubscribeDescriptor {

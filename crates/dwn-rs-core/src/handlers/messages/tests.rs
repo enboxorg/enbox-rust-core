@@ -25,7 +25,7 @@ use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult, MessageStore,
     StateIndex, SubscriptionMessage,
 };
-use crate::{message_filters, permissions, Descriptor, MapValue, Message, Value};
+use crate::{message_filters, permissions, Descriptor, MapValue, Message, ProgressToken, Value};
 
 #[tokio::test]
 async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
@@ -527,7 +527,7 @@ struct SubscribeSpec {
     timestamp: String,
     filters: Vec<message_filters::Messages>,
     permission_grant_ids: Option<Vec<String>>,
-    cursor: Option<crate::stores::ProgressToken>,
+    cursor: Option<ProgressToken>,
     signer: PrivateJwkSigner,
 }
 
