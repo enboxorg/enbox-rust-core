@@ -6,9 +6,10 @@ use std::sync::Arc;
 use crate::auth::resolver::DidResolver;
 use crate::core_protocol::CoreProtocolRegistry;
 use crate::descriptors::ConfigureDescriptor;
-use crate::dwn::{DwnReply, HandlerContext};
+use crate::dwn::HandlerContext;
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition};
-use crate::{permissions, Handler, Pagination};
+use crate::replies::protocols::Configure;
+use crate::{permissions, Handler, Pagination, Response};
 use crate::{MessageSort, SortDirection};
 
 use super::common::*;
@@ -39,12 +40,13 @@ where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
+    type Reply = Configure;
     type Descriptor = ConfigureDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -62,17 +64,18 @@ where
             {
                 Ok(Some(authorization)) => authorization,
                 Ok(None) => {
-                    return DwnReply::unauthorized(
-                        "ProtocolsConfigureAuthorizationFailed: message failed authorization",
+                    return Response::unauthorized(
+                        "ProtocolsConfigureAuthorizationFailed: message failed authorization"
+                            .to_string(),
                     )
                 }
                 Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                    return DwnReply::bad_request(detail)
+                    return Response::bad_request(detail.to_string())
                 }
                 Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                    return DwnReply::unauthorized(detail)
+                    return Response::unauthorized(detail.to_string())
                 }
-                Err(error) => return DwnReply::bad_request(error),
+                Err(error) => return Response::bad_request(error.to_string()),
             };
 
             if let Err(detail) = permissions::authorize_protocols_configure(
@@ -83,24 +86,24 @@ where
             )
             .await
             {
-                return DwnReply::unauthorized(detail);
+                return Response::unauthorized(detail.to_string());
             }
             let author = authorization.author.clone();
 
             if let Err(err) = protocol_types::validate_definition(&descriptor.definition) {
-                return DwnReply::bad_request(err.to_string());
+                return Response::bad_request(err.to_string());
             }
 
             if let Err(detail) = self
                 .validate_composition_dependencies(tenant, &descriptor.definition)
                 .await
             {
-                return DwnReply::bad_request(detail);
+                return Response::bad_request(detail.to_string());
             }
 
             let incoming_cid = match message_cid(&message) {
                 Ok(cid) => cid,
-                Err(detail) => return DwnReply::bad_request(detail),
+                Err(detail) => return Response::bad_request(detail.to_string()),
             };
             let existing_messages = match self
                 .message_store
@@ -120,10 +123,10 @@ where
             for existing in &existing_messages {
                 let cid = match message_cid(existing) {
                     Ok(cid) => cid,
-                    Err(detail) => return DwnReply::bad_request(detail),
+                    Err(detail) => return Response::bad_request(detail),
                 };
                 if cid == incoming_cid {
-                    return DwnReply::new(409, "Conflict");
+                    return Response::conflict();
                 }
                 comparable.push((cid, existing));
             }
@@ -158,11 +161,11 @@ where
             for existing in existing_messages {
                 let existing_cid = match message_cid(&existing) {
                     Ok(cid) => cid,
-                    Err(detail) => return DwnReply::bad_request(detail),
+                    Err(detail) => return Response::bad_request(detail),
                 };
                 let existing_descriptor = match protocols_configure_descriptor(&existing) {
                     Ok(descriptor) => descriptor,
-                    Err(detail) => return DwnReply::bad_request(detail),
+                    Err(detail) => return Response::bad_request(detail),
                 };
                 let existing_is_latest = !incoming_is_latest
                     && latest_existing_cid
@@ -186,7 +189,7 @@ where
                 }
             }
 
-            DwnReply::new(202, "Accepted")
+            Response::accepted()
         }
     }
 }

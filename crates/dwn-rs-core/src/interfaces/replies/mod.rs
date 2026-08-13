@@ -43,22 +43,28 @@ impl<R> Response<R> {
         }
     }
 
-    pub fn bad_request(detail: String) -> Self
+    pub fn bad_request(detail: impl Into<String>) -> Self
     where
         R: Default,
     {
         Self {
-            status: Status { code: 400, detail },
+            status: Status {
+                code: 400,
+                detail: detail.into(),
+            },
             reply: R::default(),
         }
     }
 
-    pub fn unauthorized(detail: String) -> Self
+    pub fn unauthorized(detail: impl Into<String>) -> Self
     where
         R: Default,
     {
         Self {
-            status: Status { code: 401, detail },
+            status: Status {
+                code: 401,
+                detail: detail.into(),
+            },
             reply: R::default(),
         }
     }
@@ -188,6 +194,12 @@ pub enum Reply {
 
 impl Default for Reply {
     fn default() -> Self {
+        Reply::Empty
+    }
+}
+
+impl Into<Reply> for () {
+    fn into(self) -> Reply {
         Reply::Empty
     }
 }

@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::ProtocolQueryDescriptor;
-use crate::dwn::{DwnReply, HandlerContext};
+use crate::dwn::HandlerContext;
 use crate::filters::{Filter, FilterKey, Filters};
-use crate::{permissions, Handler};
+use crate::replies::protocols::Query;
+use crate::{permissions, Handler, Response};
 use crate::{MessageSort, SortDirection, Value};
 
 const PROTOCOLS_INTERFACE: &str = "Protocols";
@@ -31,12 +32,13 @@ impl<MessageStore> Handler for ProtocolsQueryHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
+    type Reply = Query;
     type Descriptor = ProtocolQueryDescriptor;
 
     fn handle(
         &self,
         ctx: HandlerContext<'_, Self::Descriptor>,
-    ) -> impl Future<Output = DwnReply> + Send {
+    ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
             let HandlerContext {
                 tenant,
@@ -64,17 +66,17 @@ where
                         .await
                         {
                             Ok(include_private) => include_private,
-                            Err(detail) => return DwnReply::unauthorized(detail),
+                            Err(detail) => return Response::unauthorized(detail.to_string()),
                         }
                     }
                     Ok(None) => false,
                     Err(permissions::AuthorizationValidationError::BadRequest(detail)) => {
-                        return DwnReply::bad_request(detail)
+                        return Response::bad_request(detail.to_string())
                     }
                     Err(permissions::AuthorizationValidationError::Unauthorized(detail)) => {
-                        return DwnReply::unauthorized(detail)
+                        return Response::unauthorized(detail)
                     }
-                    Err(error) => return DwnReply::bad_request(error),
+                    Err(error) => return Response::bad_request(error.to_string()),
                 }
             } else {
                 false
@@ -122,11 +124,9 @@ where
                 Err(err) => return store_error_reply(err.to_string()),
             };
 
-            let entries = match serde_json::to_value(result.messages) {
-                Ok(entries) => entries,
-                Err(err) => return DwnReply::bad_request(err.to_string()),
-            };
-            DwnReply::new(200, "OK").with_body("entries", entries)
+            Response::ok().with_reply(Query {
+                entries: Some(result.messages),
+            })
         }
     }
 }

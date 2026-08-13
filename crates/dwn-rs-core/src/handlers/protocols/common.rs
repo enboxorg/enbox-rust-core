@@ -3,12 +3,11 @@ use std::collections::BTreeMap;
 use std::ops::Bound;
 
 use crate::descriptors::{ConfigureDescriptor, Descriptor, Protocols};
-use crate::dwn::DwnReply;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition, RuleSet};
 use crate::interfaces::replies::Status;
 use crate::stores::KeyValues;
-use crate::{canonical_rfc3339, permissions};
+use crate::{canonical_rfc3339, permissions, Response};
 use crate::{Message, Value};
 
 const PROTOCOLS_INTERFACE: &str = "Protocols";
@@ -273,9 +272,6 @@ pub(crate) fn validate_ref_target(
     Ok(())
 }
 
-pub(crate) fn store_error_reply(detail: String) -> DwnReply {
-    DwnReply {
-        status: Status { code: 500, detail },
-        body: BTreeMap::new(),
-    }
+pub(crate) fn store_error_reply<R: Default>(detail: String) -> Response<R> {
+    Response::new(Status { code: 500, detail }, R::default())
 }

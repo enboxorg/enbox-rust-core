@@ -14,12 +14,6 @@ pub struct Write {
     error: Option<super::Error>,
 }
 
-impl Into<Reply> for () {
-    fn into(self) -> Reply {
-        Reply::Empty
-    }
-}
-
 impl Into<Reply> for Write {
     fn into(self) -> Reply {
         Reply::RecordsWrite(Box::new(self))
