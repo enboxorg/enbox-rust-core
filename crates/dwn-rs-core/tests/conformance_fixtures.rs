@@ -987,18 +987,12 @@ fn assert_messages_query_fixture_shape(case: &FixtureCase) {
         case.id
     );
     assert!(
-        query
-            .get("request")
-            .and_then(Value::as_object)
-            .is_some(),
+        query.get("request").and_then(Value::as_object).is_some(),
         "{} MessagesQuery fixture must include an object request",
         case.id
     );
     assert!(
-        query
-            .get("reply")
-            .and_then(Value::as_object)
-            .is_some(),
+        query.get("reply").and_then(Value::as_object).is_some(),
         "{} MessagesQuery fixture must include an object reply",
         case.id
     );
@@ -1037,9 +1031,17 @@ fn messages_query_request(case: &FixtureCase, query: &Value) -> Value {
     let request = query
         .get("request")
         .and_then(Value::as_object)
-        .unwrap_or_else(|| panic!("{} MessagesQuery fixture request must be an object", case.id));
+        .unwrap_or_else(|| {
+            panic!(
+                "{} MessagesQuery fixture request must be an object",
+                case.id
+            )
+        });
     let mut descriptor = serde_json::Map::from_iter([
-        ("interface".to_string(), Value::String("Messages".to_string())),
+        (
+            "interface".to_string(),
+            Value::String("Messages".to_string()),
+        ),
         ("method".to_string(), Value::String("Query".to_string())),
         (
             "messageTimestamp".to_string(),
@@ -1058,9 +1060,9 @@ fn assert_json_subset(expected: &Value, actual: &Value, case_id: &str) {
     match (expected, actual) {
         (Value::Object(expected), Value::Object(actual)) => {
             for (key, expected_value) in expected {
-                let actual_value = actual.get(key).unwrap_or_else(|| {
-                    panic!("{case_id} reply is missing expected field {key}")
-                });
+                let actual_value = actual
+                    .get(key)
+                    .unwrap_or_else(|| panic!("{case_id} reply is missing expected field {key}"));
                 assert_json_subset(expected_value, actual_value, case_id);
             }
         }
