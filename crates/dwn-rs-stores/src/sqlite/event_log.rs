@@ -10,10 +10,10 @@ use dwn_rs_core::events::MessageEvent;
 use dwn_rs_core::stores::memory::MemoryEventLog;
 use dwn_rs_core::stores::{
     EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
-    EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues, ProgressToken,
+    EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues,
     SubscriptionListener,
 };
-use dwn_rs_core::{Descriptor, Value};
+use dwn_rs_core::{Descriptor, ProgressToken, Value};
 
 use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};
 
