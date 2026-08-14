@@ -1,4 +1,5 @@
 pub mod memory;
+pub mod replication_feed_reader;
 pub mod state_index;
 
 use std::{fmt::Debug, future::Future, pin::Pin};
@@ -17,6 +18,7 @@ use crate::{
     Cursor,
 };
 use crate::{Descriptor, MapValue, Message, MessageSort, Pagination, ProgressToken};
+pub use replication_feed_reader::ReplicationFeedReader;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
@@ -97,6 +99,7 @@ pub struct EventLogReadOptions {
 pub struct EventLogReadResult {
     pub events: Vec<EventLogEntry>,
     pub cursor: Option<ProgressToken>,
+    pub drained: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -372,7 +375,10 @@ impl EventLog for () {
         _tenant: &str,
         _options: Option<EventLogReadOptions>,
     ) -> Result<EventLogReadResult, EventLogError> {
-        Ok(EventLogReadResult::default())
+        Ok(EventLogReadResult {
+            drained: true,
+            ..Default::default()
+        })
     }
 
     fn subscribe(
@@ -418,7 +424,9 @@ mod enbox_store_contract_tests {
             stream_id: "local-dwn".to_string(),
             epoch: "epoch-1".to_string(),
             position: "10".to_string(),
-            message_cid: Some("bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i".to_string()),
+            message_cid: Some(
+                "bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i".to_string(),
+            ),
         };
 
         assert_eq!(

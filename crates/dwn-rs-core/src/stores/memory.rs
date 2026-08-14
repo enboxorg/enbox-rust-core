@@ -410,6 +410,8 @@ impl EventLog for MemoryEventLog {
             let inner = inner.read().map_err(event_lock_error)?;
 
             let mut events = Vec::new();
+            let mut drained = true;
+
             if let Some(log) = inner.tenant_logs.get(&tenant) {
                 for (seq, entry) in log {
                     if cursor_seq.is_some_and(|cursor_seq| *seq <= cursor_seq) {
@@ -426,6 +428,7 @@ impl EventLog for MemoryEventLog {
                         message_cid: Some(entry.message_cid.clone()),
                     });
                     if events.len() >= limit {
+                        drained = false;
                         break;
                     }
                 }
@@ -439,7 +442,12 @@ impl EventLog for MemoryEventLog {
                     entry.message_cid.as_deref(),
                 ))
             });
-            Ok(EventLogReadResult { events, cursor })
+
+            Ok(EventLogReadResult {
+                events,
+                cursor,
+                drained,
+            })
         }
     }
 
@@ -523,8 +531,18 @@ impl EventLog for MemoryEventLog {
                 return Ok(None);
             };
             Ok(Some(EventLogReplayBounds {
-                oldest: build_token(&tenant, &epoch, *oldest_seq, Some(&oldest_entry.message_cid)),
-                latest: build_token(&tenant, &epoch, *latest_seq, Some(&latest_entry.message_cid)),
+                oldest: build_token(
+                    &tenant,
+                    &epoch,
+                    *oldest_seq,
+                    Some(&oldest_entry.message_cid),
+                ),
+                latest: build_token(
+                    &tenant,
+                    &epoch,
+                    *latest_seq,
+                    Some(&latest_entry.message_cid),
+                ),
             }))
         }
     }
@@ -728,7 +746,9 @@ fn read_events(
     };
     let max = limit.unwrap_or(u64::MAX) as usize;
     let inner = inner.read().map_err(event_lock_error)?;
+
     let mut events = Vec::new();
+    let mut drained = true;
 
     if let Some(log) = inner.tenant_logs.get(tenant) {
         for (seq, entry) in log {
@@ -745,6 +765,7 @@ fn read_events(
                 message_cid: Some(entry.message_cid.clone()),
             });
             if events.len() >= max {
+                drained = false;
                 break;
             }
         }
@@ -758,7 +779,11 @@ fn read_events(
             entry.message_cid.as_deref(),
         ))
     });
-    Ok(EventLogReadResult { events, cursor })
+    Ok(EventLogReadResult {
+        events,
+        cursor,
+        drained,
+    })
 }
 
 fn validate_cursor(
