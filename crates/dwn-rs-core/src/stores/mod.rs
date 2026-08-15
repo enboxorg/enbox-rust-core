@@ -61,6 +61,8 @@ pub enum ProgressGapReason {
     TokenTooOld,
     EpochMismatch,
     StreamMismatch,
+    TokenTooNew,
+    MessageMismatch,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]

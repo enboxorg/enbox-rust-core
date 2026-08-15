@@ -10,6 +10,7 @@ use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, S
 use crate::events::MessageEvent;
 use crate::fields::MessageFields;
 use crate::filters::Filters;
+use crate::stores::replication_feed_reader::{build_token, derive_stream_id};
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
@@ -19,7 +20,6 @@ use crate::stores::{
 };
 use crate::{compare_values, Cursor, Descriptor, Message, MessageSort, SortDirection, Value};
 use chrono::Utc;
-use k256::sha2::{Digest, Sha256};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -845,7 +845,7 @@ fn validate_cursor(
     epoch: &str,
     cursor: &ProgressToken,
 ) -> Result<u64, EventLogError> {
-    if cursor.stream_id != stream_id(tenant) {
+    if cursor.stream_id != derive_stream_id(tenant) {
         return Err(progress_gap(
             inner,
             tenant,
@@ -883,29 +883,6 @@ fn validate_cursor(
         }
     }
     Ok(seq)
-}
-
-fn build_token(
-    tenant: &str,
-    epoch: &str,
-    seq: u64,
-    message_cid: Option<impl Into<String>>,
-) -> ProgressToken {
-    ProgressToken {
-        stream_id: stream_id(tenant),
-        epoch: epoch.to_string(),
-        position: seq.to_string(),
-        message_cid: message_cid.map(|cid| cid.into()),
-    }
-}
-
-fn stream_id(tenant: &str) -> String {
-    let digest = Sha256::digest(tenant.as_bytes());
-    digest
-        .iter()
-        .take(8)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn subscription_close(
