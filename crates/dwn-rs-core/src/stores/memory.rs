@@ -4,11 +4,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
 
-use chrono::Utc;
-use k256::sha2::{Digest, Sha256};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::MessageDescriptor;
 use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError};
@@ -23,6 +18,10 @@ use crate::stores::{
     SubscriptionMessage,
 };
 use crate::{compare_values, Cursor, Descriptor, Message, MessageSort, SortDirection, Value};
+use chrono::Utc;
+use k256::sha2::{Digest, Sha256};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 const DEFAULT_MAX_EVENTS_PER_TENANT: usize = 10_000;
 const GRABBED_TASK_TIMEOUT_SECONDS: u64 = 60;
@@ -36,12 +35,53 @@ struct MessageRow {
 }
 
 #[derive(Debug, Clone, Default)]
+struct FeedMetadata {
+    epoch: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MemoryFeedEntry {
+    fingerprint_scopes: Vec<String>,
+    indexes: KeyValues,
+    message_cid: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MemoryMessageState {
+    epoch: String,
+    messages: BTreeMap<(String, String), MessageRow>,
+    heads: BTreeMap<String, u64>,
+    entries: BTreeMap<(String, u64), MemoryFeedEntry>,
+    fingerprints: BTreeMap<(String, String), [u8; 32]>,
+}
+
+impl MemoryMessageState {
+    fn clear(&mut self) {
+        self.epoch = ulid::Ulid::new().to_string();
+        self.messages.clear();
+        self.heads.clear();
+        self.entries.clear();
+        self.fingerprints.clear();
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct MemoryMessageStore {
-    messages: Arc<RwLock<Vec<MessageRow>>>,
+    state: Arc<RwLock<MemoryMessageState>>,
 }
 
 impl MessageStore for MemoryMessageStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
+        self.state
+            .write()
+            .map_err(message_lock_error)
+            .map(|mut state| {
+                state.epoch.is_empty().then(|| {
+                    state.epoch = ulid::Ulid::new().to_string();
+                });
+            })
+            .map_err(message_lock_error)?;
+
         Ok(())
     }
 
@@ -62,14 +102,20 @@ impl MessageStore for MemoryMessageStore {
         canonical.fields.encoded_data();
         let cid = canonical.cid()?.to_string();
 
-        let mut rows = self.messages.write().map_err(message_lock_error)?;
-        rows.retain(|row| !(row.tenant == tenant && row.cid == cid));
-        rows.push(MessageRow {
-            tenant: tenant.to_string(),
-            cid,
-            message,
-            indexes,
-        });
+        let mut state = self.state.write().map_err(message_lock_error)?;
+
+        state
+            .messages
+            .retain(|(row_tenant, message_cid), _| !(*row_tenant == tenant && *message_cid == cid));
+        state.messages.insert(
+            (tenant.to_string(), cid.clone()),
+            MessageRow {
+                tenant: tenant.to_string(),
+                cid,
+                message,
+                indexes,
+            },
+        );
 
         Ok(())
     }
@@ -79,23 +125,25 @@ impl MessageStore for MemoryMessageStore {
         tenant: &str,
         cid: &str,
     ) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
-        let rows = self.messages.read().map_err(message_lock_error)?;
-        Ok(rows
+        let state = self.state.read().map_err(message_lock_error)?;
+        Ok(state
+            .messages
             .iter()
-            .find(|row| row.tenant == tenant && row.cid == cid)
-            .map(|row| row.message.clone()))
+            .find(|((row_tenant, row_cid), _)| row_tenant == tenant && row_cid == cid)
+            .map(|((_, _), row)| row.message.clone()))
     }
 
     async fn delete(&self, tenant: &str, cid: &str) -> Result<(), MessageStoreError> {
-        self.messages
+        self.state
             .write()
             .map_err(message_lock_error)?
-            .retain(|row| !(row.tenant == tenant && row.cid == cid));
+            .messages
+            .retain(|(row_tenant, row_cid), _| !(row_tenant == tenant && row_cid == cid));
         Ok(())
     }
 
     async fn clear(&self) -> Result<(), MessageStoreError> {
-        self.messages.write().map_err(message_lock_error)?.clear();
+        self.state.write().map_err(message_lock_error)?.clear();
         Ok(())
     }
 
@@ -116,9 +164,13 @@ impl MessageStore for MemoryMessageStore {
         let (property, direction) = sort_property(sort.unwrap_or_default());
 
         let mut rows: Vec<MessageRow> = {
-            let g = self.messages.read().map_err(message_lock_error)?;
-            g.iter()
-                .filter(|row| row.tenant == tenant && matches_filters(&row.indexes, Some(&filters)))
+            let g = self.state.read().map_err(message_lock_error)?;
+            g.messages
+                .iter()
+                .filter(|((row_tenant, _), row)| {
+                    row_tenant == tenant && matches_filters(&row.indexes, Some(&filters))
+                })
+                .map(|((_, _), row)| row)
                 .cloned()
                 .collect()
         };
@@ -169,12 +221,13 @@ impl MessageStore for MemoryMessageStore {
         sort: Option<crate::MessageSort>,
     ) -> Result<u64, MessageStoreError> {
         let property = Some(sort_property(sort.unwrap_or_default()).0);
-        let guard = self.messages.read().map_err(message_lock_error)?;
+        let guard = self.state.read().map_err(message_lock_error)?;
 
         Ok(guard
+            .messages
             .iter()
-            .filter(|row| {
-                row.tenant == tenant
+            .filter(|((row_tenant, _), row)| {
+                row_tenant == tenant
                     && matches_filters(&row.indexes, Some(&filters))
                     && property.is_none_or(|prop| row.indexes.contains_key(prop))
             })
