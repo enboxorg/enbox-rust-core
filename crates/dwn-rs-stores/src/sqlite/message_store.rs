@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use dwn_rs_core::descriptors::MessageDescriptor;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use dwn_rs_core::errors::MessageStoreError;
 use dwn_rs_core::fields::MessageFields;
@@ -7,6 +9,7 @@ use dwn_rs_core::filters::Filters;
 use dwn_rs_core::stores::{KeyValues, MessageQueryResult, MessageStore};
 use dwn_rs_core::{Descriptor, Message, MessageSort, Pagination, Query};
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::sqlite::query::SqliteQuery;
 use crate::store::sqlite_store_error;
@@ -14,10 +17,33 @@ use crate::SqliteStore;
 
 impl MessageStore for SqliteStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
-        self.connection()
-            .await
-            .map(|_| ())
-            .map_err(MessageStoreError::from)
+        let conn = self.connection().await.map_err(MessageStoreError::from)?;
+
+        conn.with_writer(move |conn| {
+            let tx = conn.transaction().map_err(sqlite_store_error)?;
+
+            let epoch = tx
+                .query_row("SELECT epoch FROM feed_metadata LIMIT 1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()
+                .map_err(sqlite_store_error)?;
+
+            if epoch.is_none() {
+                let epoch = Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO feed_metadata (id, epoch) VALUES (1, ?1)",
+                    params![epoch],
+                )
+                .map_err(sqlite_store_error)?;
+            };
+
+            Ok(())
+        })
+        .await
+        .map_err(MessageStoreError::from)?;
+
+        Ok(())
     }
 
     async fn close(&mut self) {
@@ -167,7 +193,13 @@ impl MessageStore for SqliteStore {
         async move {
             conn.with_writer(move |connection| {
                 connection
-                    .execute("DELETE FROM messages", [])
+                    .execute(
+                        "
+                        DELETE FROM messages;
+                        DELETE FROM feed_metadata;
+                    ",
+                        [],
+                    )
                     .map_err(sqlite_store_error)?;
                 Ok(())
             })

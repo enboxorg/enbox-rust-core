@@ -147,7 +147,35 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             CREATE TABLE IF NOT EXISTS sync_last_status (
                 key TEXT PRIMARY KEY,
                 status TEXT NOT NULL
-            );",
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_metadata (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                epoch TEXT NOT NULL,
+            )
+
+            CREATE TABLE IF NOT EXISTS feed_heads (
+                tenant TEXT PRIMARY KEY,
+                head INTEGER NOT NULL CHECK (head >= 0)
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_entries (
+                tenant TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (seq >= 0),
+                message_cid TEXT NOT NULL,
+                indexes_json TEXT NOT NULL,
+                fingerprint_scopes_json TEXT NOT NULL,
+                PRIMARY KEY (tenant, position)
+                UNIQUE(tenant, message_cid)
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_fingerprints (
+                tenant TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                value blob NOT NULL,
+                PRIMARY KEY (tenant, domain)
+            );
+            ",
         )
         .map_err(sqlite_store_error)
 }
