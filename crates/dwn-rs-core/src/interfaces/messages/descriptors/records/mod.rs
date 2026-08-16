@@ -44,6 +44,14 @@ pub(crate) fn records_write_descriptor(
     }
 }
 
+pub(crate) fn write_tag_protocol(message: &Message<Descriptor>) -> Option<&str> {
+    let descriptor = records_write_descriptor(message).ok()?;
+    match descriptor.tags.as_ref()?.get("protocol")? {
+        crate::Value::String(value) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
 /// Returns the fields carried by a RecordsWrite message.
 ///
 /// `InitialWriteField` wraps the same write fields when a reply includes an
