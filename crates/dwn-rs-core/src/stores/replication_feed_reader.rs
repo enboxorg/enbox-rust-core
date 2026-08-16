@@ -96,7 +96,7 @@ pub fn derive_stream_id(tenant: &str) -> String {
 
 /// Returns true if the given message is a feed message, which is defined as a message
 /// that has a descriptor of type Records::Write, Records::Delete, or Protocols::Configure.
-pub fn is_feed_message(msg: Message<Descriptor>) -> bool {
+pub fn is_feed_message(msg: &Message<Descriptor>) -> bool {
     match &msg.descriptor {
         Descriptor::Records(records) => {
             matches!(records.as_ref(), Records::Write(_) | Records::Delete(_))
