@@ -156,12 +156,15 @@ pub trait MessageStore: Default {
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
 
-    fn put<D: MessageDescriptor + Send>(
+    fn put<D>(
         &self,
         tenant: &str,
         message: Message<D>,
         indexes: KeyValues,
-    ) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
+    ) -> impl Future<Output = Result<(), MessageStoreError>> + Send
+    where
+        D: MessageDescriptor + Send,
+        Message<Descriptor>: From<Message<D>>;
 
     fn get(
         &self,

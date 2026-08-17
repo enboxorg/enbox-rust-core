@@ -5,13 +5,17 @@ use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use crate::cid::generate_cid_from_json;
+use crate::descriptors::records::write_tag_protocol;
 use crate::descriptors::MessageDescriptor;
 use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError};
 use crate::events::MessageEvent;
 use crate::fields::MessageFields;
 use crate::filters::Filters;
-use crate::stores::replication_feed_reader::{build_token, derive_stream_id, parse_feed_position};
-use crate::stores::wake::{WakePublishHandler, WakePublisher};
+use crate::stores::replication_feed_reader::{
+    build_token, derive_stream_id, fingerprint_scopes, fold_cid_into_domain, is_feed_message,
+    parse_feed_position, scopes_unchanged, Fingerprint,
+};
+use crate::stores::wake::{Wake, WakePublishHandler, WakePublisher};
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
@@ -19,7 +23,9 @@ use crate::stores::{
     ProgressGapInfo, ProgressGapReason, ProgressToken, ResumableTaskStore, SubscriptionListener,
     SubscriptionMessage,
 };
-use crate::{compare_values, Cursor, Descriptor, Message, MessageSort, SortDirection, Value};
+use crate::{
+    compare_values, messages, Cursor, Descriptor, Message, MessageSort, SortDirection, Value,
+};
 use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -50,10 +56,16 @@ struct MemoryFeedEntry {
 #[derive(Clone, Default)]
 struct MemoryMessageState {
     epoch: String,
+    // (tenants, message_cid) => message row
     messages: BTreeMap<(String, String), MessageRow>,
+    // (tenant) => latest seq
     heads: BTreeMap<String, u64>,
+    // (tenant, seq) => feed entry
     entries: BTreeMap<(String, u64), MemoryFeedEntry>,
-    fingerprints: BTreeMap<(String, String), [u8; 32]>,
+    // (tenant, cid) => position
+    positions_by_cid: BTreeMap<(String, String), u64>,
+    // (tenant, domain) => fingerprint
+    fingerprints: BTreeMap<(String, String), Fingerprint>,
 }
 
 impl MemoryMessageState {
@@ -104,27 +116,103 @@ impl MessageStore for MemoryMessageStore {
     ) -> Result<(), MessageStoreError>
     where
         D: MessageDescriptor + Serialize + Send,
+        Message<Descriptor>: From<Message<D>>,
     {
-        let value = serde_json::to_value(&message)?;
-        let message: Message<Descriptor> = serde_json::from_value(value)?;
+        let message: Message<Descriptor> = message.into();
         let mut canonical = message.clone();
         canonical.fields.encoded_data();
         let cid = canonical.cid()?.to_string();
 
-        let mut state = self.state.write().map_err(message_lock_error)?;
+        let wake = {
+            let mut state = self.state.write().map_err(message_lock_error)?;
 
-        state
-            .messages
-            .retain(|(row_tenant, message_cid), _| !(*row_tenant == tenant && *message_cid == cid));
-        state.messages.insert(
-            (tenant.to_string(), cid.clone()),
-            MessageRow {
+            let msg_key = (tenant.to_string(), cid.clone());
+            let msg_row = MessageRow {
                 tenant: tenant.to_string(),
-                cid,
-                message,
-                indexes,
-            },
-        );
+                cid: cid.clone(),
+                message: message.clone(),
+                indexes: indexes.clone(),
+            };
+
+            if !is_feed_message(&canonical) {
+                state.messages.insert(msg_key, msg_row);
+                None
+            } else {
+                let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
+
+                match state.positions_by_cid.get(&msg_key).copied() {
+                    Some(position) => {
+                        let entry = state
+                            .entries
+                            .get(&(tenant.to_string(), position))
+                            .ok_or_else(|| {
+                                MessageStoreError::StoreError(StoreError::InternalException(
+                                    "feed entry missing for existing feed position".to_string(),
+                                ))
+                            })?;
+
+                        if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
+                            return Err(MessageStoreError::StoreError(
+                                StoreError::InternalException(
+                                    "fingerprint scopes mismatch for existing feed entry"
+                                        .to_string(),
+                                ),
+                            ));
+                        }
+
+                        state.messages.insert(msg_key, msg_row);
+                        state
+                            .entries
+                            .get_mut(&(tenant.to_string(), position))
+                            .expect("in-memory feed positions are generated canonically")
+                            .indexes = indexes;
+
+                        None
+                    }
+                    None => {
+                        let next_position = state
+                            .heads
+                            .get(tenant)
+                            .copied()
+                            .unwrap_or(0)
+                            .checked_add(1)
+                            .ok_or_else(|| {
+                                MessageStoreError::StoreError(StoreError::InternalException(
+                                    "feed position overflow".to_string(),
+                                ))
+                            })?;
+
+                        state.messages.insert(msg_key, msg_row);
+
+                        state.entries.insert(
+                            (tenant.to_string(), next_position),
+                            MemoryFeedEntry {
+                                fingerprint_scopes: msg_scopes.clone(),
+                                indexes,
+                                message_cid: cid.clone(),
+                            },
+                        );
+
+                        state
+                            .positions_by_cid
+                            .insert((tenant.to_string(), cid.clone()), next_position);
+
+                        state.heads.insert(tenant.to_string(), next_position);
+
+                        fold_cid_into_domain(&mut state.fingerprints, tenant, &cid, &msg_scopes);
+
+                        Some(Wake {
+                            tenant: tenant.to_string(),
+                            position: next_position,
+                        })
+                    }
+                }
+            }
+        };
+
+        if let Some(wake) = wake {
+            let _ = self.waker_publisher.publish(wake);
+        }
 
         Ok(())
     }
@@ -1012,10 +1100,47 @@ fn task_store_error(error: impl std::error::Error) -> ResumableTaskStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::descriptors::{DeleteDescriptor, Records};
+    use crate::fields::WriteFields;
     use crate::filters::{Filter, FilterKey};
-    use crate::Pagination;
+    use crate::stores::replication_feed_reader::{cid_contribution, xor_in_place};
+    use crate::stores::wake::{WakeError, WakePublisher};
+    use crate::{Fields, Pagination};
     use serde_json::json;
     use std::sync::Mutex;
+
+    #[derive(Clone, Default)]
+    struct RecordingWakePublisher {
+        wakes: Arc<Mutex<Vec<(String, u64)>>>,
+        fail: bool,
+    }
+
+    impl RecordingWakePublisher {
+        fn failing() -> Self {
+            Self {
+                fail: true,
+                ..Self::default()
+            }
+        }
+
+        fn recorded(&self) -> Vec<(String, u64)> {
+            self.wakes.lock().unwrap().clone()
+        }
+    }
+
+    impl WakePublisher for RecordingWakePublisher {
+        fn publish(&self, wake: Wake) -> Result<(), WakeError> {
+            self.wakes
+                .lock()
+                .unwrap()
+                .push((wake.tenant, wake.position));
+            if self.fail {
+                Err(WakeError::PublishError("test failure".to_string()))
+            } else {
+                Ok(())
+            }
+        }
+    }
 
     #[tokio::test]
     async fn event_log_reads_replays_and_trims() {
@@ -1161,6 +1286,33 @@ mod tests {
         .expect("valid message")
     }
 
+    fn feed_msg(record_id: &str, descriptor_ts: &str) -> Message<Descriptor> {
+        Message {
+            descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(
+                DeleteDescriptor {
+                    message_timestamp: descriptor_ts.parse().unwrap(),
+                    record_id: record_id.to_string(),
+                    prune: false,
+                },
+            )))),
+            fields: Fields::Authorization(Default::default()),
+        }
+    }
+
+    fn feed_write_msg(encoded_data: Option<&str>) -> Message<Descriptor> {
+        Message {
+            descriptor: Descriptor::Records(Box::new(Records::Write(Default::default()))),
+            fields: Fields::Write(WriteFields {
+                encoded_data: encoded_data.map(str::to_string),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn stored_cid(message: &Message<Descriptor>) -> String {
+        message.message_cid().unwrap().to_string()
+    }
+
     fn idx(timestamp: &str, protocol: Option<&str>) -> KeyValues {
         let mut indexes = KeyValues::default();
         indexes.insert(
@@ -1171,6 +1323,282 @@ mod tests {
             indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
         }
         indexes
+    }
+
+    #[tokio::test]
+    async fn feed_put_assigns_monotonic_positions_and_publishes_after_commit() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let first = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let second = feed_msg("record-2", "2025-01-01T00:00:01Z");
+        let first_cid = stored_cid(&first);
+        let second_cid = stored_cid(&second);
+
+        store
+            .put("did:alice", first, idx("2025-01-01T00:00:00Z", Some("p")))
+            .await
+            .unwrap();
+        store
+            .put("did:alice", second, idx("2025-01-01T00:00:01Z", Some("p")))
+            .await
+            .unwrap();
+
+        let state = store.state.read().unwrap();
+        assert_eq!(state.heads.get("did:alice"), Some(&2));
+        assert_eq!(
+            state
+                .positions_by_cid
+                .get(&("did:alice".to_string(), first_cid.clone())),
+            Some(&1)
+        );
+        assert_eq!(
+            state
+                .positions_by_cid
+                .get(&("did:alice".to_string(), second_cid.clone())),
+            Some(&2)
+        );
+        assert_eq!(
+            state
+                .entries
+                .get(&("did:alice".to_string(), 1))
+                .map(|entry| &entry.message_cid),
+            Some(&first_cid)
+        );
+        assert_eq!(
+            state
+                .entries
+                .get(&("did:alice".to_string(), 2))
+                .map(|entry| &entry.message_cid),
+            Some(&second_cid)
+        );
+        assert_eq!(
+            state
+                .fingerprints
+                .get(&("did:alice".to_string(), "".to_string())),
+            Some(&{
+                let mut expected = cid_contribution(&first_cid);
+                xor_in_place(&mut expected, cid_contribution(&second_cid));
+                expected
+            })
+        );
+        drop(state);
+
+        assert_eq!(
+            publisher.recorded(),
+            vec![("did:alice".to_string(), 1), ("did:alice".to_string(), 2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_feed_put_updates_indexes_without_moving_or_waking() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let message = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let cid = stored_cid(&message);
+        let original_indexes = idx("2025-01-01T00:00:00Z", Some("p"));
+        let updated_indexes = idx("2025-01-01T00:00:01Z", Some("p"));
+
+        store
+            .put("did:alice", message.clone(), original_indexes)
+            .await
+            .unwrap();
+        let fingerprint = store.state.read().unwrap().fingerprints.clone();
+
+        store
+            .put("did:alice", message, updated_indexes.clone())
+            .await
+            .unwrap();
+
+        let state = store.state.read().unwrap();
+        assert_eq!(state.heads.get("did:alice"), Some(&1));
+        assert_eq!(
+            state.positions_by_cid.get(&("did:alice".to_string(), cid)),
+            Some(&1)
+        );
+        assert_eq!(
+            state
+                .entries
+                .get(&("did:alice".to_string(), 1))
+                .map(|entry| &entry.indexes),
+            Some(&updated_indexes)
+        );
+        assert_eq!(state.fingerprints, fingerprint);
+        drop(state);
+        assert_eq!(publisher.recorded(), vec![("did:alice".to_string(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn data_completion_replaces_message_without_changing_feed_identity() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let incomplete = feed_write_msg(None);
+        let complete = feed_write_msg(Some("dGVzdA=="));
+        let cid = stored_cid(&incomplete);
+        assert_eq!(stored_cid(&complete), cid);
+        let indexes = idx("2025-01-01T00:00:00Z", Some("p"));
+
+        store
+            .put("did:alice", incomplete, indexes.clone())
+            .await
+            .unwrap();
+        store
+            .put("did:alice", complete.clone(), indexes)
+            .await
+            .unwrap();
+
+        let state = store.state.read().unwrap();
+        assert_eq!(state.heads.get("did:alice"), Some(&1));
+        assert_eq!(
+            state
+                .positions_by_cid
+                .get(&("did:alice".to_string(), cid.clone())),
+            Some(&1)
+        );
+        assert_eq!(
+            state
+                .messages
+                .get(&("did:alice".to_string(), cid))
+                .map(|row| &row.message),
+            Some(&complete)
+        );
+        drop(state);
+        assert_eq!(publisher.recorded(), vec![("did:alice".to_string(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn non_feed_put_does_not_allocate_position_or_publish_wake() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let message = msg("2025-01-01T00:00:00Z");
+        let cid = stored_cid(&message);
+
+        store
+            .put("did:alice", message, idx("2025-01-01T00:00:00Z", None))
+            .await
+            .unwrap();
+
+        let state = store.state.read().unwrap();
+        assert!(state.messages.contains_key(&("did:alice".to_string(), cid)));
+        assert!(state.heads.is_empty());
+        assert!(state.entries.is_empty());
+        assert!(state.positions_by_cid.is_empty());
+        assert!(state.fingerprints.is_empty());
+        drop(state);
+        assert!(publisher.recorded().is_empty());
+    }
+
+    #[tokio::test]
+    async fn wake_failure_does_not_roll_back_committed_feed_put() {
+        let publisher = RecordingWakePublisher::failing();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let message = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let cid = stored_cid(&message);
+
+        store
+            .put("did:alice", message, idx("2025-01-01T00:00:00Z", None))
+            .await
+            .unwrap();
+
+        let state = store.state.read().unwrap();
+        assert!(state
+            .messages
+            .contains_key(&("did:alice".to_string(), cid.clone())));
+        assert_eq!(
+            state.positions_by_cid.get(&("did:alice".to_string(), cid)),
+            Some(&1)
+        );
+        drop(state);
+        assert_eq!(publisher.recorded(), vec![("did:alice".to_string(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn scope_mismatch_fails_without_mutating_existing_feed_state() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let original = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let cid = stored_cid(&original);
+        let original_indexes = idx("2025-01-01T00:00:00Z", Some("p1"));
+
+        store
+            .put("did:alice", original.clone(), original_indexes.clone())
+            .await
+            .unwrap();
+        let original_fingerprints = store.state.read().unwrap().fingerprints.clone();
+
+        let error = store
+            .put(
+                "did:alice",
+                original.clone(),
+                idx("2025-01-01T00:00:01Z", Some("p2")),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("fingerprint scopes mismatch"));
+
+        let state = store.state.read().unwrap();
+        let key = ("did:alice".to_string(), cid);
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.message),
+            Some(&original)
+        );
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.indexes),
+            Some(&original_indexes)
+        );
+        assert_eq!(
+            state
+                .entries
+                .get(&("did:alice".to_string(), 1))
+                .map(|entry| &entry.indexes),
+            Some(&original_indexes)
+        );
+        assert_eq!(state.heads.get("did:alice"), Some(&1));
+        assert_eq!(state.fingerprints, original_fingerprints);
+        drop(state);
+        assert_eq!(publisher.recorded(), vec![("did:alice".to_string(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn missing_feed_entry_fails_without_mutating_message_row_or_waking() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let original = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let cid = stored_cid(&original);
+        let original_indexes = idx("2025-01-01T00:00:00Z", Some("p"));
+
+        store
+            .put("did:alice", original.clone(), original_indexes.clone())
+            .await
+            .unwrap();
+        store
+            .state
+            .write()
+            .unwrap()
+            .entries
+            .remove(&("did:alice".to_string(), 1));
+
+        let error = store
+            .put(
+                "did:alice",
+                original.clone(),
+                idx("2025-01-01T00:00:01Z", Some("p")),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("feed entry missing"));
+
+        let state = store.state.read().unwrap();
+        let key = ("did:alice".to_string(), cid);
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.message),
+            Some(&original)
+        );
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.indexes),
+            Some(&original_indexes)
+        );
+        drop(state);
+        assert_eq!(publisher.recorded(), vec![("did:alice".to_string(), 1)]);
     }
 
     #[tokio::test]
