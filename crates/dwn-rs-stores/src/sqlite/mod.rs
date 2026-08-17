@@ -28,8 +28,10 @@ pub(crate) fn json_store_error(error: serde_json::Error) -> StoreError {
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use bytes::Bytes;
+    use dwn_rs_core::stores::wake::WakePublishHandler;
     use futures_util::{stream, TryStreamExt};
 
     use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
@@ -85,7 +87,7 @@ mod tests {
         cid_message.fields.encoded_data();
         let cid = cid_message.cid().unwrap().to_string();
 
-        let mut store = SqliteStore::new(&path);
+        let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut store).await.unwrap();
         MessageStore::put(
             &store,
@@ -97,7 +99,7 @@ mod tests {
         .unwrap();
         MessageStore::close(&mut store).await;
 
-        let mut reopened = SqliteStore::new(&path);
+        let mut reopened = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut reopened).await.unwrap();
         assert_eq!(
             MessageStore::get(&reopened, "did:example:alice", &cid)

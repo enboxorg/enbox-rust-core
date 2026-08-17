@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use dwn_rs_core::descriptors::MessageDescriptor;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, OptionalExtension};
 
 use dwn_rs_core::errors::MessageStoreError;
 use dwn_rs_core::fields::MessageFields;

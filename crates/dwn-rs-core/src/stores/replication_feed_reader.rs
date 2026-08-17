@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, future::Future};
 
 use sha2::{Digest, Sha256};
-use thiserror::Error;
 
 use crate::{
     descriptors::{Protocols, Records},
@@ -67,23 +66,6 @@ pub trait ReplicationFeedReader {
     /// Return the current stream epoch
     fn epoch(&self) -> impl Future<Output = Result<String, EventLogError>> + Send;
 }
-
-#[derive(Debug, Clone, Error)]
-pub enum WakeError {
-    #[error("Failed to publish wake: {0}")]
-    PublishError(String),
-}
-
-pub struct Wake {
-    pub tenant: String,
-    pub position: u64,
-}
-
-pub trait WakePublisher {
-    fn publish(&self, wake: Wake) -> impl Future<Output = Result<(), WakeError>> + Send;
-}
-
-pub trait WakeSubscriber {}
 
 /// Derive a stream ID from a tenant DID. The stream ID is the first 8 bytes of
 /// the SHA256 hash of the tenant DID, represented as a hex string.

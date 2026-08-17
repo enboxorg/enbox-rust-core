@@ -1,7 +1,6 @@
 //! Durable SQLite backends for [`StateIndex`], [`EventLog`], and
 //! [`ResumableTaskStore`].
 
-use std::fmt::Debug;
 use std::future::Future;
 
 use rusqlite::params;
@@ -14,7 +13,7 @@ use dwn_rs_core::Value;
 use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};
 
 /// SQLite-backed [`StateIndex`] that persists sparse-merkle-tree entries.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SqliteStateIndex {
     inner: MemoryStateIndex,
     store: SqliteStore,

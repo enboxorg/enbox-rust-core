@@ -1,5 +1,8 @@
 //! Integration tests for durable sync ledger + engine persistence.
 
+use std::sync::Arc;
+
+use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::SubscriptionMessage;
 use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
@@ -88,7 +91,7 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
         "enbox-sync-engine-ledger-{}.sqlite",
         ulid::Ulid::new()
     ));
-    let store = SqliteStore::new(&path);
+    let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
 
     {
@@ -182,7 +185,7 @@ async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
         "enbox-sync-eose-ledger-{}.sqlite",
         ulid::Ulid::new()
     ));
-    let store = SqliteStore::new(&path);
+    let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
     let engine = registered_engine(ledger.clone()).await;
     let cursor = sample_progress_token("2", "cid-2");
@@ -212,7 +215,7 @@ async fn sync_engine_persists_progress_gap_as_repairing_in_sqlite_ledger() {
         "enbox-sync-gap-ledger-{}.sqlite",
         ulid::Ulid::new()
     ));
-    let store = SqliteStore::new(&path);
+    let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
     let engine = registered_engine(ledger.clone()).await;
 

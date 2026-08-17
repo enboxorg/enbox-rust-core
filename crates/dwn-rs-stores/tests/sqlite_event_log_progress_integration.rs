@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use dwn_rs_core::errors::EventLogError;
 use dwn_rs_core::events::MessageEvent;
+use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::{
     EventLog, EventLogReadOptions, EventLogSubscribeOptions, EventLogTrimBound, ProgressGapReason,
     SubscriptionMessage,
@@ -112,7 +113,7 @@ async fn sqlite_event_log_replay_bounds_survive_reopen() {
     let (event, indexes) = sample_event();
 
     {
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let mut event_log = SqliteEventLog::new(&store);
         event_log.open().await.unwrap();
         emit(&event_log, "cid-1", &event, &indexes).await;
@@ -121,7 +122,7 @@ async fn sqlite_event_log_replay_bounds_survive_reopen() {
     }
 
     {
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let mut event_log = SqliteEventLog::new(&store);
         event_log.open().await.unwrap();
         let bounds = event_log

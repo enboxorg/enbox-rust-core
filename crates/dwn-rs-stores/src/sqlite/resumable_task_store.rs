@@ -14,7 +14,7 @@ use dwn_rs_core::stores::{ManagedResumableTask, ResumableTaskStore};
 use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};
 
 /// SQLite-backed [`ResumableTaskStore`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SqliteResumableTaskStore {
     inner: MemoryResumableTaskStore,
     store: SqliteStore,

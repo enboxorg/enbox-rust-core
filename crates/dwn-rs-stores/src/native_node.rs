@@ -10,6 +10,7 @@ use dwn_rs_core::dwn::builder::{
 };
 use dwn_rs_core::dwn::Dwn;
 use dwn_rs_core::handlers::records::{RecordsEventLogSubscribeHandler, RecordsSubscribeReply};
+use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::SubscriptionListener;
 use dwn_rs_core::sync::endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
 use dwn_rs_core::sync::{
@@ -56,7 +57,9 @@ impl SqliteNativeDwn {
         path: impl AsRef<std::path::Path>,
         public_key_resolver: StaticPublicKeyResolver,
     ) -> Result<Self, NativeDwnOpenError> {
-        Self::open(SqliteStore::new(path), public_key_resolver).await
+        // TODO: replace with InProcessBus when implemented
+        let publisher = WakePublishHandler::new(Arc::new(()));
+        Self::open(SqliteStore::new(path, publisher), public_key_resolver).await
     }
 
     pub async fn open(

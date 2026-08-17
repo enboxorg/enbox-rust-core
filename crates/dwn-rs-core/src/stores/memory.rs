@@ -11,6 +11,7 @@ use crate::events::MessageEvent;
 use crate::fields::MessageFields;
 use crate::filters::Filters;
 use crate::stores::replication_feed_reader::{build_token, derive_stream_id, parse_feed_position};
+use crate::stores::wake::{WakePublishHandler, WakePublisher};
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
@@ -46,7 +47,7 @@ struct MemoryFeedEntry {
     message_cid: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 struct MemoryMessageState {
     epoch: String,
     messages: BTreeMap<(String, String), MessageRow>,
@@ -65,9 +66,17 @@ impl MemoryMessageState {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct MemoryMessageStore {
     state: Arc<RwLock<MemoryMessageState>>,
+    waker_publisher: WakePublishHandler,
+}
+
+impl MemoryMessageStore {
+    pub fn with_waker_publisher(mut self, waker_publisher: impl WakePublisher + 'static) -> Self {
+        self.waker_publisher = WakePublishHandler::new(Arc::new(waker_publisher));
+        self
+    }
 }
 
 impl MessageStore for MemoryMessageStore {

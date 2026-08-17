@@ -1,6 +1,7 @@
 pub mod memory;
 pub mod replication_feed_reader;
 pub mod state_index;
+pub mod wake;
 
 use std::{fmt::Debug, future::Future, pin::Pin};
 

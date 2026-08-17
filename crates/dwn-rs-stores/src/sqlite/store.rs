@@ -1,15 +1,16 @@
 use std::{path::Path, sync::Arc};
 
-use dwn_rs_core::errors::StoreError;
+use dwn_rs_core::{errors::StoreError, stores::wake::WakePublishHandler};
 use rusqlite::Connection;
 use tokio::sync::OnceCell;
 
 use crate::SqliteConnection;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SqliteStore {
-    path: Arc<Path>,
     pub(crate) conn: Arc<OnceCell<SqliteConnection>>,
+    path: Arc<Path>,
+    wake_publisher: WakePublishHandler,
 }
 
 impl Default for SqliteStore {
@@ -20,13 +21,14 @@ impl Default for SqliteStore {
 
 impl SqliteStore {
     pub fn in_memory() -> Self {
-        Self::new(unique_memory_uri())
+        Self::new(unique_memory_uri(), WakePublishHandler::new(Arc::new(())))
     }
 
-    pub fn new(path: impl AsRef<Path>) -> Self {
+    pub fn new(path: impl AsRef<Path>, wake_publisher: WakePublishHandler) -> Self {
         Self {
             path: Arc::from(path.as_ref()),
             conn: Arc::new(OnceCell::new()),
+            wake_publisher,
         }
     }
 
