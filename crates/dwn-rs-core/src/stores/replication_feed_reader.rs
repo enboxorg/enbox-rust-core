@@ -29,6 +29,7 @@ pub type FeedPosition = u64;
 // current position, and the replication bounds.
 pub struct FeedCursorState<'a> {
     pub expected_stream_id: &'a str,
+    pub expected_epoch: &'a str,
     pub head: FeedPosition,
     pub oldest_replayable: FeedPosition,
     pub message_cid_at_position: Option<&'a str>,
@@ -146,7 +147,9 @@ pub fn scopes_unchanged(given: &[String], current: &[String]) -> bool {
     let mut given = given.to_vec();
     let mut current = current.to_vec();
     given.sort_unstable();
+    given.dedup();
     current.sort_unstable();
+    current.dedup();
 
     given == current
 }
@@ -228,7 +231,7 @@ pub fn validate_feed_cursor(
         ));
     }
 
-    if cursor.epoch != state.head.to_string() {
+    if cursor.epoch != state.expected_epoch {
         return Err(progress_gap(
             cursor,
             state.bounds,
@@ -289,8 +292,268 @@ fn progress_gap(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_feed_position;
+    use std::collections::BTreeMap;
+
+    use sha2::{Digest, Sha256};
+
+    use super::{
+        build_token, cid_contribution, derive_stream_id, fingerprint_scopes, fold_cid_into_domain,
+        is_feed_message, parse_feed_position, scopes_unchanged, validate_feed_cursor, xor_in_place,
+        FeedCursorState,
+    };
+    use crate::descriptors::{Messages, Protocols, Records};
     use crate::errors::EventLogError;
+    use crate::permissions::PERMISSIONS_PROTOCOL_URI;
+    use crate::stores::{KeyValues, ProgressGapReason};
+    use crate::{Descriptor, Fields, Message, ProgressToken, Value};
+
+    const TENANT: &str = "did:example:alice";
+    const EPOCH: &str = "epoch-1";
+
+    fn message(descriptor: Descriptor) -> Message<Descriptor> {
+        Message {
+            descriptor,
+            fields: Fields::default(),
+        }
+    }
+
+    fn token(position: u64, message_cid: Option<&str>) -> ProgressToken {
+        build_token(TENANT, EPOCH, position, message_cid)
+    }
+
+    fn assert_gap(error: EventLogError, reason: ProgressGapReason, requested: &ProgressToken) {
+        let EventLogError::ProgressGap(gap) = error else {
+            panic!("expected ProgressGap, got {error:?}");
+        };
+        assert_eq!(gap.reason, reason);
+        assert_eq!(&gap.requested, requested);
+        assert_eq!(gap.oldest_available, token(0, None));
+        assert_eq!(gap.latest_available, token(8, Some("cid-8")));
+    }
+
+    fn cursor_state<'a>(
+        expected_stream_id: &'a str,
+        message_cid_at_position: Option<&'a str>,
+        bounds: &'a (ProgressToken, ProgressToken),
+    ) -> FeedCursorState<'a> {
+        FeedCursorState {
+            expected_stream_id,
+            expected_epoch: EPOCH,
+            head: 8,
+            oldest_replayable: 2,
+            message_cid_at_position,
+            bounds: Some(bounds),
+        }
+    }
+
+    #[test]
+    fn derives_stream_id_from_first_eight_sha256_bytes() {
+        assert_eq!(derive_stream_id(TENANT), "6742201863cf8f21");
+        assert_eq!(derive_stream_id(TENANT).len(), 16);
+    }
+
+    #[test]
+    fn identifies_only_durable_feed_message_methods() {
+        let included = [
+            Descriptor::Records(Box::new(Records::Write(Default::default()))),
+            Descriptor::Records(Box::new(Records::Delete(Default::default()))),
+            Descriptor::Protocols(Box::new(Protocols::Configure(Default::default()))),
+        ];
+        for descriptor in included {
+            assert!(is_feed_message(&message(descriptor)));
+        }
+
+        let excluded = [
+            Descriptor::Records(Box::new(Records::Read(Default::default()))),
+            Descriptor::Records(Box::new(Records::Count(Default::default()))),
+            Descriptor::Records(Box::new(Records::Query(Default::default()))),
+            Descriptor::Records(Box::new(Records::Subscribe(Default::default()))),
+            Descriptor::Protocols(Box::new(Protocols::Query(Default::default()))),
+            Descriptor::Messages(Box::new(Messages::Read(Default::default()))),
+            Descriptor::Messages(Box::new(Messages::Query(Default::default()))),
+            Descriptor::Messages(Box::new(Messages::Subscribe(Default::default()))),
+            Descriptor::Messages(Box::new(Messages::Sync(Default::default()))),
+        ];
+        for descriptor in excluded {
+            assert!(!is_feed_message(&message(descriptor)));
+        }
+    }
+
+    #[test]
+    fn derives_global_protocol_and_permission_fingerprint_scopes() {
+        assert_eq!(fingerprint_scopes(None, &KeyValues::new()), vec![""]);
+
+        let mut protocol_indexes = KeyValues::new();
+        protocol_indexes.insert(
+            "protocol".to_string(),
+            Value::String("https://example.com/chat".to_string()),
+        );
+        assert_eq!(
+            fingerprint_scopes(None, &protocol_indexes),
+            vec!["", "protocol:https://example.com/chat"]
+        );
+
+        let mut permission_indexes = KeyValues::new();
+        permission_indexes.insert(
+            "protocol".to_string(),
+            Value::String(PERMISSIONS_PROTOCOL_URI.to_string()),
+        );
+        permission_indexes.insert(
+            "tag.protocol".to_string(),
+            Value::String("https://example.com/from-index".to_string()),
+        );
+        assert_eq!(
+            fingerprint_scopes(
+                Some("https://example.com/from-descriptor"),
+                &permission_indexes
+            ),
+            vec![
+                "".to_string(),
+                format!("protocol:{PERMISSIONS_PROTOCOL_URI}"),
+                "perm:https://example.com/from-index".to_string(),
+            ]
+        );
+
+        permission_indexes.remove("tag.protocol");
+        assert_eq!(
+            fingerprint_scopes(
+                Some("https://example.com/from-descriptor"),
+                &permission_indexes
+            )
+            .last()
+            .map(String::as_str),
+            Some("perm:https://example.com/from-descriptor")
+        );
+    }
+
+    #[test]
+    fn compares_fingerprint_scopes_as_sets() {
+        let left = vec!["".to_string(), "protocol:p".to_string()];
+        let reordered_with_duplicate = vec![
+            "protocol:p".to_string(),
+            "".to_string(),
+            "protocol:p".to_string(),
+        ];
+        assert!(scopes_unchanged(&left, &reordered_with_duplicate));
+        assert!(!scopes_unchanged(&left, &["".to_string()]));
+    }
+
+    #[test]
+    fn folds_cid_contributions_with_xor_per_tenant_and_scope() {
+        let contribution = cid_contribution("cid-1");
+        assert_eq!(contribution.as_slice(), Sha256::digest(b"cid-1").as_slice());
+
+        let mut folded = [0_u8; 32];
+        xor_in_place(&mut folded, contribution);
+        assert_eq!(folded, contribution);
+        xor_in_place(&mut folded, contribution);
+        assert_eq!(folded, [0_u8; 32]);
+
+        let scopes = vec!["".to_string(), "protocol:p".to_string()];
+        let mut fingerprints = BTreeMap::new();
+        fold_cid_into_domain(&mut fingerprints, TENANT, "cid-1", &scopes);
+        for scope in &scopes {
+            assert_eq!(
+                fingerprints.get(&(TENANT.to_string(), scope.clone())),
+                Some(&contribution)
+            );
+        }
+        assert!(!fingerprints.contains_key(&("did:example:bob".to_string(), "".to_string())));
+
+        fold_cid_into_domain(&mut fingerprints, TENANT, "cid-1", &scopes);
+        for scope in &scopes {
+            assert_eq!(
+                fingerprints.get(&(TENANT.to_string(), scope.clone())),
+                Some(&[0_u8; 32])
+            );
+        }
+    }
+
+    #[test]
+    fn builds_tokens_with_canonical_positions_and_optional_cids() {
+        assert_eq!(
+            token(42, Some("cid-42")),
+            ProgressToken {
+                stream_id: "6742201863cf8f21".to_string(),
+                epoch: EPOCH.to_string(),
+                position: "42".to_string(),
+                message_cid: Some("cid-42".to_string()),
+            }
+        );
+        assert_eq!(token(0, None).message_cid, None);
+    }
+
+    #[test]
+    fn validates_a_feed_cursor() {
+        let bounds = (token(0, None), token(8, Some("cid-8")));
+        let cursor = token(4, Some("cid-4"));
+        assert_eq!(
+            validate_feed_cursor(
+                &cursor,
+                cursor_state(&derive_stream_id(TENANT), Some("cid-4"), &bounds)
+            )
+            .unwrap(),
+            4
+        );
+    }
+
+    #[test]
+    fn rejects_stream_mismatch_with_structured_bounds() {
+        let bounds = (token(0, None), token(8, Some("cid-8")));
+        let cursor = token(4, Some("cid-4"));
+        let error =
+            validate_feed_cursor(&cursor, cursor_state("wrong-stream", None, &bounds)).unwrap_err();
+        assert_gap(error, ProgressGapReason::StreamMismatch, &cursor);
+    }
+
+    #[test]
+    fn rejects_epoch_mismatch_with_structured_bounds() {
+        let bounds = (token(0, None), token(8, Some("cid-8")));
+        let mut cursor = token(4, Some("cid-4"));
+        cursor.epoch = "stale-epoch".to_string();
+        let error = validate_feed_cursor(
+            &cursor,
+            cursor_state(&derive_stream_id(TENANT), None, &bounds),
+        )
+        .unwrap_err();
+        assert_gap(error, ProgressGapReason::EpochMismatch, &cursor);
+    }
+
+    #[test]
+    fn rejects_too_new_cursor_with_structured_bounds() {
+        let bounds = (token(0, None), token(8, Some("cid-8")));
+        let cursor = token(9, None);
+        let error = validate_feed_cursor(
+            &cursor,
+            cursor_state(&derive_stream_id(TENANT), None, &bounds),
+        )
+        .unwrap_err();
+        assert_gap(error, ProgressGapReason::TokenTooNew, &cursor);
+    }
+
+    #[test]
+    fn rejects_too_old_cursor_with_structured_bounds() {
+        let bounds = (token(0, None), token(8, Some("cid-8")));
+        let cursor = token(1, None);
+        let error = validate_feed_cursor(
+            &cursor,
+            cursor_state(&derive_stream_id(TENANT), None, &bounds),
+        )
+        .unwrap_err();
+        assert_gap(error, ProgressGapReason::TokenTooOld, &cursor);
+    }
+
+    #[test]
+    fn rejects_message_mismatch_with_structured_bounds() {
+        let bounds = (token(0, None), token(8, Some("cid-8")));
+        let cursor = token(4, Some("stale-cid"));
+        let error = validate_feed_cursor(
+            &cursor,
+            cursor_state(&derive_stream_id(TENANT), Some("current-cid"), &bounds),
+        )
+        .unwrap_err();
+        assert_gap(error, ProgressGapReason::MessageMismatch, &cursor);
+    }
 
     #[test]
     fn parses_canonical_feed_positions() {
