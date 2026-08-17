@@ -1,4 +1,4 @@
-use std::{collections::TryReserveError, convert::Infallible, num::ParseIntError};
+use std::{collections::TryReserveError, convert::Infallible};
 
 use thiserror::Error;
 use ulid::MonotonicError;
@@ -112,8 +112,8 @@ pub enum EventLogError {
     #[error("progress token gap: {0:?}")]
     ProgressGap(Box<ProgressGapInfo>),
 
-    #[error("invalid progress token: {0}")]
-    InvalidProgressToken(#[from] ParseIntError),
+    #[error("invalid progress token position: {0}")]
+    InvalidProgressToken(String),
 
     #[error("error operating the store: {0}")]
     StoreError(#[from] StoreError),

@@ -83,11 +83,15 @@ pub struct ProgressGapInfo {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct EventLogEntry {
-    pub seq: u64,
+    /// Canonical non-negative decimal position assigned to this entry.
+    pub seq: String,
     pub event: MessageEvent<Descriptor>,
     pub indexes: KeyValues,
     #[serde(rename = "messageCid", skip_serializing_if = "Option::is_none")]
     pub message_cid: Option<String>,
+    /// Inline record data detached from `event.message` for transport.
+    #[serde(rename = "encodedData", skip_serializing_if = "Option::is_none")]
+    pub encoded_data: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]

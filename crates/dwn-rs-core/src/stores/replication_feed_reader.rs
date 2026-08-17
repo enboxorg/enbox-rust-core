@@ -198,6 +198,23 @@ pub fn build_token(
     }
 }
 
+/// Parse a canonical, non-negative decimal feed position.
+///
+/// Feed positions are strings on the wire but numeric in store implementations.
+/// Leading zeroes and an explicit `+` are rejected so each position has exactly
+/// one external representation. Position zero is the empty-feed anchor.
+pub fn parse_feed_position(position: &str) -> Result<FeedPosition, EventLogError> {
+    let parsed = position
+        .parse::<FeedPosition>()
+        .map_err(|_| EventLogError::InvalidProgressToken(position.to_string()))?;
+
+    if parsed.to_string() != position {
+        return Err(EventLogError::InvalidProgressToken(position.to_string()));
+    }
+
+    Ok(parsed)
+}
+
 /// Validate the given Progress token against expectations
 pub fn validate_feed_cursor(
     cursor: &ProgressToken,
@@ -219,10 +236,7 @@ pub fn validate_feed_cursor(
         ));
     }
 
-    let position = cursor
-        .position
-        .parse::<u64>()
-        .map_err(EventLogError::InvalidProgressToken)?;
+    let position = parse_feed_position(&cursor.position)?;
 
     if position > state.head {
         return Err(progress_gap(
@@ -271,4 +285,39 @@ fn progress_gap(
         reason,
         code: ProgressGapCode::ProgressGap,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_feed_position;
+    use crate::errors::EventLogError;
+
+    #[test]
+    fn parses_canonical_feed_positions() {
+        assert_eq!(parse_feed_position("0").unwrap(), 0);
+        assert_eq!(parse_feed_position("1").unwrap(), 1);
+        assert_eq!(
+            parse_feed_position(&u64::MAX.to_string()).unwrap(),
+            u64::MAX
+        );
+    }
+
+    #[test]
+    fn rejects_noncanonical_feed_positions() {
+        for position in [
+            "",
+            "-1",
+            "+1",
+            "00",
+            "01",
+            " 1",
+            "1 ",
+            "18446744073709551616",
+        ] {
+            assert!(matches!(
+                parse_feed_position(position),
+                Err(EventLogError::InvalidProgressToken(value)) if value == position
+            ));
+        }
+    }
 }

@@ -10,7 +10,7 @@ use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, S
 use crate::events::MessageEvent;
 use crate::fields::MessageFields;
 use crate::filters::Filters;
-use crate::stores::replication_feed_reader::{build_token, derive_stream_id};
+use crate::stores::replication_feed_reader::{build_token, derive_stream_id, parse_feed_position};
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
@@ -475,10 +475,11 @@ impl EventLog for MemoryEventLog {
                     }
 
                     events.push(EventLogEntry {
-                        seq: *seq,
+                        seq: seq.to_string(),
                         event: entry.event.clone(),
                         indexes: entry.indexes.clone(),
                         message_cid: Some(entry.message_cid.clone()),
+                        encoded_data: None,
                     });
                     if events.len() >= limit {
                         drained = false;
@@ -491,7 +492,8 @@ impl EventLog for MemoryEventLog {
                 Some(build_token(
                     &tenant,
                     &epoch,
-                    entry.seq,
+                    parse_feed_position(&entry.seq)
+                        .expect("in-memory event positions are generated canonically"),
                     entry.message_cid.as_deref(),
                 ))
             });
@@ -547,7 +549,8 @@ impl EventLog for MemoryEventLog {
                         cursor: build_token(
                             &tenant,
                             &epoch,
-                            entry.seq,
+                            parse_feed_position(&entry.seq)
+                                .expect("in-memory event positions are generated canonically"),
                             entry.message_cid.as_deref(),
                         ),
                         event: Box::new(entry.event),
@@ -812,10 +815,11 @@ fn read_events(
                 continue;
             }
             events.push(EventLogEntry {
-                seq: *seq,
+                seq: seq.to_string(),
                 event: entry.event.clone(),
                 indexes: entry.indexes.clone(),
                 message_cid: Some(entry.message_cid.clone()),
+                encoded_data: None,
             });
             if events.len() >= max {
                 drained = false;
@@ -828,7 +832,8 @@ fn read_events(
         Some(build_token(
             tenant,
             epoch,
-            entry.seq,
+            parse_feed_position(&entry.seq)
+                .expect("in-memory event positions are generated canonically"),
             entry.message_cid.as_deref(),
         ))
     });
@@ -863,9 +868,7 @@ fn validate_cursor(
             ProgressGapReason::EpochMismatch,
         ));
     }
-    let seq = cursor
-        .position
-        .parse::<u64>()
+    let seq = parse_feed_position(&cursor.position)
         .map_err(|_| invalid_cursor_position(&cursor.position))?;
 
     let inner = inner.read().map_err(event_lock_error)?;
