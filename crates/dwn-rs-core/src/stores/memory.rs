@@ -46,7 +46,7 @@ struct FeedMetadata {
     epoch: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct MemoryFeedEntry {
     fingerprint_scopes: Vec<String>,
     indexes: KeyValues,
@@ -74,6 +74,7 @@ impl MemoryMessageState {
         self.messages.clear();
         self.heads.clear();
         self.entries.clear();
+        self.positions_by_cid.clear();
         self.fingerprints.clear();
     }
 }
@@ -231,16 +232,52 @@ impl MessageStore for MemoryMessageStore {
     }
 
     async fn delete(&self, tenant: &str, cid: &str) -> Result<(), MessageStoreError> {
-        self.state
-            .write()
-            .map_err(message_lock_error)?
-            .messages
-            .retain(|(row_tenant, row_cid), _| !(row_tenant == tenant && row_cid == cid));
+        let mut state = self.state.write().map_err(message_lock_error)?;
+        let key = (tenant.to_string(), cid.to_string());
+
+        let feed = match state.positions_by_cid.get(&key).copied() {
+            Some(position) => {
+                let entry = state
+                    .entries
+                    .get(&(tenant.to_string(), position))
+                    .ok_or_else(|| {
+                        MessageStoreError::StoreError(StoreError::InternalException(
+                            "feed entry missing for existing feed position".to_string(),
+                        ))
+                    })?;
+
+                if entry.message_cid != cid {
+                    return Err(MessageStoreError::StoreError(
+                        StoreError::InternalException(
+                            "feed entry message CID mismatch for existing feed position"
+                                .to_string(),
+                        ),
+                    ));
+                }
+
+                Some((
+                    position,
+                    entry.fingerprint_scopes.clone(),
+                    entry.message_cid.clone(),
+                ))
+            }
+            None => None,
+        };
+
+        state.messages.remove(&key);
+        if let Some((position, scopes, stored_cid)) = feed {
+            state.entries.remove(&(tenant.to_string(), position));
+            state.positions_by_cid.remove(&key);
+            fold_cid_into_domain(&mut state.fingerprints, tenant, &stored_cid, &scopes);
+        }
+
         Ok(())
     }
 
     async fn clear(&self) -> Result<(), MessageStoreError> {
-        self.state.write().map_err(message_lock_error)?.clear();
+        let mut state = self.state.write().map_err(message_lock_error)?;
+
+        state.clear();
         Ok(())
     }
 
@@ -1599,6 +1636,239 @@ mod tests {
         );
         drop(state);
         assert_eq!(publisher.recorded(), vec![("did:alice".to_string(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_feed_state_and_reverses_fingerprints_without_reusing_head() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let first = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let second = feed_msg("record-2", "2025-01-01T00:00:01Z");
+        let first_cid = stored_cid(&first);
+        let second_cid = stored_cid(&second);
+        let indexes = idx("2025-01-01T00:00:00Z", Some("p"));
+
+        store
+            .put("did:alice", first, indexes.clone())
+            .await
+            .unwrap();
+        store.put("did:alice", second, indexes).await.unwrap();
+        let wakes_before_delete = publisher.recorded();
+
+        store.delete("did:alice", &first_cid).await.unwrap();
+
+        let state = store.state.read().unwrap();
+        let first_key = ("did:alice".to_string(), first_cid);
+        assert!(!state.messages.contains_key(&first_key));
+        assert!(!state.positions_by_cid.contains_key(&first_key));
+        assert!(!state.entries.contains_key(&("did:alice".to_string(), 1)));
+        assert_eq!(state.heads.get("did:alice"), Some(&2));
+        assert_eq!(
+            state
+                .entries
+                .get(&("did:alice".to_string(), 2))
+                .map(|entry| entry.message_cid.as_str()),
+            Some(second_cid.as_str())
+        );
+        let second_contribution = cid_contribution(&second_cid);
+        assert_eq!(
+            state
+                .fingerprints
+                .get(&("did:alice".to_string(), "".to_string())),
+            Some(&second_contribution)
+        );
+        assert_eq!(
+            state
+                .fingerprints
+                .get(&("did:alice".to_string(), "protocol:p".to_string())),
+            Some(&second_contribution)
+        );
+        drop(state);
+        assert_eq!(publisher.recorded(), wakes_before_delete);
+    }
+
+    #[tokio::test]
+    async fn deleting_non_feed_or_unknown_message_does_not_change_feed_or_wake() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let feed = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let non_feed = msg("2025-01-01T00:00:01Z");
+        let non_feed_cid = stored_cid(&non_feed);
+
+        store
+            .put("did:alice", feed, idx("2025-01-01T00:00:00Z", None))
+            .await
+            .unwrap();
+        store
+            .put("did:alice", non_feed, idx("2025-01-01T00:00:01Z", None))
+            .await
+            .unwrap();
+        let feed_state_before = {
+            let state = store.state.read().unwrap();
+            (
+                state.heads.clone(),
+                state.entries.clone(),
+                state.positions_by_cid.clone(),
+                state.fingerprints.clone(),
+            )
+        };
+        let wakes_before = publisher.recorded();
+
+        store.delete("did:alice", &non_feed_cid).await.unwrap();
+        store.delete("did:alice", "unknown-cid").await.unwrap();
+
+        let state = store.state.read().unwrap();
+        assert!(!state
+            .messages
+            .contains_key(&("did:alice".to_string(), non_feed_cid)));
+        assert_eq!(state.heads, feed_state_before.0);
+        assert_eq!(state.entries, feed_state_before.1);
+        assert_eq!(state.positions_by_cid, feed_state_before.2);
+        assert_eq!(state.fingerprints, feed_state_before.3);
+        drop(state);
+        assert_eq!(publisher.recorded(), wakes_before);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_feed_entry_fails_without_mutating_state() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let message = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let cid = stored_cid(&message);
+        let indexes = idx("2025-01-01T00:00:00Z", Some("p"));
+
+        store
+            .put("did:alice", message.clone(), indexes.clone())
+            .await
+            .unwrap();
+        store
+            .state
+            .write()
+            .unwrap()
+            .entries
+            .remove(&("did:alice".to_string(), 1));
+        let fingerprints_before = store.state.read().unwrap().fingerprints.clone();
+        let wakes_before = publisher.recorded();
+
+        let error = store.delete("did:alice", &cid).await.unwrap_err();
+        assert!(error.to_string().contains("feed entry missing"));
+
+        let state = store.state.read().unwrap();
+        let key = ("did:alice".to_string(), cid);
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.message),
+            Some(&message)
+        );
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.indexes),
+            Some(&indexes)
+        );
+        assert_eq!(state.positions_by_cid.get(&key), Some(&1));
+        assert_eq!(state.heads.get("did:alice"), Some(&1));
+        assert_eq!(state.fingerprints, fingerprints_before);
+        drop(state);
+        assert_eq!(publisher.recorded(), wakes_before);
+    }
+
+    #[tokio::test]
+    async fn delete_feed_cid_mismatch_fails_without_mutating_state() {
+        let publisher = RecordingWakePublisher::default();
+        let store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        let message = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let cid = stored_cid(&message);
+        let indexes = idx("2025-01-01T00:00:00Z", Some("p"));
+
+        store
+            .put("did:alice", message.clone(), indexes.clone())
+            .await
+            .unwrap();
+        store
+            .state
+            .write()
+            .unwrap()
+            .entries
+            .get_mut(&("did:alice".to_string(), 1))
+            .unwrap()
+            .message_cid = "wrong-cid".to_string();
+        let fingerprints_before = store.state.read().unwrap().fingerprints.clone();
+        let wakes_before = publisher.recorded();
+
+        let error = store.delete("did:alice", &cid).await.unwrap_err();
+        assert!(error.to_string().contains("message CID mismatch"));
+
+        let state = store.state.read().unwrap();
+        let key = ("did:alice".to_string(), cid);
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.message),
+            Some(&message)
+        );
+        assert_eq!(
+            state.messages.get(&key).map(|row| &row.indexes),
+            Some(&indexes)
+        );
+        assert_eq!(state.positions_by_cid.get(&key), Some(&1));
+        assert!(state.entries.contains_key(&("did:alice".to_string(), 1)));
+        assert_eq!(state.heads.get("did:alice"), Some(&1));
+        assert_eq!(state.fingerprints, fingerprints_before);
+        drop(state);
+        assert_eq!(publisher.recorded(), wakes_before);
+    }
+
+    #[tokio::test]
+    async fn clear_rotates_epoch_and_removes_all_message_and_feed_state_without_waking() {
+        let publisher = RecordingWakePublisher::default();
+        let mut store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+        store.open().await.unwrap();
+        let feed = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let feed_cid = stored_cid(&feed);
+        let non_feed = msg("2025-01-01T00:00:01Z");
+
+        store
+            .put(
+                "did:alice",
+                feed.clone(),
+                idx("2025-01-01T00:00:00Z", Some("p")),
+            )
+            .await
+            .unwrap();
+        store
+            .put("did:alice", non_feed, idx("2025-01-01T00:00:01Z", None))
+            .await
+            .unwrap();
+        let epoch_before = store.state.read().unwrap().epoch.clone();
+        let wakes_before = publisher.recorded();
+
+        store.clear().await.unwrap();
+
+        {
+            let state = store.state.read().unwrap();
+            assert!(!state.epoch.is_empty());
+            assert_ne!(state.epoch, epoch_before);
+            assert!(state.messages.is_empty());
+            assert!(state.heads.is_empty());
+            assert!(state.entries.is_empty());
+            assert!(state.positions_by_cid.is_empty());
+            assert!(state.fingerprints.is_empty());
+        }
+        assert_eq!(publisher.recorded(), wakes_before);
+
+        store
+            .put("did:alice", feed, idx("2025-01-01T00:00:02Z", Some("p")))
+            .await
+            .unwrap();
+        let state = store.state.read().unwrap();
+        assert_eq!(state.heads.get("did:alice"), Some(&1));
+        assert_eq!(
+            state
+                .positions_by_cid
+                .get(&("did:alice".to_string(), feed_cid)),
+            Some(&1)
+        );
+        drop(state);
+        assert_eq!(
+            publisher.recorded(),
+            vec![("did:alice".to_string(), 1), ("did:alice".to_string(), 1)]
+        );
     }
 
     #[tokio::test]
