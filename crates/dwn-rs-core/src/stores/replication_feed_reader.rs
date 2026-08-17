@@ -13,6 +13,9 @@ use crate::{
     Descriptor, Message, ProgressToken, Value,
 };
 
+const POSITION_PAD_WIDTH: usize = 20;
+
+/// The global domain scope is always included in the fingerprint scopes for a tenant.
 const GLOBAL_DOMAIN: &str = "";
 
 /// Fingerprint is a 32-byte array representing the SHA256 digest of a message CID,
@@ -198,6 +201,12 @@ pub fn parse_feed_position(position: &str) -> Result<FeedPosition, EventLogError
     }
 
     Ok(parsed)
+}
+
+/// Encodes a feed position as a canonical, non-negative decimal string,
+/// with at most POSITION_PAD_WIDTH leading zeroes.
+pub fn encode_feed_position(position: FeedPosition) -> String {
+    format!("{:0>width$}", position, width = POSITION_PAD_WIDTH)
 }
 
 /// Validate the given Progress token against expectations
