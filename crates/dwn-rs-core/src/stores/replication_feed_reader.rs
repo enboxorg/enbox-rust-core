@@ -41,30 +41,30 @@ pub struct FeedCursorState<'a> {
 pub type ReplicationBounds = (ProgressToken, ProgressToken);
 
 /// ReplicationFeedReader is a trait that defines the interface for reading from a replication feed.
-pub trait ReplicationFeedReader: Default {
+pub trait ReplicationFeedReader {
     /// Returns an available feed that matches the given filters
     /// after theprovided cursor.
     fn log_read(
         &self,
         tenant: &str,
         options: EventLogReadOptions,
-    ) -> impl Future<Output = Result<Vec<EventLogReadResult>, EventLogError>> + Send;
+    ) -> impl Future<Output = Result<EventLogReadResult, EventLogError>> + Send;
 
     /// Return the oldest, and latest ProgressTokens for a tenant
     fn log_bounds(
         &self,
         tenant: &str,
-    ) -> impl Future<Output = Result<ReplicationBounds, EventLogError>> + Send;
+    ) -> impl Future<Output = Result<Option<ReplicationBounds>, EventLogError>> + Send;
 
     /// Fingerprint returns the replication fingerprint for a given tenant.
     fn fingerprint(
         &self,
         tenant: &str,
         scopes: &[String],
-    ) -> impl Future<Output = Result<String, EventLogError>> + Send;
+    ) -> impl Future<Output = Result<Fingerprint, EventLogError>> + Send;
 
     /// Return the current stream epoch
-    fn epoch(&self) -> impl Future<Output = Result<u64, EventLogError>> + Send;
+    fn epoch(&self) -> impl Future<Output = Result<String, EventLogError>> + Send;
 }
 
 #[derive(Debug, Clone, Error)]
