@@ -1,4 +1,7 @@
 pub mod memory;
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub mod replication_feed_conformance;
 pub mod replication_feed_reader;
 pub mod state_index;
 pub mod wake;

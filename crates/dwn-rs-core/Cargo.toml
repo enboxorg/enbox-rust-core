@@ -8,6 +8,9 @@ description = "Core library components for dwn-rs"
 [lib]
 crate-type = ["rlib"]
 
+[features]
+test-utils = []
+
 [dependencies]
 xtra = { version = "0.6.0", features = ["tokio", "sink", "instrumentation"] }
 chrono = { version = "0.4.30", features = ["serde"] }
