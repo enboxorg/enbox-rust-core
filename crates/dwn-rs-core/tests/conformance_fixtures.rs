@@ -986,6 +986,16 @@ fn assert_messages_query_fixture_shape(case: &FixtureCase) {
         "{} MessagesQuery fixture must include a tenant",
         case.id
     );
+
+    if query.get("transition").and_then(Value::as_object).is_some() {
+        assert!(
+            query.get("reply").and_then(Value::as_object).is_some(),
+            "{} MessagesQuery transition fixture must include an object reply",
+            case.id
+        );
+        return;
+    }
+
     assert!(
         query.get("request").and_then(Value::as_object).is_some(),
         "{} MessagesQuery fixture must include an object request",

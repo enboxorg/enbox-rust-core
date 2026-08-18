@@ -81,7 +81,7 @@
     {
       "id": "messages-query-empty-feed",
       "description": "An owner query over an empty durable feed returns no entries, is drained, and returns the captured feed-head cursor and global empty fingerprint.",
-      "rustStatus": "supported",
+      "rustStatus": "known_gap",
       "query": {
         "tenant": "did:example:alice",
         "request": {
