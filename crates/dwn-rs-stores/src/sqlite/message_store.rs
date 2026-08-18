@@ -36,7 +36,7 @@ impl MessageStore for SqliteStore {
                 .map_err(sqlite_store_error)?;
             };
 
-            Ok(())
+            tx.commit().map_err(sqlite_store_error)
         })
         .await
         .map_err(MessageStoreError::from)?;

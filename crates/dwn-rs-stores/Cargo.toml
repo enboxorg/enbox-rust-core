@@ -56,6 +56,7 @@ bytes = { version = "1.8.0", features = ["serde"] }
 deadpool-sqlite = "0.13.0"
 base64 = "0.22.1"
 uuid = { version = "1.23.3", features = ["v4"] }
+refinery = { version = "0.9.2", features = ["rusqlite"] }
 
 [dev-dependencies]
 rand = "0.8.5"

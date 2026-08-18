@@ -58,6 +58,9 @@ pub enum StoreError {
     #[error("internal store error: {0}")]
     InternalException(String),
 
+    #[error("incompatible database: {reason}; {action}")]
+    IncompatibleDatabase { reason: String, action: String },
+
     #[error("unable to find record")]
     NotFound,
 }

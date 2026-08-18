@@ -1,9 +1,11 @@
 use dwn_rs_core::errors::StoreError;
 
 pub mod conn;
+mod data_migrations;
 pub mod data_store;
 pub mod event_log;
 pub mod message_store;
+mod migrations;
 mod query;
 pub mod resumable_task_store;
 pub mod secrets_store;
