@@ -1310,6 +1310,7 @@ dependencies = [
  "dwn-rs-stores",
  "ed25519-dalek",
  "futures-util",
+ "hex",
  "hkdf",
  "hmac",
  "ipld-core",

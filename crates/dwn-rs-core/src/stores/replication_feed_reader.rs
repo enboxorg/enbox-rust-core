@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, future::Future};
+use std::{collections::BTreeMap, fmt::Display, future::Future};
 
 use sha2::{Digest, Sha256};
 
@@ -13,14 +13,42 @@ use crate::{
     Descriptor, Message, ProgressToken, Value,
 };
 
-const POSITION_PAD_WIDTH: usize = 20;
-
 /// The global domain scope is always included in the fingerprint scopes for a tenant.
 const GLOBAL_DOMAIN: &str = "";
 
 /// Fingerprint is a 32-byte array representing the SHA256 digest of a message CID,
-/// used for calculating the replication fingerprint for a tenant.
-pub type Fingerprint = [u8; 32];
+/// aggregated across all messages in a replication feed for a tenant. It is used to
+/// detect changes in the replication feed and to ensure that clients are in sync with
+/// the server.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Fingerprint {
+    fingerprint: [u8; 32],
+}
+
+impl From<[u8; 32]> for Fingerprint {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self { fingerprint: bytes }
+    }
+}
+
+// Implement Display for Fingerprint to show the hex representation of the fingerprint.
+impl Display for Fingerprint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.hex())
+    }
+}
+
+impl Fingerprint {
+    /// Returns the fingerprint as a byte slice.
+    pub fn as_slice(&self) -> &[u8; 32] {
+        &self.fingerprint
+    }
+
+    // Returns the fingerprint as the canonical hex string representation of the SHA256 digest.
+    pub fn hex(&self) -> String {
+        hex::encode(self.fingerprint)
+    }
+}
 
 /// FeedPosition is a u64 representing the position of a message in the replication
 /// feed for a tenant.
@@ -142,12 +170,16 @@ pub fn scopes_unchanged(given: &[String], current: &[String]) -> bool {
 /// Return the SHA256 digest of the message CID, for it's contribution into the fingerprint
 /// calculation.
 pub fn cid_contribution(message_cid: &str) -> Fingerprint {
-    Sha256::digest(message_cid.as_bytes()).into()
+    Into::<[u8; 32]>::into(Sha256::digest(message_cid.as_bytes())).into()
 }
 
 /// XOR the contribution Fingerprint into the current target fingerprint.
-pub fn xor_in_place(target: &mut Fingerprint, contribution: Fingerprint) {
-    for (t, c) in target.iter_mut().zip(contribution.iter()) {
+pub fn xor_in_place(target: &mut Fingerprint, contribution: &Fingerprint) {
+    for (t, c) in target
+        .fingerprint
+        .iter_mut()
+        .zip(contribution.fingerprint.iter())
+    {
         *t ^= *c;
     }
 }
@@ -165,9 +197,9 @@ pub fn fold_cid_into_domain(
     for scope in scopes {
         let fingerprint = fingerprints
             .entry((tenant.to_string(), scope.clone()))
-            .or_insert_with(|| [0u8; 32]);
+            .or_default();
 
-        xor_in_place(fingerprint, contribution);
+        xor_in_place(fingerprint, &contribution);
     }
 }
 
@@ -284,7 +316,7 @@ mod tests {
     use super::{
         build_token, cid_contribution, derive_stream_id, fingerprint_scopes, fold_cid_into_domain,
         is_feed_message, parse_feed_position, scopes_unchanged, validate_feed_cursor, xor_in_place,
-        FeedCursorState,
+        FeedCursorState, Fingerprint,
     };
     use crate::descriptors::{Messages, Protocols, Records};
     use crate::errors::EventLogError;
@@ -335,6 +367,34 @@ mod tests {
     fn derives_stream_id_from_first_eight_sha256_bytes() {
         assert_eq!(derive_stream_id(TENANT), "6742201863cf8f21");
         assert_eq!(derive_stream_id(TENANT).len(), 16);
+    }
+
+    #[test]
+    fn fingerprint_display_is_exactly_64_lowercase_hex_characters() {
+        let fingerprint = Fingerprint::from([
+            0x00, 0x01, 0x09, 0x0a, 0x0f, 0x10, 0x1f, 0x20, 0x2a, 0x3b, 0x4c, 0x5d, 0x6e, 0x7f,
+            0x80, 0x90, 0xab, 0xbc, 0xcd, 0xde, 0xef, 0xf0, 0xff, 0x08, 0x17, 0x26, 0x35, 0x44,
+            0x53, 0x62, 0x71, 0x8a,
+        ]);
+
+        let displayed = fingerprint.to_string();
+
+        assert_eq!(displayed.len(), 64);
+        assert_eq!(
+            displayed,
+            "0001090a0f101f202a3b4c5d6e7f8090abbccddeeff0ff08172635445362718a"
+        );
+        assert!(displayed
+            .chars()
+            .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character)));
+    }
+
+    #[test]
+    fn fingerprint_as_slice_exposes_original_bytes() {
+        let bytes = std::array::from_fn(|index| index as u8);
+        let fingerprint = Fingerprint::from(bytes);
+
+        assert_eq!(fingerprint.as_slice(), &bytes);
     }
 
     #[test]
@@ -428,11 +488,11 @@ mod tests {
         let contribution = cid_contribution("cid-1");
         assert_eq!(contribution.as_slice(), Sha256::digest(b"cid-1").as_slice());
 
-        let mut folded = [0_u8; 32];
-        xor_in_place(&mut folded, contribution);
+        let mut folded = [0_u8; 32].into();
+        xor_in_place(&mut folded, &contribution);
         assert_eq!(folded, contribution);
-        xor_in_place(&mut folded, contribution);
-        assert_eq!(folded, [0_u8; 32]);
+        xor_in_place(&mut folded, &contribution);
+        assert_eq!(folded, [0_u8; 32].into());
 
         let scopes = vec!["".to_string(), "protocol:p".to_string()];
         let mut fingerprints = BTreeMap::new();
@@ -449,7 +509,7 @@ mod tests {
         for scope in &scopes {
             assert_eq!(
                 fingerprints.get(&(TENANT.to_string(), scope.clone())),
-                Some(&[0_u8; 32])
+                Some(&[0_u8; 32].into())
             );
         }
     }

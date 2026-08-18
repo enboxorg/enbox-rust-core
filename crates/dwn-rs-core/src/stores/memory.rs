@@ -593,7 +593,7 @@ impl ReplicationFeedReader for MemoryMessageStore {
         tenant: &str,
         scopes: &[String],
     ) -> Result<Fingerprint, EventLogError> {
-        let mut fingerprint: Fingerprint = [0u8; 32];
+        let mut fingerprint = Fingerprint::default();
         let mut normal_scopes = scopes.to_vec();
         normal_scopes.sort_unstable();
         normal_scopes.dedup();
@@ -602,7 +602,7 @@ impl ReplicationFeedReader for MemoryMessageStore {
         for scope in normal_scopes {
             let key = (tenant.to_string(), scope.clone());
             if let Some(fp) = state.fingerprints.get(&key) {
-                xor_in_place(&mut fingerprint, *fp);
+                xor_in_place(&mut fingerprint, fp);
             }
         }
 
@@ -1667,7 +1667,7 @@ mod tests {
                 .get(&("did:alice".to_string(), "".to_string())),
             Some(&{
                 let mut expected = cid_contribution(&first_cid);
-                xor_in_place(&mut expected, cid_contribution(&second_cid));
+                xor_in_place(&mut expected, &cid_contribution(&second_cid));
                 expected
             })
         );
