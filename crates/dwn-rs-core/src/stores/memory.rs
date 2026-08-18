@@ -11,20 +11,22 @@ use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, S
 use crate::events::MessageEvent;
 use crate::fields::MessageFields;
 use crate::filters::Filters;
+use crate::matching::has_valid_subtree_filters;
 use crate::stores::replication_feed_reader::{
     build_token, derive_stream_id, fingerprint_scopes, fold_cid_into_domain, is_feed_message,
-    parse_feed_position, scopes_unchanged, Fingerprint,
+    parse_feed_position, scopes_unchanged, validate_feed_cursor, xor_in_place, FeedCursorState,
+    Fingerprint,
 };
 use crate::stores::wake::{Wake, WakePublishHandler, WakePublisher};
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
     KeyValues, ManagedResumableTask, MessageQueryResult, MessageStore, ProgressGapCode,
-    ProgressGapInfo, ProgressGapReason, ProgressToken, ResumableTaskStore, SubscriptionListener,
-    SubscriptionMessage,
+    ProgressGapInfo, ProgressGapReason, ProgressToken, ReplicationFeedReader, ResumableTaskStore,
+    SubscriptionListener, SubscriptionMessage,
 };
 use crate::{
-    compare_values, messages, Cursor, Descriptor, Message, MessageSort, SortDirection, Value,
+    compare_values, Cursor, Descriptor, FilterError, Message, MessageSort, SortDirection, Value,
 };
 use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -89,6 +91,28 @@ impl MemoryMessageStore {
     pub fn with_waker_publisher(mut self, waker_publisher: impl WakePublisher + 'static) -> Self {
         self.waker_publisher = WakePublishHandler::new(Arc::new(waker_publisher));
         self
+    }
+
+    fn log_bounds_from_state(
+        &self,
+        tenant: &str,
+        state: &MemoryMessageState,
+    ) -> Result<Option<(ProgressToken, ProgressToken)>, EventLogError> {
+        let head = state.heads.get(tenant).copied().unwrap_or(0);
+        if head == 0 {
+            return Ok(None);
+        }
+
+        let oldest = build_token(tenant, &state.epoch, 0, None);
+
+        let latest_entry = state.entries.get(&(tenant.to_string(), head));
+
+        let latest = match latest_entry {
+            Some(entry) => build_token(tenant, &state.epoch, head, Some(&entry.message_cid)),
+            None => build_token(tenant, &state.epoch, head, None),
+        };
+
+        Ok(Some((oldest, latest)))
     }
 }
 
@@ -366,6 +390,228 @@ impl MessageStore for MemoryMessageStore {
                     && property.is_none_or(|prop| row.indexes.contains_key(prop))
             })
             .count() as u64)
+    }
+}
+
+impl ReplicationFeedReader for MemoryMessageStore {
+    async fn log_read(
+        &self,
+        tenant: &str,
+        options: EventLogReadOptions,
+    ) -> Result<EventLogReadResult, EventLogError> {
+        if let Some(filters) = &options.filters {
+            if !has_valid_subtree_filters(filters) {
+                return Err(EventLogError::FilterError(FilterError::UnparseableFilter(
+                    "invalid subtree filter".to_string(),
+                )));
+            }
+        }
+
+        let state = self.state.read().map_err(event_lock_error)?;
+
+        let head = state.heads.get(tenant).copied().unwrap_or(0);
+        if let Some(cursor) = &options.cursor {
+            let bounds = self.log_bounds_from_state(tenant, &state)?;
+            let zero_cursor = build_token(tenant, &state.epoch, 0, None);
+            let zero_bounds = (zero_cursor.clone(), zero_cursor.clone());
+            let message_cid_at_position = state
+                .entries
+                .get(&(
+                    tenant.to_string(),
+                    parse_feed_position(&cursor.position).unwrap_or(0),
+                ))
+                .map(|entry| entry.message_cid.as_str());
+
+            validate_feed_cursor(
+                cursor,
+                FeedCursorState {
+                    expected_stream_id: derive_stream_id(tenant).as_str(),
+                    expected_epoch: state.epoch.clone().as_str(),
+                    head,
+                    oldest_replayable: 0, // todo: retention policy
+                    message_cid_at_position,
+                    bounds: match bounds {
+                        Some(ref bounds) => Some(bounds),
+                        None => Some(&zero_bounds),
+                    },
+                },
+            )?;
+        }
+
+        if head == 0 {
+            return Ok(EventLogReadResult {
+                events: Vec::new(),
+                cursor: Some(
+                    options
+                        .cursor
+                        .unwrap_or(build_token(tenant, &state.epoch, 0, None)),
+                ),
+                drained: true,
+            });
+        }
+
+        let start_position = options
+            .cursor
+            .as_ref()
+            .and_then(|c| parse_feed_position(&c.position).ok())
+            .unwrap_or(0);
+
+        let max_events = options.limit.unwrap_or(u64::MAX) as usize;
+        if max_events == 0 {
+            return Ok(EventLogReadResult {
+                events: Vec::new(),
+                cursor: match options.cursor {
+                    Some(cursor) => Some(cursor),
+                    None => Some(build_token(tenant, &state.epoch, start_position, None)),
+                },
+                drained: start_position >= head,
+            });
+        }
+
+        if start_position == head {
+            return Ok(EventLogReadResult {
+                events: Vec::new(),
+                cursor: Some(build_token(tenant, &state.epoch, start_position, None)),
+                drained: true,
+            });
+        }
+
+        if start_position > head {
+            return Ok(EventLogReadResult {
+                events: Vec::new(),
+                cursor: options.cursor,
+                drained: true,
+            });
+        }
+
+        let mut events: Vec<EventLogEntry> = Vec::new();
+        let mut last_position_scanned = start_position;
+
+        for position in start_position + 1..=head {
+            last_position_scanned = position;
+
+            let entry_key = (tenant.to_string(), position);
+            if let Some(entry) = state.entries.get(&entry_key) {
+                if !matches_filters(&entry.indexes, options.filters.as_ref()) {
+                    continue;
+                }
+
+                let msg_key = (tenant.to_string(), entry.message_cid.clone());
+
+                match state.messages.get(&msg_key) {
+                    Some(row) => {
+                        let mut msg = row.message.clone();
+                        let encoded_data = match msg.fields.encoded_data() {
+                            Some(Value::String(encoded)) => Some(encoded.clone()),
+                            Some(Value::Null) | None => None,
+                            Some(_) => {
+                                return Err(EventLogError::StoreError(
+                                    StoreError::InternalException(
+                                        "encodedData field must be a string or null".to_string(),
+                                    ),
+                                ))
+                            }
+                        };
+
+                        if row.cid != entry.message_cid {
+                            return Err(EventLogError::StoreError(StoreError::InternalException(
+                                "stored message CID mismatch for feed entry".to_string(),
+                            )));
+                        }
+
+                        if row
+                            .message
+                            .message_cid()
+                            .map_err(|err| {
+                                EventLogError::StoreError(StoreError::InternalException(format!(
+                                    "failed to compute message CID: {err}"
+                                )))
+                            })?
+                            .to_string()
+                            != entry.message_cid
+                        {
+                            return Err(EventLogError::StoreError(StoreError::InternalException(
+                                "message CID mismatch for feed entry".to_string(),
+                            )));
+                        }
+
+                        events.push(EventLogEntry {
+                            seq: position.to_string(),
+                            event: MessageEvent {
+                                message: msg,
+                                initial_write: None,
+                            },
+                            indexes: entry.indexes.clone(),
+                            message_cid: Some(row.cid.clone()),
+                            encoded_data,
+                        });
+                    }
+
+                    None => {
+                        return Err(EventLogError::StoreError(StoreError::InternalException(
+                            "feed entry exists without corresponding message".to_string(),
+                        )))
+                    }
+                };
+
+                if events.len() >= max_events {
+                    break;
+                }
+            }
+        }
+
+        Ok(EventLogReadResult {
+            events: events.clone(),
+            cursor: Some(build_token(
+                tenant,
+                &state.epoch,
+                last_position_scanned,
+                if last_position_scanned
+                    == events
+                        .last()
+                        .map_or(0, |entry| parse_feed_position(&entry.seq).unwrap_or(0))
+                {
+                    events.last().and_then(|entry| entry.message_cid.as_deref())
+                } else {
+                    None
+                },
+            )),
+            drained: last_position_scanned >= head,
+        })
+    }
+
+    async fn log_bounds(
+        &self,
+        tenant: &str,
+    ) -> Result<Option<super::replication_feed_reader::ReplicationBounds>, EventLogError> {
+        let state = self.state.read().map_err(event_lock_error)?;
+        self.log_bounds_from_state(tenant, &state)
+    }
+
+    async fn fingerprint(
+        &self,
+        tenant: &str,
+        scopes: &[String],
+    ) -> Result<Fingerprint, EventLogError> {
+        let mut fingerprint: Fingerprint = [0u8; 32];
+        let mut normal_scopes = scopes.to_vec();
+        normal_scopes.sort_unstable();
+        normal_scopes.dedup();
+
+        let state = self.state.read().map_err(event_lock_error)?;
+        for scope in normal_scopes {
+            let key = (tenant.to_string(), scope.clone());
+            if let Some(fp) = state.fingerprints.get(&key) {
+                xor_in_place(&mut fingerprint, *fp);
+            }
+        }
+
+        Ok(fingerprint)
+    }
+
+    async fn epoch(&self) -> Result<String, EventLogError> {
+        let state = self.state.read().map_err(event_lock_error)?;
+        Ok(state.epoch.clone())
     }
 }
 
@@ -1362,6 +1608,13 @@ mod tests {
         indexes
     }
 
+    fn protocol_filter(protocol: &str) -> Filters {
+        Filters::from([[(
+            FilterKey::Index("protocol".to_string()),
+            Filter::Equal(Value::String(protocol.to_string())),
+        )]])
+    }
+
     #[tokio::test]
     async fn feed_put_assigns_monotonic_positions_and_publishes_after_commit() {
         let publisher = RecordingWakePublisher::default();
@@ -1869,6 +2122,393 @@ mod tests {
             publisher.recorded(),
             vec![("did:alice".to_string(), 1), ("did:alice".to_string(), 1)]
         );
+    }
+
+    #[tokio::test]
+    async fn replication_feed_empty_bounds_and_cursor_validation() {
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+        let epoch = ReplicationFeedReader::epoch(&store).await.unwrap();
+
+        assert!(store.log_bounds("did:alice").await.unwrap().is_none());
+
+        let empty = store
+            .log_read("did:alice", EventLogReadOptions::default())
+            .await
+            .unwrap();
+        assert!(empty.events.is_empty());
+        assert!(empty.drained);
+        assert_eq!(
+            empty.cursor,
+            Some(build_token("did:alice", &epoch, 0, None))
+        );
+
+        let error = store
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    cursor: Some(build_token("did:alice", &epoch, 1, None)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        let EventLogError::ProgressGap(gap) = error else {
+            panic!("expected progress gap");
+        };
+        assert_eq!(gap.reason, ProgressGapReason::TokenTooNew);
+    }
+
+    #[tokio::test]
+    async fn replication_feed_limit_counts_matches_and_drains_to_high_water() {
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+        for (record, timestamp, protocol) in [
+            ("record-1", "2025-01-01T00:00:00Z", "other"),
+            ("record-2", "2025-01-01T00:00:01Z", "wanted"),
+            ("record-3", "2025-01-01T00:00:02Z", "other"),
+        ] {
+            store
+                .put(
+                    "did:alice",
+                    feed_msg(record, timestamp),
+                    idx(timestamp, Some(protocol)),
+                )
+                .await
+                .unwrap();
+        }
+
+        let limited = store
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    limit: Some(1),
+                    filters: Some(protocol_filter("wanted")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(limited.events.len(), 1);
+        assert_eq!(limited.events[0].seq, "2");
+        assert!(!limited.drained);
+        let limited_cursor = limited.cursor.unwrap();
+        assert_eq!(limited_cursor.position, "2");
+        assert_eq!(
+            limited_cursor.message_cid.as_deref(),
+            limited.events[0].message_cid.as_deref()
+        );
+
+        let drained = store
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    filters: Some(protocol_filter("wanted")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(drained.events.len(), 1);
+        assert!(drained.drained);
+        assert_eq!(drained.cursor.as_ref().unwrap().position, "3");
+        assert_eq!(drained.cursor.unwrap().message_cid, None);
+    }
+
+    #[tokio::test]
+    async fn replication_feed_limit_zero_validates_without_advancing_and_at_head_is_drained() {
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+        store
+            .put(
+                "did:alice",
+                feed_msg("record-1", "2025-01-01T00:00:00Z"),
+                idx("2025-01-01T00:00:00Z", None),
+            )
+            .await
+            .unwrap();
+        let epoch = ReplicationFeedReader::epoch(&store).await.unwrap();
+        let anchor = build_token("did:alice", &epoch, 0, None);
+
+        let zero_limit = store
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    cursor: Some(anchor.clone()),
+                    limit: Some(0),
+                    filters: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(zero_limit.events.is_empty());
+        assert_eq!(zero_limit.cursor, Some(anchor));
+        assert!(!zero_limit.drained);
+
+        let invalid = store
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    cursor: Some(build_token("did:alice", &epoch, 2, None)),
+                    limit: Some(0),
+                    filters: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        let EventLogError::ProgressGap(gap) = invalid else {
+            panic!("expected progress gap");
+        };
+        assert_eq!(gap.reason, ProgressGapReason::TokenTooNew);
+
+        let head_cursor = store
+            .log_read("did:alice", EventLogReadOptions::default())
+            .await
+            .unwrap()
+            .cursor
+            .unwrap();
+        assert_eq!(head_cursor.position, "1");
+        assert!(head_cursor.message_cid.is_some());
+        let at_head = store
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    cursor: Some(head_cursor),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(at_head.events.is_empty());
+        assert!(at_head.drained);
+        assert_eq!(at_head.cursor.as_ref().unwrap().position, "1");
+        assert_eq!(at_head.cursor.unwrap().message_cid, None);
+    }
+
+    #[tokio::test]
+    async fn replication_feed_skips_deleted_positions_and_preserves_deleted_head() {
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+        let messages = [
+            feed_msg("record-1", "2025-01-01T00:00:00Z"),
+            feed_msg("record-2", "2025-01-01T00:00:01Z"),
+            feed_msg("record-3", "2025-01-01T00:00:02Z"),
+        ];
+        let cids = messages.iter().map(stored_cid).collect::<Vec<_>>();
+        for (position, message) in messages.into_iter().enumerate() {
+            store
+                .put(
+                    "did:alice",
+                    message,
+                    idx(&format!("2025-01-01T00:00:0{position}Z"), None),
+                )
+                .await
+                .unwrap();
+        }
+
+        store.delete("did:alice", &cids[1]).await.unwrap();
+        let through_hole = store
+            .log_read("did:alice", EventLogReadOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            through_hole
+                .events
+                .iter()
+                .map(|event| event.seq.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "3"]
+        );
+        assert!(through_hole.drained);
+
+        store.delete("did:alice", &cids[2]).await.unwrap();
+        let (_, latest) = store.log_bounds("did:alice").await.unwrap().unwrap();
+        assert_eq!(latest.position, "3");
+        assert_eq!(latest.message_cid, None);
+
+        let epoch = ReplicationFeedReader::epoch(&store).await.unwrap();
+        let after_position_one = store
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    cursor: Some(build_token("did:alice", &epoch, 1, Some(&cids[0]))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(after_position_one.events.is_empty());
+        assert!(after_position_one.drained);
+        assert_eq!(after_position_one.cursor.as_ref().unwrap().position, "3");
+        assert_eq!(after_position_one.cursor.unwrap().message_cid, None);
+    }
+
+    #[tokio::test]
+    async fn replication_feed_detaches_inline_data_without_mutating_storage() {
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+        let message = feed_write_msg(Some("dGVzdA=="));
+        let cid = stored_cid(&message);
+        store
+            .put(
+                "did:alice",
+                message.clone(),
+                idx("2025-01-01T00:00:00Z", None),
+            )
+            .await
+            .unwrap();
+
+        let read = store
+            .log_read("did:alice", EventLogReadOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(read.events[0].encoded_data.as_deref(), Some("dGVzdA=="));
+        assert!(matches!(
+            &read.events[0].event.message.fields,
+            Fields::Write(WriteFields {
+                encoded_data: None,
+                ..
+            })
+        ));
+        assert_eq!(store.get("did:alice", &cid).await.unwrap(), Some(message));
+    }
+
+    #[tokio::test]
+    async fn replication_feed_rejects_corrupt_message_rows() {
+        let mut missing_store = MemoryMessageStore::default();
+        missing_store.open().await.unwrap();
+        let message = feed_msg("record-1", "2025-01-01T00:00:00Z");
+        let cid = stored_cid(&message);
+        missing_store
+            .put("did:alice", message, idx("2025-01-01T00:00:00Z", None))
+            .await
+            .unwrap();
+        missing_store
+            .state
+            .write()
+            .unwrap()
+            .messages
+            .remove(&("did:alice".to_string(), cid));
+        let missing_error = missing_store
+            .log_read("did:alice", EventLogReadOptions::default())
+            .await
+            .unwrap_err();
+        assert!(missing_error
+            .to_string()
+            .contains("without corresponding message"));
+
+        let mut mismatch_store = MemoryMessageStore::default();
+        mismatch_store.open().await.unwrap();
+        let message = feed_msg("record-2", "2025-01-01T00:00:01Z");
+        let cid = stored_cid(&message);
+        mismatch_store
+            .put("did:alice", message, idx("2025-01-01T00:00:01Z", None))
+            .await
+            .unwrap();
+        mismatch_store
+            .state
+            .write()
+            .unwrap()
+            .messages
+            .get_mut(&("did:alice".to_string(), cid))
+            .unwrap()
+            .cid = "wrong-cid".to_string();
+        let mismatch_error = mismatch_store
+            .log_read("did:alice", EventLogReadOptions::default())
+            .await
+            .unwrap_err();
+        assert!(mismatch_error
+            .to_string()
+            .contains("stored message CID mismatch"));
+    }
+
+    #[tokio::test]
+    async fn replication_feed_normalizes_fingerprint_scopes() {
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+        store
+            .put(
+                "did:alice",
+                feed_msg("record-1", "2025-01-01T00:00:00Z"),
+                idx("2025-01-01T00:00:00Z", Some("a")),
+            )
+            .await
+            .unwrap();
+
+        let ordered = store
+            .fingerprint("did:alice", &["".to_string(), "protocol:a".to_string()])
+            .await
+            .unwrap();
+        let reordered = store
+            .fingerprint("did:alice", &["protocol:a".to_string(), "".to_string()])
+            .await
+            .unwrap();
+        let duplicated = store
+            .fingerprint(
+                "did:alice",
+                &[
+                    "".to_string(),
+                    "protocol:a".to_string(),
+                    "protocol:a".to_string(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(ordered, reordered);
+        assert_eq!(ordered, duplicated);
+        assert_ne!(
+            ordered,
+            store
+                .fingerprint("did:alice", &["".to_string()])
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn replication_feed_epoch_is_shared_and_clear_invalidates_cursors() {
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+        let clone = store.clone();
+        let epoch = ReplicationFeedReader::epoch(&store).await.unwrap();
+        assert_eq!(ReplicationFeedReader::epoch(&clone).await.unwrap(), epoch);
+
+        store
+            .put(
+                "did:alice",
+                feed_msg("record-1", "2025-01-01T00:00:00Z"),
+                idx("2025-01-01T00:00:00Z", None),
+            )
+            .await
+            .unwrap();
+        let cursor = store
+            .log_read("did:alice", EventLogReadOptions::default())
+            .await
+            .unwrap()
+            .cursor
+            .unwrap();
+
+        store.clear().await.unwrap();
+        let new_epoch = ReplicationFeedReader::epoch(&store).await.unwrap();
+        assert_ne!(new_epoch, epoch);
+        assert_eq!(
+            ReplicationFeedReader::epoch(&clone).await.unwrap(),
+            new_epoch
+        );
+        let error = clone
+            .log_read(
+                "did:alice",
+                EventLogReadOptions {
+                    cursor: Some(cursor),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        let EventLogError::ProgressGap(gap) = error else {
+            panic!("expected progress gap");
+        };
+        assert_eq!(gap.reason, ProgressGapReason::EpochMismatch);
     }
 
     #[tokio::test]

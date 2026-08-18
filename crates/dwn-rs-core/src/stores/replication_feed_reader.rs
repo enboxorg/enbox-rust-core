@@ -176,7 +176,7 @@ pub fn build_token(
     tenant: &str,
     epoch: &str,
     seq: u64,
-    message_cid: Option<impl Into<String>>,
+    message_cid: Option<&str>,
 ) -> ProgressToken {
     ProgressToken {
         stream_id: derive_stream_id(tenant),
@@ -201,12 +201,6 @@ pub fn parse_feed_position(position: &str) -> Result<FeedPosition, EventLogError
     }
 
     Ok(parsed)
-}
-
-/// Encodes a feed position as a canonical, non-negative decimal string,
-/// with at most POSITION_PAD_WIDTH leading zeroes.
-pub fn encode_feed_position(position: FeedPosition) -> String {
-    format!("{:0>width$}", position, width = POSITION_PAD_WIDTH)
 }
 
 /// Validate the given Progress token against expectations
