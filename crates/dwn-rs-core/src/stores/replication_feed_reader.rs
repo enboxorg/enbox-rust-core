@@ -16,10 +16,12 @@ use crate::{
 /// The global domain scope is always included in the fingerprint scopes for a tenant.
 const GLOBAL_DOMAIN: &str = "";
 
-/// Fingerprint is a 32-byte array representing the SHA256 digest of a message CID,
-/// aggregated across all messages in a replication feed for a tenant. It is used to
-/// detect changes in the replication feed and to ensure that clients are in sync with
-/// the server.
+/// Fixed-width fingerprint of the messages visible in one or more feed scopes.
+///
+/// A fingerprint is the XOR aggregate of the SHA-256 CID contributions in the
+/// requested scopes. The byte representation is used by stores; [`Display`] and
+/// [`Fingerprint::hex`] provide the canonical 64-character lowercase hexadecimal
+/// representation used at API boundaries.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Fingerprint {
     fingerprint: [u8; 32],
@@ -31,7 +33,6 @@ impl From<[u8; 32]> for Fingerprint {
     }
 }
 
-// Implement Display for Fingerprint to show the hex representation of the fingerprint.
 impl Display for Fingerprint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.hex())
@@ -39,67 +40,121 @@ impl Display for Fingerprint {
 }
 
 impl Fingerprint {
-    /// Returns the fingerprint as a byte slice.
+    /// Borrows the fixed-width byte representation used by storage backends.
     pub fn as_slice(&self) -> &[u8; 32] {
         &self.fingerprint
     }
 
-    // Returns the fingerprint as the canonical hex string representation of the SHA256 digest.
+    /// Returns the canonical 64-character lowercase hexadecimal representation.
     pub fn hex(&self) -> String {
         hex::encode(self.fingerprint)
     }
 }
 
-/// FeedPosition is a u64 representing the position of a message in the replication
-/// feed for a tenant.
+/// Numeric position of an entry in a tenant's replication feed.
+///
+/// Position zero is reserved for the empty-feed anchor. Actual entries begin at
+/// one and increase monotonically; positions are not reused after deletion.
 pub type FeedPosition = u64;
 
-// FeedCursorState represents the state of a replication feed cursor, including the expected
-// stream ID, the head position, the oldest replayable position, the message CID at the
-// current position, and the replication bounds.
+/// Feed snapshot and expectations used to validate a [`ProgressToken`].
+///
+/// Backends should construct this state from one consistent read snapshot so a
+/// concurrent writer cannot change the head or entry identity during validation.
 pub struct FeedCursorState<'a> {
+    /// Stream identifier derived for the tenant being read.
     pub expected_stream_id: &'a str,
+    /// Epoch of the feed snapshot being read.
     pub expected_epoch: &'a str,
+    /// Highest position allocated in the snapshot, including deleted entries.
     pub head: FeedPosition,
+    /// Earliest position from which an exclusive resume is still supported.
     pub oldest_replayable: FeedPosition,
+    /// CID currently stored at the cursor position, if that entry still exists.
     pub message_cid_at_position: Option<&'a str>,
+    /// Bounds to include in a structured progress-gap error.
     pub bounds: Option<&'a ReplicationBounds>,
 }
 
-/// Replication bounds represents the range of available replication feed entries for
-/// a given tenant. Lower bound is the oldest ProgressToken available, and upper bound
-/// is the latest ProgressToken available.
+/// Oldest and latest resumable tokens for a tenant, in that order.
+///
+/// Either token can identify a scan position without a `message_cid` when no
+/// entry exists at that position, for example after deletion.
 pub type ReplicationBounds = (ProgressToken, ProgressToken);
 
-/// ReplicationFeedReader is a trait that defines the interface for reading from a replication feed.
+/// Reads the durable, ordered message feed used by replication handlers.
+///
+/// This is the storage contract behind `MessagesQuery` and `MessagesSubscribe`.
+/// The [DWN specification] defines the normative protocol messages, filters, and
+/// replies; this trait defines the persistence and resume semantics that backend
+/// implementations must share.
+///
+/// Each tenant has an independent, monotonically increasing sequence of numeric
+/// positions. Stores operate on positions as [`FeedPosition`] values, while
+/// [`ProgressToken::position`] and [`EventLogEntry::seq`](crate::stores::EventLogEntry::seq)
+/// expose their canonical, unpadded decimal representation. Position zero is the
+/// anchor for an empty feed and is never assigned to an entry.
+///
+/// A cursor is exclusive: a read resumes with the first eligible entry after its
+/// position. The cursor returned by [`log_read`](Self::log_read) is also the scan
+/// high-water mark, not necessarily the position of the last returned event. A
+/// scan can advance across deleted or filtered-out positions; in that case its
+/// token may omit `message_cid`.
+///
+/// A feed epoch identifies the position namespace. Ordinary inserts, updates,
+/// and deletes retain the epoch; clearing the store replaces it and invalidates
+/// cursors from the previous epoch.
+///
+/// [DWN specification]: https://dwn-spec.pages.dev/
 pub trait ReplicationFeedReader {
-    /// Returns an available feed that matches the given filters
-    /// after theprovided cursor.
+    /// Reads an ordered page of events for `tenant`.
+    ///
+    /// `options.cursor` is validated and treated as an exclusive starting
+    /// position. Filters affect which events are returned, but the result cursor
+    /// records how far the feed was scanned. `drained` is true when that scan has
+    /// reached the captured tenant head.
+    ///
+    /// A limit of zero still validates the cursor and filters, but performs no
+    /// scan and does not advance the cursor. Without an input cursor, the result
+    /// uses the position-zero anchor.
     fn log_read(
         &self,
         tenant: &str,
         options: EventLogReadOptions,
     ) -> impl Future<Output = Result<EventLogReadResult, EventLogError>> + Send;
 
-    /// Return the oldest, and latest ProgressTokens for a tenant
+    /// Returns the oldest and latest resumable tokens for `tenant`.
+    ///
+    /// Backends use these bounds when reporting why a supplied cursor cannot be
+    /// resumed. An empty feed has no entry bounds.
     fn log_bounds(
         &self,
         tenant: &str,
     ) -> impl Future<Output = Result<Option<ReplicationBounds>, EventLogError>> + Send;
 
-    /// Fingerprint returns the replication fingerprint for a given tenant.
+    /// Returns the aggregate fingerprint for `tenant` over the requested scopes.
+    ///
+    /// Scope order and duplicates do not affect the result. [`Fingerprint`]
+    /// retains its fixed-width bytes inside the store and formats as the
+    /// canonical 64-character lowercase hexadecimal value at the API boundary.
     fn fingerprint(
         &self,
         tenant: &str,
         scopes: &[String],
     ) -> impl Future<Output = Result<Fingerprint, EventLogError>> + Send;
 
-    /// Return the current stream epoch
+    /// Returns the current non-empty stream epoch shared by all tenants.
+    ///
+    /// Implementations must return the current persisted value rather than a
+    /// cached startup value so that a completed `clear` is immediately visible.
     fn epoch(&self) -> impl Future<Output = Result<String, EventLogError>> + Send;
 }
 
-/// Derive a stream ID from a tenant DID. The stream ID is the first 8 bytes of
-/// the SHA256 hash of the tenant DID, represented as a hex string.
+/// Derives the stable stream identifier for a tenant.
+///
+/// The identifier is the first eight bytes of the SHA-256 digest of `tenant`,
+/// encoded as 16 lowercase hexadecimal characters. All backends must use this
+/// helper so tokens for the same tenant identify the same stream.
 pub fn derive_stream_id(tenant: &str) -> String {
     sha2::Sha256::digest(tenant)
         .iter()
@@ -108,8 +163,11 @@ pub fn derive_stream_id(tenant: &str) -> String {
         .collect()
 }
 
-/// Returns true if the given message is a feed message, which is defined as a message
-/// that has a descriptor of type Records::Write, Records::Delete, or Protocols::Configure.
+/// Returns whether a message belongs in the durable replication feed.
+///
+/// The feed contains `RecordsWrite`, `RecordsDelete`, and `ProtocolsConfigure`
+/// messages. Other methods remain available through their own interfaces but do
+/// not consume a feed position or affect fingerprints.
 pub fn is_feed_message(msg: &Message<Descriptor>) -> bool {
     match &msg.descriptor {
         Descriptor::Records(records) => {
@@ -122,7 +180,7 @@ pub fn is_feed_message(msg: &Message<Descriptor>) -> bool {
     }
 }
 
-/// Returns the string value of a key in the given indexes, if it exists and is a string.
+/// Returns a string-valued index, treating missing and differently typed values alike.
 fn string_index<'a>(indexes: &'a KeyValues, key: &str) -> Option<&'a str> {
     match indexes.get(key) {
         Some(Value::String(value)) => Some(value),
@@ -130,10 +188,12 @@ fn string_index<'a>(indexes: &'a KeyValues, key: &str) -> Option<&'a str> {
     }
 }
 
-/// Returns the fingerprint scopes for a given message descriptor and indexes. The scopes are
-/// derived from the protocol and tag.protocol indexes, if they exist. If the protocol is
-/// PERMISSIONS_PROTOCOL_URI, the permission scopes are also derived from the tag.protocol index,
-/// if it exists. The GLOBAL_DOMAIN scope is always included.
+/// Derives the fingerprint scopes affected by a message.
+///
+/// Every message contributes to the global scope (`""`). A string-valued
+/// `protocol` index adds `protocol:<uri>`. Permission-protocol messages can also
+/// add `perm:<uri>` for their target protocol; a string-valued `tag.protocol`
+/// index takes precedence over `descriptor_tag_proto` when both are available.
 pub fn fingerprint_scopes(descriptor_tag_proto: Option<&str>, indexes: &KeyValues) -> Vec<String> {
     let mut scopes = vec![GLOBAL_DOMAIN.to_owned()];
 
@@ -154,8 +214,11 @@ pub fn fingerprint_scopes(descriptor_tag_proto: Option<&str>, indexes: &KeyValue
     scopes
 }
 
-/// Compres two sets of scopes and returns true if they are equal, ignoring order. This is used to determine
-/// if the fingerprint scopes have changed between two messages.
+/// Compares two scope collections as sets.
+///
+/// Ordering and duplicate values are ignored. Stores use this when replacing a
+/// message with the same CID: changing its fingerprint membership would make the
+/// existing aggregate inconsistent.
 pub fn scopes_unchanged(given: &[String], current: &[String]) -> bool {
     let mut given = given.to_vec();
     let mut current = current.to_vec();
@@ -167,13 +230,17 @@ pub fn scopes_unchanged(given: &[String], current: &[String]) -> bool {
     given == current
 }
 
-/// Return the SHA256 digest of the message CID, for it's contribution into the fingerprint
-/// calculation.
+/// Computes one message CID's fixed-width fingerprint contribution.
+///
+/// The contribution is the SHA-256 digest of the CID string's UTF-8 bytes.
 pub fn cid_contribution(message_cid: &str) -> Fingerprint {
     Into::<[u8; 32]>::into(Sha256::digest(message_cid.as_bytes())).into()
 }
 
-/// XOR the contribution Fingerprint into the current target fingerprint.
+/// XORs `contribution` into `target` in place.
+///
+/// XOR is self-inverse, so applying the same contribution once adds it to an
+/// aggregate and applying it again removes it.
 pub fn xor_in_place(target: &mut Fingerprint, contribution: &Fingerprint) {
     for (t, c) in target
         .fingerprint
@@ -184,8 +251,11 @@ pub fn xor_in_place(target: &mut Fingerprint, contribution: &Fingerprint) {
     }
 }
 
-/// Fold the message CID into the fingerprint for each of the given scopes. This is used to update
-/// the fingerprint for a tenant when a new message is added to the replication feed.
+/// Applies a CID contribution to each `(tenant, scope)` aggregate.
+///
+/// Missing aggregates start at zero. Because the fold uses XOR, this same helper
+/// is used both when adding an entry and when removing it. Callers must therefore
+/// invoke it exactly once for each corresponding state transition.
 pub fn fold_cid_into_domain(
     fingerprints: &mut BTreeMap<(String, String), Fingerprint>,
     tenant: &str,
@@ -203,7 +273,11 @@ pub fn fold_cid_into_domain(
     }
 }
 
-/// Build a ProgressToken given tenant, epoch, position and message_cid
+/// Builds a progress token for a feed position.
+///
+/// The tenant determines the stream ID, and `seq` is encoded as its canonical
+/// decimal string. `message_cid` should be present only when the token identifies
+/// an existing entry at that exact position; scan high-water tokens may omit it.
 pub fn build_token(
     tenant: &str,
     epoch: &str,
@@ -223,6 +297,9 @@ pub fn build_token(
 /// Feed positions are strings on the wire but numeric in store implementations.
 /// Leading zeroes and an explicit `+` are rejected so each position has exactly
 /// one external representation. Position zero is the empty-feed anchor.
+///
+/// Returns [`EventLogError::InvalidProgressToken`] when the value is malformed,
+/// non-canonical, negative, or outside the range of [`FeedPosition`].
 pub fn parse_feed_position(position: &str) -> Result<FeedPosition, EventLogError> {
     let parsed = position
         .parse::<FeedPosition>()
@@ -235,7 +312,17 @@ pub fn parse_feed_position(position: &str) -> Result<FeedPosition, EventLogError
     Ok(parsed)
 }
 
-/// Validate the given Progress token against expectations
+/// Validates a progress token against a consistent feed snapshot.
+///
+/// Validation checks the stream and epoch, parses the canonical position, and
+/// ensures the position lies between `oldest_replayable` and `head`. When both
+/// the token and the current entry provide a CID, they must match. A token may
+/// omit its CID because it can represent a scan high-water position rather than
+/// a delivered entry.
+///
+/// Returns the parsed numeric position on success. Stream, epoch, range, and CID
+/// mismatches return a structured [`EventLogError::ProgressGap`]; malformed
+/// positions return [`EventLogError::InvalidProgressToken`].
 pub fn validate_feed_cursor(
     cursor: &ProgressToken,
     state: FeedCursorState,
