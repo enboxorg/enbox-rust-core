@@ -37,15 +37,9 @@ const GRABBED_TASK_TIMEOUT_SECONDS: u64 = 60;
 
 #[derive(Clone, Debug)]
 struct MessageRow {
-    tenant: String,
     cid: String,
     message: Message<Descriptor>,
     indexes: KeyValues,
-}
-
-#[derive(Debug, Clone, Default)]
-struct FeedMetadata {
-    epoch: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -153,7 +147,6 @@ impl MessageStore for MemoryMessageStore {
 
             let msg_key = (tenant.to_string(), cid.clone());
             let msg_row = MessageRow {
-                tenant: tenant.to_string(),
                 cid: cid.clone(),
                 message: message.clone(),
                 indexes: indexes.clone(),
