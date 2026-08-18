@@ -1641,8 +1641,7 @@ fn matches_filter(value: &Value, filter: &Filter<Value>) -> bool {
         }
         Filter::Subtree(subtree) => match value {
             Value::String(actual) => {
-                *actual == subtree.subtree
-                    || actual.starts_with(&format!("{}/", subtree.subtree))
+                *actual == subtree.subtree || actual.starts_with(&format!("{}/", subtree.subtree))
             }
             _ => false,
         },
