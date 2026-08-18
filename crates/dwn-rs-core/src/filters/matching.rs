@@ -28,6 +28,17 @@ use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::stores::KeyValues;
 use crate::Value;
 
+const SUBFILTER_FILTER_PROPERTIES: [&str; 2] = ["contextId", "protocolPath"];
+
+pub fn has_valid_subtree_filters(filters: &Filters) -> bool {
+    filters.set.iter().all(|set| {
+        set.iter().all(|(key, filter)| match filter {
+            Filter::Subtree(_) => SUBFILTER_FILTER_PROPERTIES.contains(&key.to_string().as_str()),
+            _ => true,
+        })
+    })
+}
+
 /// Returns `true` iff `indexes` satisfies at least one filter set in `filters`.
 ///
 /// `None` filters or an empty filter list both match everything; this matches
@@ -68,6 +79,12 @@ pub fn matches_filter(actual: &Value, filter: &Filter<Value>) -> bool {
             _ => false,
         },
         Filter::Range(range) => matches_range(actual, range),
+        Filter::Subtree(subtree) => match actual {
+            Value::String(actual) => {
+                *actual == subtree.subtree || actual.starts_with(&format!("{}/", subtree.subtree))
+            }
+            _ => false,
+        },
     }
 }
 
@@ -157,7 +174,10 @@ mod tests {
     use std::ops::Bound;
 
     use super::*;
-    use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
+    use crate::{
+        filters::{Filter, FilterKey, Filters, RangeFilter},
+        SubtreeFilter,
+    };
 
     fn indexes(pairs: &[(&str, Value)]) -> KeyValues {
         pairs
@@ -331,5 +351,137 @@ mod tests {
     #[test]
     fn compare_mismatched_variants_returns_none() {
         assert!(compare_values(&Value::Number(1), &Value::String("1".into())).is_none());
+    }
+
+    #[test]
+    fn subtree_matches_exact_value() {
+        let idx = indexes(&[("contextId", Value::String("root/branch".into()))]);
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root/branch".into(),
+            }),
+        )])]
+        .into();
+        assert!(matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn subtree_matches_descendant() {
+        let idx = indexes(&[("contextId", Value::String("root/branch/child".into()))]);
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root/branch".into(),
+            }),
+        )])]
+        .into();
+        assert!(matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn subtree_matches_deep_descendant() {
+        let idx = indexes(&[(
+            "contextId",
+            Value::String("root/branch/child/grandchild".into()),
+        )]);
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root/branch".into(),
+            }),
+        )])]
+        .into();
+        assert!(matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn subtree_does_not_match_sibling() {
+        let idx = indexes(&[("contextId", Value::String("root/branch-sibling".into()))]);
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root/branch".into(),
+            }),
+        )])]
+        .into();
+        assert!(!matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn subtree_does_not_match_prefix_collision() {
+        let idx = indexes(&[("contextId", Value::String("root/branches/child".into()))]);
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root/branch".into(),
+            }),
+        )])]
+        .into();
+        assert!(!matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn subtree_does_not_match_non_string() {
+        let idx = indexes(&[("contextId", Value::Number(42))]);
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "42".into(),
+            }),
+        )])]
+        .into();
+        assert!(!matches_filters(&idx, Some(&filters)));
+    }
+
+    #[test]
+    fn has_valid_subtree_filters_allows_context_id() {
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root".into(),
+            }),
+        )])]
+        .into();
+        assert!(has_valid_subtree_filters(&filters));
+    }
+
+    #[test]
+    fn has_valid_subtree_filters_allows_protocol_path() {
+        let filters: Filters = vec![filter_set(vec![(
+            "protocolPath",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root".into(),
+            }),
+        )])]
+        .into();
+        assert!(has_valid_subtree_filters(&filters));
+    }
+
+    #[test]
+    fn has_valid_subtree_filters_rejects_other_keys() {
+        let filters: Filters = vec![filter_set(vec![(
+            "recordId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root".into(),
+            }),
+        )])]
+        .into();
+        assert!(!has_valid_subtree_filters(&filters));
+    }
+
+    #[test]
+    fn has_valid_subtree_filters_allows_mixed_filter_types() {
+        let filters: Filters = vec![filter_set(vec![
+            (
+                "contextId",
+                Filter::Subtree(SubtreeFilter {
+                    subtree: "root".into(),
+                }),
+            ),
+            ("protocol", Filter::Equal(Value::String("proto".into()))),
+        ])]
+        .into();
+        assert!(has_valid_subtree_filters(&filters));
     }
 }

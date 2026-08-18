@@ -37,6 +37,11 @@
       "assertions": ["messages-sync.replies"]
     },
     {
+      "id": "dwn.messages.query-replies",
+      "path": "dwn/messages/query-replies.json",
+      "assertions": ["messages-query.replies"]
+    },
+    {
       "id": "dwn.messages.process-replies",
       "path": "dwn/messages/process-replies.json",
       "assertions": ["cid.message", "cid.descriptor", "message.process"]

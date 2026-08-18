@@ -39,12 +39,14 @@ fn test_query_descriptor() {
     let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
     let filters = vec![MessagesFilter::default()];
-    let cursor = Some(crate::Cursor::default());
+    let cursor = Some(crate::ProgressToken::default());
     let descriptor = QueryDescriptor {
         message_timestamp,
         filters,
         permission_grant_ids: None,
         cursor: cursor.clone(),
+        limit: None,
+        cids_only: None,
     };
     let json = json!({
         "messageTimestamp": message_timestamp,

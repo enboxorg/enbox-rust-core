@@ -17,12 +17,13 @@ pub(crate) fn record_id(message: &Message<Descriptor>) -> Option<String> {
 #[interface(MESSAGES, union = Messages)]
 mod inner {
     use super::SyncAction;
+    use crate::descriptors::MESSAGES_QUERY_SCHEMA;
     use crate::filters::message_filters::Messages as MessagesFilter;
     use crate::interfaces::messages::descriptors::{
         MESSAGES, MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA, QUERY,
         READ, SUBSCRIBE, SYNC,
     };
-    use crate::Cursor;
+    use crate::ProgressToken;
     use cid::Cid;
     use std::collections::BTreeMap;
 
@@ -52,13 +53,10 @@ mod inner {
     }
 
     /// QueryDescriptor represents the MessagesQuery interface method for querying messages.
-    ///
-    /// `no_handler`: deserializable for spec parity, but this implementation has no MessagesQuery
-    /// request handler, so it is excluded from `current_handler_kinds()`.
     #[descriptor(
         method = QUERY,
         variant = Query,
-        no_handler,
+        schema_id = MESSAGES_QUERY_SCHEMA,
         fields = crate::auth::Authorization,
         parameters = super::QueryParameters
     )]
@@ -68,12 +66,16 @@ mod inner {
             serialize_with = "crate::ser::serialize_datetime"
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         pub filters: Vec<MessagesFilter>,
         #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
         pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub cursor: Option<Cursor>,
+        pub cursor: Option<ProgressToken>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub limit: Option<u64>,
+        #[serde(rename = "cidsOnly", skip_serializing_if = "Option::is_none")]
+        pub cids_only: Option<bool>,
     }
 
     /// SubscribeDescriptor represents the MessagesSubscribe interface method for subscribing to
@@ -96,7 +98,7 @@ mod inner {
         #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
         pub permission_grant_ids: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub cursor: Option<crate::stores::ProgressToken>,
+        pub cursor: Option<ProgressToken>,
     }
 
     /// SyncDescriptor represents the MessagesSync interface method for synchronizing message state.

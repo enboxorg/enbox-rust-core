@@ -1,0 +1,247 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "handler": "MessagesQueryHandler.handle",
+    "test": "packages/dwn-sdk-js/tests/handlers/messages-query.spec.ts"
+  },
+  "querySeedSets": {
+    "query-feed": [
+      {
+        "position": "1",
+        "id": "records-write-inline",
+        "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
+        "indexes": {
+          "interface": "Records",
+          "method": "Write",
+          "protocol": "https://example.com/protocol/notes",
+          "protocolPath": "note"
+        },
+        "message": {
+          "descriptor": {
+            "interface": "Records",
+            "method": "Write",
+            "protocol": "https://example.com/protocol/notes",
+            "protocolPath": "note",
+            "messageTimestamp": "2025-01-01T00:03:00.000000Z",
+            "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+            "dataSize": 11,
+            "dataFormat": "text/plain"
+          }
+        },
+        "encodedData": "aGVsbG8gcXVlcnk",
+        "isLatestBaseState": true
+      },
+      {
+        "position": "2",
+        "id": "records-delete-note",
+        "messageCid": "bafyreic7uxfzjh3smvznwyjpgxmvfoknyjfrabpc5evdivtr4mddxhoq2e",
+        "indexes": {
+          "interface": "Records",
+          "method": "Delete",
+          "protocol": "https://example.com/protocol/notes",
+          "protocolPath": "note"
+        },
+        "message": {
+          "descriptor": {
+            "interface": "Records",
+            "method": "Delete",
+            "protocol": "https://example.com/protocol/notes",
+            "protocolPath": "note",
+            "messageTimestamp": "2025-01-01T00:03:01.000000Z",
+            "recordId": "note-1"
+          }
+        },
+        "isLatestBaseState": true
+      },
+      {
+        "position": "3",
+        "id": "protocols-configure-notes",
+        "messageCid": "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu",
+        "indexes": {
+          "interface": "Protocols",
+          "method": "Configure",
+          "protocol": "https://example.com/protocol/notes"
+        },
+        "message": {
+          "descriptor": {
+            "interface": "Protocols",
+            "method": "Configure",
+            "protocol": "https://example.com/protocol/notes",
+            "messageTimestamp": "2025-01-01T00:03:02.000000Z"
+          }
+        },
+        "isLatestBaseState": true
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "messages-query-empty-feed",
+      "description": "An owner query over an empty durable feed returns no entries, is drained, and returns the captured feed-head cursor and global empty fingerprint.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "request": {
+          "filters": [],
+          "cidsOnly": false
+        },
+        "reply": {
+          "status": { "code": 200, "detail": "OK" },
+          "entries": [],
+          "cursor": { "position": "0" },
+          "drained": true,
+          "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "id": "messages-query-full-entry-detaches-inline-data",
+      "description": "A full RecordsWrite feed entry exposes encodedData beside the message, not inside the returned message object.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "seedSet": "query-feed",
+        "request": {
+          "filters": [{ "interface": "Records", "method": "Write" }]
+        },
+        "reply": {
+          "status": { "code": 200, "detail": "OK" },
+          "entries": [{
+            "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
+            "isLatestBaseState": true,
+            "protocol": "https://example.com/protocol/notes",
+            "encodedData": "aGVsbG8gcXVlcnk",
+            "messageHasEncodedData": false
+          }],
+          "cursor": { "position": "3" },
+          "drained": true
+        }
+      }
+    },
+    {
+      "id": "messages-query-cids-only-pagination",
+      "description": "cidsOnly pagination returns CID inventory without messages or inline data and resumes after the high-water cursor.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "seedSet": "query-feed",
+        "request": {
+          "filters": [{ "protocol": "https://example.com/protocol/notes" }],
+          "limit": 2,
+          "cidsOnly": true
+        },
+        "reply": {
+          "status": { "code": 200, "detail": "OK" },
+          "entries": [
+            { "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m" },
+            { "messageCid": "bafyreic7uxfzjh3smvznwyjpgxmvfoknyjfrabpc5evdivtr4mddxhoq2e" }
+          ],
+          "entryFieldsOmitted": ["message", "encodedData"],
+          "cursor": { "position": "2" },
+          "drained": false
+        },
+        "resume": {
+          "cursor": { "position": "2" },
+          "reply": {
+            "entries": [{ "messageCid": "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu" }],
+            "drained": true
+          }
+        }
+      }
+    },
+    {
+      "id": "messages-query-filtered-high-water-without-entry",
+      "description": "A query whose remaining scanned positions are out of scope advances its cursor to the feed head even when no matching messageCid is returned.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "seedSet": "query-feed",
+        "request": {
+          "cursor": { "position": "1" },
+          "filters": [{ "interface": "Records", "method": "Write" }]
+        },
+        "reply": {
+          "status": { "code": 200, "detail": "OK" },
+          "entries": [],
+          "cursor": { "position": "3" },
+          "drained": true
+        }
+      }
+    },
+    {
+      "id": "messages-query-same-cid-transition-keeps-position",
+      "description": "A same-CID index or data-completion transition updates the feed entry in place and does not append a second CID or move its position.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "seedSet": "query-feed",
+        "transition": {
+          "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
+          "from": { "position": "1", "encodedData": null },
+          "to": { "position": "1", "encodedData": "aGVsbG8gcXVlcnk" }
+        },
+        "reply": {
+          "entryCount": 3,
+          "messageCidOccurrences": 1,
+          "position": "1"
+        }
+      }
+    },
+    {
+      "id": "messages-query-scoped-metadata-feed",
+      "description": "A protocol-scoped delegated feed includes authorized metadata and strips record payload bytes where the grant only authorizes metadata visibility.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "author": "did:example:bob",
+        "seedSet": "query-feed",
+        "request": {
+          "filters": [{ "protocol": "https://example.com/protocol/notes", "protocolPathPrefix": "note" }],
+          "permissionGrantIds": ["grant-messages-read-notes"]
+        },
+        "reply": {
+          "status": { "code": 200, "detail": "OK" },
+          "entries": [{
+            "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
+            "message": "present",
+            "encodedData": null,
+            "messageHasEncodedData": false
+          }]
+        }
+      }
+    },
+    {
+      "id": "messages-query-progress-gap",
+      "description": "A cursor from another stream is rejected with 410 ProgressGap and structured stream-mismatch metadata.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "request": {
+          "filters": [],
+          "cursor": { "streamId": "wrong-stream", "epoch": "wrong-epoch", "position": "0" }
+        },
+        "reply": {
+          "status": { "code": 410 },
+          "error": { "code": "ProgressGap", "reason": "stream_mismatch" }
+        }
+      }
+    },
+    {
+      "id": "messages-query-feed-unavailable",
+      "description": "A MessagesQuery request against a message store without the replication feed reader returns 501.",
+      "rustStatus": "known_gap",
+      "query": {
+        "tenant": "did:example:alice",
+        "storeCapabilities": [],
+        "request": { "filters": [] },
+        "reply": {
+          "status": { "code": 501 },
+          "error": { "code": "MessagesQueryReplicationFeedUnimplemented" }
+        }
+      }
+    }
+  ]
+}

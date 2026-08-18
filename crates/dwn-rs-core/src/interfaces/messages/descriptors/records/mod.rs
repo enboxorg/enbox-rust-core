@@ -44,6 +44,14 @@ pub(crate) fn records_write_descriptor(
     }
 }
 
+pub(crate) fn write_tag_protocol(message: &Message<Descriptor>) -> Option<&str> {
+    let descriptor = records_write_descriptor(message).ok()?;
+    match descriptor.tags.as_ref()?.get("protocol")? {
+        crate::Value::String(value) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
 /// Returns the fields carried by a RecordsWrite message.
 ///
 /// `InitialWriteField` wraps the same write fields when a reply includes an
@@ -85,7 +93,7 @@ mod inner {
         RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA, RECORDS_WRITE_SCHEMA,
         SUBSCRIBE, WRITE,
     };
-    use crate::{MapValue, Pagination};
+    use crate::{MapValue, Pagination, ProgressToken};
 
     /// ReadDescriptor represents the RecordsRead interface method for reading a given
     /// record by ID.
@@ -218,7 +226,7 @@ mod inner {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub pagination: Option<Pagination>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub cursor: Option<crate::stores::ProgressToken>,
+        pub cursor: Option<ProgressToken>,
     }
 
     /// DeleteDescriptor represents the RecordsDelete interface method for deleting a record.

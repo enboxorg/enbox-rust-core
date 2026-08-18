@@ -159,7 +159,7 @@ where
         if authorization.author == tenant {
             return Ok(());
         }
-        permissions::authorize_messages_subscribe(
+        permissions::authorize_messages_subscribe_and_query(
             tenant,
             message,
             &descriptor.filters,

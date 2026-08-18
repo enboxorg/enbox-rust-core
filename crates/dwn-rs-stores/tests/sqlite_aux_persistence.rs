@@ -2,8 +2,10 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dwn_rs_core::events::MessageEvent;
+use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::{EventLog, ResumableTaskStore, StateIndex};
 use dwn_rs_core::{Descriptor, Message, Value};
 use serde::{Deserialize, Serialize};
@@ -22,7 +24,7 @@ async fn sqlite_state_index_survives_reopen() {
     )]);
 
     {
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let mut state_index = SqliteStateIndex::new(&store);
         state_index.open().await.unwrap();
         state_index
@@ -63,7 +65,7 @@ async fn sqlite_event_log_survives_reopen() {
     };
 
     {
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let mut event_log = SqliteEventLog::new(&store);
         event_log.open().await.unwrap();
         let token = event_log
@@ -98,7 +100,7 @@ async fn sqlite_resumable_task_store_survives_reopen() {
     };
 
     {
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let mut task_store = SqliteResumableTaskStore::new(&store);
         task_store.open().await.unwrap();
         let managed = task_store.register(task.clone(), 120).await.unwrap();

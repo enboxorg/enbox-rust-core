@@ -466,16 +466,15 @@ pub fn default_method_handlers() -> MethodHandlerMap {
 /// The set of `(interface, method)` kinds this node dispatches handlers for.
 ///
 /// Derived from the descriptor declarations: each interface union (`Records`/`Protocols`/
-/// `Messages`) reports its kinds via [`InterfaceUnion::KINDS`], and descriptors marked
-/// `no_handler` (e.g. `MessagesQuery`) are filtered out. Adding a handler-backed descriptor in a
-/// `#[interface]` module registers it here automatically — no hand-maintained list to keep in sync.
+/// `Messages`) reports its kinds via [`InterfaceUnion::KINDS`] are filtered out. Adding
+/// a handler-backed descriptor in a `#[interface]` module registers it here automatically
+/// — no hand-maintained list to keep in sync.
 pub fn current_handler_kinds() -> Vec<MessageKind> {
     Records::KINDS
         .iter()
         .chain(Messages::KINDS)
         .chain(Protocols::KINDS)
-        .filter(|&&(_, _, has_handler)| has_handler)
-        .filter_map(|&(i, m, _)| MessageKind::from_parts(i, m))
+        .filter_map(|&(i, m)| MessageKind::from_parts(i, m))
         .collect()
 }
 
@@ -507,8 +506,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::descriptors::{messages::MessagesMethod, records::RecordsMethod};
-    use crate::interfaces::messages::descriptors::QUERY;
+    use crate::descriptors::records::RecordsMethod;
 
     #[tokio::test]
     async fn process_message_rejects_inactive_tenant_before_dispatch() {
@@ -660,20 +658,6 @@ mod tests {
             reply.status.detail,
             "RecordsQuery handler is not implemented"
         );
-    }
-
-    #[tokio::test]
-    async fn current_handler_kinds_excludes_no_handler_descriptors() {
-        let kinds = current_handler_kinds();
-
-        // `MessagesQuery` is a deserializable descriptor variant on the `Messages` union...
-        assert!(Messages::KINDS
-            .iter()
-            .any(|&(_, method, _)| method == QUERY));
-        // ...but it is marked `no_handler`, so it is excluded from the dispatch set.
-        assert!(!kinds.contains(&MessageKind::Messages(MessagesMethod::Query)));
-        // The other Messages methods remain handler-backed.
-        assert!(kinds.contains(&MessageKind::Messages(MessagesMethod::Read)));
     }
 
     #[derive(Clone)]

@@ -1067,6 +1067,12 @@ fn matches_filter(value: &Value, filter: &Filter<Value>) -> bool {
         | Filter::Range(RangeFilter::Criterion(lower, upper)) => {
             matches_lower_bound(value, lower) && matches_upper_bound(value, upper)
         }
+        Filter::Subtree(subtree) => match value {
+            Value::String(actual) => {
+                *actual == subtree.subtree || actual.starts_with(&format!("{}/", subtree.subtree))
+            }
+            _ => false,
+        },
     }
 }
 

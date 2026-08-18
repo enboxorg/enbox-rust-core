@@ -169,6 +169,16 @@ impl<U, T> SqliteQuery<U, T> {
                     None => Ok((format!("({col} >= ?)"), vec![lo.into()])), // no bound
                 }
             }
+
+            Filter::Subtree(v) => {
+                let exact = SqliteValue::from(v.subtree.clone());
+                let descendant_prefix = SqliteValue::from(format!("{}/", v.subtree));
+                let upper_bound = SqliteValue::from(format!("{}0", v.subtree));
+                Ok((
+                    format!("({col} = ? OR ({col} >= ? AND {col} < ?))"),
+                    vec![exact, descendant_prefix, upper_bound],
+                ))
+            }
         }
     }
 }

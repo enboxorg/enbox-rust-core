@@ -4,11 +4,12 @@ use std::sync::{Arc, Mutex};
 
 use dwn_rs_core::errors::EventLogError;
 use dwn_rs_core::events::MessageEvent;
+use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::{
     EventLog, EventLogReadOptions, EventLogSubscribeOptions, EventLogTrimBound, ProgressGapReason,
     SubscriptionMessage,
 };
-use dwn_rs_core::{Descriptor, Message, Value};
+use dwn_rs_core::{Descriptor, Message, ProgressToken, Value};
 use serde_json::json;
 
 use dwn_rs_stores::{SqliteEventLog, SqliteStore};
@@ -45,14 +46,14 @@ async fn sqlite_event_log_subscribe_replays_from_cursor_and_emits_eose() {
     match &messages[0] {
         SubscriptionMessage::Event { cursor, .. } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "cid-2");
+            assert_eq!(cursor.message_cid.as_deref(), Some("cid-2"));
         }
         other => panic!("expected event, got {other:?}"),
     }
     match &messages[1] {
         SubscriptionMessage::Eose { cursor } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "cid-2");
+            assert_eq!(cursor.message_cid.as_deref(), Some("cid-2"));
         }
         other => panic!("expected eose, got {other:?}"),
     }
@@ -92,7 +93,7 @@ async fn sqlite_event_log_read_returns_progress_gap_after_trim() {
         panic!("expected progress gap");
     };
     assert_eq!(gap.reason, ProgressGapReason::TokenTooOld);
-    assert_eq!(gap.oldest_available.message_cid, "cid-3");
+    assert_eq!(gap.oldest_available.message_cid.as_deref(), Some("cid-3"));
     assert_eq!(gap.latest_available, fourth);
 
     event_log
@@ -112,7 +113,7 @@ async fn sqlite_event_log_replay_bounds_survive_reopen() {
     let (event, indexes) = sample_event();
 
     {
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let mut event_log = SqliteEventLog::new(&store);
         event_log.open().await.unwrap();
         emit(&event_log, "cid-1", &event, &indexes).await;
@@ -121,7 +122,7 @@ async fn sqlite_event_log_replay_bounds_survive_reopen() {
     }
 
     {
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let mut event_log = SqliteEventLog::new(&store);
         event_log.open().await.unwrap();
         let bounds = event_log
@@ -129,8 +130,8 @@ async fn sqlite_event_log_replay_bounds_survive_reopen() {
             .await
             .unwrap()
             .expect("replay bounds");
-        assert_eq!(bounds.oldest.message_cid, "cid-1");
-        assert_eq!(bounds.latest.message_cid, "cid-2");
+        assert_eq!(bounds.oldest.message_cid.as_deref(), Some("cid-1"));
+        assert_eq!(bounds.latest.message_cid.as_deref(), Some("cid-2"));
 
         let read = event_log
             .read(
@@ -192,7 +193,7 @@ async fn emit(
     message_cid: &str,
     event: &MessageEvent<Descriptor>,
     indexes: &std::collections::BTreeMap<String, Value>,
-) -> dwn_rs_core::stores::ProgressToken {
+) -> ProgressToken {
     event_log
         .emit(TENANT, event.clone(), indexes.clone(), message_cid)
         .await

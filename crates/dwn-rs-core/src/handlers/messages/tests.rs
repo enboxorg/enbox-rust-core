@@ -25,7 +25,7 @@ use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult, MessageStore,
     StateIndex, SubscriptionMessage,
 };
-use crate::{message_filters, permissions, Descriptor, MapValue, Message, Value};
+use crate::{message_filters, permissions, Descriptor, MapValue, Message, ProgressToken, Value};
 
 #[tokio::test]
 async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
@@ -242,14 +242,14 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
     match &delivered[0] {
         SubscriptionMessage::Event { cursor, .. } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "second-cid");
+            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
         }
         other => panic!("expected event, got {other:?}"),
     }
     match &delivered[1] {
         SubscriptionMessage::Eose { cursor } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "second-cid");
+            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
         }
         other => panic!("expected eose, got {other:?}"),
     }
@@ -527,7 +527,7 @@ struct SubscribeSpec {
     timestamp: String,
     filters: Vec<message_filters::Messages>,
     permission_grant_ids: Option<Vec<String>>,
-    cursor: Option<crate::stores::ProgressToken>,
+    cursor: Option<ProgressToken>,
     signer: PrivateJwkSigner,
 }
 

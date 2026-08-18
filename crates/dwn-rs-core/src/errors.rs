@@ -112,6 +112,9 @@ pub enum EventLogError {
     #[error("progress token gap: {0:?}")]
     ProgressGap(Box<ProgressGapInfo>),
 
+    #[error("invalid progress token position: {0}")]
+    InvalidProgressToken(String),
+
     #[error("error operating the store: {0}")]
     StoreError(#[from] StoreError),
 

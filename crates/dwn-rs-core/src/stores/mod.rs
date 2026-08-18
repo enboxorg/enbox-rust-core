@@ -1,5 +1,7 @@
 pub mod memory;
+pub mod replication_feed_reader;
 pub mod state_index;
+pub mod wake;
 
 use std::{fmt::Debug, future::Future, pin::Pin};
 
@@ -16,7 +18,8 @@ use crate::{
     filters::filter_key::Filters,
     Cursor,
 };
-use crate::{Descriptor, MapValue, Message, MessageSort, Pagination};
+use crate::{Descriptor, MapValue, Message, MessageSort, Pagination, ProgressToken};
+pub use replication_feed_reader::ReplicationFeedReader;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ManagedResumableTask<T: Serialize + Sync + Send + Debug> {
@@ -53,22 +56,14 @@ pub struct DataStoreGetResult {
     pub data_stream: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProgressToken {
-    pub stream_id: String,
-    pub epoch: String,
-    /// Monotonic decimal string. Compare numerically, not lexicographically.
-    pub position: String,
-    pub message_cid: String,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressGapReason {
     TokenTooOld,
     EpochMismatch,
     StreamMismatch,
+    TokenTooNew,
+    MessageMismatch,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -89,11 +84,15 @@ pub struct ProgressGapInfo {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct EventLogEntry {
-    pub seq: u64,
+    /// Canonical non-negative decimal position assigned to this entry.
+    pub seq: String,
     pub event: MessageEvent<Descriptor>,
     pub indexes: KeyValues,
     #[serde(rename = "messageCid", skip_serializing_if = "Option::is_none")]
     pub message_cid: Option<String>,
+    /// Inline record data detached from `event.message` for transport.
+    #[serde(rename = "encodedData", skip_serializing_if = "Option::is_none")]
+    pub encoded_data: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -107,6 +106,7 @@ pub struct EventLogReadOptions {
 pub struct EventLogReadResult {
     pub events: Vec<EventLogEntry>,
     pub cursor: Option<ProgressToken>,
+    pub drained: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
@@ -156,12 +156,15 @@ pub trait MessageStore: Default {
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
 
-    fn put<D: MessageDescriptor + Send>(
+    fn put<D>(
         &self,
         tenant: &str,
         message: Message<D>,
         indexes: KeyValues,
-    ) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
+    ) -> impl Future<Output = Result<(), MessageStoreError>> + Send
+    where
+        D: MessageDescriptor + Send,
+        Message<Descriptor>: From<Message<D>>;
 
     fn get(
         &self,
@@ -382,7 +385,10 @@ impl EventLog for () {
         _tenant: &str,
         _options: Option<EventLogReadOptions>,
     ) -> Result<EventLogReadResult, EventLogError> {
-        Ok(EventLogReadResult::default())
+        Ok(EventLogReadResult {
+            drained: true,
+            ..Default::default()
+        })
     }
 
     fn subscribe(
@@ -428,7 +434,9 @@ mod enbox_store_contract_tests {
             stream_id: "local-dwn".to_string(),
             epoch: "epoch-1".to_string(),
             position: "10".to_string(),
-            message_cid: "bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i".to_string(),
+            message_cid: Some(
+                "bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i".to_string(),
+            ),
         };
 
         assert_eq!(
@@ -438,6 +446,25 @@ mod enbox_store_contract_tests {
                 "epoch": "epoch-1",
                 "position": "10",
                 "messageCid": "bafyreigdyrzt5sfp7udm7hu76uh7y26mohmfvhyp6wmu2yxu3ktc4qtr3i",
+            })
+        );
+    }
+
+    #[test]
+    fn progress_token_omits_missing_message_cid() {
+        let token = ProgressToken {
+            stream_id: "local-dwn".to_string(),
+            epoch: "epoch-1".to_string(),
+            position: "10".to_string(),
+            message_cid: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(token).unwrap(),
+            json!({
+                "streamId": "local-dwn",
+                "epoch": "epoch-1",
+                "position": "10",
             })
         );
     }

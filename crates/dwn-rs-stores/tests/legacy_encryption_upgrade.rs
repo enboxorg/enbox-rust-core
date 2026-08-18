@@ -4,11 +4,13 @@
 //! current RecordsWrite builder.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use base64::Engine;
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::fields::MessageFields;
+use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::{DataStore, MessageStore};
 use dwn_rs_core::{Descriptor, Fields, Filters, Message, Value};
 use futures_util::{stream, TryStreamExt};
@@ -53,7 +55,7 @@ async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_mess
 
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("legacy-encryption.sqlite");
-    let mut pre_upgrade = SqliteStore::new(&path);
+    let mut pre_upgrade = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     MessageStore::open(&mut pre_upgrade).await.unwrap();
     let indexes = BTreeMap::from([(
         "messageTimestamp".to_string(),
@@ -74,7 +76,7 @@ async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_mess
     MessageStore::close(&mut pre_upgrade).await;
     let message_json_before = stored_message_json(&path, &message_cid);
 
-    let mut upgraded = SqliteStore::new(&path);
+    let mut upgraded = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     MessageStore::open(&mut upgraded).await.unwrap();
     let by_get = MessageStore::get(&upgraded, TENANT, &message_cid)
         .await

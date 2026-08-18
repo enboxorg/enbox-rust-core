@@ -8,12 +8,13 @@ use rusqlite::{params, OptionalExtension};
 use dwn_rs_core::errors::{EventLogError, StoreError};
 use dwn_rs_core::events::MessageEvent;
 use dwn_rs_core::stores::memory::MemoryEventLog;
+use dwn_rs_core::stores::replication_feed_reader::parse_feed_position;
 use dwn_rs_core::stores::{
     EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
-    EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues, ProgressToken,
+    EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues,
     SubscriptionListener,
 };
-use dwn_rs_core::{Descriptor, Value};
+use dwn_rs_core::{Descriptor, ProgressToken, Value};
 
 use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};
 
@@ -287,7 +288,7 @@ impl EventLog for SqliteEventLog {
             .emit(&tenant, event.clone(), indexes.clone(), &message_cid)
             .await?;
         if let Some(token) = &token {
-            let seq = token.position.parse::<u64>().map_err(|_| {
+            let seq = parse_feed_position(&token.position).map_err(|_| {
                 EventLogError::StoreError(StoreError::InternalException(
                     "invalid event log sequence".to_string(),
                 ))

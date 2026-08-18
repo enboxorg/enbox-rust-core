@@ -41,6 +41,11 @@ impl From<RangeFilter<String>> for RangeFilter<Value> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SubtreeFilter {
+    pub subtree: String,
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(untagged)]
 pub enum Filter<T> {
@@ -50,6 +55,7 @@ pub enum Filter<T> {
     OneOf(Vec<T>),
     #[serde(with = "prefix_filter_serializer")]
     Prefix(T),
+    Subtree(SubtreeFilter),
 }
 
 pub mod prefix_filter_serializer {
@@ -326,6 +332,7 @@ impl<'de> serde::de::Visitor<'de> for FilterVisitor {
     {
         let mut range = (Bound::Unbounded, Bound::Unbounded);
         let mut prefix_value: Option<Value> = None;
+        let mut subtree_value: Option<String> = None;
         let mut has_range_key = false;
         let mut has_criterion_key = false;
 
@@ -370,25 +377,37 @@ impl<'de> serde::de::Visitor<'de> for FilterVisitor {
                     }
                 }
                 "prefix" => {
-                    if has_range_key || has_criterion_key {
-                        return Err(serde::de::Error::custom(
-                            "cannot provide both 'prefix' and range keys",
-                        ));
-                    }
                     prefix_value = Some(value);
+                }
+                "subtree" => {
+                    subtree_value = Some(match value {
+                        Value::String(s) => s,
+                        _ => {
+                            return Err(serde::de::Error::custom("subtree value must be a string"))
+                        }
+                    });
                 }
                 _ => return Err(serde::de::Error::custom("invalid range key")),
             }
         }
 
-        if let Some(value) = prefix_value {
-            return Ok(Filter::Prefix(value));
+        let has_prefix = prefix_value.is_some();
+        let has_subtree = subtree_value.is_some();
+        let exclusive_count =
+            has_range_key as u8 + has_criterion_key as u8 + has_prefix as u8 + has_subtree as u8;
+
+        if exclusive_count > 1 {
+            return Err(serde::de::Error::custom(
+                "cannot combine subtree, prefix, range, and criterion keys",
+            ));
         }
 
-        if has_range_key && has_criterion_key {
-            return Err(serde::de::Error::custom(
-                "cannot provide both range and criterion keys",
-            ));
+        if let Some(subtree) = subtree_value {
+            return Ok(Filter::Subtree(SubtreeFilter { subtree }));
+        }
+
+        if let Some(value) = prefix_value {
+            return Ok(Filter::Prefix(value));
         }
 
         if has_range_key {
@@ -512,6 +531,7 @@ impl<T: Default + TryFrom<Value>> From<Filter<Value>> for Filter<T> {
                     .collect(),
             ),
             Filter::Prefix(v) => Filter::Prefix(v.try_into().unwrap_or_default()),
+            Filter::Subtree(v) => Filter::Subtree(SubtreeFilter { subtree: v.subtree }),
         }
     }
 }
@@ -607,6 +627,14 @@ mod test {
                     "from": 1,
                 }),
             },
+            Test {
+                filter: Filter::Subtree(SubtreeFilter {
+                    subtree: "root/branch".to_string(),
+                }),
+                json: json!({
+                    "subtree": "root/branch",
+                }),
+            },
         ];
 
         for test in tests {
@@ -685,6 +713,14 @@ mod test {
                     Bound::<Value>::Unbounded,
                 )),
             },
+            Test {
+                json: json!({
+                    "subtree": "root/branch",
+                }),
+                filter: Filter::Subtree(SubtreeFilter {
+                    subtree: "root/branch".to_string(),
+                }),
+            },
         ];
 
         for test in tests {
@@ -703,6 +739,10 @@ mod test {
         let invalid_range_tests = vec![
             json!({ "lt": 2, "prefix": "test" }),
             json!({ "bad": false }),
+            json!({ "subtree": 42 }),
+            json!({ "subtree": "root", "prefix": "test" }),
+            json!({ "prefix": "test", "subtree": "root" }),
+            json!({ "subtree": "root", "gte": 1 }),
         ];
 
         for test in invalid_range_tests {
@@ -746,6 +786,16 @@ mod test {
         assert_eq!(
             Filter::<String>::from(filter),
             Filter::Prefix("test".to_string())
+        );
+
+        let filter: Filter<Value> = Filter::Subtree(SubtreeFilter {
+            subtree: "root/branch".to_string(),
+        });
+        assert_eq!(
+            Filter::<String>::from(filter),
+            Filter::Subtree(SubtreeFilter {
+                subtree: "root/branch".to_string(),
+            })
         );
     }
 }

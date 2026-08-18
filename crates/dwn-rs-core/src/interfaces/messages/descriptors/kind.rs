@@ -167,7 +167,7 @@ mod tests {
             messages::MessagesMethod, protocols::ProtocolsMethod, records::RecordsMethod,
         };
 
-        // (variant, expected wire string) — covers the `no_handler` MessagesQuery too.
+        // (variant, expected wire string)
         assert_eq!(RecordsMethod::Read.as_str(), READ);
         assert_eq!(RecordsMethod::Write.as_str(), WRITE);
         assert_eq!(RecordsMethod::Count.as_str(), COUNT);
@@ -207,7 +207,6 @@ mod tests {
 
     #[test]
     fn message_kind_from_parts_round_trips() {
-        // One representative kind per interface, including the `no_handler` MessagesQuery.
         let cases = [
             (RECORDS, WRITE, MessageKind::Records(RecordsMethod::Write)),
             (
@@ -261,12 +260,9 @@ mod tests {
             Some("https://identity.foundation/dwn/json-schemas/messages-sync.json")
         );
 
-        // `MessagesQuery` is `no_handler` and has no published schema — the case that distinguishes
-        // the descriptor-derived lookup from a total match, so `validate_message` still yields
-        // "schema not found" for it rather than dispatching.
         assert_eq!(
             MessageKind::Messages(MessagesMethod::Query).schema_id(),
-            None
+            Some("https://identity.foundation/dwn/json-schemas/messages-query.json")
         );
     }
 }

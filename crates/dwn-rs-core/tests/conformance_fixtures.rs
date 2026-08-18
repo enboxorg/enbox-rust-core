@@ -48,6 +48,7 @@ const JWE_DECRYPT_ASSERTION: &str = "jwe.decrypt";
 const JWE_SEAL_ASSERTION: &str = "jwe.seal";
 const STATE_INDEX_OPERATIONS_ASSERTION: &str = "state-index.operations";
 const MESSAGES_SYNC_REPLIES_ASSERTION: &str = "messages-sync.replies";
+const MESSAGES_QUERY_REPLIES_ASSERTION: &str = "messages-query.replies";
 const MESSAGE_PROCESS_ASSERTION: &str = "message.process";
 const PROTOCOL_AUTHORIZATION_CORPUS_ASSERTION: &str = "protocol.authorization-corpus";
 const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
@@ -125,6 +126,7 @@ struct FixtureCase {
     tenants: Option<Vec<String>>,
     operations: Option<Vec<StateIndexOperation>>,
     process: Option<MessageProcessFixture>,
+    query: Option<Value>,
     protocol_authorization: Option<ProtocolAuthorizationFixture>,
     grant_authorization: Option<GrantAuthorizationFixture>,
     sync: Option<MessagesSyncFixture>,
@@ -638,6 +640,45 @@ async fn fixture_messages_sync_replies_match_typescript() {
 }
 
 #[tokio::test]
+async fn fixture_messages_query_replies_match_typescript() {
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(MESSAGES_QUERY_REPLIES_ASSERTION) {
+            continue;
+        }
+
+        for case in &suite.fixture_set.cases {
+            assert_messages_query_fixture_shape(case);
+
+            if case.rust_status != RustStatus::Supported {
+                continue;
+            }
+
+            let query = messages_query_fixture(case);
+            let seed_set = query
+                .get("seedSet")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(
+                seed_set.is_empty(),
+                "{} requires durable-feed fixture seeding before it can be executable",
+                case.id
+            );
+
+            let node = SqliteNativeDwn::open_in_memory(conformance_process_resolver())
+                .await
+                .unwrap_or_else(|err| panic!("{} failed to open SqliteNativeDwn: {err}", case.id));
+            let request = messages_query_request(case, query);
+            let actual = node
+                .dwn()
+                .process_message(messages_query_tenant(case, query), request)
+                .await;
+            let actual = serde_json::to_value(actual).expect("DwnReply must serialize");
+            assert_json_subset(messages_query_reply(case, query), &actual, &case.id);
+        }
+    }
+}
+
+#[tokio::test]
 async fn fixture_process_replies_are_measurable_by_handler() {
     for suite in load_fixture_suites() {
         if !suite.has_assertion(MESSAGE_PROCESS_ASSERTION) {
@@ -936,6 +977,113 @@ fn message_process_fixture(case: &FixtureCase) -> &MessageProcessFixture {
     case.process
         .as_ref()
         .unwrap_or_else(|| panic!("{} must include process fixture", case.id))
+}
+
+fn assert_messages_query_fixture_shape(case: &FixtureCase) {
+    let query = messages_query_fixture(case);
+    assert!(
+        query.get("tenant").and_then(Value::as_str).is_some(),
+        "{} MessagesQuery fixture must include a tenant",
+        case.id
+    );
+
+    if query.get("transition").and_then(Value::as_object).is_some() {
+        assert!(
+            query.get("reply").and_then(Value::as_object).is_some(),
+            "{} MessagesQuery transition fixture must include an object reply",
+            case.id
+        );
+        return;
+    }
+
+    assert!(
+        query.get("request").and_then(Value::as_object).is_some(),
+        "{} MessagesQuery fixture must include an object request",
+        case.id
+    );
+    assert!(
+        query.get("reply").and_then(Value::as_object).is_some(),
+        "{} MessagesQuery fixture must include an object reply",
+        case.id
+    );
+    assert!(
+        messages_query_reply(case, query)
+            .get("status")
+            .and_then(Value::as_object)
+            .and_then(|status| status.get("code"))
+            .and_then(Value::as_i64)
+            .is_some(),
+        "{} MessagesQuery reply must include a numeric status.code",
+        case.id
+    );
+}
+
+fn messages_query_fixture(case: &FixtureCase) -> &Value {
+    case.query
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} must include a MessagesQuery fixture", case.id))
+}
+
+fn messages_query_tenant<'a>(case: &FixtureCase, query: &'a Value) -> &'a str {
+    query
+        .get("tenant")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("{} MessagesQuery fixture tenant must be a string", case.id))
+}
+
+fn messages_query_reply<'a>(case: &FixtureCase, query: &'a Value) -> &'a Value {
+    query
+        .get("reply")
+        .unwrap_or_else(|| panic!("{} MessagesQuery fixture must include reply", case.id))
+}
+
+fn messages_query_request(case: &FixtureCase, query: &Value) -> Value {
+    let request = query
+        .get("request")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} MessagesQuery fixture request must be an object",
+                case.id
+            )
+        });
+    let mut descriptor = serde_json::Map::from_iter([
+        (
+            "interface".to_string(),
+            Value::String("Messages".to_string()),
+        ),
+        ("method".to_string(), Value::String("Query".to_string())),
+        (
+            "messageTimestamp".to_string(),
+            Value::String("2025-02-02T00:00:00.000000Z".to_string()),
+        ),
+    ]);
+    descriptor.extend(request.clone());
+
+    serde_json::json!({
+        "authorization": {},
+        "descriptor": descriptor,
+    })
+}
+
+fn assert_json_subset(expected: &Value, actual: &Value, case_id: &str) {
+    match (expected, actual) {
+        (Value::Object(expected), Value::Object(actual)) => {
+            for (key, expected_value) in expected {
+                let actual_value = actual
+                    .get(key)
+                    .unwrap_or_else(|| panic!("{case_id} reply is missing expected field {key}"));
+                assert_json_subset(expected_value, actual_value, case_id);
+            }
+        }
+        (Value::Array(expected), Value::Array(actual)) => {
+            assert_eq!(actual.len(), expected.len(), "{case_id} reply array length");
+            for (expected_value, actual_value) in expected.iter().zip(actual) {
+                assert_json_subset(expected_value, actual_value, case_id);
+            }
+        }
+        _ => assert_eq!(actual, expected, "{case_id} reply field"),
+    }
 }
 
 fn process_reply(case: &FixtureCase) -> Response<Reply> {

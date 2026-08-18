@@ -31,7 +31,7 @@ use crate::stores::{
 };
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
-    RangeFilter, SortDirection,
+    ProgressToken, RangeFilter, SortDirection,
 };
 use crate::{Descriptor, Value};
 
@@ -818,14 +818,14 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
     match &delivered[0] {
         SubscriptionMessage::Event { cursor, .. } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "second-cid");
+            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
         }
         other => panic!("expected event, got {other:?}"),
     }
     match &delivered[1] {
         SubscriptionMessage::Eose { cursor } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid, "second-cid");
+            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
         }
         other => panic!("expected eose, got {other:?}"),
     }
@@ -1132,7 +1132,7 @@ fn record_event_indexes(protocol: &str, method: &str) -> KeyValues {
 
 async fn signed_records_subscribe_message(
     filter: RecordsFilter,
-    cursor: Option<crate::stores::ProgressToken>,
+    cursor: Option<ProgressToken>,
     timestamp: &str,
 ) -> serde_json::Value {
     let descriptor = SubscribeDescriptor {
@@ -1639,6 +1639,12 @@ fn matches_filter(value: &Value, filter: &Filter<Value>) -> bool {
         | Filter::Range(RangeFilter::Criterion(lower, upper)) => {
             matches_lower_bound(value, lower) && matches_upper_bound(value, upper)
         }
+        Filter::Subtree(subtree) => match value {
+            Value::String(actual) => {
+                *actual == subtree.subtree || actual.starts_with(&format!("{}/", subtree.subtree))
+            }
+            _ => false,
+        },
     }
 }
 

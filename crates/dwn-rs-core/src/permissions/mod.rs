@@ -1308,7 +1308,7 @@ where
     }
 }
 
-pub async fn authorize_messages_subscribe<MessageStore>(
+pub async fn authorize_messages_subscribe_and_query<MessageStore>(
     tenant: &str,
     incoming_message: &Message<Descriptor>,
     filters: &[MessagesFilter],

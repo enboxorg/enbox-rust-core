@@ -72,12 +72,15 @@ impl<R> Response<R> {
         }
     }
 
-    pub fn not_implemented(detail: String) -> Self
+    pub fn not_implemented(detail: impl Into<String>) -> Self
     where
         R: Default,
     {
         Self {
-            status: Status { code: 501, detail },
+            status: Status {
+                code: 501,
+                detail: detail.into(),
+            },
             reply: R::default(),
         }
     }

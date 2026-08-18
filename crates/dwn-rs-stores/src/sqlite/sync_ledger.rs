@@ -16,7 +16,7 @@ use dwn_rs_core::utils::canonical_rfc3339;
 use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};
 
 /// SQLite-backed [`SyncLedger`] persisted alongside the native DWN database.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SqliteSyncLedger {
     store: SqliteStore,
 }
@@ -455,14 +455,19 @@ fn parse_run_status(value: &str) -> Result<SyncRunStatus, dwn_rs_core::errors::S
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
-    use dwn_rs_core::sync::{SyncError, SyncScope};
+    use dwn_rs_core::{
+        stores::wake::WakePublishHandler,
+        sync::{SyncError, SyncScope},
+    };
 
     #[tokio::test]
     async fn sqlite_sync_ledger_survives_reopen() {
         let path =
             std::env::temp_dir().join(format!("enbox-sync-ledger-{}.sqlite", ulid::Ulid::new()));
-        let store = SqliteStore::new(&path);
+        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let ledger = SqliteSyncLedger::new(&store);
         let checkpoint = SyncCheckpoint {
             key: "did:example:alice|https://peer|global|Pull".to_string(),

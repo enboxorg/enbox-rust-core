@@ -105,11 +105,14 @@ impl SecretStore for SqliteSecretStore {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use dwn_rs_core::identity::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryKeyManager, MemoryPortableDidStore, VAULT_PORTABLE_DID_KEY,
     };
+    use dwn_rs_core::stores::wake::WakePublishHandler;
     use dwn_rs_core::stores::MessageStore;
     use tempfile::tempdir;
 
@@ -117,7 +120,7 @@ mod tests {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     async fn opened_store(path: &std::path::Path) -> SqliteStore {
-        let mut store = SqliteStore::new(path);
+        let mut store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut store).await.expect("open sqlite");
         store
     }

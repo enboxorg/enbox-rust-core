@@ -7,7 +7,7 @@ use crate::descriptors::{MessageParameters, MessageValidator, ValidationError};
 use crate::encryption::{DerivationScheme, Encryption, EncryptionEnvelope, EncryptionInput};
 use crate::fields::WriteFields;
 use crate::filters::message_filters::Records as RecordsFilter;
-use crate::{normalize_url, MapValue, Message, Pagination};
+use crate::{normalize_url, MapValue, Message, Pagination, ProgressToken};
 
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -439,7 +439,7 @@ pub struct SubscribeParameters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pagination: Option<Pagination>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<crate::stores::ProgressToken>,
+    pub cursor: Option<ProgressToken>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
 }

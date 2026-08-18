@@ -1,15 +1,16 @@
 use std::{path::Path, sync::Arc};
 
-use dwn_rs_core::errors::StoreError;
+use dwn_rs_core::{errors::StoreError, stores::wake::WakePublishHandler};
 use rusqlite::Connection;
 use tokio::sync::OnceCell;
 
 use crate::SqliteConnection;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SqliteStore {
-    path: Arc<Path>,
     pub(crate) conn: Arc<OnceCell<SqliteConnection>>,
+    path: Arc<Path>,
+    wake_publisher: WakePublishHandler,
 }
 
 impl Default for SqliteStore {
@@ -20,13 +21,14 @@ impl Default for SqliteStore {
 
 impl SqliteStore {
     pub fn in_memory() -> Self {
-        Self::new(unique_memory_uri())
+        Self::new(unique_memory_uri(), WakePublishHandler::new(Arc::new(())))
     }
 
-    pub fn new(path: impl AsRef<Path>) -> Self {
+    pub fn new(path: impl AsRef<Path>, wake_publisher: WakePublishHandler) -> Self {
         Self {
             path: Arc::from(path.as_ref()),
             conn: Arc::new(OnceCell::new()),
+            wake_publisher,
         }
     }
 
@@ -147,7 +149,35 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
             CREATE TABLE IF NOT EXISTS sync_last_status (
                 key TEXT PRIMARY KEY,
                 status TEXT NOT NULL
-            );",
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_metadata (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                epoch TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_heads (
+                tenant TEXT PRIMARY KEY,
+                head INTEGER NOT NULL CHECK (head >= 0)
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_entries (
+                tenant TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 0),
+                message_cid TEXT NOT NULL,
+                indexes_json TEXT NOT NULL,
+                fingerprint_scopes_json TEXT NOT NULL,
+                PRIMARY KEY (tenant, position),
+                UNIQUE(tenant, message_cid)
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_fingerprints (
+                tenant TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                value blob NOT NULL,
+                PRIMARY KEY (tenant, domain)
+            );
+            ",
         )
         .map_err(sqlite_store_error)
 }

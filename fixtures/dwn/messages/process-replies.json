@@ -51,6 +51,50 @@
       }
     },
     {
+      "id": "process-messages-query-valid",
+      "description": "MessagesQuery owner feed request; kept as a known gap until a signed owner fixture is captured.",
+      "rustStatus": "known_gap",
+      "descriptorCid": "bafyreidurpzbravdzznzpzccs5mjkclienhcsk73hot7qrlgubxqngo7hu",
+      "messageCid": "bafyreidxd5caypo2hwk6m5b2cvkwauuoetdvucyrzist4lvwclo5ehb63u",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesQuery",
+        "valid": true,
+        "reply": { "status": { "code": 200, "detail": "OK" }, "entries": [], "drained": true }
+      },
+      "message": {
+        "authorization": {},
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Query",
+          "messageTimestamp": "2025-02-01T00:00:01.500000Z",
+          "filters": []
+        }
+      }
+    },
+    {
+      "id": "process-messages-query-invalid",
+      "description": "MessagesQuery process fixture for a malformed filters value.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreibm5p3ouxoczelb5fveajx57lufluv2hvz3d4aqbwa47piurh52ge",
+      "messageCid": "bafyreiddyqrfessdl2mps5jtshirpocs5jmbqoivtmtzgfuyfl2rjbskcu",
+      "process": {
+        "tenant": "did:example:alice",
+        "handler": "MessagesQuery",
+        "valid": false,
+        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"not-an-array\" is not of type \"array\"" } }
+      },
+      "message": {
+        "authorization": {},
+        "descriptor": {
+          "interface": "Messages",
+          "method": "Query",
+          "messageTimestamp": "2025-02-01T00:00:01.750000Z",
+          "filters": "not-an-array"
+        }
+      }
+    },
+    {
       "id": "process-messages-subscribe-valid",
       "description": "MessagesSubscribe dispatch stub until signed fixture is extracted (#107).",
       "rustStatus": "supported",

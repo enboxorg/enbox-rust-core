@@ -19,7 +19,6 @@ pub struct DescriptorAttr {
     pub(crate) schema_id: Option<Path>,
     pub(crate) variant: Option<Ident>,
     pub(crate) boxed: bool,
-    pub(crate) no_handler: bool,
 }
 
 impl Parse for DescriptorAttr {
@@ -32,15 +31,12 @@ impl Parse for DescriptorAttr {
             mut schema_id,
             mut variant,
             mut boxed,
-            mut no_handler,
-        ) = (None, None, None, None, None, None, false, false);
+        ) = (None, None, None, None, None, None, false);
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
             if key == "boxed" {
                 boxed = true;
-            } else if key == "no_handler" {
-                no_handler = true;
             } else {
                 input.parse::<Token![=]>()?;
                 match key.to_string().as_str() {
@@ -78,7 +74,6 @@ impl Parse for DescriptorAttr {
             schema_id,
             variant,
             boxed,
-            no_handler,
         })
     }
 }
@@ -109,7 +104,7 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
     let fields = attrs.fields;
     let parameters = attrs.parameters;
     // Build the `SCHEMA_ID` const expression: `Some(<PATH>)` when a `schema_id = …` is given,
-    // `None` otherwise (e.g. the `no_handler` MessagesQuery, which has no published schema). A bare
+    // `None` otherwise.
     // `#schema_id` would expand an `Option<Path>` to either bare path tokens (a `&str`, not
     // `Option<&str>`) or nothing at all, so wrap it explicitly.
     let schema_id = match attrs.schema_id {
@@ -329,7 +324,6 @@ mod tests {
             parameters: Some(parse_quote! { FieldsNamed }),
             variant: None,
             boxed: false,
-            no_handler: false,
             schema_id: None,
         };
 
