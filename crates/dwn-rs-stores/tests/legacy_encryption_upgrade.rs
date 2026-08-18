@@ -74,6 +74,11 @@ async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_mess
     .await
     .unwrap();
     MessageStore::close(&mut pre_upgrade).await;
+    // `close` prevents the pools from handing out more connections, but the
+    // store still owns the initialized pools. Drop it before opening the same
+    // database through rusqlite or another SqliteStore so every platform
+    // releases the SQLite handles deterministically.
+    drop(pre_upgrade);
     let message_json_before = stored_message_json(&path, &message_cid);
 
     let mut upgraded = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
@@ -101,6 +106,7 @@ async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_mess
         .await
         .unwrap();
     MessageStore::close(&mut upgraded).await;
+    drop(upgraded);
 
     let private_jwk = serde_json::from_str(PRIVATE_JWK).unwrap();
     for message in [by_get, by_query] {
