@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::Bound;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -23,11 +23,12 @@ use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::interfaces::messages::protocols::{ActionWho, Type};
 use crate::protocols::{Action, Can, Definition, RuleSet, Who};
-use crate::stores::memory::MemoryEventLog;
+use crate::stores::memory::{MemoryEventLog, MemoryMessageStore};
 use crate::stores::state_index::MemoryStateIndex;
+use crate::stores::wake::{Wake, WakeError, WakePublisher};
 use crate::stores::{
-    DataStore, DataStoreGetResult, DataStorePutResult, EventLog, KeyValues, MessageQueryResult,
-    MessageStore, StateIndex, SubscriptionMessage,
+    DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
+    MessageQueryResult, MessageStore, ReplicationFeedReader, StateIndex, SubscriptionMessage,
 };
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
@@ -37,6 +38,32 @@ use crate::{Descriptor, Value};
 
 use super::common::*;
 use super::*;
+
+#[derive(Clone, Default)]
+struct RecordingWakePublisher {
+    wakes: Arc<Mutex<Vec<(String, u64)>>>,
+}
+
+impl RecordingWakePublisher {
+    fn positions(&self) -> Vec<u64> {
+        self.wakes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, position)| *position)
+            .collect()
+    }
+}
+
+impl WakePublisher for RecordingWakePublisher {
+    fn publish(&self, wake: Wake) -> Result<(), WakeError> {
+        self.wakes
+            .lock()
+            .unwrap()
+            .push((wake.tenant, wake.position));
+        Ok(())
+    }
+}
 
 #[tokio::test]
 async fn records_write_read_query_and_count_published_inline_data() {
@@ -182,6 +209,137 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn records_write_retains_initial_feed_position_without_extra_wake() {
+    const TENANT: &str = "did:example:alice";
+
+    let publisher = RecordingWakePublisher::default();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+    let mut data_store = TestDataStore::default();
+    let mut state_index = MemoryStateIndex::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    state_index.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+        message_store.clone(),
+        data_store,
+        state_index,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"version one");
+    let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+    let initial = signed_write_message(WriteSpec {
+        data_cid: data_cid.clone(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let initial_message: Message<Descriptor> = serde_json::from_value(initial.clone()).unwrap();
+    let initial_cid = message_cid(&initial_message).unwrap();
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let context_id = initial["contextId"].as_str().unwrap().to_string();
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            TENANT,
+            &initial,
+            Some(data.clone()),
+        ))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let update = signed_write_message(WriteSpec {
+        record_id: Some(record_id),
+        context_id: Some(context_id),
+        data_cid,
+        data_size: data.len() as u64,
+        date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(TENANT, &update, None))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let feed = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    let retained = feed
+        .events
+        .iter()
+        .find(|entry| entry.message_cid.as_deref() == Some(initial_cid.as_str()))
+        .expect("initial write remains in feed");
+    assert_eq!(retained.seq, "2");
+    assert_eq!(feed.cursor.unwrap().position, "3");
+    assert_eq!(publisher.positions(), [1, 2, 3]);
+}
+
+#[tokio::test]
+async fn records_delete_retains_initial_feed_position_without_extra_wake() {
+    const TENANT: &str = "did:example:alice";
+
+    let publisher = RecordingWakePublisher::default();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+    let mut data_store = TestDataStore::default();
+    let mut state_index = MemoryStateIndex::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    state_index.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
+        message_store.clone(),
+        data_store.clone(),
+        state_index.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store,
+        state_index,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"version one");
+    let initial = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let initial_message: Message<Descriptor> = serde_json::from_value(initial.clone()).unwrap();
+    let initial_cid = message_cid(&initial_message).unwrap();
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let reply = write_handler
+        .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let delete = signed_delete_message(&record_id, false, "2025-01-01T00:01:00.000000Z").await;
+    let reply = delete_handler
+        .run(MethodHandlerRequest::new(TENANT, &delete, None))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let feed = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    let retained = feed
+        .events
+        .iter()
+        .find(|entry| entry.message_cid.as_deref() == Some(initial_cid.as_str()))
+        .expect("initial write remains in feed");
+    assert_eq!(retained.seq, "2");
+    assert_eq!(feed.cursor.unwrap().position, "3");
+    assert_eq!(publisher.positions(), [1, 2, 3]);
 }
 
 #[tokio::test]
@@ -1238,7 +1396,10 @@ async fn put_squash_protocol(tenant: &str, message_store: &TestMessageStore) {
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
-async fn put_notes_protocol_without_actions(tenant: &str, message_store: &TestMessageStore) {
+async fn put_notes_protocol_without_actions<M>(tenant: &str, message_store: &M)
+where
+    M: MessageStore,
+{
     let definition = Definition {
         protocol: "http://example.com/notes".to_string(),
         published: false,
