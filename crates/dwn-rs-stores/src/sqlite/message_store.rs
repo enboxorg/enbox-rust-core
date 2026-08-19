@@ -253,6 +253,8 @@ impl MessageStore for SqliteStore {
 
                 generate_epoch(&tx)?;
 
+                tx.commit().map_err(sqlite_store_error)?;
+
                 Ok(())
             })
             .await
