@@ -379,28 +379,7 @@ fn upsert_feed_fingerprint(
     message_cid: &str,
     scopes: &[String],
 ) -> Result<(), StoreError> {
-    // select all the feed_fingerprints for the tenant across all the
-    // provided scopes
-    let mut fingerprints: BTreeMap<(String, String), Fingerprint> = tx
-        .prepare(
-            "SELECT tenant, domain, value FROM feed_fingerprints \
-            WHERE tenant = ?1 AND domain IN (SELECT value FROM json_each(?2))",
-        )
-        .map_err(sqlite_store_error)?
-        .query_map(
-            params![tenant, serde_json::to_string(scopes).unwrap()],
-            |row| {
-                Ok((
-                    (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                    row.get::<_, [u8; 32]>(2)?,
-                ))
-            },
-        )
-        .map_err(sqlite_store_error)?
-        .map(|res| res.map(|(scope, fingerprint)| (scope, fingerprint.into())))
-        .collect::<Result<BTreeMap<(String, String), Fingerprint>, rusqlite::Error>>()
-        .map_err(sqlite_store_error)?;
-
+    let mut fingerprints = get_feed_fingerprints(tx, tenant, scopes)?;
     fold_cid_into_domain(&mut fingerprints, tenant, message_cid, scopes);
 
     for ((_, scope), fp) in fingerprints.iter() {
@@ -413,4 +392,48 @@ fn upsert_feed_fingerprint(
     }
 
     Ok(())
+}
+
+// select all the feed_fingerprints for the tenant across all the
+// provided scopes
+pub(crate) fn get_feed_fingerprints(
+    tx: &Transaction,
+    tenant: &str,
+    scopes: &[String],
+) -> Result<BTreeMap<(String, String), Fingerprint>, StoreError> {
+    tx.prepare(
+        "SELECT tenant, domain, value FROM feed_fingerprints \
+            WHERE tenant = ?1 AND domain IN (SELECT value FROM json_each(?2))",
+    )
+    .map_err(sqlite_store_error)?
+    .query_map(
+        params![tenant, serde_json::to_string(scopes).unwrap()],
+        |row| {
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, [u8; 32]>(2)?,
+            ))
+        },
+    )
+    .map_err(sqlite_store_error)?
+    .map(|res| res.map(|(scope, fingerprint)| (scope, fingerprint.into())))
+    .collect::<Result<BTreeMap<(String, String), Fingerprint>, rusqlite::Error>>()
+    .map_err(sqlite_store_error)
+}
+
+pub(crate) fn get_single_feed_fingerprint(
+    tx: &Transaction,
+    tenant: &str,
+    scope: &str,
+) -> Result<Option<Fingerprint>, StoreError> {
+    tx.query_row(
+        "SELECT value FROM feed_fingerprints \
+            WHERE tenant = ?1 AND domain = ?2
+            LIMIT 1",
+        params![tenant, scope],
+        |row| row.get::<_, [u8; 32]>(0),
+    )
+    .optional()
+    .map(|opt| opt.map(Fingerprint::from))
+    .map_err(sqlite_store_error)
 }
