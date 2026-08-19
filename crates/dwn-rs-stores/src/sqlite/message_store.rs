@@ -237,15 +237,21 @@ impl MessageStore for SqliteStore {
 
         async move {
             conn.with_writer(move |connection| {
-                connection
-                    .execute(
-                        "
+                let tx = connection.transaction().map_err(sqlite_store_error)?;
+                tx.execute(
+                    "
                         DELETE FROM messages;
                         DELETE FROM feed_metadata;
+                        DELETE FROM feed_entries;
+                        DELETE FROM feed_fingerprints;
+                        DELETE FROM feed_heads;
                     ",
-                        [],
-                    )
-                    .map_err(sqlite_store_error)?;
+                    [],
+                )
+                .map_err(sqlite_store_error)?;
+
+                generate_epoch(&tx)?;
+
                 Ok(())
             })
             .await
@@ -405,5 +411,5 @@ fn upsert_feed_fingerprint(
         .map_err(sqlite_store_error)?;
     }
 
-    todo!()
+    Ok(())
 }
