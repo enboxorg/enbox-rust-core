@@ -24,7 +24,7 @@ use crate::SqliteStore;
 
 impl MessageStore for SqliteStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
-        let conn = self.connection().await.map_err(MessageStoreError::from)?;
+        self.connection().await.map_err(MessageStoreError::from)?;
         Ok(())
     }
 
@@ -87,7 +87,6 @@ impl MessageStore for SqliteStore {
                                 tenant: tenant.clone(),
                                 position: next,
                                 message_cid: message_cid.clone(),
-                                message_json: message_json.clone(),
                                 indexes_json: indexes_json.clone(),
                                 fingerprint_scopes: msg_scopes.clone(),
                             },
@@ -407,7 +406,7 @@ fn upsert_feed_fingerprint(
     for ((_, scope), fp) in fingerprints.iter() {
         tx.execute(
             "INSERT INTO feed_fingerprints (tenant, domain, value) VALUES (?1, ?2, ?3) \
-                ON CONFLICT(tenant, domain) DO UPDATE SET fingerprint = excluded.fingerprint",
+                ON CONFLICT(tenant, domain) DO UPDATE SET value = excluded.value",
             params![tenant, scope, fp.as_slice()],
         )
         .map_err(sqlite_store_error)?;
