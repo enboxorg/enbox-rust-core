@@ -1,6 +1,5 @@
 use dwn_rs_core::errors::StoreError;
 use rusqlite::Transaction;
-use uuid::Uuid;
 
 use crate::{message_store::generate_epoch, sqlite_store_error};
 
