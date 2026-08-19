@@ -92,7 +92,7 @@ impl MessageStore for SqliteStore {
                             },
                         )?;
                         update_feed_head(&tx, &tenant, next)?;
-                        insert_feed_fingerprint(&tx, &tenant, &message_cid, &msg_scopes)?;
+                        upsert_feed_fingerprint(&tx, &tenant, &message_cid, &msg_scopes)?;
 
                         Some(Wake {
                             tenant: tenant.clone(),
@@ -201,12 +201,31 @@ impl MessageStore for SqliteStore {
         let cid = cid.to_string();
 
         conn.with_writer(move |connection| {
-            connection
-                .execute(
-                    "DELETE FROM messages WHERE tenant = ?1 AND message_cid = ?2",
-                    params![tenant, cid],
-                )
-                .map_err(sqlite_store_error)?;
+            let tx = connection.transaction().map_err(sqlite_store_error)?;
+
+            let feed_entry = match select_feed_entry(&tx, &tenant, &cid)? {
+                Some(entry) => Some((entry.message_cid, entry.fingerprint_scopes)),
+                None => None,
+            };
+
+            tx.execute(
+                "DELETE FROM messages WHERE tenant = ?1 AND message_cid = ?2",
+                params![tenant, cid],
+            )
+            .map_err(sqlite_store_error)?;
+
+            tx.execute(
+                "DELETE FROM feed_entries WHERE tenant = ?1 AND message_cid = ?2",
+                params![tenant, cid],
+            )
+            .map_err(sqlite_store_error)?;
+
+            if let Some((feed_cid, ref scopes)) = feed_entry {
+                upsert_feed_fingerprint(&tx, &tenant, &feed_cid, scopes)?;
+            }
+
+            tx.commit().map_err(sqlite_store_error)?;
+
             Ok(())
         })
         .await
@@ -347,12 +366,12 @@ fn update_feed_head(tx: &Transaction, tenant: &str, position: i64) -> Result<usi
     .map_err(sqlite_store_error)
 }
 
-fn insert_feed_fingerprint(
+fn upsert_feed_fingerprint(
     tx: &Transaction,
     tenant: &str,
     message_cid: &str,
     scopes: &[String],
-) -> Result<usize, StoreError> {
+) -> Result<(), StoreError> {
     // select all the feed_fingerprints for the tenant across all the
     // provided scopes
     let mut fingerprints: BTreeMap<(String, String), Fingerprint> = tx
