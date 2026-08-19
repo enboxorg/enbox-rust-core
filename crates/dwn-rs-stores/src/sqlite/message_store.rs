@@ -407,8 +407,8 @@ fn upsert_feed_fingerprint(
 
     for ((_, scope), fp) in fingerprints.iter() {
         tx.execute(
-            "INSERT INTO feed_fingerprints (tenant, scope, fingerprint) VALUES (?1, ?2, ?3) \
-                ON CONFLICT(tenant, scope) DO UPDATE SET fingerprint = excluded.fingerprint",
+            "INSERT INTO feed_fingerprints (tenant, domain, value) VALUES (?1, ?2, ?3) \
+                ON CONFLICT(tenant, domain) DO UPDATE SET fingerprint = excluded.fingerprint",
             params![tenant, scope, fp.as_slice()],
         )
         .map_err(sqlite_store_error)?;
