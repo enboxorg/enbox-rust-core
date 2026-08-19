@@ -61,6 +61,7 @@ impl MessageStore for SqliteStore {
 
                 if !is_feed_message(&message) {
                     insert_message(&tx, &tenant, &message_cid, &message_json, &indexes_json)?;
+                    tx.commit().map_err(sqlite_store_error)?;
                     return Ok(None);
                 }
 
