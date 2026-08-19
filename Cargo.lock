@@ -1398,6 +1398,7 @@ dependencies = [
  "serde",
  "serde_ipld_dagcbor",
  "serde_json",
+ "serde_rusqlite",
  "serde_with",
  "tempfile",
  "thiserror 1.0.69",
@@ -4314,6 +4315,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "serde_rusqlite"
+version = "0.41.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5224145f7ea2188165a3ad4e856c4452474683cd7a72dab3325201f673a2b410"
+dependencies = [
+ "rusqlite",
+ "serde_core",
 ]
 
 [[package]]

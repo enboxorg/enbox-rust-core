@@ -7,6 +7,7 @@ pub mod event_log;
 pub mod message_store;
 mod migrations;
 mod query;
+pub mod replication_feed_reader;
 pub mod resumable_task_store;
 pub mod secrets_store;
 pub mod state_index;

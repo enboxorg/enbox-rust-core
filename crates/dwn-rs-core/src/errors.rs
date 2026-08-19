@@ -63,6 +63,9 @@ pub enum StoreError {
 
     #[error("unable to find record")]
     NotFound,
+
+    #[error("unable to perform duable message replication: {0}")]
+    ReplicationError(#[from] MessageReplicationError),
 }
 
 #[derive(Error, Debug)]
@@ -93,6 +96,15 @@ pub enum MessageStoreError {
 
     #[error("unable to create filters: {0}")]
     FilterError(#[from] FilterError),
+}
+
+#[derive(Error, Debug)]
+pub enum MessageReplicationError {
+    #[error("fingerprint scopes mismatch for existing feed entry")]
+    FingerprintScopesMismatch,
+
+    #[error("feed position overflow")]
+    FeedPositionOverflow,
 }
 
 #[derive(Error, Debug)]

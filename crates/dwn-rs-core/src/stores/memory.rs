@@ -7,7 +7,9 @@ use std::sync::{Arc, RwLock};
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::records::write_tag_protocol;
 use crate::descriptors::MessageDescriptor;
-use crate::errors::{EventLogError, MessageStoreError, ResumableTaskStoreError, StoreError};
+use crate::errors::{
+    EventLogError, MessageReplicationError, MessageStoreError, ResumableTaskStoreError, StoreError,
+};
 use crate::events::MessageEvent;
 use crate::fields::MessageFields;
 use crate::filters::Filters;
@@ -171,9 +173,8 @@ impl MessageStore for MemoryMessageStore {
 
                         if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
                             return Err(MessageStoreError::StoreError(
-                                StoreError::InternalException(
-                                    "fingerprint scopes mismatch for existing feed entry"
-                                        .to_string(),
+                                StoreError::ReplicationError(
+                                    MessageReplicationError::FingerprintScopesMismatch,
                                 ),
                             ));
                         }
@@ -194,11 +195,9 @@ impl MessageStore for MemoryMessageStore {
                             .copied()
                             .unwrap_or(0)
                             .checked_add(1)
-                            .ok_or_else(|| {
-                                MessageStoreError::StoreError(StoreError::InternalException(
-                                    "feed position overflow".to_string(),
-                                ))
-                            })?;
+                            .ok_or(MessageStoreError::StoreError(StoreError::ReplicationError(
+                                MessageReplicationError::FeedPositionOverflow,
+                            )))?;
 
                         state.messages.insert(msg_key, msg_row);
 
