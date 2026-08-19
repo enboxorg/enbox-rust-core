@@ -5,7 +5,6 @@ pub(crate) struct FeedEntry {
     pub(crate) tenant: String,
     pub(crate) position: i64,
     pub(crate) message_cid: String,
-    pub(crate) message_json: String,
     pub(crate) indexes_json: String,
     #[serde(
         rename = "fingerprint_scopes_json",
