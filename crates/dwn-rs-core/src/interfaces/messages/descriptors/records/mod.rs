@@ -44,7 +44,7 @@ pub(crate) fn records_write_descriptor(
     }
 }
 
-pub(crate) fn write_tag_protocol(message: &Message<Descriptor>) -> Option<&str> {
+pub fn write_tag_protocol(message: &Message<Descriptor>) -> Option<&str> {
     let descriptor = records_write_descriptor(message).ok()?;
     match descriptor.tags.as_ref()?.get("protocol")? {
         crate::Value::String(value) => Some(value.as_str()),
