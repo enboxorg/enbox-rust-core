@@ -177,9 +177,6 @@ where
                     existing_author.as_deref(),
                     existing_is_latest,
                 );
-                if let Err(err) = self.message_store.delete(tenant, &existing_cid).await {
-                    return store_error_reply(err.to_string());
-                }
                 if let Err(err) = self
                     .message_store
                     .put(tenant, existing, updated_indexes)

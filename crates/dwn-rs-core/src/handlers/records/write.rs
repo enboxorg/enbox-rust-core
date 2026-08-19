@@ -691,20 +691,15 @@ where
 
             delete_from_data_store_if_needed(tenant, message, newest_message, &self.data_store)
                 .await?;
+
             let old_cid = message_cid(message)?;
-            self.message_store
-                .delete(tenant, &old_cid)
-                .await
-                .map_err(|err| err.to_string())?;
-            self.state_index
-                .delete(tenant, std::slice::from_ref(&old_cid))
-                .await
-                .map_err(|err| err.to_string())?;
 
             if is_initial_write(message, author).unwrap_or(false) {
                 let mut initial_write = message.clone();
                 set_encoded_data(&mut initial_write, None)?;
+
                 let indexes = records_write_indexes(&initial_write, author, false)?;
+
                 self.message_store
                     .put(tenant, initial_write.clone(), indexes.clone())
                     .await
@@ -712,6 +707,15 @@ where
                 let new_cid = message_cid(&initial_write)?;
                 self.state_index
                     .insert(tenant, &new_cid, indexes)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            } else {
+                self.message_store
+                    .delete(tenant, &old_cid)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                self.state_index
+                    .delete(tenant, &[old_cid])
                     .await
                     .map_err(|err| err.to_string())?;
             }
