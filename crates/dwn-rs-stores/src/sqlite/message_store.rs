@@ -239,7 +239,7 @@ impl MessageStore for SqliteStore {
         async move {
             conn.with_writer(move |connection| {
                 let tx = connection.transaction().map_err(sqlite_store_error)?;
-                tx.execute(
+                tx.execute_batch(
                     "
                         DELETE FROM messages;
                         DELETE FROM feed_metadata;
@@ -247,7 +247,6 @@ impl MessageStore for SqliteStore {
                         DELETE FROM feed_fingerprints;
                         DELETE FROM feed_heads;
                     ",
-                    [],
                 )
                 .map_err(sqlite_store_error)?;
 
