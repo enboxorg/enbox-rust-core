@@ -31,10 +31,11 @@ pub(crate) fn json_store_error(error: serde_json::Error) -> StoreError {
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use bytes::Bytes;
-    use dwn_rs_core::stores::wake::WakePublishHandler;
+    use dwn_rs_core::stores::replication_feed_reader::{cid_contribution, xor_in_place};
+    use dwn_rs_core::stores::wake::{Wake, WakePublishHandler, WakePublisher};
     use futures_util::{stream, TryStreamExt};
 
     use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
@@ -43,8 +44,151 @@ mod tests {
     use dwn_rs_core::filters::{Filter, FilterKey, Filters};
     use dwn_rs_core::stores::{DataStore, KeyValues, MessageStore};
     use dwn_rs_core::{Descriptor, Fields, Message, MessageSort, Pagination, SortDirection, Value};
+    use rusqlite::OptionalExtension;
 
     use super::*;
+
+    const TENANT: &str = "did:example:alice";
+
+    #[derive(Default)]
+    struct RecordingPublisher {
+        wakes: Mutex<Vec<(String, u64, bool)>>,
+        database_path: Option<PathBuf>,
+    }
+
+    impl WakePublisher for RecordingPublisher {
+        fn publish(&self, wake: Wake) -> Result<(), dwn_rs_core::stores::wake::WakeError> {
+            let committed = self.database_path.as_ref().is_none_or(|path| {
+                rusqlite::Connection::open(path)
+                    .and_then(|connection| {
+                        connection.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM feed_entries \
+                             WHERE tenant = ?1 AND position = ?2)",
+                            rusqlite::params![&wake.tenant, wake.position as i64],
+                            |row| row.get::<_, bool>(0),
+                        )
+                    })
+                    .unwrap_or(false)
+            });
+            self.wakes
+                .lock()
+                .unwrap()
+                .push((wake.tenant, wake.position, committed));
+            Ok(())
+        }
+    }
+
+    struct RejectingPublisher;
+
+    impl WakePublisher for RejectingPublisher {
+        fn publish(&self, _wake: Wake) -> Result<(), dwn_rs_core::stores::wake::WakeError> {
+            Err(dwn_rs_core::stores::wake::WakeError::PublishError(
+                "injected failure".to_string(),
+            ))
+        }
+    }
+
+    fn message_cid(message: &Message<Descriptor>) -> String {
+        let mut canonical = message.clone();
+        canonical.fields.encoded_data();
+        canonical.cid().unwrap().to_string()
+    }
+
+    fn non_feed_message(timestamp: &str) -> Message<Descriptor> {
+        serde_json::from_value(serde_json::json!({
+            "descriptor": {
+                "interface": "Messages",
+                "method": "Query",
+                "messageTimestamp": timestamp,
+            },
+            "authorization": { "signature": {} },
+        }))
+        .unwrap()
+    }
+
+    async fn feed_rows(store: &SqliteStore) -> Vec<(i64, String, String)> {
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT position, message_cid, indexes_json FROM feed_entries \
+                         WHERE tenant = ?1 ORDER BY position",
+                    )
+                    .map_err(sqlite_store_error)?;
+                let rows = statement
+                    .query_map([TENANT], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                    .map_err(sqlite_store_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(sqlite_store_error)?;
+                Ok(rows)
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn feed_head(store: &SqliteStore) -> Option<i64> {
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row(
+                        "SELECT head FROM feed_heads WHERE tenant = ?1",
+                        [TENANT],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn global_fingerprint(store: &SqliteStore) -> Option<Vec<u8>> {
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row(
+                        "SELECT value FROM feed_fingerprints WHERE tenant = ?1 AND domain = ''",
+                        [TENANT],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn feed_epoch(store: &SqliteStore) -> String {
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row("SELECT epoch FROM feed_metadata WHERE id = 1", [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap()
+    }
+
+    fn test_memory_uri() -> String {
+        format!(
+            "file:dwn-feed-test-{}?mode=memory&cache=shared",
+            uuid::Uuid::new_v4()
+        )
+    }
 
     #[tokio::test]
     async fn message_store_roundtrips_inline_data_without_changing_message_cid() {
@@ -248,6 +392,295 @@ mod tests {
             .unwrap();
         assert!(result.messages.is_empty());
         assert!(result.cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn durable_feed_assigns_monotonic_positions_and_updates_existing_cids() {
+        let publisher = Arc::new(RecordingPublisher::default());
+        let mut store = SqliteStore::new(
+            test_memory_uri(),
+            WakePublishHandler::new(publisher.clone()),
+        );
+        MessageStore::open(&mut store).await.unwrap();
+
+        let first = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
+        let second = message("2025-01-01T00:00:01Z", "https://example.com/notes", None);
+        let incomplete = message("2025-01-01T00:00:02Z", "https://example.com/notes", None);
+        let complete = message(
+            "2025-01-01T00:00:02Z",
+            "https://example.com/notes",
+            Some("dGVzdA=="),
+        );
+        let cids = [&first, &second, &incomplete]
+            .map(message_cid)
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(message_cid(&complete), cids[2]);
+
+        MessageStore::put(&store, TENANT, first.clone(), indexes(&first))
+            .await
+            .unwrap();
+        MessageStore::put(&store, TENANT, second.clone(), indexes(&second))
+            .await
+            .unwrap();
+
+        let mut updated_indexes = indexes(&second);
+        updated_indexes.insert("marker".to_string(), Value::String("updated".to_string()));
+        MessageStore::put(&store, TENANT, second, updated_indexes)
+            .await
+            .unwrap();
+        MessageStore::put(&store, TENANT, incomplete.clone(), indexes(&incomplete))
+            .await
+            .unwrap();
+        MessageStore::put(&store, TENANT, complete.clone(), indexes(&complete))
+            .await
+            .unwrap();
+
+        let rows = feed_rows(&store).await;
+        assert_eq!(rows.iter().map(|row| row.0).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(
+            rows.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
+            cids
+        );
+        assert!(rows[1].2.contains("updated"));
+        assert_eq!(feed_head(&store).await, Some(3));
+        assert_eq!(
+            MessageStore::get(&store, TENANT, &cids[2]).await.unwrap(),
+            Some(complete)
+        );
+
+        let mut expected = cid_contribution(&cids[0]);
+        xor_in_place(&mut expected, &cid_contribution(&cids[1]));
+        xor_in_place(&mut expected, &cid_contribution(&cids[2]));
+        assert_eq!(
+            global_fingerprint(&store).await.unwrap(),
+            expected.as_slice()
+        );
+
+        let wakes = publisher.wakes.lock().unwrap();
+        assert_eq!(
+            wakes
+                .iter()
+                .map(|(_, position, _)| *position)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_feed_deletes_leave_holes_and_preserve_the_head() {
+        let publisher = Arc::new(RecordingPublisher::default());
+        let mut store = SqliteStore::new(
+            test_memory_uri(),
+            WakePublishHandler::new(publisher.clone()),
+        );
+        MessageStore::open(&mut store).await.unwrap();
+        let messages = [
+            message("2025-01-01T00:00:00Z", "https://example.com/notes", None),
+            message("2025-01-01T00:00:01Z", "https://example.com/notes", None),
+            message("2025-01-01T00:00:02Z", "https://example.com/notes", None),
+        ];
+        let cids = messages.iter().map(message_cid).collect::<Vec<_>>();
+        for message in messages {
+            MessageStore::put(&store, TENANT, message.clone(), indexes(&message))
+                .await
+                .unwrap();
+        }
+
+        MessageStore::delete(&store, TENANT, &cids[1])
+            .await
+            .unwrap();
+        MessageStore::delete(&store, TENANT, &cids[2])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            feed_rows(&store)
+                .await
+                .into_iter()
+                .map(|row| row.0)
+                .collect::<Vec<_>>(),
+            [1]
+        );
+        assert_eq!(feed_head(&store).await, Some(3));
+        assert_eq!(
+            global_fingerprint(&store).await.unwrap(),
+            cid_contribution(&cids[0]).as_slice()
+        );
+        assert_eq!(publisher.wakes.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn durable_feed_clear_replaces_epoch_and_restarts_positions_without_waking() {
+        let publisher = Arc::new(RecordingPublisher::default());
+        let mut store = SqliteStore::new(
+            test_memory_uri(),
+            WakePublishHandler::new(publisher.clone()),
+        );
+        MessageStore::open(&mut store).await.unwrap();
+        let before = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
+        MessageStore::put(&store, TENANT, before.clone(), indexes(&before))
+            .await
+            .unwrap();
+        let old_epoch = feed_epoch(&store).await;
+
+        MessageStore::clear(&store).await.unwrap();
+
+        assert_ne!(feed_epoch(&store).await, old_epoch);
+        assert!(feed_rows(&store).await.is_empty());
+        assert_eq!(feed_head(&store).await, None);
+        assert_eq!(global_fingerprint(&store).await, None);
+        assert_eq!(publisher.wakes.lock().unwrap().len(), 1);
+
+        let after = message("2025-01-01T00:00:01Z", "https://example.com/notes", None);
+        MessageStore::put(&store, TENANT, after.clone(), indexes(&after))
+            .await
+            .unwrap();
+        assert_eq!(feed_rows(&store).await[0].0, 1);
+        assert_eq!(publisher.wakes.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn durable_feed_rolls_back_all_sql_state_and_does_not_wake() {
+        let publisher = Arc::new(RecordingPublisher::default());
+        let mut store = SqliteStore::new(
+            test_memory_uri(),
+            WakePublishHandler::new(publisher.clone()),
+        );
+        MessageStore::open(&mut store).await.unwrap();
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_writer(|connection| {
+                connection
+                    .execute_batch(
+                        "CREATE TRIGGER reject_fingerprint BEFORE INSERT ON feed_fingerprints \
+                         BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+                    )
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        let rejected = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
+        let rejected_cid = message_cid(&rejected);
+
+        assert!(
+            MessageStore::put(&store, TENANT, rejected, KeyValues::new())
+                .await
+                .is_err()
+        );
+
+        assert!(feed_rows(&store).await.is_empty());
+        assert_eq!(feed_head(&store).await, None);
+        assert_eq!(global_fingerprint(&store).await, None);
+        assert!(MessageStore::get(&store, TENANT, &rejected_cid)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(publisher.wakes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn non_feed_put_only_stores_the_message_and_does_not_wake() {
+        let publisher = Arc::new(RecordingPublisher::default());
+        let mut store = SqliteStore::new(
+            test_memory_uri(),
+            WakePublishHandler::new(publisher.clone()),
+        );
+        MessageStore::open(&mut store).await.unwrap();
+        let message = non_feed_message("2025-01-01T00:00:00Z");
+        let cid = message_cid(&message);
+
+        MessageStore::put(&store, TENANT, message.clone(), KeyValues::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            MessageStore::get(&store, TENANT, &cid).await.unwrap(),
+            Some(message)
+        );
+        assert!(feed_rows(&store).await.is_empty());
+        assert_eq!(feed_head(&store).await, None);
+        assert_eq!(global_fingerprint(&store).await, None);
+        assert!(publisher.wakes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn wake_publication_failure_does_not_fail_or_roll_back_put() {
+        let mut store = SqliteStore::new(
+            test_memory_uri(),
+            WakePublishHandler::new(Arc::new(RejectingPublisher)),
+        );
+        MessageStore::open(&mut store).await.unwrap();
+        let message = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
+        let cid = message_cid(&message);
+
+        MessageStore::put(&store, TENANT, message.clone(), indexes(&message))
+            .await
+            .expect("publisher failure must not fail put");
+
+        assert_eq!(feed_head(&store).await, Some(1));
+        assert_eq!(
+            MessageStore::get(&store, TENANT, &cid).await.unwrap(),
+            Some(message)
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_feed_state_survives_reopen_and_wakes_only_after_commit() {
+        let path = temp_db_path("durable-feed-reopen");
+        let publisher = Arc::new(RecordingPublisher {
+            wakes: Mutex::new(Vec::new()),
+            database_path: Some(path.clone()),
+        });
+        let first = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
+        let second = message("2025-01-01T00:00:01Z", "https://example.com/tasks", None);
+        let cids = [&first, &second].map(message_cid);
+        let mut expected = cid_contribution(&cids[0]);
+        xor_in_place(&mut expected, &cid_contribution(&cids[1]));
+
+        let mut store = SqliteStore::new(&path, WakePublishHandler::new(publisher.clone()));
+        MessageStore::open(&mut store).await.unwrap();
+        MessageStore::put(&store, TENANT, first.clone(), indexes(&first))
+            .await
+            .unwrap();
+        MessageStore::put(&store, TENANT, second.clone(), indexes(&second))
+            .await
+            .unwrap();
+        let epoch = feed_epoch(&store).await;
+        MessageStore::close(&mut store).await;
+
+        let mut reopened = SqliteStore::new(&path, WakePublishHandler::default());
+        MessageStore::open(&mut reopened).await.unwrap();
+        assert_eq!(feed_epoch(&reopened).await, epoch);
+        assert_eq!(feed_head(&reopened).await, Some(2));
+        assert_eq!(
+            feed_rows(&reopened)
+                .await
+                .into_iter()
+                .map(|row| row.1)
+                .collect::<Vec<_>>(),
+            cids
+        );
+        assert_eq!(
+            global_fingerprint(&reopened).await.unwrap(),
+            expected.as_slice()
+        );
+        assert_eq!(
+            MessageStore::get(&reopened, TENANT, &cids[1])
+                .await
+                .unwrap(),
+            Some(second)
+        );
+        assert!(publisher
+            .wakes
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, _, committed)| *committed));
+        MessageStore::close(&mut reopened).await;
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
