@@ -382,8 +382,8 @@ fn upsert_feed_fingerprint(
     // provided scopes
     let mut fingerprints: BTreeMap<(String, String), Fingerprint> = tx
         .prepare(
-            "SELECT domain, value, fingerprint FROM feed_fingerprints \
-            WHERE tenant = ?1 AND scope IN (SELECT value FROM json_each(?2))",
+            "SELECT tenant, domain, value FROM feed_fingerprints \
+            WHERE tenant = ?1 AND domain IN (SELECT value FROM json_each(?2))",
         )
         .map_err(sqlite_store_error)?
         .query_map(
