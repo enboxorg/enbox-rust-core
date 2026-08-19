@@ -25,31 +25,6 @@ use crate::SqliteStore;
 impl MessageStore for SqliteStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
         let conn = self.connection().await.map_err(MessageStoreError::from)?;
-
-        conn.with_writer(move |conn| {
-            let tx = conn.transaction().map_err(sqlite_store_error)?;
-
-            let epoch = tx
-                .query_row("SELECT epoch FROM feed_metadata LIMIT 1", [], |row| {
-                    row.get::<_, String>(0)
-                })
-                .optional()
-                .map_err(sqlite_store_error)?;
-
-            if epoch.is_none() {
-                let epoch = Uuid::new_v4().to_string();
-                tx.execute(
-                    "INSERT INTO feed_metadata (id, epoch) VALUES (1, ?1)",
-                    params![epoch],
-                )
-                .map_err(sqlite_store_error)?;
-            };
-
-            tx.commit().map_err(sqlite_store_error)
-        })
-        .await
-        .map_err(MessageStoreError::from)?;
-
         Ok(())
     }
 
@@ -259,6 +234,14 @@ impl MessageStore for SqliteStore {
         }
         .await
     }
+}
+
+pub(crate) fn generate_epoch(tx: &Transaction) -> Result<usize, StoreError> {
+    tx.execute(
+        "INSERT INTO feed_metadata (id, epoch) VALUES (1, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .map_err(sqlite_store_error)
 }
 
 fn insert_message(
