@@ -563,7 +563,9 @@ impl MessageStore for TestMessageStore {
             let value = serde_json::to_value(&message)?;
             let message: Message<Descriptor> = serde_json::from_value(value)?;
             let cid = message_cid(&message).map_err(test_store_error)?;
-            rows.write().unwrap().push(TestMessageRow {
+            let mut rows = rows.write().unwrap();
+            rows.retain(|row| row.tenant != tenant || row.cid != cid);
+            rows.push(TestMessageRow {
                 tenant,
                 cid,
                 message,

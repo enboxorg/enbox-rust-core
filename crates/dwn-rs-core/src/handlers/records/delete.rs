@@ -200,14 +200,6 @@ where
         if compare_messages(existing, message) == Ordering::Less {
             delete_from_data_store_if_needed(tenant, existing, message, data_store).await?;
             let old_cid = message_cid(existing)?;
-            message_store
-                .delete(tenant, &old_cid)
-                .await
-                .map_err(|err| err.to_string())?;
-            state_index
-                .delete(tenant, std::slice::from_ref(&old_cid))
-                .await
-                .map_err(|err| err.to_string())?;
             if records_write_descriptor(existing).is_ok()
                 && record_id(existing) == Some(descriptor.record_id.clone())
                 && is_initial_write(
@@ -218,8 +210,10 @@ where
             {
                 let mut initial = existing.clone();
                 set_encoded_data(&mut initial, None)?;
+
                 let author = extract_author(&initial).unwrap_or_default();
                 let indexes = records_write_indexes(&initial, &author, false)?;
+
                 message_store
                     .put(tenant, initial.clone(), indexes.clone())
                     .await
@@ -227,6 +221,15 @@ where
                 let new_cid = message_cid(&initial)?;
                 state_index
                     .insert(tenant, &new_cid, indexes)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            } else {
+                message_store
+                    .delete(tenant, &old_cid)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                state_index
+                    .delete(tenant, std::slice::from_ref(&old_cid))
                     .await
                     .map_err(|err| err.to_string())?;
             }

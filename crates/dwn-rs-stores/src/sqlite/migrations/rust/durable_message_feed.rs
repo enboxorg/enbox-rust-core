@@ -1,8 +1,7 @@
 use dwn_rs_core::errors::StoreError;
 use rusqlite::Transaction;
-use uuid::Uuid;
 
-use crate::sqlite_store_error;
+use crate::{message_store::generate_epoch, sqlite_store_error};
 
 pub(crate) fn run(tx: &Transaction<'_>) -> Result<(), StoreError> {
     let message_count = tx
@@ -20,11 +19,7 @@ pub(crate) fn run(tx: &Transaction<'_>) -> Result<(), StoreError> {
         });
     }
 
-    tx.execute(
-        "INSERT INTO feed_metadata (id, epoch) VALUES (1, ?1)",
-        [Uuid::new_v4().to_string()],
-    )
-    .map_err(sqlite_store_error)?;
+    generate_epoch(tx)?;
 
     Ok(())
 }

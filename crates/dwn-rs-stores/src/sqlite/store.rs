@@ -13,7 +13,7 @@ use crate::{
 pub struct SqliteStore {
     pub(crate) conn: Arc<OnceCell<SqliteConnection>>,
     path: Arc<Path>,
-    wake_publisher: WakePublishHandler,
+    pub(crate) waker_publisher: WakePublishHandler,
 }
 
 impl Default for SqliteStore {
@@ -27,11 +27,11 @@ impl SqliteStore {
         Self::new(unique_memory_uri(), WakePublishHandler::new(Arc::new(())))
     }
 
-    pub fn new(path: impl AsRef<Path>, wake_publisher: WakePublishHandler) -> Self {
+    pub fn new(path: impl AsRef<Path>, waker_publisher: WakePublishHandler) -> Self {
         Self {
             path: Arc::from(path.as_ref()),
             conn: Arc::new(OnceCell::new()),
-            wake_publisher,
+            waker_publisher,
         }
     }
 
