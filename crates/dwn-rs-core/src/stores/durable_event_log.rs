@@ -115,6 +115,6 @@ where
         _tenant: &str,
         _older_than: EventLogTrimBound,
     ) -> Result<(), EventLogError> {
-        return Err(EventLogError::UnsupportedReadOption("trim".to_string()));
+        Err(EventLogError::UnsupportedReadOption("trim".to_string()))
     }
 }
