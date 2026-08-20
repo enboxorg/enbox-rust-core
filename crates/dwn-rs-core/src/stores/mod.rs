@@ -1,3 +1,4 @@
+pub mod durable_event_log;
 pub mod memory;
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
