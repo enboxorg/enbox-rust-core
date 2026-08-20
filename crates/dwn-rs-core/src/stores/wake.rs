@@ -118,6 +118,10 @@ pub trait WakeSubscriber: Send + Sync {
         tenant: &str,
         listener: WakeSubscriptionListener,
     ) -> WakeFuture<'_, Box<dyn WakeSubscriptionHandle>>;
+
+    // Closes the subscriber and removes all registered listeners. After this
+    // call, no further wakes will be delivered to any listener.
+    fn clear(&self) -> WakeFuture<'_, ()>;
 }
 
 /// Handle returned by [`WakeSubscriber::subscribe`] that removes the listener
@@ -157,15 +161,6 @@ impl InProcessWakeBus {
         Self {
             inner: Arc::new(InProcessBusInner::default()),
         }
-    }
-
-    /// Removes every listener registered with this bus.
-    ///
-    /// Closing drops the bus-owned senders and cancels the corresponding
-    /// listener tasks, including callbacks that are currently awaiting.
-    pub fn close(&self) -> WakeFuture<'_, ()> {
-        self.inner.clear();
-        Box::pin(async {})
     }
 }
 
@@ -268,6 +263,11 @@ impl WakeSubscriber for InProcessWakeBus {
             Box::new(InProcessSubscriptionHandle { id, tenant, inner })
                 as Box<dyn WakeSubscriptionHandle>
         })
+    }
+
+    fn clear(&self) -> WakeFuture<'_, ()> {
+        self.inner.clear();
+        Box::pin(async {})
     }
 }
 
