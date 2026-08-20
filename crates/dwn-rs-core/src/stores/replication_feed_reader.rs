@@ -251,6 +251,15 @@ pub fn xor_in_place(target: &mut Fingerprint, contribution: &Fingerprint) {
     }
 }
 
+// Normalizes a scope collection for comparison and storage.
+pub fn normalize_scopes(scopes: &[String]) -> Vec<String> {
+    let mut normal_scopes = scopes.to_vec();
+    normal_scopes.sort_unstable();
+    normal_scopes.dedup();
+
+    normal_scopes
+}
+
 /// Applies a CID contribution to each `(tenant, scope)` aggregate.
 ///
 /// Missing aggregates start at zero. Because the fold uses XOR, this same helper

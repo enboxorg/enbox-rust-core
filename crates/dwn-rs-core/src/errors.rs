@@ -105,6 +105,18 @@ pub enum MessageReplicationError {
 
     #[error("feed position overflow")]
     FeedPositionOverflow,
+
+    #[error("encodedData must be a string or null")]
+    InvalidEncodedData,
+
+    #[error("failed to compute message cid: {0}")]
+    MissingMessageCid(#[from] ipld_core::cid::Error),
+
+    #[error("cids mismatch for existing feed entry: expected {expected}, actual {actual}")]
+    CidsMismatch { expected: String, actual: String },
+
+    #[error("feed entry exists without corresponding message: {message_cid}")]
+    MissingMessage { message_cid: String },
 }
 
 #[derive(Error, Debug)]

@@ -9,7 +9,6 @@ use dwn_rs_core::stores::wake::Wake;
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use dwn_rs_core::errors::{MessageReplicationError, MessageStoreError, StoreError};
-use dwn_rs_core::fields::MessageFields;
 use dwn_rs_core::filters::Filters;
 use dwn_rs_core::stores::{KeyValues, MessageQueryResult, MessageStore};
 use dwn_rs_core::{Descriptor, Message, MessageSort, Pagination, Query};
@@ -46,9 +45,8 @@ impl MessageStore for SqliteStore {
     {
         let tenant = tenant.to_string();
         let message_json = serde_json::to_string(&message)?;
-        let mut message: Message<Descriptor> = message.into();
-        message.fields.encoded_data(); // strip inline encodedData so the CID is canonical
-        let message_cid = message.cid()?.to_string();
+        let message: Message<Descriptor> = message.into();
+        let message_cid = message.message_cid()?.to_string();
         let indexes_json = serde_json::to_string(&indexes)?;
         let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
 
@@ -87,7 +85,7 @@ impl MessageStore for SqliteStore {
                                 tenant: tenant.clone(),
                                 position: next,
                                 message_cid: message_cid.clone(),
-                                indexes_json: indexes_json.clone(),
+                                indexes: indexes.clone(),
                                 fingerprint_scopes: msg_scopes.clone(),
                             },
                         )?;
@@ -308,6 +306,28 @@ fn select_feed_entry(
     .map_err(sqlite_store_error)
 }
 
+pub(crate) fn select_feed_entry_by_position(
+    tx: &Transaction,
+    tenant: &str,
+    position: i64,
+) -> Result<Option<FeedEntry>, StoreError> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT tenant, position, message_cid, indexes_json, fingerprint_scopes_json \
+            FROM feed_entries \
+            WHERE tenant = ?1 AND position = ?2
+            LIMIT 1",
+        )
+        .map_err(sqlite_store_error)?;
+
+    stmt.query_row(params![tenant, position], |row| {
+        from_row::<FeedEntry>(row)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+    })
+    .optional()
+    .map_err(sqlite_store_error)
+}
+
 fn update_feed_entry_indexes(
     tx: &Transaction,
     tenant: &str,
@@ -331,6 +351,9 @@ fn insert_feed_entry(tx: &Transaction, entry: &FeedEntry) -> Result<usize, Store
     let fingerprint_scopes_json = serde_json::to_string(&entry.fingerprint_scopes)
         .map_err(|err| StoreError::InternalException(err.to_string()))?;
 
+    let indexes_json = serde_json::to_string(&entry.indexes)
+        .map_err(|err| StoreError::InternalException(err.to_string()))?;
+
     tx.execute(
         "INSERT INTO feed_entries \
             (tenant, position, message_cid, indexes_json, fingerprint_scopes_json) \
@@ -339,7 +362,7 @@ fn insert_feed_entry(tx: &Transaction, entry: &FeedEntry) -> Result<usize, Store
             entry.tenant,
             entry.position,
             entry.message_cid,
-            entry.indexes_json,
+            indexes_json,
             fingerprint_scopes_json
         ],
     )
@@ -379,28 +402,7 @@ fn upsert_feed_fingerprint(
     message_cid: &str,
     scopes: &[String],
 ) -> Result<(), StoreError> {
-    // select all the feed_fingerprints for the tenant across all the
-    // provided scopes
-    let mut fingerprints: BTreeMap<(String, String), Fingerprint> = tx
-        .prepare(
-            "SELECT tenant, domain, value FROM feed_fingerprints \
-            WHERE tenant = ?1 AND domain IN (SELECT value FROM json_each(?2))",
-        )
-        .map_err(sqlite_store_error)?
-        .query_map(
-            params![tenant, serde_json::to_string(scopes).unwrap()],
-            |row| {
-                Ok((
-                    (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                    row.get::<_, [u8; 32]>(2)?,
-                ))
-            },
-        )
-        .map_err(sqlite_store_error)?
-        .map(|res| res.map(|(scope, fingerprint)| (scope, fingerprint.into())))
-        .collect::<Result<BTreeMap<(String, String), Fingerprint>, rusqlite::Error>>()
-        .map_err(sqlite_store_error)?;
-
+    let mut fingerprints = get_feed_fingerprints(tx, tenant, scopes)?;
     fold_cid_into_domain(&mut fingerprints, tenant, message_cid, scopes);
 
     for ((_, scope), fp) in fingerprints.iter() {
@@ -413,4 +415,48 @@ fn upsert_feed_fingerprint(
     }
 
     Ok(())
+}
+
+// select all the feed_fingerprints for the tenant across all the
+// provided scopes
+pub(crate) fn get_feed_fingerprints(
+    tx: &Transaction,
+    tenant: &str,
+    scopes: &[String],
+) -> Result<BTreeMap<(String, String), Fingerprint>, StoreError> {
+    tx.prepare(
+        "SELECT tenant, domain, value FROM feed_fingerprints \
+            WHERE tenant = ?1 AND domain IN (SELECT value FROM json_each(?2))",
+    )
+    .map_err(sqlite_store_error)?
+    .query_map(
+        params![tenant, serde_json::to_string(scopes).unwrap()],
+        |row| {
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, [u8; 32]>(2)?,
+            ))
+        },
+    )
+    .map_err(sqlite_store_error)?
+    .map(|res| res.map(|(scope, fingerprint)| (scope, fingerprint.into())))
+    .collect::<Result<BTreeMap<(String, String), Fingerprint>, rusqlite::Error>>()
+    .map_err(sqlite_store_error)
+}
+
+pub(crate) fn get_single_feed_fingerprint(
+    tx: &Transaction,
+    tenant: &str,
+    scope: &str,
+) -> Result<Option<Fingerprint>, StoreError> {
+    tx.query_row(
+        "SELECT value FROM feed_fingerprints \
+            WHERE tenant = ?1 AND domain = ?2
+            LIMIT 1",
+        params![tenant, scope],
+        |row| row.get::<_, [u8; 32]>(0),
+    )
+    .optional()
+    .map(|opt| opt.map(Fingerprint::from))
+    .map_err(sqlite_store_error)
 }

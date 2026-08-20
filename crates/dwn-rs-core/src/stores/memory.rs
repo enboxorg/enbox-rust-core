@@ -16,8 +16,8 @@ use crate::filters::Filters;
 use crate::matching::has_valid_subtree_filters;
 use crate::stores::replication_feed_reader::{
     build_token, derive_stream_id, fingerprint_scopes, fold_cid_into_domain, is_feed_message,
-    parse_feed_position, scopes_unchanged, validate_feed_cursor, xor_in_place, FeedCursorState,
-    Fingerprint,
+    normalize_scopes, parse_feed_position, scopes_unchanged, validate_feed_cursor, xor_in_place,
+    FeedCursorState, Fingerprint,
 };
 use crate::stores::wake::{Wake, WakePublishHandler, WakePublisher};
 use crate::stores::{
@@ -498,16 +498,19 @@ impl ReplicationFeedReader for MemoryMessageStore {
                             Some(Value::Null) | None => None,
                             Some(_) => {
                                 return Err(EventLogError::StoreError(
-                                    StoreError::InternalException(
-                                        "encodedData field must be a string or null".to_string(),
+                                    StoreError::ReplicationError(
+                                        MessageReplicationError::InvalidEncodedData,
                                     ),
                                 ))
                             }
                         };
 
                         if row.cid != entry.message_cid {
-                            return Err(EventLogError::StoreError(StoreError::InternalException(
-                                "stored message CID mismatch for feed entry".to_string(),
+                            return Err(EventLogError::StoreError(StoreError::ReplicationError(
+                                MessageReplicationError::CidsMismatch {
+                                    expected: entry.message_cid.clone(),
+                                    actual: row.cid.clone(),
+                                },
                             )));
                         }
 
@@ -540,8 +543,10 @@ impl ReplicationFeedReader for MemoryMessageStore {
                     }
 
                     None => {
-                        return Err(EventLogError::StoreError(StoreError::InternalException(
-                            "feed entry exists without corresponding message".to_string(),
+                        return Err(EventLogError::StoreError(StoreError::ReplicationError(
+                            MessageReplicationError::MissingMessage {
+                                message_cid: entry.message_cid.clone(),
+                            },
                         )))
                     }
                 };
@@ -586,9 +591,7 @@ impl ReplicationFeedReader for MemoryMessageStore {
         scopes: &[String],
     ) -> Result<Fingerprint, EventLogError> {
         let mut fingerprint = Fingerprint::default();
-        let mut normal_scopes = scopes.to_vec();
-        normal_scopes.sort_unstable();
-        normal_scopes.dedup();
+        let normal_scopes = normalize_scopes(scopes);
 
         let state = self.state.read().map_err(event_lock_error)?;
         for scope in normal_scopes {
@@ -2409,9 +2412,12 @@ mod tests {
             .log_read("did:alice", EventLogReadOptions::default())
             .await
             .unwrap_err();
-        assert!(mismatch_error
-            .to_string()
-            .contains("stored message CID mismatch"));
+        assert!(matches!(
+            mismatch_error,
+            EventLogError::StoreError(StoreError::ReplicationError(
+                MessageReplicationError::CidsMismatch { ref actual, .. }
+            )) if actual == "wrong-cid"
+        ));
     }
 
     #[tokio::test]
