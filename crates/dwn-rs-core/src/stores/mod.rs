@@ -122,7 +122,7 @@ pub struct EventLogSubscribeOptions {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SubscriptionError {
     pub code: String,
-    pub details: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
