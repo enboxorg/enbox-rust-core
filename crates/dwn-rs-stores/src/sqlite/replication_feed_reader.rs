@@ -1,4 +1,5 @@
 use dwn_rs_core::{
+    cid::generate_message_cid_from_json,
     errors::{EventLogError, MessageReplicationError, StoreError},
     fields::MessageFields,
     matches_filters,
@@ -162,23 +163,8 @@ impl ReplicationFeedReader for SqliteStore {
                         continue;
                     }
 
-                    let msg: Option<Message<Descriptor>> = match message_json {
-                        Some(json) => serde_json::from_str(json)
-                            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
-                            .map_err(|err| StoreError::InternalException(err.to_string()))?,
-                        None => None,
-                    };
-
-                    if msg.is_none() {
-                        return Err(StoreError::ReplicationError(
-                            MessageReplicationError::MissingMessage {
-                                message_cid: entry.message_cid.clone(),
-                            },
-                        ));
-                    }
-
-                    let (mut msg, msg_cid) = match (msg, msg_cid) {
-                        (Some(msg), Some(cid)) => (msg, cid),
+                    let (message_json, msg_cid) = match (message_json, msg_cid) {
+                        (Some(json), Some(cid)) => (json, cid),
                         (None, None) | (Some(_), None) | (None, Some(_)) => {
                             return Err(StoreError::ReplicationError(
                                 MessageReplicationError::MissingMessage {
@@ -187,6 +173,16 @@ impl ReplicationFeedReader for SqliteStore {
                             ))
                         }
                     };
+
+                    let message_value: serde_json::Value = serde_json::from_str(message_json)
+                        .map_err(|err| StoreError::InternalException(err.to_string()))?;
+
+                    let computed_cid = generate_message_cid_from_json(&message_value)
+                        .map_err(|err| StoreError::InternalException(err.to_string()))?
+                        .to_string();
+
+                    let mut msg: Message<Descriptor> = serde_json::from_value(message_value)
+                        .map_err(|err| StoreError::InternalException(err.to_string()))?;
 
                     let encoded_data = match msg.fields.encoded_data() {
                         Some(Value::String(data)) => Ok(Some(data.clone())),
@@ -205,16 +201,11 @@ impl ReplicationFeedReader for SqliteStore {
                         ));
                     }
 
-                    let msg_cid = msg
-                        .message_cid()
-                        .map_err(|err| StoreError::InternalException(err.to_string()))?
-                        .to_string();
-
-                    if msg_cid != entry.message_cid {
+                    if computed_cid != entry.message_cid {
                         return Err(StoreError::ReplicationError(
                             MessageReplicationError::CidsMismatch {
                                 expected: entry.message_cid.clone(),
-                                actual: msg_cid,
+                                actual: computed_cid,
                             },
                         ));
                     }
