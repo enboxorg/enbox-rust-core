@@ -11,7 +11,8 @@
 
 use crate::errors::EventLogError;
 use crate::stores::{
-    wake::WakeSubscriber, EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
+    wake::{WakeSubscriber, WakeSubscriptionHandle},
+    EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues,
     ReplicationFeedReader, SubscriptionListener,
 };
@@ -28,17 +29,33 @@ use crate::{Descriptor, MessageEvent, ProgressToken};
 /// `R` provides authoritative ordered reads and progress validation. `S`
 /// supplies best-effort tenant wake notifications used to trigger live drains.
 /// The two dependencies must refer to the same underlying message-feed domain.
-#[derive(Debug)]
 pub struct DurableEventLog<R, S>
 where
     R: ReplicationFeedReader + Default,
     S: WakeSubscriber + Default,
 {
     /// Authoritative source of committed replication-feed entries and cursors.
-    pub reader: R,
+    reader: R,
 
     /// Consumer of best-effort wake hints for newly committed feed entries.
-    pub subscriber: S,
+    subscriber: S,
+
+    handles: Vec<Box<dyn WakeSubscriptionHandle>>,
+}
+
+impl<R, S> DurableEventLog<R, S>
+where
+    R: ReplicationFeedReader + Default,
+    S: WakeSubscriber + Default,
+{
+    /// Create a new durable event log adapter.
+    pub fn new(reader: R, subscriber: S) -> Self {
+        Self {
+            reader,
+            subscriber,
+            handles: Vec::new(),
+        }
+    }
 }
 
 impl<R, S> Default for DurableEventLog<R, S>
@@ -50,6 +67,7 @@ where
         Self {
             reader: R::default(),
             subscriber: S::default(),
+            handles: Vec::new(),
         }
     }
 }
@@ -64,7 +82,9 @@ where
     }
 
     async fn close(&mut self) -> () {
-        self.subscriber.clear().await;
+        for handle in self.handles.drain(..) {
+            handle.close().await;
+        }
     }
 
     async fn emit(
@@ -93,6 +113,7 @@ where
         listener: SubscriptionListener,
         options: Option<EventLogSubscribeOptions>,
     ) -> Result<EventSubscription, EventLogError> {
+        let _ = self.subscriber;
         todo!()
     }
 
