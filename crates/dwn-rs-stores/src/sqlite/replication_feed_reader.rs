@@ -270,13 +270,13 @@ impl ReplicationFeedReader for SqliteStore {
     }
 
     async fn log_bounds(&self, tenant: &str) -> Result<Option<ReplicationBounds>, EventLogError> {
-        let epoch = self.epoch().await?;
         let tenant = tenant.to_owned();
 
         self.connection()
             .await?
             .with_writer(move |conn| {
                 let tx = conn.transaction().map_err(sqlite_store_error)?;
+                let epoch = Self::epoch_tx(&tx)?;
                 log_bounds(&tx, &tenant, &epoch)
             })
             .await
