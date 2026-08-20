@@ -260,37 +260,6 @@ impl MessageStore for SqliteStore {
     }
 }
 
-pub(crate) fn select_messages(
-    tx: &Transaction,
-    tenant: &str,
-    cids: &[String],
-) -> Result<Vec<Message<Descriptor>>, StoreError> {
-    let mut stmt = tx
-        .prepare(
-            "SELECT message_json FROM messages \
-            WHERE tenant = ?1 AND message_cid IN (SELECT value FROM json_each(?2))",
-        )
-        .map_err(sqlite_store_error)?;
-
-    let messages = stmt
-        .query_map(
-            params![tenant, serde_json::to_string(cids).unwrap()],
-            |row| {
-                row.get::<_, String>(0)
-                    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
-            },
-        )
-        .map_err(sqlite_store_error)?
-        .map(|res| res.map(|json| serde_json::from_str::<Message<Descriptor>>(&json)))
-        .collect::<Result<Vec<Result<Message<Descriptor>, serde_json::Error>>, rusqlite::Error>>()
-        .map_err(sqlite_store_error)?
-        .into_iter()
-        .collect::<Result<Vec<Message<Descriptor>>, serde_json::Error>>()
-        .map_err(|err| StoreError::InternalException(err.to_string()))?;
-
-    Ok(messages)
-}
-
 pub(crate) fn generate_epoch(tx: &Transaction) -> Result<usize, StoreError> {
     tx.execute(
         "INSERT INTO feed_metadata (id, epoch) VALUES (1, ?1)",
