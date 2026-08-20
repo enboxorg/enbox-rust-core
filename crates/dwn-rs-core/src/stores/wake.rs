@@ -406,14 +406,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closing_bus_removes_all_registrations() {
+    async fn clearing_bus_removes_all_registrations() {
         let bus = InProcessWakeBus::new();
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let _subscription = bus
             .subscribe("did:example:alice", recording_listener(sender))
             .await;
 
-        bus.close().await;
+        bus.clear().await;
         bus.publish(wake("did:example:alice", 1)).unwrap();
 
         assert_eq!(receiver.recv().await, None);
