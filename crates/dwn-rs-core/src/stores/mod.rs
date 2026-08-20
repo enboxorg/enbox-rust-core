@@ -120,6 +120,12 @@ pub struct EventLogSubscribeOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubscriptionError {
+    pub code: String,
+    pub details: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
 pub enum SubscriptionMessage {
     #[serde(rename = "event")]
@@ -129,6 +135,11 @@ pub enum SubscriptionMessage {
     },
     #[serde(rename = "eose")]
     Eose { cursor: ProgressToken },
+    #[serde(rename = "error")]
+    Error {
+        cursor: ProgressToken,
+        error: SubscriptionError,
+    },
 }
 
 pub type SubscriptionListener = Box<dyn Fn(SubscriptionMessage) + Send + Sync + 'static>;

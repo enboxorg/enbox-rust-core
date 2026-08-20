@@ -933,6 +933,24 @@ where
                 result.checkpoints.push(checkpoint);
                 result
             }
+            SubscriptionMessage::Error {
+                cursor: _cursor,
+                error,
+            } => {
+                let error = SyncError::transient(error.code, error.details);
+                self.record_dead_letter(
+                    tenant,
+                    remote,
+                    &scope,
+                    None,
+                    DeadLetterCategory::Transient,
+                    error.clone(),
+                )
+                .await;
+                let mut result = SyncOnceResult::new(SyncRunStatus::Failed);
+                result.error = Some(error);
+                result
+            }
         }
     }
 
@@ -1009,6 +1027,24 @@ where
                     .await;
                 let mut result = SyncOnceResult::new(SyncRunStatus::Completed);
                 result.checkpoints.push(checkpoint);
+                result
+            }
+            SubscriptionMessage::Error {
+                cursor: _cursor,
+                error,
+            } => {
+                let error = SyncError::transient(error.code, error.details);
+                self.record_dead_letter(
+                    tenant,
+                    remote,
+                    &scope,
+                    None,
+                    DeadLetterCategory::Transient,
+                    error.clone(),
+                )
+                .await;
+                let mut result = SyncOnceResult::new(SyncRunStatus::Failed);
+                result.error = Some(error);
                 result
             }
         }
