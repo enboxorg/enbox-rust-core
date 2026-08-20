@@ -31,8 +31,8 @@ use crate::{Descriptor, MessageEvent, ProgressToken};
 /// The two dependencies must refer to the same underlying message-feed domain.
 pub struct DurableEventLog<R, S>
 where
-    R: ReplicationFeedReader + Default,
-    S: WakeSubscriber + Default,
+    R: ReplicationFeedReader,
+    S: WakeSubscriber,
 {
     /// Authoritative source of committed replication-feed entries and cursors.
     reader: R,
@@ -45,8 +45,8 @@ where
 
 impl<R, S> DurableEventLog<R, S>
 where
-    R: ReplicationFeedReader + Default,
-    S: WakeSubscriber + Default,
+    R: ReplicationFeedReader,
+    S: WakeSubscriber,
 {
     /// Create a new durable event log adapter.
     pub fn new(reader: R, subscriber: S) -> Self {
@@ -58,24 +58,10 @@ where
     }
 }
 
-impl<R, S> Default for DurableEventLog<R, S>
-where
-    R: ReplicationFeedReader + Default,
-    S: WakeSubscriber + Default,
-{
-    fn default() -> Self {
-        Self {
-            reader: R::default(),
-            subscriber: S::default(),
-            handles: Vec::new(),
-        }
-    }
-}
-
 impl<R, S> EventLog for DurableEventLog<R, S>
 where
-    R: ReplicationFeedReader + Default + Send + Sync,
-    S: WakeSubscriber + Default,
+    R: ReplicationFeedReader + Send + Sync,
+    S: WakeSubscriber,
 {
     async fn open(&mut self) -> Result<(), EventLogError> {
         Ok(())

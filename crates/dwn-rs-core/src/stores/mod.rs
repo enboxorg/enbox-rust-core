@@ -300,7 +300,7 @@ pub trait StateIndex: Default {
 }
 
 /// Native persistent event log contract with progress tokens and replay.
-pub trait EventLog: Default {
+pub trait EventLog {
     fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
