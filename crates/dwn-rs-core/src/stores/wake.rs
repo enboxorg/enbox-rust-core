@@ -57,7 +57,17 @@ pub trait WakePublisher: Send + Sync {
     fn publish(&self, wake: Wake) -> Result<(), WakeError>;
 }
 
-/// Provides the default no-op publisher for configurations without live consumers.
+/// No-op publisher for configurations without live consumers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoopWakePublisher;
+
+impl WakePublisher for NoopWakePublisher {
+    fn publish(&self, _wake: Wake) -> Result<(), WakeError> {
+        Ok(())
+    }
+}
+
+/// Retains `()` as a backwards-compatible no-op publisher.
 impl WakePublisher for () {
     fn publish(&self, _wake: Wake) -> Result<(), WakeError> {
         Ok(())
@@ -72,7 +82,7 @@ pub struct WakePublishHandler {
 
 impl Default for WakePublishHandler {
     fn default() -> Self {
-        Self::new(Arc::new(()))
+        Self::new(Arc::new(NoopWakePublisher))
     }
 }
 
@@ -151,8 +161,8 @@ impl InProcessWakeBus {
 
     /// Removes every listener registered with this bus.
     ///
-    /// Closing drops the bus-owned senders, which also allows the corresponding
-    /// listener tasks to finish once any wake already being handled completes.
+    /// Closing drops the bus-owned senders and cancels the corresponding
+    /// listener tasks, including callbacks that are currently awaiting.
     pub fn close(&self) -> WakeFuture<'_, ()> {
         self.inner.clear();
         Box::pin(async {})
@@ -315,6 +325,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn noop_publisher_is_the_default() {
+        WakePublishHandler::default()
+            .publish(wake("did:example:alice", 1))
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn isolates_tenants() {
         let bus = InProcessWakeBus::new();
@@ -351,6 +368,20 @@ mod tests {
 
         assert_eq!(first_rx.recv().await.unwrap().position, 11);
         assert_eq!(second_rx.recv().await.unwrap().position, 11);
+    }
+
+    #[tokio::test]
+    async fn cloned_bus_shares_registrations() {
+        let subscriber = InProcessWakeBus::new();
+        let publisher = subscriber.clone();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let _subscription = subscriber
+            .subscribe("did:example:alice", recording_listener(sender))
+            .await;
+
+        publisher.publish(wake("did:example:alice", 13)).unwrap();
+
+        assert_eq!(receiver.recv().await.unwrap().position, 13);
     }
 
     #[tokio::test]
