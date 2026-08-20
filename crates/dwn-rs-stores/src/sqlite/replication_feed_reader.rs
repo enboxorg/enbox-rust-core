@@ -206,7 +206,7 @@ impl ReplicationFeedReader for SqliteStore {
                     }
 
                     let msg_cid = msg
-                        .cid()
+                        .message_cid()
                         .map_err(|err| StoreError::InternalException(err.to_string()))?
                         .to_string();
 

@@ -9,7 +9,6 @@ use dwn_rs_core::stores::wake::Wake;
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use dwn_rs_core::errors::{MessageReplicationError, MessageStoreError, StoreError};
-use dwn_rs_core::fields::MessageFields;
 use dwn_rs_core::filters::Filters;
 use dwn_rs_core::stores::{KeyValues, MessageQueryResult, MessageStore};
 use dwn_rs_core::{Descriptor, Message, MessageSort, Pagination, Query};
@@ -46,9 +45,8 @@ impl MessageStore for SqliteStore {
     {
         let tenant = tenant.to_string();
         let message_json = serde_json::to_string(&message)?;
-        let mut message: Message<Descriptor> = message.into();
-        message.fields.encoded_data(); // strip inline encodedData so the CID is canonical
-        let message_cid = message.cid()?.to_string();
+        let message: Message<Descriptor> = message.into();
+        let message_cid = message.message_cid()?.to_string();
         let indexes_json = serde_json::to_string(&indexes)?;
         let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
 
