@@ -22,10 +22,9 @@ use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::records::common::{
     authorize_against_protocol, bool_filter, compare_messages, context_id,
     core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
-    event_log_error_reply, existing_initial_lacks_data, fetch_newest_write, filter_map,
-    find_initial_write, governing_timestamp, is_initial_write, message_as_write_descriptor,
-    message_cid, message_record_id, message_timestamp, newest_message, parent_context_id,
-    purge_record_messages, records_delete_descriptor, records_write_event_log_indexes,
+    existing_initial_lacks_data, fetch_newest_write, filter_map, find_initial_write,
+    governing_timestamp, is_initial_write, message_cid, message_record_id, message_timestamp,
+    newest_message, parent_context_id, purge_record_messages, records_delete_descriptor,
     records_write_indexes, set_encoded_data, store_error_reply, string_filter,
     validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
 };
@@ -39,22 +38,20 @@ use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, 
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
 #[derive(Clone)]
-pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog = ()> {
+pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex = ()> {
     message_store: MessageStore,
     data_store: DataStore,
     state_index: StateIndex,
-    event_log: Option<EventLog>,
     core_protocol_registry: CoreProtocolRegistry,
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
-impl<MessageStore, DataStore, StateIndex, EventLog> Handler
-    for RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+impl<MessageStore, DataStore, StateIndex> Handler
+    for RecordsWriteHandler<MessageStore, DataStore, StateIndex>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
-    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     type Reply = Write;
     type Descriptor = RecordsWriteDescriptor;
@@ -284,30 +281,6 @@ where
                 return store_error_reply(detail);
             }
 
-            if let Some(event_log) = &self.event_log {
-                let initial_write = if incoming_is_initial {
-                    None
-                } else {
-                    find_initial_write(&existing_messages, &signature.author)
-                        .and_then(message_as_write_descriptor)
-                };
-                let indexes = match records_write_event_log_indexes(
-                    &message,
-                    &signature.author,
-                    is_latest_base_state,
-                ) {
-                    Ok(indexes) => indexes,
-                    Err(detail) => return Response::bad_request(detail),
-                };
-                let event = crate::events::MessageEvent {
-                    message: message.clone(),
-                    initial_write,
-                };
-                if let Err(err) = event_log.emit(tenant, event, indexes, &incoming_cid).await {
-                    return event_log_error_reply(err);
-                }
-            }
-
             if incoming_is_initial && !is_latest_base_state {
                 Response::no_content()
             } else {
@@ -317,36 +290,8 @@ where
     }
 }
 
-impl<MessageStore, DataStore, StateIndex, EventLog>
-    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
-where
-    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
-{
-    pub fn with_event_log(
-        message_store: MessageStore,
-        data_store: DataStore,
-        state_index: StateIndex,
-        event_log: EventLog,
-        did_resolver: Option<Arc<dyn DidResolver>>,
-    ) -> Self {
-        Self {
-            message_store,
-            data_store,
-            state_index,
-            event_log: Some(event_log),
-            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
-            did_resolver,
-        }
-    }
-}
-
-impl<MessageStore, DataStore, StateIndex, EventLog>
-    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
-{
-    /// Construct a handler with no event log (`event_log: None`). Used by tests that exercise the
-    /// write path without event logging; the native builder always wires an event log via
-    /// [`RecordsWriteHandler::with_event_log`], so this is unused outside `#[cfg(test)]`.
-    #[allow(dead_code)]
+impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
+    /// Construct a handler.
     pub fn new(
         message_store: MessageStore,
         data_store: DataStore,
@@ -357,20 +302,17 @@ impl<MessageStore, DataStore, StateIndex, EventLog>
             message_store,
             data_store,
             state_index,
-            event_log: None,
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             did_resolver,
         }
     }
 }
 
-impl<MessageStore, DataStore, StateIndex, EventLog>
-    RecordsWriteHandler<MessageStore, DataStore, StateIndex, EventLog>
+impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
-    EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     async fn existing_record_messages(
         &self,

@@ -247,11 +247,10 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
         message_store.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsWriteHandler::with_event_log(
+    dwn.register(RecordsWriteHandler::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
-        event_log.clone(),
         resolver.clone(),
     ));
     dwn.register(RecordsReadHandler::new(

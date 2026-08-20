@@ -200,15 +200,6 @@ pub(crate) fn find_initial_write(
         .cloned()
 }
 
-pub(crate) fn message_as_write_descriptor(
-    message: Message<Descriptor>,
-) -> Option<Message<crate::interfaces::messages::descriptors::records::WriteDescriptor>> {
-    if records_write_descriptor(&message).is_err() {
-        return None;
-    }
-    serde_json::from_value(serde_json::to_value(&message).ok()?).ok()
-}
-
 pub(crate) fn verify_immutable_properties(
     initial_write: &Message<Descriptor>,
     new_message: &Message<Descriptor>,
@@ -339,23 +330,6 @@ pub(crate) fn records_write_indexes(
             }
         }
     }
-    Ok(indexes)
-}
-
-pub(crate) fn records_write_event_log_indexes(
-    message: &Message<Descriptor>,
-    author: &str,
-    is_latest_base_state: bool,
-) -> Result<KeyValues, String> {
-    let mut indexes = records_write_indexes(message, author, is_latest_base_state)?;
-    indexes.insert(
-        "interface".to_string(),
-        Value::String(RECORDS_INTERFACE.to_string()),
-    );
-    indexes.insert(
-        "method".to_string(),
-        Value::String(WRITE_METHOD.to_string()),
-    );
     Ok(indexes)
 }
 

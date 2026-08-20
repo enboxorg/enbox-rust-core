@@ -75,7 +75,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let write_handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
@@ -145,7 +145,7 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -223,7 +223,7 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -293,7 +293,7 @@ async fn records_delete_retains_initial_feed_position_without_extra_wake() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let write_handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
@@ -351,7 +351,7 @@ async fn records_write_rejects_older_conflicting_write() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -411,7 +411,7 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
@@ -465,7 +465,7 @@ async fn records_delete_prune_purges_descendant_records() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let write_handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
@@ -554,7 +554,7 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_squash_protocol("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
@@ -642,7 +642,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -737,7 +737,7 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -804,7 +804,7 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
