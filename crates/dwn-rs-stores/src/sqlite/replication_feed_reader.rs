@@ -428,3 +428,309 @@ fn fetch_feed_entries(
     .collect::<Result<FeedEntryRow, rusqlite::Error>>()
     .map_err(sqlite_store_error)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use dwn_rs_core::descriptors::{DeleteDescriptor, Records};
+    use dwn_rs_core::errors::{EventLogError, MessageReplicationError, StoreError};
+    use dwn_rs_core::filters::{Filter, FilterKey, Filters};
+    use dwn_rs_core::stores::replication_feed_conformance;
+    use dwn_rs_core::stores::wake::WakePublishHandler;
+    use dwn_rs_core::stores::{EventLogReadOptions, KeyValues, MessageStore};
+    use dwn_rs_core::{Descriptor, Fields, Message, Value};
+
+    use super::*;
+
+    const TENANT: &str = "did:example:alice";
+
+    fn delete_message(record_id: &str, timestamp: &str) -> Message<Descriptor> {
+        Message {
+            descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(
+                DeleteDescriptor {
+                    message_timestamp: timestamp.parse().expect("valid timestamp"),
+                    record_id: record_id.to_string(),
+                    prune: false,
+                },
+            )))),
+            fields: Fields::Authorization(Default::default()),
+        }
+    }
+
+    fn indexes(marker: &str) -> KeyValues {
+        BTreeMap::from([("marker".to_string(), Value::String(marker.to_string()))])
+    }
+
+    fn marker_filter(marker: &str) -> Filters {
+        Filters::from(BTreeMap::from([(
+            FilterKey::Index("marker".to_string()),
+            Filter::Equal(Value::String(marker.to_string())),
+        )]))
+    }
+
+    async fn opened_memory_store() -> SqliteStore {
+        let mut store = SqliteStore::in_memory();
+        MessageStore::open(&mut store).await.expect("open store");
+        store
+    }
+
+    #[tokio::test]
+    async fn sqlite_conforms_to_replication_feed_contract() {
+        replication_feed_conformance::run(|| async { SqliteStore::in_memory() }).await;
+    }
+
+    #[tokio::test]
+    async fn filtered_out_corrupt_message_is_not_hydrated() {
+        let store = opened_memory_store().await;
+        let skipped = delete_message("skipped", "2025-01-01T00:00:00Z");
+        let matched = delete_message("matched", "2025-01-01T00:00:01Z");
+
+        MessageStore::put(&store, TENANT, skipped, indexes("skipped"))
+            .await
+            .expect("put skipped message");
+        MessageStore::put(&store, TENANT, matched, indexes("matched"))
+            .await
+            .expect("put matched message");
+
+        let tenant = TENANT.to_string();
+        store
+            .connection()
+            .await
+            .expect("connection")
+            .with_writer(move |connection| {
+                connection
+                    .execute(
+                        "UPDATE messages SET message_json = '{' \
+                         WHERE tenant = ?1 AND message_cid = (\
+                             SELECT message_cid FROM feed_entries \
+                             WHERE tenant = ?1 AND position = 1\
+                         )",
+                        [tenant],
+                    )
+                    .map_err(sqlite_store_error)?;
+                Ok(())
+            })
+            .await
+            .expect("corrupt filtered-out message");
+
+        let page = store
+            .log_read(
+                TENANT,
+                EventLogReadOptions {
+                    filters: Some(marker_filter("matched")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("filtered read");
+
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].seq, "2");
+        assert!(page.drained);
+        assert_eq!(page.cursor.expect("cursor").position, "2");
+    }
+
+    #[tokio::test]
+    async fn matching_feed_entry_without_message_is_corruption() {
+        let store = opened_memory_store().await;
+        let message = delete_message("missing", "2025-01-01T00:00:00Z");
+        MessageStore::put(&store, TENANT, message, indexes("missing"))
+            .await
+            .expect("put message");
+
+        let tenant = TENANT.to_string();
+        store
+            .connection()
+            .await
+            .expect("connection")
+            .with_writer(move |connection| {
+                connection
+                    .execute("DELETE FROM messages WHERE tenant = ?1", [tenant])
+                    .map_err(sqlite_store_error)?;
+                Ok(())
+            })
+            .await
+            .expect("remove message row");
+
+        let error = store
+            .log_read(TENANT, EventLogReadOptions::default())
+            .await
+            .expect_err("orphaned feed entry must fail");
+
+        assert!(matches!(
+            error,
+            EventLogError::StoreError(StoreError::ReplicationError(
+                MessageReplicationError::MissingMessage { .. }
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_feed_metadata_is_corruption() {
+        for column in ["indexes_json", "fingerprint_scopes_json"] {
+            let store = opened_memory_store().await;
+            MessageStore::put(
+                &store,
+                TENANT,
+                delete_message("corrupt", "2025-01-01T00:00:00Z"),
+                indexes("corrupt"),
+            )
+            .await
+            .expect("put message");
+
+            let statement = format!("UPDATE feed_entries SET {column} = '{{' WHERE tenant = ?1");
+            let tenant = TENANT.to_string();
+            store
+                .connection()
+                .await
+                .expect("connection")
+                .with_writer(move |connection| {
+                    connection
+                        .execute(&statement, [tenant])
+                        .map_err(sqlite_store_error)?;
+                    Ok(())
+                })
+                .await
+                .expect("corrupt feed metadata");
+
+            assert!(matches!(
+                store.log_read(TENANT, EventLogReadOptions::default()).await,
+                Err(EventLogError::StoreError(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn message_json_with_wrong_cid_is_corruption() {
+        let store = opened_memory_store().await;
+        MessageStore::put(
+            &store,
+            TENANT,
+            delete_message("original", "2025-01-01T00:00:00Z"),
+            indexes("original"),
+        )
+        .await
+        .expect("put message");
+
+        let replacement =
+            serde_json::to_string(&delete_message("replacement", "2025-01-01T00:00:01Z"))
+                .expect("serialize replacement");
+        let tenant = TENANT.to_string();
+        store
+            .connection()
+            .await
+            .expect("connection")
+            .with_writer(move |connection| {
+                connection
+                    .execute(
+                        "UPDATE messages SET message_json = ?1 WHERE tenant = ?2",
+                        rusqlite::params![replacement, tenant],
+                    )
+                    .map_err(sqlite_store_error)?;
+                Ok(())
+            })
+            .await
+            .expect("replace message JSON");
+
+        assert!(matches!(
+            store.log_read(TENANT, EventLogReadOptions::default()).await,
+            Err(EventLogError::StoreError(StoreError::ReplicationError(
+                MessageReplicationError::CidsMismatch { .. }
+            )))
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_fingerprint_bytes_are_corruption() {
+        let store = opened_memory_store().await;
+        MessageStore::put(
+            &store,
+            TENANT,
+            delete_message("fingerprint", "2025-01-01T00:00:00Z"),
+            indexes("fingerprint"),
+        )
+        .await
+        .expect("put message");
+
+        let tenant = TENANT.to_string();
+        store
+            .connection()
+            .await
+            .expect("connection")
+            .with_writer(move |connection| {
+                connection
+                    .execute_batch("PRAGMA ignore_check_constraints = ON")
+                    .map_err(sqlite_store_error)?;
+                connection
+                    .execute(
+                        "UPDATE feed_fingerprints SET value = x'00' WHERE tenant = ?1",
+                        [tenant],
+                    )
+                    .map_err(sqlite_store_error)?;
+                connection
+                    .execute_batch("PRAGMA ignore_check_constraints = OFF")
+                    .map_err(sqlite_store_error)?;
+                Ok(())
+            })
+            .await
+            .expect("corrupt fingerprint");
+
+        assert!(matches!(
+            store.fingerprint(TENANT, &[String::new()]).await,
+            Err(EventLogError::StoreError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn reopened_store_preserves_feed_positions_bounds_and_epoch() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("replication-feed.sqlite3");
+        let publisher = WakePublishHandler::new(Arc::new(()));
+        let mut store = SqliteStore::new(&path, publisher.clone());
+        MessageStore::open(&mut store).await.expect("open store");
+
+        for (record_id, timestamp) in [
+            ("one", "2025-01-01T00:00:00Z"),
+            ("two", "2025-01-01T00:00:01Z"),
+        ] {
+            MessageStore::put(
+                &store,
+                TENANT,
+                delete_message(record_id, timestamp),
+                indexes(record_id),
+            )
+            .await
+            .expect("put message");
+        }
+
+        let epoch = store.epoch().await.expect("epoch");
+        let bounds = store.log_bounds(TENANT).await.expect("bounds");
+        MessageStore::close(&mut store).await;
+
+        let mut reopened = SqliteStore::new(&path, publisher);
+        MessageStore::open(&mut reopened)
+            .await
+            .expect("reopen store");
+        let page = reopened
+            .log_read(TENANT, EventLogReadOptions::default())
+            .await
+            .expect("read reopened feed");
+
+        assert_eq!(reopened.epoch().await.expect("reopened epoch"), epoch);
+        assert_eq!(
+            reopened.log_bounds(TENANT).await.expect("reopened bounds"),
+            bounds
+        );
+        assert_eq!(
+            page.events
+                .iter()
+                .map(|event| event.seq.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2"]
+        );
+        assert_eq!(page.cursor.expect("cursor").position, "2");
+        assert!(page.drained);
+    }
+}

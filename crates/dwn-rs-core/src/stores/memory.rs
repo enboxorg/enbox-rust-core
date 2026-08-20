@@ -2412,9 +2412,12 @@ mod tests {
             .log_read("did:alice", EventLogReadOptions::default())
             .await
             .unwrap_err();
-        assert!(mismatch_error
-            .to_string()
-            .contains("stored message CID mismatch"));
+        assert!(matches!(
+            mismatch_error,
+            EventLogError::StoreError(StoreError::ReplicationError(
+                MessageReplicationError::CidsMismatch { ref actual, .. }
+            )) if actual == "wrong-cid"
+        ));
     }
 
     #[tokio::test]
