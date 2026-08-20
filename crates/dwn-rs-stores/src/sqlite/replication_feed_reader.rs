@@ -85,7 +85,7 @@ impl ReplicationFeedReader for SqliteStore {
                 let head = get_head(&tx, &tenant)?.unwrap_or(0) as u64;
 
                 let cursor_entry = if let Some(cursor) = &options.cursor {
-                    let bounds = log_bounds(&tx, &tenant, &cursor.epoch)?;
+                    let bounds = log_bounds(&tx, &tenant, &epoch)?;
                     let entry = select_feed_entry_by_position(&tx, &tenant, position as i64)?;
 
                     (head, entry, Some(cursor.clone()), Some(bounds))
