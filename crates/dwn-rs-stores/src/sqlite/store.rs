@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use dwn_rs_core::{errors::StoreError, stores::wake::WakePublishHandler};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use tokio::sync::OnceCell;
 
 use crate::{
@@ -39,6 +39,13 @@ impl SqliteStore {
         self.conn
             .get_or_try_init(|| SqliteConnection::open(self.path.clone(), migrate))
             .await
+    }
+
+    pub(crate) fn epoch_tx(tx: &Transaction<'_>) -> Result<String, StoreError> {
+        tx.query_row("SELECT epoch FROM feed_metadata WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .map_err(sqlite_store_error)
     }
 }
 pub(crate) fn sqlite_store_error(error: rusqlite::Error) -> StoreError {

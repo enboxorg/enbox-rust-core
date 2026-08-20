@@ -498,16 +498,19 @@ impl ReplicationFeedReader for MemoryMessageStore {
                             Some(Value::Null) | None => None,
                             Some(_) => {
                                 return Err(EventLogError::StoreError(
-                                    StoreError::InternalException(
-                                        "encodedData field must be a string or null".to_string(),
+                                    StoreError::ReplicationError(
+                                        MessageReplicationError::InvalidEncodedData,
                                     ),
                                 ))
                             }
                         };
 
                         if row.cid != entry.message_cid {
-                            return Err(EventLogError::StoreError(StoreError::InternalException(
-                                "stored message CID mismatch for feed entry".to_string(),
+                            return Err(EventLogError::StoreError(StoreError::ReplicationError(
+                                MessageReplicationError::CidsMismatch {
+                                    expected: entry.message_cid.clone(),
+                                    actual: row.cid.clone(),
+                                },
                             )));
                         }
 
@@ -540,8 +543,10 @@ impl ReplicationFeedReader for MemoryMessageStore {
                     }
 
                     None => {
-                        return Err(EventLogError::StoreError(StoreError::InternalException(
-                            "feed entry exists without corresponding message".to_string(),
+                        return Err(EventLogError::StoreError(StoreError::ReplicationError(
+                            MessageReplicationError::MissingMessage {
+                                message_cid: entry.message_cid.clone(),
+                            },
                         )))
                     }
                 };

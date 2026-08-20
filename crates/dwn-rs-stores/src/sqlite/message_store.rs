@@ -87,7 +87,7 @@ impl MessageStore for SqliteStore {
                                 tenant: tenant.clone(),
                                 position: next,
                                 message_cid: message_cid.clone(),
-                                indexes_json: indexes_json.clone(),
+                                indexes: indexes.clone(),
                                 fingerprint_scopes: msg_scopes.clone(),
                             },
                         )?;
@@ -262,6 +262,37 @@ impl MessageStore for SqliteStore {
     }
 }
 
+pub(crate) fn select_messages(
+    tx: &Transaction,
+    tenant: &str,
+    cids: &[String],
+) -> Result<Vec<Message<Descriptor>>, StoreError> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT message_json FROM messages \
+            WHERE tenant = ?1 AND message_cid IN (SELECT value FROM json_each(?2))",
+        )
+        .map_err(sqlite_store_error)?;
+
+    let messages = stmt
+        .query_map(
+            params![tenant, serde_json::to_string(cids).unwrap()],
+            |row| {
+                row.get::<_, String>(0)
+                    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+            },
+        )
+        .map_err(sqlite_store_error)?
+        .map(|res| res.map(|json| serde_json::from_str::<Message<Descriptor>>(&json)))
+        .collect::<Result<Vec<Result<Message<Descriptor>, serde_json::Error>>, rusqlite::Error>>()
+        .map_err(sqlite_store_error)?
+        .into_iter()
+        .collect::<Result<Vec<Message<Descriptor>>, serde_json::Error>>()
+        .map_err(|err| StoreError::InternalException(err.to_string()))?;
+
+    Ok(messages)
+}
+
 pub(crate) fn generate_epoch(tx: &Transaction) -> Result<usize, StoreError> {
     tx.execute(
         "INSERT INTO feed_metadata (id, epoch) VALUES (1, ?1)",
@@ -308,6 +339,28 @@ fn select_feed_entry(
     .map_err(sqlite_store_error)
 }
 
+pub(crate) fn select_feed_entry_by_position(
+    tx: &Transaction,
+    tenant: &str,
+    position: i64,
+) -> Result<Option<FeedEntry>, StoreError> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT tenant, position, message_cid, indexes_json, fingerprint_scopes_json \
+            FROM feed_entries \
+            WHERE tenant = ?1 AND position = ?2
+            LIMIT 1",
+        )
+        .map_err(sqlite_store_error)?;
+
+    stmt.query_row(params![tenant, position], |row| {
+        from_row::<FeedEntry>(row)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+    })
+    .optional()
+    .map_err(sqlite_store_error)
+}
+
 fn update_feed_entry_indexes(
     tx: &Transaction,
     tenant: &str,
@@ -331,6 +384,9 @@ fn insert_feed_entry(tx: &Transaction, entry: &FeedEntry) -> Result<usize, Store
     let fingerprint_scopes_json = serde_json::to_string(&entry.fingerprint_scopes)
         .map_err(|err| StoreError::InternalException(err.to_string()))?;
 
+    let indexes_json = serde_json::to_string(&entry.indexes)
+        .map_err(|err| StoreError::InternalException(err.to_string()))?;
+
     tx.execute(
         "INSERT INTO feed_entries \
             (tenant, position, message_cid, indexes_json, fingerprint_scopes_json) \
@@ -339,7 +395,7 @@ fn insert_feed_entry(tx: &Transaction, entry: &FeedEntry) -> Result<usize, Store
             entry.tenant,
             entry.position,
             entry.message_cid,
-            entry.indexes_json,
+            indexes_json,
             fingerprint_scopes_json
         ],
     )
