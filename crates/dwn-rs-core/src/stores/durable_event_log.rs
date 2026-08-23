@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
 use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 
 use crate::errors::{EventLogError, StoreError};
 use crate::stores::replication_feed_reader::{parse_feed_position, ReplicationBounds};
@@ -22,8 +23,11 @@ use crate::stores::{
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues,
     ReplicationFeedReader, SubscriptionListener,
 };
-use crate::stores::{ProgressGapCode, ProgressGapInfo, ProgressGapReason};
-use crate::{Descriptor, Filters, MessageEvent, ProgressToken};
+use crate::stores::{
+    EventLogEntry, ProgressGapCode, ProgressGapInfo, ProgressGapReason, SubscriptionError,
+    SubscriptionMessage,
+};
+use crate::{Descriptor, Filters, MessageEvent, ProgressToken, Value};
 
 /// Read-only event log backed by a durable replication-feed reader.
 ///
@@ -87,6 +91,7 @@ struct SubscriptionStateMutable {
     redrain_requested: bool,
     terminal_error_sent: bool,
     wake_handle: Option<Box<dyn WakeSubscriptionHandle>>,
+    drain_task: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -135,57 +140,13 @@ where
         listener: SubscriptionListener,
         options: Option<EventLogSubscribeOptions>,
     ) -> Result<EventSubscription, EventLogError> {
-        let cursor = options.as_ref().and_then(|o| o.cursor.clone());
+        let cursor = self
+            .validate_resume_cursor(tenant, options.as_ref())
+            .await?;
 
-        if let Some(cursor) = &cursor {
-            self.inner
-                .reader
-                .log_read(
-                    tenant,
-                    EventLogReadOptions {
-                        cursor: Some(cursor.clone()),
-                        filters: options.as_ref().and_then(|o| o.filters.clone()),
-                        limit: Some(0),
-                    },
-                )
-                .await?;
-        }
-
-        let subscription = Arc::new(SubscriptionState {
-            id: id.to_string(),
-            tenant: tenant.to_string(),
-            listener,
-            filters: options.as_ref().and_then(|o| o.filters.clone()),
-            mutable: Mutex::new(SubscriptionStateMutable {
-                cursor: cursor.clone(),
-                phase: SubscriptionPhase::Replay,
-                draining: false,
-                redrain_requested: false,
-                terminal_error_sent: false,
-                wake_handle: None,
-            }),
-        });
-
-        let install_lock = self.install_lock(id).await;
-        let _install_guard = install_lock.lock().await;
-
-        let removed = {
-            let mut subscriptions = self.inner.subscriptions.write().await;
-            subscriptions.remove(id)
-        };
-        if let Some(removed) = removed {
-            self.cleanup_subscription(&removed).await;
-        };
-
-        {
-            let mut subscriptions = self.inner.subscriptions.write().await;
-            let replaced = subscriptions.insert(id.to_string(), subscription.clone());
-            debug_assert!(replaced.is_none(), "subscription replaced unexpectedly");
-        }
-
-        let handler = self.wake_handler(Arc::downgrade(&subscription));
-        let wake_handle = self.subscriber.subscribe(tenant, handler).await;
-        subscription.mutable.lock().await.wake_handle = Some(wake_handle);
+        let subscription = self
+            .install_subscription(tenant, id, listener, cursor.clone(), options.as_ref())
+            .await?;
 
         let bounds = match self.inner.reader.log_bounds(tenant).await {
             Ok(bounds) => bounds,
@@ -236,49 +197,27 @@ where
     S: WakeSubscriber,
 {
     fn wake_handler(&self, sub_state: Weak<SubscriptionState>) -> WakeSubscriptionListener {
-        let sub_state = sub_state.clone();
+        let inner = Arc::downgrade(&self.inner);
         Box::new(move |wake| {
             let sub_state = sub_state.clone();
+            let inner = inner.clone();
             Box::pin(async move {
-                let subscription = Weak::upgrade(&sub_state);
-                if subscription.is_none() {
+                let (Some(inner), Some(subscription)) =
+                    (Weak::upgrade(&inner), Weak::upgrade(&sub_state))
+                else {
                     return;
-                }
-                let subscription = subscription.unwrap();
+                };
                 if wake.tenant != subscription.tenant {
                     return;
                 }
 
-                let mut mutable = subscription.mutable.lock().await;
-                if mutable.phase == SubscriptionPhase::Closed {
-                    return;
-                }
-                mutable.redrain_requested = true;
-                drop(mutable);
+                DurableEventLogInner::request_drain(&inner, subscription).await;
             })
         })
     }
 
     async fn cleanup_subscription(&self, subscription: &Arc<SubscriptionState>) {
-        let wake_handle = {
-            let mut mutable = subscription.mutable.lock().await;
-            mutable.phase = SubscriptionPhase::Closed;
-            mutable.wake_handle.take()
-        };
-
-        {
-            let mut subscriptions = self.inner.subscriptions.write().await;
-            let is_current = subscriptions
-                .get(&subscription.id)
-                .is_some_and(|current| Arc::ptr_eq(current, subscription));
-            if is_current {
-                subscriptions.remove(&subscription.id);
-            }
-        }
-
-        if let Some(wake_handle) = wake_handle {
-            wake_handle.close().await;
-        }
+        DurableEventLogInner::cleanup_subscription(&self.inner, subscription).await;
     }
 
     async fn frozen_cursor(
@@ -383,6 +322,332 @@ where
         let new_lock = Arc::new(Mutex::new(()));
         install_locks.insert(id.to_string(), Arc::downgrade(&new_lock));
         new_lock
+    }
+
+    async fn validate_resume_cursor(
+        &self,
+        tenant: &str,
+        options: Option<&EventLogSubscribeOptions>,
+    ) -> Result<Option<ProgressToken>, EventLogError> {
+        let cursor = options.as_ref().and_then(|o| o.cursor.clone());
+
+        if let Some(cursor) = &cursor {
+            self.inner
+                .reader
+                .log_read(
+                    tenant,
+                    EventLogReadOptions {
+                        cursor: Some(cursor.clone()),
+                        filters: options.as_ref().and_then(|o| o.filters.clone()),
+                        limit: Some(0),
+                    },
+                )
+                .await?;
+        };
+
+        Ok(cursor)
+    }
+
+    async fn install_subscription(
+        &self,
+        tenant: &str,
+        id: &str,
+        listener: SubscriptionListener,
+        cursor: Option<ProgressToken>,
+        options: Option<&EventLogSubscribeOptions>,
+    ) -> Result<Arc<SubscriptionState>, EventLogError> {
+        let subscription = Arc::new(SubscriptionState {
+            id: id.to_string(),
+            tenant: tenant.to_string(),
+            listener,
+            filters: options.as_ref().and_then(|o| o.filters.clone()),
+            mutable: Mutex::new(SubscriptionStateMutable {
+                cursor: cursor.clone(),
+                phase: SubscriptionPhase::Replay,
+                draining: false,
+                redrain_requested: false,
+                terminal_error_sent: false,
+                wake_handle: None,
+                drain_task: None,
+            }),
+        });
+
+        let install_lock = self.install_lock(id).await;
+        let _install_guard = install_lock.lock().await;
+
+        let removed = {
+            let mut subscriptions = self.inner.subscriptions.write().await;
+            subscriptions.remove(id)
+        };
+        if let Some(removed) = removed {
+            self.cleanup_subscription(&removed).await;
+        };
+
+        {
+            let mut subscriptions = self.inner.subscriptions.write().await;
+            let replaced = subscriptions.insert(id.to_string(), subscription.clone());
+            debug_assert!(replaced.is_none(), "subscription replaced unexpectedly");
+        }
+
+        let handler = self.wake_handler(Arc::downgrade(&subscription));
+        let wake_handle = self.subscriber.subscribe(tenant, handler).await;
+        subscription.mutable.lock().await.wake_handle = Some(wake_handle);
+
+        Ok(subscription)
+    }
+}
+
+const DEFAULT_DRAIN_READ_LIMIT: u64 = 100;
+
+impl<R> DurableEventLogInner<R>
+where
+    R: ReplicationFeedReader + Send + Sync + 'static,
+{
+    async fn request_drain(inner: &Arc<Self>, subscription: Arc<SubscriptionState>) {
+        let should_try_start = {
+            let mut mutable = subscription.mutable.lock().await;
+            if mutable.phase == SubscriptionPhase::Closed || mutable.terminal_error_sent {
+                return;
+            }
+
+            mutable.redrain_requested = true;
+            mutable.phase == SubscriptionPhase::Live
+        };
+
+        if should_try_start {
+            Self::try_start_drain(inner, subscription).await;
+        }
+    }
+
+    async fn try_start_drain(inner: &Arc<Self>, subscription: Arc<SubscriptionState>) {
+        let mut mutable = subscription.mutable.lock().await;
+        if mutable.phase != SubscriptionPhase::Live
+            || mutable.draining
+            || mutable.terminal_error_sent
+        {
+            return;
+        }
+
+        mutable.draining = true;
+        mutable.redrain_requested = false;
+        let cursor = mutable.cursor.clone();
+        let inner = Arc::clone(inner);
+        let task_subscription = Arc::clone(&subscription);
+        let task = tokio::spawn(async move {
+            Self::run_drain(inner, task_subscription, cursor).await;
+        });
+        mutable.drain_task = Some(task);
+    }
+
+    async fn run_drain(
+        inner: Arc<Self>,
+        subscription: Arc<SubscriptionState>,
+        mut cursor: Option<ProgressToken>,
+    ) {
+        // Taking this lock first ensures the claiming caller stores our
+        // JoinHandle before this task can finish and clear it. Do not clear a
+        // redrain here: a wake may have re-armed it after the drain was claimed.
+        drop(subscription.mutable.lock().await);
+
+        loop {
+            match Self::drain_once(&inner, &subscription, &mut cursor).await {
+                Ok(()) => {}
+                Err(EventLogError::ProgressGap(gap)) => {
+                    Self::handle_progress_gap(&inner, &subscription, *gap).await;
+                    break;
+                }
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        subscription_id = %subscription.id,
+                        tenant = %subscription.tenant,
+                        "durable event-log drain failed"
+                    );
+
+                    let mut mutable = subscription.mutable.lock().await;
+                    if mutable.phase == SubscriptionPhase::Live
+                        && std::mem::take(&mut mutable.redrain_requested)
+                    {
+                        cursor = mutable.cursor.clone();
+                        drop(mutable);
+                        continue;
+                    }
+
+                    mutable.draining = false;
+                    mutable.drain_task = None;
+                    return;
+                }
+            }
+
+            let mut mutable = subscription.mutable.lock().await;
+            if mutable.phase == SubscriptionPhase::Live
+                && std::mem::take(&mut mutable.redrain_requested)
+            {
+                cursor = mutable.cursor.clone();
+                drop(mutable);
+                continue;
+            }
+
+            mutable.draining = false;
+            mutable.drain_task = None;
+            return;
+        }
+
+        let mut mutable = subscription.mutable.lock().await;
+        mutable.draining = false;
+        mutable.drain_task = None;
+    }
+
+    async fn drain_once(
+        inner: &Arc<Self>,
+        subscription: &Arc<SubscriptionState>,
+        cursor: &mut Option<ProgressToken>,
+    ) -> Result<(), EventLogError> {
+        loop {
+            if Self::closed(subscription).await {
+                return Ok(());
+            }
+
+            let results = inner
+                .reader
+                .log_read(
+                    &subscription.tenant,
+                    EventLogReadOptions {
+                        cursor: cursor.clone(),
+                        limit: Some(DEFAULT_DRAIN_READ_LIMIT),
+                        filters: subscription.filters.clone(),
+                    },
+                )
+                .await?;
+            let scan_cursor = results.cursor.ok_or_else(|| {
+                EventLogError::StoreError(StoreError::InternalException(
+                    "feed reader returned no live-drain scan cursor".to_string(),
+                ))
+            })?;
+
+            for entry in results.events {
+                if Self::closed(subscription).await {
+                    return Ok(());
+                }
+
+                let entry_cursor = Self::deliver_entry(subscription, entry, &scan_cursor).await?;
+                let mut mutable = subscription.mutable.lock().await;
+                if mutable.phase == SubscriptionPhase::Closed {
+                    return Ok(());
+                }
+                mutable.cursor = Some(entry_cursor);
+            }
+
+            {
+                let mut mutable = subscription.mutable.lock().await;
+                if mutable.phase == SubscriptionPhase::Closed {
+                    return Ok(());
+                }
+                mutable.cursor = Some(scan_cursor.clone());
+            }
+            *cursor = Some(scan_cursor);
+
+            if results.drained {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn deliver_entry(
+        subscription: &Arc<SubscriptionState>,
+        entry: EventLogEntry,
+        page_cursor: &ProgressToken,
+    ) -> Result<ProgressToken, EventLogError> {
+        parse_feed_position(&entry.seq)?;
+
+        if Self::closed(subscription).await {
+            return Ok(page_cursor.clone());
+        }
+
+        let cursor = ProgressToken {
+            stream_id: page_cursor.stream_id.clone(),
+            epoch: page_cursor.epoch.clone(),
+            position: entry.seq.clone(),
+            message_cid: entry.message_cid.clone(),
+        };
+
+        (subscription.listener)(SubscriptionMessage::Event {
+            event: Box::new(entry.event),
+            seq: Some(entry.seq.clone()),
+            cursor: cursor.clone(),
+            message_cid: entry.message_cid.clone(),
+            is_latest_base_state: entry
+                .indexes
+                .get("isLatestBaseState")
+                .map(|value| match value {
+                    Value::Bool(value) => *value,
+                    Value::String(value) => value == "true",
+                    _ => false,
+                }),
+            protocol: entry.indexes.get("protocol").and_then(|value| match value {
+                Value::String(value) => Some(value.clone()),
+                _ => None,
+            }),
+            encoded_data: entry.encoded_data,
+        });
+
+        Ok(cursor)
+    }
+
+    async fn handle_progress_gap(
+        inner: &Arc<Self>,
+        subscription: &Arc<SubscriptionState>,
+        gap: ProgressGapInfo,
+    ) {
+        let should_send = {
+            let mut mutable = subscription.mutable.lock().await;
+            if mutable.phase == SubscriptionPhase::Closed || mutable.terminal_error_sent {
+                false
+            } else {
+                mutable.terminal_error_sent = true;
+                true
+            }
+        };
+
+        if should_send {
+            let cursor = gap.requested.clone();
+            let error = SubscriptionError {
+                code: gap.code,
+                detail: format!(
+                    "progress gap: requested={:?}, latest_available={:?}, oldest_available={:?}, reason={:?}",
+                    gap.requested, gap.latest_available, gap.oldest_available, gap.reason
+                ),
+            };
+            (subscription.listener)(SubscriptionMessage::Error { cursor, error });
+        }
+
+        Self::cleanup_subscription(inner, subscription).await;
+    }
+
+    async fn closed(subscription: &Arc<SubscriptionState>) -> bool {
+        subscription.mutable.lock().await.phase == SubscriptionPhase::Closed
+    }
+
+    async fn cleanup_subscription(inner: &Arc<Self>, subscription: &Arc<SubscriptionState>) {
+        let wake_handle = {
+            let mut mutable = subscription.mutable.lock().await;
+            mutable.phase = SubscriptionPhase::Closed;
+            mutable.wake_handle.take()
+        };
+
+        {
+            let mut subscriptions = inner.subscriptions.write().await;
+            let is_current = subscriptions
+                .get(&subscription.id)
+                .is_some_and(|current| Arc::ptr_eq(current, subscription));
+            if is_current {
+                subscriptions.remove(&subscription.id);
+            }
+        }
+
+        if let Some(wake_handle) = wake_handle {
+            wake_handle.close().await;
+        }
     }
 }
 

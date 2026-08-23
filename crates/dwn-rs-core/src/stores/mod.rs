@@ -121,7 +121,7 @@ pub struct EventLogSubscribeOptions {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SubscriptionError {
-    pub code: String,
+    pub code: ProgressGapCode,
     pub detail: String,
 }
 
@@ -548,7 +548,13 @@ mod enbox_store_contract_tests {
                 ..
             } => {
                 assert_eq!(
-                    (seq, message_cid, is_latest_base_state, protocol, encoded_data),
+                    (
+                        seq,
+                        message_cid,
+                        is_latest_base_state,
+                        protocol,
+                        encoded_data
+                    ),
                     (None, None, None, None, None)
                 );
             }
