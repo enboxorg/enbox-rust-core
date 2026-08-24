@@ -6,6 +6,7 @@ pub mod replication_feed_conformance;
 pub mod replication_feed_reader;
 pub mod state_index;
 pub mod wake;
+pub mod write_resolver;
 
 use std::{fmt::Debug, future::Future, pin::Pin};
 
@@ -173,12 +174,6 @@ pub type EventSubscriptionClose =
 pub struct EventSubscription {
     pub id: String,
     pub close: EventSubscriptionClose,
-}
-
-impl EventSubscription {
-    fn new(id: String, close: EventSubscriptionClose) -> Self {
-        Self { id, close }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

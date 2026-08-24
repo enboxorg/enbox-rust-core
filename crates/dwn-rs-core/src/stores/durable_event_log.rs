@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use crate::errors::{EventLogError, StoreError};
 use crate::stores::replication_feed_reader::{parse_feed_position, ReplicationBounds};
 use crate::stores::wake::{WakeSubscriptionHandle, WakeSubscriptionListener};
+use crate::stores::write_resolver::InitialWriteResolver;
 use crate::stores::{
     wake::WakeSubscriber, EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues,
@@ -65,6 +66,23 @@ where
             subscriber,
             inner: Arc::new(DurableEventLogInner {
                 reader: Arc::new(reader),
+                initial_write_resolver: None,
+                subscriptions: RwLock::new(BTreeMap::new()),
+                install_locks: Mutex::new(BTreeMap::new()),
+            }),
+        }
+    }
+
+    pub fn with_initial_write_resolver(
+        reader: R,
+        subscriber: S,
+        resolver: Arc<dyn InitialWriteResolver>,
+    ) -> Self {
+        Self {
+            subscriber,
+            inner: Arc::new(DurableEventLogInner {
+                reader: Arc::new(reader),
+                initial_write_resolver: Some(resolver),
                 subscriptions: RwLock::new(BTreeMap::new()),
                 install_locks: Mutex::new(BTreeMap::new()),
             }),
@@ -74,6 +92,7 @@ where
 
 struct DurableEventLogInner<R> {
     reader: Arc<R>,
+    initial_write_resolver: Option<Arc<dyn InitialWriteResolver>>,
     subscriptions: RwLock<BTreeMap<String, Arc<SubscriptionState>>>,
     install_locks: Mutex<BTreeMap<String, Weak<Mutex<()>>>>,
 }
@@ -605,7 +624,8 @@ where
                     break;
                 }
 
-                let entry_cursor = Self::deliver_entry(&subscription, entry, &scan_cursor).await?;
+                let entry_cursor =
+                    Self::deliver_entry(inner, &subscription, entry, &scan_cursor).await?;
                 let mut mutable = subscription.mutable.lock().await;
                 match mutable.phase {
                     SubscriptionPhase::Replay => mutable.cursor = Some(entry_cursor),
@@ -769,7 +789,8 @@ where
                     return Ok(());
                 }
 
-                let entry_cursor = Self::deliver_entry(subscription, entry, &scan_cursor).await?;
+                let entry_cursor =
+                    Self::deliver_entry(inner, subscription, entry, &scan_cursor).await?;
                 let mut mutable = subscription.mutable.lock().await;
                 if mutable.phase == SubscriptionPhase::Closed {
                     return Ok(());
@@ -793,8 +814,9 @@ where
     }
 
     async fn deliver_entry(
+        inner: &Arc<Self>,
         subscription: &Arc<SubscriptionState>,
-        entry: EventLogEntry,
+        mut entry: EventLogEntry,
         page_cursor: &ProgressToken,
     ) -> Result<ProgressToken, EventLogError> {
         parse_feed_position(&entry.seq)?;
@@ -809,6 +831,12 @@ where
             position: entry.seq.clone(),
             message_cid: entry.message_cid.clone(),
         };
+
+        if let Some(resolver) = &inner.initial_write_resolver {
+            entry.event.initial_write = resolver
+                .resolve_initial_write(&subscription.tenant, &entry.event.message)
+                .await?
+        }
 
         (subscription.listener)(SubscriptionMessage::Event {
             event: Box::new(entry.event),

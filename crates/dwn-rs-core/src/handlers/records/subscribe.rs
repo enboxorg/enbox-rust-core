@@ -17,6 +17,7 @@ use crate::handlers::records::common::{
 };
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Subscribe;
+use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
 use crate::stores::EventSubscription;
 use crate::stores::{EventLogSubscribeOptions, SubscriptionListener};
 use crate::validation::validate_message;
@@ -27,13 +28,14 @@ use super::RecordsAuthorizationKind;
 
 #[derive(Clone)]
 pub struct RecordsSubscribeHandler<MessageStore> {
-    message_store: MessageStore,
+    message_store: Arc<MessageStore>,
     did_resolver: Option<Arc<dyn DidResolver>>,
+    write_resolver: Arc<dyn InitialWriteResolver>,
 }
 
 impl<MessageStore> Handler for RecordsSubscribeHandler<MessageStore>
 where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
 {
     type Reply = Subscribe;
     type Descriptor = SubscribeDescriptor;
@@ -91,7 +93,7 @@ where
                         &message,
                         &descriptor.filter,
                         signature,
-                        &self.message_store,
+                        self.message_store.as_ref(),
                     )
                     .await
                     {
@@ -103,7 +105,7 @@ where
                         tenant,
                         &descriptor.filter,
                         signature,
-                        &self.message_store,
+                        self.message_store.as_ref(),
                         RecordsAuthorizationKind::Subscribe,
                     )
                     .await
@@ -141,15 +143,17 @@ where
                 Ok(result) => result,
                 Err(err) => return store_error_reply(err.to_string()),
             };
-            let entries = attach_initial_writes(
-                tenant,
-                result.messages,
-                &self.message_store,
-                signature
-                    .as_ref()
-                    .map(|signature| signature.author.as_str()),
-            )
-            .await;
+            let entries =
+                match attach_initial_writes(tenant, result.messages, self.write_resolver.as_ref())
+                    .await
+                {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return store_error_reply(format!(
+                            "failed to attach initial writes: {err}"
+                        ));
+                    }
+                };
             Response::ok().with_reply(Subscribe {
                 subscription_id: None,
                 entries: Some(entries.clone()),
@@ -165,39 +169,50 @@ pub struct RecordsSubscribeReply {
     pub subscription: Option<EventSubscription>,
 }
 
-impl<MessageStore> RecordsSubscribeHandler<MessageStore> {
+impl<MessageStore> RecordsSubscribeHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
+{
     pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
+        let message_store = Arc::new(message_store);
         Self {
-            message_store,
+            message_store: message_store.clone(),
             did_resolver,
+            write_resolver: Arc::new(MessageStoreInitialWriteResolver::new(message_store)),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
-    message_store: MessageStore,
+    message_store: Arc<MessageStore>,
     event_log: EventLog,
     did_resolver: Option<Arc<dyn DidResolver>>,
+    write_resolver: Arc<dyn InitialWriteResolver>,
 }
 
-impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog> {
+impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog>
+where
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
+{
     pub fn new(
         message_store: MessageStore,
         event_log: EventLog,
         did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
+        let message_store = Arc::new(message_store);
         Self {
-            message_store,
+            message_store: message_store.clone(),
             event_log,
             did_resolver,
+            write_resolver: Arc::new(MessageStoreInitialWriteResolver::new(message_store)),
         }
     }
 }
 
 impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog>
 where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
     EventLog: crate::stores::EventLog + Clone + Send + Sync + 'static,
 {
     pub async fn handle_subscribe(
@@ -242,7 +257,7 @@ where
             }
         };
 
-        let (event_filters, query_filters, author) = match self
+        let (event_filters, query_filters, _) = match self
             .records_subscribe_filters(tenant, &message, &descriptor, signature.as_ref())
             .await
         {
@@ -306,13 +321,22 @@ where
                 return records_subscribe_reply(store_error_reply(err.to_string()), None);
             }
         };
-        let entries = attach_initial_writes(
+        let entries = match attach_initial_writes(
             tenant,
             result.messages,
-            &self.message_store,
-            author.as_deref(),
+            self.write_resolver.as_ref(),
         )
-        .await;
+        .await
+        {
+            Ok(entries) => entries,
+            Err(err) => {
+                let _ = (subscription.close)().await;
+                return records_subscribe_reply(
+                    store_error_reply(format!("failed to attach initial writes: {err}")),
+                    None,
+                );
+            }
+        };
         let reply = Response::ok().with_reply(Subscribe {
             subscription_id: Some(subscription.id.clone()),
             entries: Some(entries.clone()),
@@ -351,7 +375,7 @@ where
             message,
             &descriptor.filter,
             signature,
-            &self.message_store,
+            self.message_store.as_ref(),
         )
         .await
         .map_err(|err| Response::unauthorized(err.to_string()))?;
@@ -360,7 +384,7 @@ where
                 tenant,
                 &descriptor.filter,
                 signature,
-                &self.message_store,
+                self.message_store.as_ref(),
                 RecordsAuthorizationKind::Subscribe,
             )
             .await

@@ -7,8 +7,8 @@ use base64::Engine as _;
 use bytes::Bytes;
 use serde_json::Value as JsonValue;
 
-use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
-use crate::descriptors::records::is_initial_write;
+use crate::cid::generate_message_cid_from_json;
+use crate::descriptors::records::{entry_id, is_initial_write};
 use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields, write_fields_mut},
@@ -28,6 +28,7 @@ use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::{QueryEntry, Subscribe};
 use crate::replies::HasProgressGapInfo;
+use crate::stores::write_resolver::InitialWriteResolver;
 use crate::stores::{EventSubscription, KeyValues};
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, Response, SortDirection, Value};
 
@@ -161,20 +162,6 @@ pub(crate) fn message_record_id(message: &Message<Descriptor>) -> Option<String>
             .ok()
             .map(|d| d.record_id.clone())
     })
-}
-
-pub(crate) fn entry_id(
-    author: &str,
-    descriptor: &RecordsWriteDescriptor,
-) -> Result<String, String> {
-    let mut descriptor = serde_json::to_value(descriptor).map_err(|err| err.to_string())?;
-    let object = descriptor.as_object_mut().ok_or_else(|| {
-        "RecordsWriteGetEntryIdInvalidDescriptor: descriptor must be an object".to_string()
-    })?;
-    object.insert("author".to_string(), JsonValue::String(author.to_string()));
-    generate_cid_from_json(&descriptor)
-        .map(|cid| cid.to_string())
-        .map_err(|err| err.to_string())
 }
 
 pub(crate) fn find_initial_write(
@@ -1187,40 +1174,29 @@ where
     Ok(chain)
 }
 
-pub(crate) async fn attach_initial_writes<MessageStore>(
+pub(crate) async fn attach_initial_writes(
     tenant: &str,
     messages: Vec<Message<Descriptor>>,
-    message_store: &MessageStore,
-    author_hint: Option<&str>,
-) -> Vec<QueryEntry>
+    resolver: &dyn InitialWriteResolver,
+) -> Result<Vec<QueryEntry>, EventLogError>
 where
-    MessageStore: crate::stores::MessageStore + Sync,
 {
     let mut entries = Vec::new();
-    for message in messages {
-        let mut entry = QueryEntry {
-            message: message.clone(),
-            initial_write: None,
-            encoded_data: None,
-        };
 
-        let author = extract_author(&message).or_else(|| author_hint.map(str::to_string));
-        let is_initial = author
-            .as_deref()
-            .and_then(|author| is_initial_write(&message, author).ok())
-            .unwrap_or(false);
-        if !is_initial {
-            if let Some(record_id) = record_id(&message) {
-                if let Ok(Some(initial_write)) =
-                    fetch_initial_write_message(tenant, &record_id, message_store).await
-                {
-                    entry.initial_write = Some(initial_write.clone());
-                }
-            }
-        }
-        entries.push(entry);
+    for message in messages {
+        let initial_write = resolver
+            .resolve_initial_write(tenant, &message)
+            .await?
+            .map(Into::into);
+
+        entries.push(QueryEntry {
+            message,
+            initial_write,
+            encoded_data: None,
+        });
     }
-    entries
+
+    Ok(entries)
 }
 
 pub(crate) async fn fetch_record_messages<MessageStore>(
