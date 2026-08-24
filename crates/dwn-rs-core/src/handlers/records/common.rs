@@ -8,6 +8,7 @@ use bytes::Bytes;
 use serde_json::Value as JsonValue;
 
 use crate::cid::{generate_cid_from_json, generate_message_cid_from_json};
+use crate::descriptors::records::is_initial_write;
 use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields, write_fields_mut},
@@ -174,17 +175,6 @@ pub(crate) fn entry_id(
     generate_cid_from_json(&descriptor)
         .map(|cid| cid.to_string())
         .map_err(|err| err.to_string())
-}
-
-pub(crate) fn is_initial_write(
-    message: &Message<Descriptor>,
-    author: &str,
-) -> Result<bool, String> {
-    let descriptor = records_write_descriptor(message)?;
-    let Some(record_id) = record_id(message) else {
-        return Ok(false);
-    };
-    Ok(entry_id(author, descriptor)? == record_id)
 }
 
 pub(crate) fn find_initial_write(

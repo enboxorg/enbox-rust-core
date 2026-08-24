@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
+use crate::descriptors::records::is_initial_write;
 use crate::descriptors::{
     messages::record_id, records::records_write_descriptor, DeleteDescriptor, Descriptor,
 };
@@ -10,9 +11,8 @@ use crate::dwn::{Handler, HandlerContext};
 use crate::handlers::records::common::{
     authorize_records_delete, can_perform_delete_against_record, compare_messages,
     delete_from_data_store_if_needed, extract_author, fetch_record_messages, find_initial_write,
-    is_initial_write, message_cid, newest_message, purge_record_descendants,
-    records_delete_descriptor, records_delete_indexes, records_write_indexes, set_encoded_data,
-    store_error_reply,
+    message_cid, newest_message, purge_record_descendants, records_delete_descriptor,
+    records_delete_indexes, records_write_indexes, set_encoded_data, store_error_reply,
 };
 use crate::permissions::{self};
 use crate::Message;

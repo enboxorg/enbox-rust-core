@@ -10,6 +10,7 @@ use futures_util::stream;
 
 use crate::auth::resolver::DidResolver;
 use crate::cid::generate_dag_pb_cid_from_bytes;
+use crate::descriptors::records::is_initial_write;
 use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields},
@@ -23,10 +24,10 @@ use crate::handlers::records::common::{
     authorize_against_protocol, bool_filter, compare_messages, context_id,
     core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
     existing_initial_lacks_data, fetch_newest_write, filter_map, find_initial_write,
-    governing_timestamp, is_initial_write, message_cid, message_record_id, message_timestamp,
-    newest_message, parent_context_id, purge_record_messages, records_delete_descriptor,
-    records_write_indexes, set_encoded_data, store_error_reply, string_filter,
-    validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
+    governing_timestamp, message_cid, message_record_id, message_timestamp, newest_message,
+    parent_context_id, purge_record_messages, records_delete_descriptor, records_write_indexes,
+    set_encoded_data, store_error_reply, string_filter, validate_data_integrity,
+    validate_records_write_integrity, verify_immutable_properties,
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
