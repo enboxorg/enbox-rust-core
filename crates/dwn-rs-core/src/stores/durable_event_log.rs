@@ -11,9 +11,11 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::errors::{EventLogError, StoreError};
 use crate::stores::replication_feed_reader::{parse_feed_position, ReplicationBounds};
@@ -53,39 +55,132 @@ where
 
     /// Consumer of best-effort wake hints for newly committed feed entries.
     subscriber: S,
+
+    // Background task for periodic idle re-drain. None if disabled.
+    idle_redrain_task: Option<IdleRedrainTask>,
+}
+
+/// IdleRedrainTask is a background task that periodically re-drains all subscriptions that have
+/// requested a redrain. This is used to ensure that subscriptions that have been idle for a long
+/// time are still able to receive new events. The task is spawned when the DurableEventLog
+/// is created and is cancelled when the DurableEventLog is dropped. The task is only spawned if the
+/// idle_redrain_interval is set to Some(Duration) in the DurableEventLogConfig. If
+/// idle_redrain_interval is set to None, the task is not spawned and the subscriptions will only be
+/// redrained when a wake is received. If idle_redrain_interval is set to Some(Duration::ZERO), the task
+/// is not spawned and the subscriptions will be redrained immediately after a wake is received. This
+/// is useful for testing and debugging, but should not be used in production.
+struct IdleRedrainTask {
+    cancel: oneshot::Sender<()>,
+    handle: JoinHandle<()>,
+}
+
+impl IdleRedrainTask {
+    fn spawn<R>(period: Duration, inner: &Arc<DurableEventLogInner<R>>) -> Self
+    where
+        R: ReplicationFeedReader + Send + Sync + 'static,
+    {
+        debug_assert!(
+            period > Duration::ZERO,
+            "idle_redrain_interval must be greater than zero"
+        );
+
+        let weak = Arc::downgrade(inner);
+        let (cancel, mut cancelled) = oneshot::channel();
+
+        let handle = tokio::spawn(async move {
+            let start = Instant::now() + period;
+            let mut ticker = tokio::time::interval_at(start, period);
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    _ = &mut cancelled => {
+                        return;
+                    }
+
+                    _ = ticker.tick() => {
+                        let Some(inner) = weak.upgrade() else {
+                            return;
+                        };
+
+                        DurableEventLogInner::redrain_all(&inner).await;
+                        }
+                }
+            }
+        });
+
+        Self { cancel, handle }
+    }
+
+    async fn shutdown(self) {
+        let _ = self.cancel.send(());
+        if let Err(err) = self.handle.await {
+            tracing::error!("IdleRedrainTask failed to join: {:?}", err);
+        }
+    }
 }
 
 impl<R, S> DurableEventLog<R, S>
 where
-    R: ReplicationFeedReader,
+    R: ReplicationFeedReader + Send + Sync + 'static,
     S: WakeSubscriber,
 {
     /// Create a new durable event log adapter.
-    pub fn new(reader: R, subscriber: S) -> Self {
-        Self {
-            subscriber,
-            inner: Arc::new(DurableEventLogInner {
-                reader: Arc::new(reader),
-                initial_write_resolver: None,
-                subscriptions: RwLock::new(BTreeMap::new()),
-                install_locks: Mutex::new(BTreeMap::new()),
-            }),
-        }
-    }
-
-    pub fn with_initial_write_resolver(
+    pub fn new(
         reader: R,
         subscriber: S,
-        resolver: Arc<dyn InitialWriteResolver>,
+        initial_write_resolver: Option<Arc<dyn InitialWriteResolver>>,
+        config: Option<DurableEventLogConfig>,
     ) -> Self {
+        let mut config = config.unwrap_or_default();
+        if config.idle_redrain_interval == Some(Duration::ZERO) {
+            config.idle_redrain_interval = None;
+        }
+
+        let inner = Arc::new(DurableEventLogInner {
+            reader: Arc::new(reader),
+            initial_write_resolver,
+            subscriptions: RwLock::new(BTreeMap::new()),
+            install_locks: Mutex::new(BTreeMap::new()),
+            config: config.clone(),
+        });
+
+        let idle_redrain_task = config
+            .idle_redrain_interval
+            .map(|period| IdleRedrainTask::spawn(period, &inner));
+
         Self {
             subscriber,
-            inner: Arc::new(DurableEventLogInner {
-                reader: Arc::new(reader),
-                initial_write_resolver: Some(resolver),
-                subscriptions: RwLock::new(BTreeMap::new()),
-                install_locks: Mutex::new(BTreeMap::new()),
-            }),
+            inner,
+            idle_redrain_task,
+        }
+    }
+}
+
+pub type ErrorFn = Arc<dyn Fn(&EventLogError) + Send + Sync>;
+
+/// Configuration for [`DurableEventLog`].
+#[derive(Clone)]
+pub struct DurableEventLogConfig {
+    // Maximum number of feed rows returned per-drain. Default 100; values
+    // are claimed to at least 1.
+    pub read_limit: u64,
+
+    // Idle re-drain interval bounding dropped-wake latency. None disables
+    // polling. Default 30s.
+    pub idle_redrain_interval: Option<Duration>,
+
+    // Sink for background drain errors. Defaults to logs via `tracing`.
+    pub on_error: Option<ErrorFn>,
+}
+
+impl Default for DurableEventLogConfig {
+    fn default() -> Self {
+        Self {
+            read_limit: DEFAULT_DRAIN_READ_LIMIT,
+            idle_redrain_interval: Some(Duration::from_secs(30)),
+            on_error: None,
         }
     }
 }
@@ -95,6 +190,7 @@ struct DurableEventLogInner<R> {
     initial_write_resolver: Option<Arc<dyn InitialWriteResolver>>,
     subscriptions: RwLock<BTreeMap<String, Arc<SubscriptionState>>>,
     install_locks: Mutex<BTreeMap<String, Weak<Mutex<()>>>>,
+    config: DurableEventLogConfig,
 }
 
 pub struct SubscriptionState {
@@ -139,6 +235,10 @@ where
     }
 
     async fn close(&mut self) -> () {
+        if let Some(task) = self.idle_redrain_task.take() {
+            task.shutdown().await;
+        }
+
         self.inner.subscriptions.write().await.clear();
     }
 
@@ -179,7 +279,7 @@ where
         let bounds = match self.inner.reader.log_bounds(tenant).await {
             Ok(bounds) => bounds,
             Err(error) => {
-                self.cleanup_subscription(&subscription).await;
+                self.cleanup_subscription(&subscription).await?;
                 return Err(error);
             }
         };
@@ -187,7 +287,7 @@ where
         let frozen_cursor = match self.frozen_cursor(bounds, cursor.clone(), tenant).await {
             Ok(frozen_cursor) => frozen_cursor,
             Err(error) => {
-                self.cleanup_subscription(&subscription).await;
+                self.cleanup_subscription(&subscription).await?;
                 return Err(error);
             }
         };
@@ -218,13 +318,13 @@ where
                         ),
                     )),
                     Ok(_) => {
-                        self.cleanup_subscription(&subscription).await;
+                        self.cleanup_subscription(&subscription).await?;
                         Err(EventLogError::StoreError(StoreError::InternalException(
                             "subscription phase changed unexpectedly during replay".to_string(),
                         )))
                     }
                     Err(error) => {
-                        self.cleanup_subscription(&subscription).await;
+                        self.cleanup_subscription(&subscription).await?;
                         Err(error)
                     }
                 }
@@ -233,6 +333,14 @@ where
                 let should_start = {
                     let mut mutable = subscription.mutable.lock().await;
                     mutable.cursor = Some(frozen_cursor.clone());
+
+                    if Self::closed(&subscription).await {
+                        return Ok(DurableEventLogInner::make_subscription(
+                            Arc::clone(&self.inner),
+                            Arc::clone(&subscription),
+                        ));
+                    }
+
                     mutable.phase = SubscriptionPhase::Live;
                     mutable.redrain_requested
                 };
@@ -262,7 +370,7 @@ where
 
                     if mutable.phase != SubscriptionPhase::Replay {
                         drop(mutable);
-                        self.cleanup_subscription(&subscription).await;
+                        self.cleanup_subscription(&subscription).await?;
                         return Err(EventLogError::StoreError(StoreError::InternalException(
                             "subscription phase changed unexpectedly during replay".to_string(),
                         )));
@@ -282,7 +390,7 @@ where
 
                     if mutable.phase != SubscriptionPhase::Replay {
                         drop(mutable);
-                        self.cleanup_subscription(&subscription).await;
+                        self.cleanup_subscription(&subscription).await?;
                         return Err(EventLogError::StoreError(StoreError::InternalException(
                             "subscription phase changed unexpectedly during replay".to_string(),
                         )));
@@ -291,6 +399,7 @@ where
                     mutable.cursor = Some(frozen_cursor.clone());
                     mutable.phase = SubscriptionPhase::Live;
                     let should_start = mutable.redrain_requested;
+                    drop(mutable);
 
                     if should_start {
                         let inner = Arc::clone(&self.inner);
@@ -356,8 +465,16 @@ where
         })
     }
 
-    async fn cleanup_subscription(&self, subscription: &Arc<SubscriptionState>) {
-        DurableEventLogInner::cleanup_subscription(&self.inner, subscription).await;
+    async fn cleanup_subscription(
+        &self,
+        subscription: &Arc<SubscriptionState>,
+    ) -> Result<(), EventLogError> {
+        DurableEventLogInner::cleanup_subscription(
+            &self.inner,
+            subscription,
+            CleanupOrigin::External,
+        )
+        .await
     }
 
     async fn frozen_cursor(
@@ -520,7 +637,7 @@ where
             subscriptions.remove(id)
         };
         if let Some(removed) = removed {
-            self.cleanup_subscription(&removed).await;
+            self.cleanup_subscription(&removed).await?;
         };
 
         {
@@ -535,12 +652,30 @@ where
 
         Ok(subscription)
     }
+
+    async fn closed(subscription: &Arc<SubscriptionState>) -> bool {
+        DurableEventLogInner::<R>::closed(subscription).await
+    }
 }
 
 impl<R> DurableEventLogInner<R>
 where
     R: ReplicationFeedReader + Send + Sync + 'static,
 {
+    async fn redrain_all(inner: &Arc<Self>) {
+        let subscriptions = inner
+            .subscriptions
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for subscription in subscriptions {
+            DurableEventLogInner::request_drain(inner, subscription).await;
+        }
+    }
+
     async fn replay_to_frozen(
         inner: &Arc<Self>,
         subscription: Arc<SubscriptionState>,
@@ -572,7 +707,7 @@ where
                     &subscription.tenant,
                     EventLogReadOptions {
                         cursor: Some(read_cursor.clone()),
-                        limit: Some(DEFAULT_DRAIN_READ_LIMIT),
+                        limit: Some(inner.config.read_limit),
                         filters: subscription.filters.clone(),
                     },
                 )
@@ -712,16 +847,15 @@ where
             match Self::drain_once(&inner, &subscription, &mut cursor).await {
                 Ok(()) => {}
                 Err(EventLogError::ProgressGap(gap)) => {
-                    Self::handle_progress_gap(&inner, &subscription, *gap).await;
+                    if let Err(error) = Self::handle_progress_gap(&inner, &subscription, *gap).await
+                    {
+                        inner.report_background_error(&subscription, &error);
+                    };
+
                     break;
                 }
                 Err(error) => {
-                    tracing::error!(
-                        %error,
-                        subscription_id = %subscription.id,
-                        tenant = %subscription.tenant,
-                        "durable event-log drain failed"
-                    );
+                    inner.report_background_error(&subscription, &error);
 
                     let mut mutable = subscription.mutable.lock().await;
                     if mutable.phase == SubscriptionPhase::Live
@@ -773,7 +907,7 @@ where
                     &subscription.tenant,
                     EventLogReadOptions {
                         cursor: cursor.clone(),
-                        limit: Some(DEFAULT_DRAIN_READ_LIMIT),
+                        limit: Some(inner.config.read_limit),
                         filters: subscription.filters.clone(),
                     },
                 )
@@ -838,6 +972,10 @@ where
                 .await?
         }
 
+        if Self::closed(subscription).await {
+            return Ok(cursor);
+        }
+
         (subscription.listener)(SubscriptionMessage::Event {
             event: Box::new(entry.event),
             seq: Some(entry.seq.clone()),
@@ -865,7 +1003,7 @@ where
         inner: &Arc<Self>,
         subscription: &Arc<SubscriptionState>,
         gap: ProgressGapInfo,
-    ) {
+    ) -> Result<(), EventLogError> {
         let should_send = {
             let mut mutable = subscription.mutable.lock().await;
             if mutable.phase == SubscriptionPhase::Closed || mutable.terminal_error_sent {
@@ -888,7 +1026,7 @@ where
             (subscription.listener)(SubscriptionMessage::Error { cursor, error });
         }
 
-        Self::cleanup_subscription(inner, subscription).await;
+        Self::cleanup_subscription(inner, subscription, CleanupOrigin::DrainTask).await
     }
 
     async fn closed(subscription: &Arc<SubscriptionState>) -> bool {
@@ -907,19 +1045,27 @@ where
                 let inner = Arc::clone(&inner);
                 let subscription = Arc::clone(&subscription);
                 Box::pin(async move {
-                    Self::cleanup_subscription(&inner, &subscription).await;
-
-                    Ok(())
+                    Self::cleanup_subscription(&inner, &subscription, CleanupOrigin::External).await
                 })
             }),
         }
     }
 
-    async fn cleanup_subscription(inner: &Arc<Self>, subscription: &Arc<SubscriptionState>) {
-        let wake_handle = {
+    async fn cleanup_subscription(
+        inner: &Arc<Self>,
+        subscription: &Arc<SubscriptionState>,
+        origin: CleanupOrigin,
+    ) -> Result<(), EventLogError> {
+        let (wake_handle, drain_task) = {
             let mut mutable = subscription.mutable.lock().await;
             mutable.phase = SubscriptionPhase::Closed;
-            mutable.wake_handle.take()
+
+            let drain_task = match origin {
+                CleanupOrigin::External => mutable.drain_task.take(),
+                CleanupOrigin::DrainTask => None,
+            };
+
+            (mutable.wake_handle.take(), drain_task)
         };
 
         {
@@ -935,7 +1081,35 @@ where
         if let Some(wake_handle) = wake_handle {
             wake_handle.close().await;
         }
+
+        if let Some(drain_task) = drain_task {
+            drain_task.await.map_err(|err| {
+                EventLogError::StoreError(StoreError::InternalException(format!(
+                    "drain task join failed: {err}"
+                )))
+            })?;
+        }
+
+        Ok(())
     }
+
+    fn report_background_error(&self, subscription: &SubscriptionState, error: &EventLogError) {
+        if let Some(on_error) = &self.config.on_error {
+            on_error(error);
+        } else {
+            tracing::error!(
+                %error,
+                subscription_id = %subscription.id,
+                tenant = %subscription.tenant,
+                "durable event-log background error"
+            );
+        }
+    }
+}
+
+enum CleanupOrigin {
+    DrainTask,
+    External,
 }
 
 fn progress_gap(
