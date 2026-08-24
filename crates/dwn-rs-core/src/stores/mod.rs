@@ -76,6 +76,20 @@ pub enum ProgressGapCode {
     ProgressGap,
 }
 
+impl ProgressGapCode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProgressGap => "ProgressGap",
+        }
+    }
+}
+
+impl std::fmt::Display for ProgressGapCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressGapInfo {
@@ -159,6 +173,12 @@ pub type EventSubscriptionClose =
 pub struct EventSubscription {
     pub id: String,
     pub close: EventSubscriptionClose,
+}
+
+impl EventSubscription {
+    fn new(id: String, close: EventSubscriptionClose) -> Self {
+        Self { id, close }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

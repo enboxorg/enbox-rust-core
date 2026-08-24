@@ -937,7 +937,7 @@ where
                 cursor: _cursor,
                 error,
             } => {
-                let error = SyncError::transient(error.code, error.detail);
+                let error = SyncError::transient(error.code.to_string(), error.detail);
                 self.record_dead_letter(
                     tenant,
                     remote,
@@ -1033,7 +1033,7 @@ where
                 cursor: _cursor,
                 error,
             } => {
-                let error = SyncError::transient(error.code, error.detail);
+                let error = SyncError::transient(error.code.to_string(), error.detail);
                 self.record_dead_letter(
                     tenant,
                     remote,

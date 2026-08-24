@@ -29,6 +29,8 @@ use crate::stores::{
 };
 use crate::{Descriptor, Filters, MessageEvent, ProgressToken, Value};
 
+const DEFAULT_DRAIN_READ_LIMIT: u64 = 100;
+
 /// Read-only event log backed by a durable replication-feed reader.
 ///
 /// This adapter does not own a second event history. In particular, it must not
@@ -101,6 +103,12 @@ enum SubscriptionPhase {
     Closed,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReplayOutcome {
+    ReachedFrozenHead,
+    Closed,
+}
+
 impl<R, S> EventLog for DurableEventLog<R, S>
 where
     R: ReplicationFeedReader + Send + Sync + 'static,
@@ -161,6 +169,65 @@ where
             Err(error) => {
                 self.cleanup_subscription(&subscription).await;
                 return Err(error);
+            }
+        };
+
+        match cursor {
+            Some(requested) => {
+                let outcome = DurableEventLogInner::replay_to_frozen(
+                    &self.inner,
+                    Arc::clone(&subscription),
+                    requested,
+                    frozen_cursor,
+                )
+                .await;
+
+                match outcome {
+                    Ok(ReplayOutcome::ReachedFrozenHead) => {
+                        let inner = Arc::clone(&self.inner);
+                        let state = Arc::clone(&subscription);
+                        tokio::spawn(async move {
+                            DurableEventLogInner::try_start_drain(&inner, state).await;
+                        });
+
+                        return Ok(DurableEventLogInner::make_subscription(
+                            Arc::clone(&self.inner),
+                            Arc::clone(&subscription),
+                        )
+                        .await);
+                    }
+                    Ok(ReplayOutcome::Closed) => {
+                        self.cleanup_subscription(&subscription).await;
+                        return Err(EventLogError::StoreError(StoreError::InternalException(
+                            "subscription closed during replay".to_string(),
+                        )));
+                    }
+                    Err(error) => {
+                        self.cleanup_subscription(&subscription).await;
+                        return Err(error);
+                    }
+                }
+            }
+            None => {
+                let should_start = {
+                    let mut mutable = subscription.mutable.lock().await;
+                    mutable.cursor = Some(frozen_cursor);
+                    mutable.phase = SubscriptionPhase::Live;
+                    mutable.redrain_requested
+                };
+                if should_start {
+                    let inner = Arc::clone(&self.inner);
+                    let state = Arc::clone(&subscription);
+                    tokio::spawn(async move {
+                        DurableEventLogInner::try_start_drain(&inner, state).await;
+                    });
+
+                    return Ok(DurableEventLogInner::make_subscription(
+                        Arc::clone(&self.inner),
+                        Arc::clone(&subscription),
+                    )
+                    .await);
+                }
             }
         };
 
@@ -397,12 +464,130 @@ where
     }
 }
 
-const DEFAULT_DRAIN_READ_LIMIT: u64 = 100;
-
 impl<R> DurableEventLogInner<R>
 where
     R: ReplicationFeedReader + Send + Sync + 'static,
 {
+    async fn replay_to_frozen(
+        inner: &Arc<Self>,
+        subscription: Arc<SubscriptionState>,
+        requested: ProgressToken,
+        frozen: ProgressToken,
+    ) -> Result<ReplayOutcome, EventLogError> {
+        let mut read_cursor = requested.clone();
+        let mut read_position = parse_feed_position(&requested.position)?;
+        let frozen_position = parse_feed_position(&frozen.position)?;
+
+        if read_position > frozen_position {
+            return Err(EventLogError::StoreError(StoreError::InternalException(
+                "validated replay cursor is ahead of the frozen cursor".to_string(),
+            )));
+        }
+
+        if read_position == frozen_position {
+            return Ok(ReplayOutcome::ReachedFrozenHead);
+        };
+
+        loop {
+            if Self::closed(&subscription).await {
+                return Ok(ReplayOutcome::Closed);
+            }
+
+            let results = inner
+                .reader
+                .log_read(
+                    &subscription.tenant,
+                    EventLogReadOptions {
+                        cursor: Some(read_cursor.clone()),
+                        limit: Some(DEFAULT_DRAIN_READ_LIMIT),
+                        filters: subscription.filters.clone(),
+                    },
+                )
+                .await?;
+
+            if Self::closed(&subscription).await {
+                return Ok(ReplayOutcome::Closed);
+            }
+
+            let scan_cursor = results.cursor.ok_or_else(|| {
+                EventLogError::StoreError(StoreError::InternalException(
+                    "feed reader returned no replay scan cursor".to_string(),
+                ))
+            })?;
+
+            if scan_cursor.stream_id != frozen.stream_id {
+                return Err(EventLogError::StoreError(StoreError::InternalException(
+                    "replay scan cursor stream does not match frozen cursor".to_string(),
+                )));
+            }
+
+            if scan_cursor.epoch != frozen.epoch {
+                return Err(EventLogError::StoreError(StoreError::InternalException(
+                    "replay scan cursor epoch does not match frozen cursor".to_string(),
+                )));
+            }
+
+            let scan_position = parse_feed_position(&scan_cursor.position)?;
+            if scan_position < frozen_position && scan_position <= read_position {
+                return Err(EventLogError::StoreError(StoreError::InternalException(
+                    "replay scan cursor did not advance toward frozen cursor".to_string(),
+                )));
+            }
+
+            let mut last_entry_position = read_position;
+            for entry in results.events {
+                if Self::closed(&subscription).await {
+                    return Ok(ReplayOutcome::Closed);
+                }
+                let entry_position = parse_feed_position(&entry.seq)?;
+                if entry_position <= last_entry_position {
+                    return Err(EventLogError::StoreError(StoreError::InternalException(
+                        "replay entries are not in strictly increasing position order".to_string(),
+                    )));
+                }
+                last_entry_position = entry_position;
+
+                if entry_position > frozen_position {
+                    break;
+                }
+
+                let entry_cursor = Self::deliver_entry(&subscription, entry, &scan_cursor).await?;
+                let mut mutable = subscription.mutable.lock().await;
+                match mutable.phase {
+                    SubscriptionPhase::Replay => mutable.cursor = Some(entry_cursor),
+                    SubscriptionPhase::Closed => return Ok(ReplayOutcome::Closed),
+                    SubscriptionPhase::Live => {
+                        return Err(EventLogError::StoreError(StoreError::InternalException(
+                            "subscription became live during replay".to_string(),
+                        )));
+                    }
+                }
+            }
+
+            if scan_position >= frozen_position {
+                return Ok(ReplayOutcome::ReachedFrozenHead);
+            }
+
+            {
+                let mut mutable = subscription.mutable.lock().await;
+                match mutable.phase {
+                    SubscriptionPhase::Replay => {
+                        mutable.cursor = Some(scan_cursor.clone());
+                    }
+                    SubscriptionPhase::Closed => return Ok(ReplayOutcome::Closed),
+                    SubscriptionPhase::Live => {
+                        return Err(EventLogError::StoreError(StoreError::InternalException(
+                            "subscription became live during replay".to_string(),
+                        )));
+                    }
+                }
+            }
+
+            read_position = scan_position;
+            read_cursor = scan_cursor;
+        }
+    }
+
     async fn request_drain(inner: &Arc<Self>, subscription: Arc<SubscriptionState>) {
         let should_try_start = {
             let mut mutable = subscription.mutable.lock().await;
@@ -626,6 +811,26 @@ where
 
     async fn closed(subscription: &Arc<SubscriptionState>) -> bool {
         subscription.mutable.lock().await.phase == SubscriptionPhase::Closed
+    }
+
+    async fn make_subscription(
+        inner: Arc<Self>,
+        subscription: Arc<SubscriptionState>,
+    ) -> EventSubscription {
+        let subscription_id = subscription.id.clone();
+
+        EventSubscription {
+            id: subscription_id,
+            close: Box::new(move || {
+                let inner = Arc::clone(&inner);
+                let subscription = Arc::clone(&subscription);
+                Box::pin(async move {
+                    Self::cleanup_subscription(&inner, &subscription).await;
+
+                    Ok(())
+                })
+            }),
+        }
     }
 
     async fn cleanup_subscription(inner: &Arc<Self>, subscription: &Arc<SubscriptionState>) {
