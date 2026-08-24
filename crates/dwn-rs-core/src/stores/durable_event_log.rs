@@ -106,6 +106,7 @@ enum SubscriptionPhase {
 #[derive(Debug, PartialEq, Eq)]
 enum ReplayOutcome {
     ReachedFrozenHead,
+    NoCursorFollow,
     Closed,
 }
 
@@ -172,66 +173,119 @@ where
             }
         };
 
-        match cursor {
+        let event_sub = match cursor {
             Some(requested) => {
                 let outcome = DurableEventLogInner::replay_to_frozen(
                     &self.inner,
                     Arc::clone(&subscription),
                     requested,
-                    frozen_cursor,
+                    frozen_cursor.clone(),
                 )
                 .await;
 
                 match outcome {
-                    Ok(ReplayOutcome::ReachedFrozenHead) => {
-                        let inner = Arc::clone(&self.inner);
-                        let state = Arc::clone(&subscription);
-                        tokio::spawn(async move {
-                            DurableEventLogInner::try_start_drain(&inner, state).await;
-                        });
-
-                        return Ok(DurableEventLogInner::make_subscription(
+                    Ok(ReplayOutcome::ReachedFrozenHead) => Ok((
+                        ReplayOutcome::ReachedFrozenHead,
+                        DurableEventLogInner::make_subscription(
                             Arc::clone(&self.inner),
                             Arc::clone(&subscription),
-                        )
-                        .await);
-                    }
-                    Ok(ReplayOutcome::Closed) => {
+                        ),
+                    )),
+                    Ok(ReplayOutcome::Closed) => Ok((
+                        ReplayOutcome::Closed,
+                        DurableEventLogInner::make_subscription(
+                            Arc::clone(&self.inner),
+                            Arc::clone(&subscription),
+                        ),
+                    )),
+                    Ok(_) => {
                         self.cleanup_subscription(&subscription).await;
-                        return Err(EventLogError::StoreError(StoreError::InternalException(
-                            "subscription closed during replay".to_string(),
-                        )));
+                        Err(EventLogError::StoreError(StoreError::InternalException(
+                            "subscription phase changed unexpectedly during replay".to_string(),
+                        )))
                     }
                     Err(error) => {
                         self.cleanup_subscription(&subscription).await;
-                        return Err(error);
+                        Err(error)
                     }
                 }
             }
             None => {
                 let should_start = {
                     let mut mutable = subscription.mutable.lock().await;
-                    mutable.cursor = Some(frozen_cursor);
+                    mutable.cursor = Some(frozen_cursor.clone());
                     mutable.phase = SubscriptionPhase::Live;
                     mutable.redrain_requested
                 };
+                let inner = Arc::clone(&self.inner);
+                let state = Arc::clone(&subscription);
                 if should_start {
-                    let inner = Arc::clone(&self.inner);
-                    let state = Arc::clone(&subscription);
-                    tokio::spawn(async move {
-                        DurableEventLogInner::try_start_drain(&inner, state).await;
-                    });
+                    DurableEventLogInner::try_start_drain(&inner, state).await;
+                }
 
-                    return Ok(DurableEventLogInner::make_subscription(
+                Ok((
+                    ReplayOutcome::NoCursorFollow,
+                    DurableEventLogInner::make_subscription(
                         Arc::clone(&self.inner),
                         Arc::clone(&subscription),
-                    )
-                    .await);
-                }
+                    ),
+                ))
             }
         };
 
-        todo!()
+        match event_sub {
+            Ok((outcome, sub)) => match outcome {
+                ReplayOutcome::ReachedFrozenHead => {
+                    let mut mutable = subscription.mutable.lock().await;
+                    if mutable.phase == SubscriptionPhase::Closed {
+                        return Ok(sub);
+                    }
+
+                    if mutable.phase != SubscriptionPhase::Replay {
+                        drop(mutable);
+                        self.cleanup_subscription(&subscription).await;
+                        return Err(EventLogError::StoreError(StoreError::InternalException(
+                            "subscription phase changed unexpectedly during replay".to_string(),
+                        )));
+                    }
+
+                    mutable.cursor = Some(frozen_cursor.clone());
+                    drop(mutable);
+
+                    (subscription.listener)(SubscriptionMessage::Eose {
+                        cursor: frozen_cursor.clone(),
+                    });
+
+                    let mut mutable = subscription.mutable.lock().await;
+                    if mutable.phase == SubscriptionPhase::Closed {
+                        return Ok(sub);
+                    }
+
+                    if mutable.phase != SubscriptionPhase::Replay {
+                        drop(mutable);
+                        self.cleanup_subscription(&subscription).await;
+                        return Err(EventLogError::StoreError(StoreError::InternalException(
+                            "subscription phase changed unexpectedly during replay".to_string(),
+                        )));
+                    }
+
+                    mutable.cursor = Some(frozen_cursor.clone());
+                    mutable.phase = SubscriptionPhase::Live;
+                    let should_start = mutable.redrain_requested;
+
+                    if should_start {
+                        let inner = Arc::clone(&self.inner);
+                        let state = Arc::clone(&subscription);
+                        DurableEventLogInner::try_start_drain(&inner, state).await;
+                    }
+
+                    Ok(sub)
+                }
+                ReplayOutcome::NoCursorFollow => Ok(sub),
+                ReplayOutcome::Closed => Ok(sub),
+            },
+            Err(error) => Err(error),
+        }
     }
 
     async fn get_replay_bounds(
@@ -813,7 +867,7 @@ where
         subscription.mutable.lock().await.phase == SubscriptionPhase::Closed
     }
 
-    async fn make_subscription(
+    fn make_subscription(
         inner: Arc<Self>,
         subscription: Arc<SubscriptionState>,
     ) -> EventSubscription {
