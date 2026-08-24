@@ -213,6 +213,66 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         }
     });
 
+    // The owned counterpart to `into_message_impls`: convert an untyped `Message<Descriptor>`
+    // envelope into a concrete typed message. The descriptor is downcast by matching the union
+    // (the top-level `Descriptor::#name` variant is always boxed; the inner payload is
+    // dereferenced according to `boxed`), while the fields are converted through a JSON round
+    // trip — this macro does not own the concrete fields types, and `crate::Fields` is an
+    // untagged serde enum whose flat serialization is exactly what each concrete fields type
+    // deserializes from, making it the inverse of the `<#fields as Into<crate::Fields>>`
+    // conversion above.
+    let try_from_message_impls = variants.iter().map(|v| {
+        let (vn, ty, fields) = (&v.variant, &v.ty, &v.fields);
+        let unexpected = quote! {
+            return core::result::Result::Err(
+                crate::interfaces::messages::descriptors::ValidationError {
+                    message: format!(
+                        "expected {} {} descriptor",
+                        #iface,
+                        <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD
+                    ),
+                },
+            )
+        };
+        let variant_arm = if v.boxed {
+            quote!(#name::#vn(descriptor) => *descriptor)
+        } else {
+            quote!(#name::#vn(descriptor) => descriptor)
+        };
+        quote! {
+            impl core::convert::TryFrom<crate::Message<crate::Descriptor>> for crate::Message<#ty> {
+                type Error = crate::interfaces::messages::descriptors::ValidationError;
+
+                fn try_from(
+                    message: crate::Message<crate::Descriptor>,
+                ) -> core::result::Result<Self, Self::Error> {
+                    let crate::Message { descriptor, fields } = message;
+
+                    let descriptor = match descriptor {
+                        crate::Descriptor::#name(inner) => match *inner {
+                            #variant_arm,
+                            _ => #unexpected,
+                        },
+                        _ => #unexpected,
+                    };
+
+                    let fields = serde_json::to_value(&fields).map_err(|error| {
+                        crate::interfaces::messages::descriptors::ValidationError {
+                            message: format!("failed to serialize message fields: {error}"),
+                        }
+                    })?;
+                    let fields = serde_json::from_value::<#fields>(fields).map_err(|error| {
+                        crate::interfaces::messages::descriptors::ValidationError {
+                            message: format!("failed to deserialize message fields: {error}"),
+                        }
+                    })?;
+
+                    core::result::Result::Ok(crate::Message { descriptor, fields })
+                }
+            }
+        }
+    });
+
     // A fieldless method discriminant for this interface (e.g. `RecordsMethod`), generated from the
     // same variant entries that back the payload union. Unlike the union, it carries no descriptor
     // payload, so it is usable as a map key / embedded discriminant. `as_str`/`from_str_opt` route
@@ -338,6 +398,7 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
 
         #(#from_descriptor_impls)*
         #(#into_message_impls)*
+        #(#try_from_message_impls)*
     }
 }
 
@@ -406,6 +467,13 @@ mod tests {
         // dispatch keys off the trait const + has a fallback error
         assert!(out.contains("ConcreteDescriptor"));
         assert!(out.contains("impl From < crate :: Message < ReadDescriptor >"));
+        // owned untyped -> typed conversion is generated per concrete descriptor
+        assert!(out.contains(
+            "impl core :: convert :: TryFrom < crate :: Message < crate :: Descriptor >> for crate :: Message < ReadDescriptor >"
+        ));
+        assert!(out.contains(
+            "impl core :: convert :: TryFrom < crate :: Message < crate :: Descriptor >> for crate :: Message < WriteDescriptor >"
+        ));
         assert!(out.contains("unsupported"));
         // leaf codegen still runs (per-struct internal types)
         assert!(out.contains("ReadDescriptorInternal"));
@@ -459,3 +527,4 @@ mod tests {
         assert!(expand_interface(a, m).is_err());
     }
 }
+
