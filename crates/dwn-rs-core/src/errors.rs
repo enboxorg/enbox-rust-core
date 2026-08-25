@@ -156,6 +156,9 @@ pub enum EventLogError {
 
     #[error("unsupported event log read option: {0}")]
     UnsupportedReadOption(String),
+
+    #[error("event log is closed")]
+    Closed,
 }
 
 #[derive(Error, Debug)]
