@@ -13,7 +13,7 @@ use crate::handlers::messages::subscribe::SubscribeReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::replies::{messages, HasProgressGapInfo};
 use crate::stores::{EventSubscription, StateHash};
-use crate::{Fields, Message, RangeFilter, Response, Value};
+use crate::{Fields, Message, RangeFilter, Response, SubtreeFilter, Value};
 
 const MAX_SYNC_DEPTH: usize = 256;
 
@@ -51,13 +51,26 @@ pub(crate) fn messages_filter_to_filter_map(
     let mut map = BTreeMap::new();
     insert_messages_string_filter(&mut map, "interface", filter.interface.as_ref());
     insert_messages_string_filter(&mut map, "method", filter.method.as_ref());
+    insert_messages_string_filter(&mut map, "protocolPath", filter.protocol_path.as_ref());
     insert_messages_string_filter(&mut map, "protocol", filter.protocol.as_ref());
-    insert_messages_string_filter(
-        &mut map,
-        "protocolPathPrefix",
-        filter.protocol_path_prefix.as_ref(),
-    );
-    insert_messages_string_filter(&mut map, "contextId", filter.context_id_prefix.as_ref());
+
+    if let Some(prefix) = &filter.protocol_path_prefix {
+        map.insert(
+            FilterKey::Index("protocolPathPrefix".to_string()),
+            Filter::Subtree(SubtreeFilter {
+                subtree: prefix.clone(),
+            }),
+        );
+    }
+
+    if let Some(prefix) = &filter.context_id_prefix {
+        map.insert(
+            FilterKey::Index("contextIdPrefix".to_string()),
+            Filter::Subtree(SubtreeFilter {
+                subtree: prefix.clone(),
+            }),
+        );
+    }
 
     insert_message_range_filter(
         &mut map,
