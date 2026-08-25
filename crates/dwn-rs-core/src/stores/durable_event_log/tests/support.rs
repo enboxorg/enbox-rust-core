@@ -349,6 +349,22 @@ impl ScriptedReader {
         self.push_gated(ScriptedOutcome::Page(result))
     }
 
+    /// Holds the next `limit: Some(0)` read open, freezing a subscription mid-install.
+    pub(crate) fn push_gated_zero_limit_page(&self, result: EventLogReadResult) -> ReadGate {
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        self.push_zero_limit(ScriptedResponse {
+            outcome: ScriptedOutcome::Page(result),
+            entered: Some(entered_tx),
+            release: Some(release_rx),
+        });
+
+        ReadGate {
+            entered: Some(entered_rx),
+            release: Some(release_tx),
+        }
+    }
+
     /// Queues an error the harness can hold open; see [`ReadGate`].
     pub(crate) fn push_gated_error(&self, factory: ErrorFactory) -> ReadGate {
         self.push_gated(ScriptedOutcome::Error(factory))
@@ -875,10 +891,25 @@ impl LiveHarness {
             .expect("feed put");
     }
 
+    /// Publishes a wake directly, modelling a duplicate or stale hint.
+    pub(crate) fn publish_wake(&self, tenant: &str, position: u64) {
+        publish_wake(&self.bus, tenant, position);
+    }
+
     /// Commits a `RecordsDelete` distinguished by `marker`.
     pub(crate) async fn commit_delete(&self, tenant: &str, marker: &str, timestamp: &str) {
         self.commit(tenant, delete_message(marker, timestamp), marker)
             .await;
+    }
+}
+
+/// Yields enough times for wake-bus tasks queued on this runtime to run.
+///
+/// Wake delivery is asynchronous, so a test that must observe a wake taking
+/// effect before it proceeds parks here rather than sleeping.
+pub(crate) async fn settle() {
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
     }
 }
 

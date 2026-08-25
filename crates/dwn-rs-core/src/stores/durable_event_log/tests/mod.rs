@@ -2,5 +2,6 @@
 
 pub(crate) mod support;
 
+mod drain;
 mod replay;
 mod smoke;
