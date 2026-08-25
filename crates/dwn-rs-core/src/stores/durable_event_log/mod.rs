@@ -33,6 +33,9 @@ use crate::stores::{
 };
 use crate::{Descriptor, Filters, MessageEvent, ProgressToken, Value};
 
+#[cfg(test)]
+mod tests;
+
 const DEFAULT_DRAIN_READ_LIMIT: u64 = 100;
 
 /// Read-only event log backed by a durable replication-feed reader.
