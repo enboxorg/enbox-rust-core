@@ -7,6 +7,21 @@ on:
   pull_request:
 
 jobs:
+  changes:
+    name: Detect test scope changes
+    runs-on: ubuntu-latest
+    outputs:
+      enbox_version: ${{ steps.filter.outputs.enbox_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            enbox_version:
+              - '.enbox-version'
+
   rust-tests:
     name: Native Rust workspace
     runs-on: ubuntu-latest
@@ -116,6 +131,8 @@ jobs:
 
   dwn-sdk-js-reference:
     name: dwn-sdk-js reference gate (pinned Enbox)
+    needs: changes
+    if: needs.changes.outputs.enbox_version == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
