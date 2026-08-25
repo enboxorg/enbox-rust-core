@@ -2,4 +2,5 @@
 
 pub(crate) mod support;
 
+mod replay;
 mod smoke;

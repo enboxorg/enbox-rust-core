@@ -25,6 +25,7 @@ use tokio::time::timeout;
 use crate::descriptors::{DeleteDescriptor, Records};
 use crate::errors::{EventLogError, StoreError};
 use crate::fields::WriteFields;
+use crate::filters::{Filter, FilterKey};
 use crate::stores::durable_event_log::{DurableEventLog, DurableEventLogConfig, ErrorFn};
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::replication_feed_reader::{build_token, Fingerprint, ReplicationBounds};
@@ -94,6 +95,14 @@ pub(crate) fn indexes(pairs: &[(&str, &str)]) -> KeyValues {
         indexes.insert((*key).to_string(), Value::String((*value).to_string()));
     }
     indexes
+}
+
+/// Single-index equality filter, the common subscription filter shape.
+pub(crate) fn index_filters(key: &str, value: &str) -> Filters {
+    Filters::from([[(
+        FilterKey::Index(key.to_string()),
+        Filter::Equal(Value::String(value.to_string())),
+    )]])
 }
 
 /// Feed entry at `position` carrying a `RecordsWrite` and no indexes.
@@ -237,6 +246,7 @@ struct ScriptedReaderInner {
     /// Scan position used for the default page returned once the script runs out.
     default_position: Mutex<u64>,
     responses: Mutex<VecDeque<ScriptedResponse>>,
+    zero_limit_responses: Mutex<VecDeque<ScriptedResponse>>,
     reads: Mutex<Vec<RecordedRead>>,
     bounds_calls: Mutex<Vec<String>>,
     progress: Notify,
@@ -249,6 +259,11 @@ struct ScriptedReaderInner {
 /// [`ScriptedReader::set_default_position`], so incidental reads (cursor
 /// validation, empty-feed anchors, a final drain pass) never panic. Assertions
 /// are made against [`ScriptedReader::reads`] and delivered messages instead.
+///
+/// Reads with `limit: Some(0)` — cursor validation and empty-feed anchor
+/// capture — draw from their own script ([`ScriptedReader::push_zero_limit_page`],
+/// [`ScriptedReader::push_zero_limit_error`]) so tests script paging without
+/// counting the opening reads that interleave with it.
 #[derive(Clone, Default)]
 pub(crate) struct ScriptedReader {
     inner: Arc<ScriptedReaderInner>,
@@ -311,6 +326,24 @@ impl ScriptedReader {
         });
     }
 
+    /// Queues a response for the next `limit: Some(0)` read.
+    pub(crate) fn push_zero_limit_page(&self, result: EventLogReadResult) {
+        self.push_zero_limit(ScriptedResponse {
+            outcome: ScriptedOutcome::Page(result),
+            entered: None,
+            release: None,
+        });
+    }
+
+    /// Fails the next `limit: Some(0)` read, as cursor validation would.
+    pub(crate) fn push_zero_limit_error(&self, factory: ErrorFactory) {
+        self.push_zero_limit(ScriptedResponse {
+            outcome: ScriptedOutcome::Error(factory),
+            entered: None,
+            release: None,
+        });
+    }
+
     /// Queues a page the harness can hold open; see [`ReadGate`].
     pub(crate) fn push_gated_page(&self, result: EventLogReadResult) -> ReadGate {
         self.push_gated(ScriptedOutcome::Page(result))
@@ -342,6 +375,22 @@ impl ScriptedReader {
             .lock()
             .expect("responses lock")
             .push_back(response);
+    }
+
+    fn push_zero_limit(&self, response: ScriptedResponse) {
+        self.inner
+            .zero_limit_responses
+            .lock()
+            .expect("zero-limit responses lock")
+            .push_back(response);
+    }
+
+    /// Reads that actually scanned the feed, excluding validation and anchor reads.
+    pub(crate) fn paging_reads(&self) -> Vec<RecordedRead> {
+        self.reads()
+            .into_iter()
+            .filter(|read| read.limit != Some(0))
+            .collect()
     }
 
     /// Every read the adapter has issued, in order.
@@ -434,12 +483,19 @@ impl ReplicationFeedReader for ScriptedReader {
     ) -> Result<EventLogReadResult, EventLogError> {
         self.record(tenant, &options);
 
-        let response = self
-            .inner
-            .responses
-            .lock()
-            .expect("responses lock")
-            .pop_front();
+        let response = if options.limit == Some(0) {
+            self.inner
+                .zero_limit_responses
+                .lock()
+                .expect("zero-limit responses lock")
+                .pop_front()
+        } else {
+            self.inner
+                .responses
+                .lock()
+                .expect("responses lock")
+                .pop_front()
+        };
 
         let Some(response) = response else {
             return Ok(self.default_page());
@@ -597,8 +653,10 @@ impl Recorder {
     }
 
     /// Asserts nothing is delivered within `window`.
+    ///
+    /// A dropped listener counts as quiet: a cleaned-up subscription releases it.
     pub(crate) async fn expect_quiet(&mut self, window: Duration) {
-        if let Ok(message) = timeout(window, self.receiver.recv()).await {
+        if let Ok(Some(message)) = timeout(window, self.receiver.recv()).await {
             panic!("expected no further messages, got {message:?}");
         }
     }
