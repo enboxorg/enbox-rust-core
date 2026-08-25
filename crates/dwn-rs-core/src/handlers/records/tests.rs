@@ -13,8 +13,8 @@ use ssi_jwk::Algorithm;
 use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
-    records::write_fields, ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor,
-    Records, RecordsWriteDescriptor, SubscribeDescriptor,
+    records::entry_id, records::write_fields, ConfigureDescriptor, DeleteDescriptor,
+    Protocols as ProtocolsDescriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::{Handler, MethodHandlerRequest};
 use crate::errors::{DataStoreError, MessageStoreError, StoreError};
