@@ -10,6 +10,7 @@
 //! coalesced, duplicated, or dropped wakes.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -58,6 +59,10 @@ where
 
     // Background task for periodic idle re-drain. None if disabled.
     idle_redrain_task: Option<IdleRedrainTask>,
+
+    // coordinate subscription installation and cleanup to avoid installing
+    // a subscription while another task is cleaning it up.
+    installation_gate: RwLock<()>,
 }
 
 /// IdleRedrainTask is a background task that periodically re-drains all subscriptions that have
@@ -145,6 +150,7 @@ where
             subscriptions: RwLock::new(BTreeMap::new()),
             install_locks: Mutex::new(BTreeMap::new()),
             config: config.clone(),
+            closed: AtomicBool::new(false),
         });
 
         let idle_redrain_task = config
@@ -155,6 +161,7 @@ where
             subscriber,
             inner,
             idle_redrain_task,
+            installation_gate: RwLock::new(()),
         }
     }
 }
@@ -192,6 +199,7 @@ struct DurableEventLogInner<R> {
     subscriptions: RwLock<BTreeMap<String, Arc<SubscriptionState>>>,
     install_locks: Mutex<BTreeMap<String, Weak<Mutex<()>>>>,
     config: DurableEventLogConfig,
+    closed: AtomicBool,
 }
 
 pub struct SubscriptionState {
@@ -200,6 +208,7 @@ pub struct SubscriptionState {
     listener: SubscriptionListener,
     filters: Option<Filters>,
     mutable: Mutex<SubscriptionStateMutable>,
+    delivery_gate: Mutex<()>,
 }
 
 struct SubscriptionStateMutable {
@@ -236,11 +245,38 @@ where
     }
 
     async fn close(&mut self) -> () {
+        if self.inner.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
         if let Some(task) = self.idle_redrain_task.take() {
             task.shutdown().await;
         }
 
-        self.inner.subscriptions.write().await.clear();
+        // wait for installation and cleanup to finish before we start cleaning up subscriptions
+        drop(self.installation_gate.write().await);
+
+        let subscriptions = {
+            self.inner
+                .subscriptions
+                .read()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        for subscription in subscriptions {
+            if let Err(err) = DurableEventLogInner::cleanup_subscription(
+                &self.inner,
+                &subscription,
+                CleanupOrigin::External,
+            )
+            .await
+            {
+                self.inner.report_background_error(&subscription, &err);
+            }
+        }
     }
 
     async fn emit(
@@ -269,6 +305,10 @@ where
         listener: SubscriptionListener,
         options: Option<EventLogSubscribeOptions>,
     ) -> Result<EventSubscription, EventLogError> {
+        if self.inner.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(EventLogError::Closed);
+        }
+
         let cursor = self
             .validate_resume_cursor(tenant, options.as_ref())
             .await?;
@@ -335,7 +375,7 @@ where
                     let mut mutable = subscription.mutable.lock().await;
                     mutable.cursor = Some(frozen_cursor.clone());
 
-                    if Self::closed(&subscription).await {
+                    if mutable.phase == SubscriptionPhase::Closed {
                         return Ok(DurableEventLogInner::make_subscription(
                             Arc::clone(&self.inner),
                             Arc::clone(&subscription),
@@ -364,6 +404,8 @@ where
         match event_sub {
             Ok((outcome, sub)) => match outcome {
                 ReplayOutcome::ReachedFrozenHead => {
+                    let _delivery_guard = subscription.delivery_gate.lock().await;
+
                     let mut mutable = subscription.mutable.lock().await;
                     if mutable.phase == SubscriptionPhase::Closed {
                         return Ok(sub);
@@ -391,6 +433,7 @@ where
 
                     if mutable.phase != SubscriptionPhase::Replay {
                         drop(mutable);
+                        drop(_delivery_guard);
                         self.cleanup_subscription(&subscription).await?;
                         return Err(EventLogError::StoreError(StoreError::InternalException(
                             "subscription phase changed unexpectedly during replay".to_string(),
@@ -614,11 +657,21 @@ where
         cursor: Option<ProgressToken>,
         options: Option<&EventLogSubscribeOptions>,
     ) -> Result<Arc<SubscriptionState>, EventLogError> {
+        let _install_guard = self.installation_gate.write().await;
+
+        if self.inner.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(EventLogError::Closed);
+        }
+
+        let install_lock = self.install_lock(id).await;
+        let _id_guard = install_lock.lock().await;
+
         let subscription = Arc::new(SubscriptionState {
             id: id.to_string(),
             tenant: tenant.to_string(),
             listener,
             filters: options.as_ref().and_then(|o| o.filters.clone()),
+            delivery_gate: Mutex::new(()),
             mutable: Mutex::new(SubscriptionStateMutable {
                 cursor: cursor.clone(),
                 phase: SubscriptionPhase::Replay,
@@ -629,9 +682,6 @@ where
                 drain_task: None,
             }),
         });
-
-        let install_lock = self.install_lock(id).await;
-        let _install_guard = install_lock.lock().await;
 
         let removed = {
             let mut subscriptions = self.inner.subscriptions.write().await;
@@ -649,7 +699,24 @@ where
 
         let handler = self.wake_handler(Arc::downgrade(&subscription));
         let wake_handle = self.subscriber.subscribe(tenant, handler).await;
-        subscription.mutable.lock().await.wake_handle = Some(wake_handle);
+        let wake_handle = {
+            let mut mutable = subscription.mutable.lock().await;
+
+            if mutable.phase == SubscriptionPhase::Closed {
+                Some(wake_handle)
+            } else {
+                mutable.wake_handle = Some(wake_handle);
+                None
+            }
+        };
+
+        if let Some(wake_handle) = wake_handle {
+            wake_handle.close().await;
+        }
+
+        if Self::closed(&subscription).await {
+            self.cleanup_subscription(&subscription).await?;
+        }
 
         Ok(subscription)
     }
@@ -973,6 +1040,8 @@ where
                 .await?
         }
 
+        let _delivery_guard = subscription.delivery_gate.lock().await;
+
         if Self::closed(subscription).await {
             return Ok(cursor);
         }
@@ -1005,6 +1074,8 @@ where
         subscription: &Arc<SubscriptionState>,
         gap: ProgressGapInfo,
     ) -> Result<(), EventLogError> {
+        let _delivery_guard = subscription.delivery_gate.lock().await;
+
         let should_send = {
             let mut mutable = subscription.mutable.lock().await;
             if mutable.phase == SubscriptionPhase::Closed || mutable.terminal_error_sent {
@@ -1024,8 +1095,11 @@ where
                     gap.requested, gap.latest_available, gap.oldest_available, gap.reason
                 ),
             };
+
             (subscription.listener)(SubscriptionMessage::Error { cursor, error });
         }
+
+        drop(_delivery_guard);
 
         Self::cleanup_subscription(inner, subscription, CleanupOrigin::DrainTask).await
     }
@@ -1060,6 +1134,7 @@ where
         let (wake_handle, drain_task) = {
             let mut mutable = subscription.mutable.lock().await;
             mutable.phase = SubscriptionPhase::Closed;
+            mutable.redrain_requested = false;
 
             let drain_task = match origin {
                 CleanupOrigin::External => mutable.drain_task.take(),
@@ -1071,10 +1146,10 @@ where
 
         {
             let mut subscriptions = inner.subscriptions.write().await;
-            let is_current = subscriptions
+            if subscriptions
                 .get(&subscription.id)
-                .is_some_and(|current| Arc::ptr_eq(current, subscription));
-            if is_current {
+                .is_some_and(|current| Arc::ptr_eq(current, subscription))
+            {
                 subscriptions.remove(&subscription.id);
             }
         }
@@ -1082,6 +1157,10 @@ where
         if let Some(wake_handle) = wake_handle {
             wake_handle.close().await;
         }
+
+        // wait for any in-progress listeners, then drop the lock so that any in-progress
+        // drain can finish
+        drop(subscription.delivery_gate.lock().await);
 
         if let Some(drain_task) = drain_task {
             drain_task.await.map_err(|err| {
