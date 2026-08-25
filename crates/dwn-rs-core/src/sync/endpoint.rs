@@ -1,4 +1,4 @@
-//! Production [`SyncEndpoint`](crate::sync::SyncEndpoint) implementations for local
+//! Production [`SyncEndpoint`] implementations for local
 //! stores and remote `@enbox/dwn-server` peers.
 
 use std::collections::{BTreeMap, BTreeSet};

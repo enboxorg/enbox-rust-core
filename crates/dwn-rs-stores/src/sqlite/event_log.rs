@@ -1,5 +1,5 @@
-//! Durable SQLite backends for [`StateIndex`], [`EventLog`], and
-//! [`ResumableTaskStore`].
+//! Durable SQLite backend for one of the native node's auxiliary stores
+//! (`StateIndex`, `EventLog`, or `ResumableTaskStore`).
 
 use std::collections::BTreeMap;
 
