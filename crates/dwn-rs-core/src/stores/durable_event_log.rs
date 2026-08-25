@@ -137,6 +137,7 @@ where
         if config.idle_redrain_interval == Some(Duration::ZERO) {
             config.idle_redrain_interval = None;
         }
+        config.read_limit = config.read_limit.max(1);
 
         let inner = Arc::new(DurableEventLogInner {
             reader: Arc::new(reader),
