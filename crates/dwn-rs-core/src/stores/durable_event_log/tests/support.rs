@@ -22,7 +22,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::time::timeout;
 
-use crate::descriptors::{DeleteDescriptor, Records};
+use crate::descriptors::{DeleteDescriptor, Protocols, Records, RecordsWriteDescriptor};
 use crate::errors::{EventLogError, StoreError};
 use crate::fields::WriteFields;
 use crate::filters::{Filter, FilterKey};
@@ -30,7 +30,7 @@ use crate::stores::durable_event_log::{DurableEventLog, DurableEventLogConfig, E
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::replication_feed_reader::{build_token, Fingerprint, ReplicationBounds};
 use crate::stores::wake::{InProcessWakeBus, Wake, WakePublisher};
-use crate::stores::write_resolver::InitialWriteResolver;
+use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
 use crate::stores::{
     EventLogEntry, EventLogReadOptions, EventLogReadResult, KeyValues, MessageStore,
     ProgressGapCode, ProgressGapInfo, ProgressGapReason, ReplicationFeedReader, SubscriptionError,
@@ -95,6 +95,22 @@ pub(crate) fn indexes(pairs: &[(&str, &str)]) -> KeyValues {
         indexes.insert((*key).to_string(), Value::String((*value).to_string()));
     }
     indexes
+}
+
+/// `ProtocolsConfigure` fixture, the third message type carried by the feed.
+pub(crate) fn configure_message() -> Message<Descriptor> {
+    Message {
+        descriptor: Descriptor::Protocols(Box::new(Protocols::Configure(Default::default()))),
+        fields: Fields::Authorization(Default::default()),
+    }
+}
+
+/// Stand-in for the `RecordsWrite` a resolver attaches to an update or delete.
+pub(crate) fn initial_write_message() -> Message<RecordsWriteDescriptor> {
+    Message {
+        descriptor: Default::default(),
+        fields: WriteFields::default(),
+    }
 }
 
 /// Single-index equality filter, the common subscription filter shape.
@@ -693,6 +709,73 @@ impl Recorder {
 }
 
 // -------------------------------------------------------------------------
+// Initial-write resolution
+// -------------------------------------------------------------------------
+
+#[derive(Default)]
+struct StubResolverInner {
+    initial_write: Option<Message<RecordsWriteDescriptor>>,
+    failures: Mutex<usize>,
+    calls: Mutex<usize>,
+}
+
+/// Resolver stand-in: answers with a fixed initial write, or fails on demand.
+#[derive(Clone, Default)]
+pub(crate) struct StubResolver {
+    inner: Arc<StubResolverInner>,
+}
+
+impl StubResolver {
+    /// Resolver that attaches `initial_write` to every event it is asked about.
+    pub(crate) fn resolving(initial_write: Message<RecordsWriteDescriptor>) -> Self {
+        Self {
+            inner: Arc::new(StubResolverInner {
+                initial_write: Some(initial_write),
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// Fails the next `count` resolutions, then resolves normally again.
+    pub(crate) fn fail_next(&self, count: usize) {
+        *self.inner.failures.lock().expect("failures lock") = count;
+    }
+
+    pub(crate) fn calls(&self) -> usize {
+        *self.inner.calls.lock().expect("calls lock")
+    }
+
+    pub(crate) fn shared(&self) -> Arc<dyn InitialWriteResolver> {
+        Arc::new(self.clone())
+    }
+}
+
+impl InitialWriteResolver for StubResolver {
+    fn resolve_initial_write<'a>(
+        &'a self,
+        _tenant: &'a str,
+        _event: &'a Message<Descriptor>,
+    ) -> crate::stores::write_resolver::InitialWriteFuture<'a> {
+        *self.inner.calls.lock().expect("calls lock") += 1;
+
+        let failing = {
+            let mut failures = self.inner.failures.lock().expect("failures lock");
+            let failing = *failures > 0;
+            *failures = failures.saturating_sub(1);
+            failing
+        };
+        let initial_write = self.inner.initial_write.clone();
+
+        Box::pin(async move {
+            if failing {
+                return Err(transient_error("initial-write resolution failed"));
+            }
+            Ok(initial_write)
+        })
+    }
+}
+
+// -------------------------------------------------------------------------
 // Background error sink
 // -------------------------------------------------------------------------
 
@@ -835,6 +918,7 @@ pub(crate) struct LiveHarnessBuilder {
     bus: InProcessWakeBus,
     config: DurableEventLogConfig,
     resolver: Option<Arc<dyn InitialWriteResolver>>,
+    message_store_resolver: bool,
 }
 
 pub(crate) fn live_harness() -> LiveHarnessBuilder {
@@ -842,6 +926,7 @@ pub(crate) fn live_harness() -> LiveHarnessBuilder {
         bus: InProcessWakeBus::new(),
         config: test_config(),
         resolver: None,
+        message_store_resolver: false,
     }
 }
 
@@ -861,18 +946,28 @@ impl LiveHarnessBuilder {
         self
     }
 
+    /// Resolves initial writes through the harness's own message store.
+    pub(crate) fn with_message_store_resolver(mut self) -> Self {
+        self.message_store_resolver = true;
+        self
+    }
+
     pub(crate) async fn build(self) -> LiveHarness {
         // The publisher clone goes to the store and the subscriber clone to the
         // adapter, so wakes follow the same path as a native assembly.
         let mut store = MemoryMessageStore::default().with_waker_publisher(self.bus.clone());
         store.open().await.expect("memory message store must open");
 
-        let log = DurableEventLog::new(
-            store.clone(),
-            self.bus.clone(),
-            self.resolver,
-            Some(self.config),
-        );
+        let resolver = match (self.resolver, self.message_store_resolver) {
+            (Some(resolver), _) => Some(resolver),
+            (None, true) => Some(Arc::new(MessageStoreInitialWriteResolver::new(Arc::new(
+                store.clone(),
+            ))) as Arc<dyn InitialWriteResolver>),
+            (None, false) => None,
+        };
+
+        let log =
+            DurableEventLog::new(store.clone(), self.bus.clone(), resolver, Some(self.config));
 
         LiveHarness {
             store,
@@ -894,6 +989,19 @@ impl LiveHarness {
     /// Publishes a wake directly, modelling a duplicate or stale hint.
     pub(crate) fn publish_wake(&self, tenant: &str, position: u64) {
         publish_wake(&self.bus, tenant, position);
+    }
+
+    /// Commits a message with explicit indexes.
+    pub(crate) async fn store_put(
+        &self,
+        tenant: &str,
+        message: Message<Descriptor>,
+        indexes: KeyValues,
+    ) {
+        self.store
+            .put(tenant, message, indexes)
+            .await
+            .expect("feed put");
     }
 
     /// Commits a `RecordsDelete` distinguished by `marker`.
