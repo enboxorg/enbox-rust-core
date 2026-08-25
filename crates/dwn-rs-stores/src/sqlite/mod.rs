@@ -15,6 +15,8 @@ pub mod store;
 mod sync_ledger;
 
 pub use self::conn::SqliteConnection;
+#[doc(hidden)]
+#[deprecated(note = "Use DurableEventLog instead")]
 pub use self::event_log::SqliteEventLog;
 pub use self::resumable_task_store::SqliteResumableTaskStore;
 pub use self::secrets_store::SqliteSecretStore;
@@ -192,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_store_roundtrips_inline_data_without_changing_message_cid() {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         MessageStore::open(&mut store).await.unwrap();
         let message = message(
             "2025-01-01T00:00:00.000000Z",
@@ -260,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_store_filters_sorts_counts_and_paginates() {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         MessageStore::open(&mut store).await.unwrap();
         let first = message(
             "2025-01-01T00:00:00.000000Z",
@@ -685,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn data_store_shares_content_addressed_blocks_and_refs() {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         DataStore::open(&mut store).await.unwrap();
         let bytes = Bytes::from_static(b"hello sqlite data");
         let data_cid = generate_dag_pb_cid_from_bytes(&bytes).to_string();

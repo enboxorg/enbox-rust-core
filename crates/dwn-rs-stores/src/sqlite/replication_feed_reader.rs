@@ -471,14 +471,14 @@ mod tests {
     }
 
     async fn opened_memory_store() -> SqliteStore {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         MessageStore::open(&mut store).await.expect("open store");
         store
     }
 
     #[tokio::test]
     async fn sqlite_conforms_to_replication_feed_contract() {
-        replication_feed_conformance::run(|| async { SqliteStore::in_memory() }).await;
+        replication_feed_conformance::run(|| async { SqliteStore::in_memory(None) }).await;
     }
 
     #[tokio::test]

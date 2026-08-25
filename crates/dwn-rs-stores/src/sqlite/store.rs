@@ -255,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_store_migrates_schema_on_open() {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         MessageStore::open(&mut store).await.unwrap();
 
         let tables = store

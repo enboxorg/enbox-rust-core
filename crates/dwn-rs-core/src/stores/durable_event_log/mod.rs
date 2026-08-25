@@ -20,16 +20,18 @@ use tokio::time::Instant;
 
 use crate::errors::{EventLogError, StoreError};
 use crate::stores::replication_feed_reader::{parse_feed_position, ReplicationBounds};
-use crate::stores::wake::{WakeSubscriptionHandle, WakeSubscriptionListener};
-use crate::stores::write_resolver::InitialWriteResolver;
+use crate::stores::wake::{
+    InProcessWakeBus, WakePublishHandler, WakeSubscriptionHandle, WakeSubscriptionListener,
+};
+use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
 use crate::stores::{
     wake::WakeSubscriber, EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues,
     ReplicationFeedReader, SubscriptionListener,
 };
 use crate::stores::{
-    EventLogEntry, ProgressGapCode, ProgressGapInfo, ProgressGapReason, SubscriptionError,
-    SubscriptionMessage,
+    EventLogEntry, MessageStore, ProgressGapCode, ProgressGapInfo, ProgressGapReason,
+    SubscriptionError, SubscriptionMessage,
 };
 use crate::{Descriptor, Filters, MessageEvent, ProgressToken, Value};
 
@@ -71,6 +73,29 @@ where
             inner: Arc::clone(&self.inner),
             subscriber: self.subscriber.clone(),
         }
+    }
+}
+
+impl<M> DurableEventLog<M, InProcessWakeBus>
+where
+    M: ReplicationFeedReader + MessageStore + Clone + Send + Sync + 'static,
+{
+    pub fn paired_message_store<E>(
+        make_reader: impl FnOnce(WakePublishHandler) -> Result<M, E>,
+        config: Option<DurableEventLogConfig>,
+    ) -> Result<(Self, M), E> {
+        let wake = InProcessWakeBus::new();
+        let publisher = WakePublishHandler::new(Arc::new(wake.clone()));
+        let reader = make_reader(publisher)?;
+
+        let shared = Arc::new(reader.clone());
+        let resolver: Arc<dyn InitialWriteResolver> =
+            Arc::new(MessageStoreInitialWriteResolver::new(shared.clone()));
+
+        Ok((
+            Self::with_parts(shared, wake, Some(resolver), config),
+            reader,
+        ))
     }
 }
 
@@ -147,6 +172,15 @@ where
         initial_write_resolver: Option<Arc<dyn InitialWriteResolver>>,
         config: Option<DurableEventLogConfig>,
     ) -> Self {
+        Self::with_parts(Arc::new(reader), subscriber, initial_write_resolver, config)
+    }
+
+    fn with_parts(
+        reader: Arc<R>,
+        subscriber: S,
+        initial_write_resolver: Option<Arc<dyn InitialWriteResolver>>,
+        config: Option<DurableEventLogConfig>,
+    ) -> Self {
         let mut config = config.unwrap_or_default();
         if config.idle_redrain_interval == Some(Duration::ZERO) {
             config.idle_redrain_interval = None;
@@ -154,7 +188,7 @@ where
         config.read_limit = config.read_limit.max(1);
 
         let inner = Arc::new(DurableEventLogInner {
-            reader: Arc::new(reader),
+            reader,
             initial_write_resolver,
             subscriptions: RwLock::new(BTreeMap::new()),
             install_locks: Mutex::new(BTreeMap::new()),

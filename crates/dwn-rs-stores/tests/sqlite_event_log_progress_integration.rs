@@ -18,7 +18,7 @@ const TENANT: &str = "did:example:alice";
 
 #[tokio::test]
 async fn sqlite_event_log_subscribe_replays_from_cursor_and_emits_eose() {
-    let store = SqliteStore::in_memory();
+    let store = SqliteStore::in_memory(None);
     let mut event_log = SqliteEventLog::new(&store);
     event_log.open().await.unwrap();
 
@@ -63,7 +63,7 @@ async fn sqlite_event_log_subscribe_replays_from_cursor_and_emits_eose() {
 
 #[tokio::test]
 async fn sqlite_event_log_read_returns_progress_gap_after_trim() {
-    let store = SqliteStore::in_memory();
+    let store = SqliteStore::in_memory(None);
     let mut event_log = SqliteEventLog::new(&store);
     event_log.open().await.unwrap();
 
@@ -153,7 +153,7 @@ async fn sqlite_event_log_replay_bounds_survive_reopen() {
 
 #[tokio::test]
 async fn sqlite_event_log_read_from_empty_store_returns_no_events() {
-    let store = SqliteStore::in_memory();
+    let store = SqliteStore::in_memory(None);
     let mut event_log = SqliteEventLog::new(&store);
     event_log.open().await.unwrap();
 
