@@ -1,3 +1,4 @@
+pub(crate) mod authorization;
 mod common;
 pub(crate) mod query;
 pub(crate) mod read;

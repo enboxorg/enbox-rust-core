@@ -1,4 +1,4 @@
-mod common;
+pub(crate) mod common;
 pub(crate) mod count;
 pub(crate) mod delete;
 pub(crate) mod query;
