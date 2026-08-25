@@ -1,21 +1,25 @@
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
-use crate::permissions::errors::PermissionError;
-use crate::permissions::{self, AuthorizationContext, AuthorizationValidationError};
+use crate::handlers::messages::authorization::{
+    authorize_query_or_subscribe, MessageAuthorizationKind, QueryAuthorization,
+};
+use crate::permissions::AuthorizationValidationError;
 use crate::replies::messages::Query;
-use crate::stores::MessageStore;
-use crate::{descriptors, replies, Descriptor, Handler, HandlerContext, Message, Response};
+use crate::stores::{MessageStore, ReplicationFeedReader};
+use crate::{descriptors, replies, Handler, HandlerContext, Response};
 
 #[derive(Clone)]
-pub struct MessagesQueryHandler<MessageStore> {
-    message_store: MessageStore,
+pub struct MessagesQueryHandler<MS, RS> {
+    message_store: MS,
     did_resolver: Option<Arc<dyn DidResolver>>,
+    replication_feed_reader: Option<RS>,
 }
 
-impl<MS> Handler for MessagesQueryHandler<MS>
+impl<MS, RS> Handler for MessagesQueryHandler<MS, RS>
 where
     MS: MessageStore + Clone + Send + Sync + 'static,
+    RS: ReplicationFeedReader + Clone + Send + Sync + 'static,
 {
     type Reply = Query;
     type Descriptor = descriptors::MessagesQueryDescriptor;
@@ -31,7 +35,7 @@ where
             ..
         } = ctx;
 
-        let authorization = match crate::permissions::validate_authorization_signature(
+        let auth_context = match crate::permissions::validate_authorization_signature(
             &message,
             self.did_resolver.as_deref(),
             true,
@@ -66,46 +70,43 @@ where
             },
         };
 
-        if let Err(details) = self
-            .authorize_messages_query(tenant, &message, &descriptor, &authorization)
-            .await
+        let authorization = match authorize_query_or_subscribe(
+            tenant,
+            &message,
+            &descriptor.filters,
+            &auth_context,
+            &self.message_store,
+            MessageAuthorizationKind::Query,
+        )
+        .await
         {
-            return Response::unauthorized(details.to_string());
+            Ok(authorization) => QueryAuthorization::from(authorization),
+            Err(details) => {
+                return Response::unauthorized(details.to_string());
+            }
+        };
+
+        if self.replication_feed_reader.is_none() {
+            return Response::not_implemented("replication feed not supported");
         }
 
         Response::not_implemented("replication feed not supported")
     }
 }
 
-impl<MS> MessagesQueryHandler<MS>
+impl<MS, RS> MessagesQueryHandler<MS, RS>
 where
     MS: MessageStore + Clone + Send + Sync + 'static,
 {
-    pub fn new(message_store: MS, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
+    pub fn new(
+        message_store: MS,
+        replication_feed_reader: Option<RS>,
+        did_resolver: Option<Arc<dyn DidResolver>>,
+    ) -> Self {
         Self {
             message_store,
             did_resolver,
+            replication_feed_reader,
         }
-    }
-
-    async fn authorize_messages_query(
-        &self,
-        tenant: &str,
-        incoming_message: &Message<Descriptor>,
-        descriptor: &descriptors::MessagesQueryDescriptor,
-        auth: &AuthorizationContext,
-    ) -> Result<(), PermissionError> {
-        if auth.author == tenant {
-            return Ok(());
-        }
-
-        permissions::authorize_messages_subscribe_and_query(
-            tenant,
-            incoming_message,
-            &descriptor.filters,
-            auth,
-            &self.message_store,
-        )
-        .await
     }
 }

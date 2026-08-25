@@ -877,6 +877,7 @@ where
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_query_or_subscribe_role<MessageStore>(
     tenant: &str,
     author: &str,

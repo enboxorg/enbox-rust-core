@@ -57,6 +57,39 @@ pub(crate) enum MessagesAuthorization {
     Role(MessagesRoleAuthorization),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueryAuthorization {
+    include_delete_initial_write: bool,
+    include_encoded_data: bool,
+    include_shadow_filters: bool,
+    role_record_id: Option<String>,
+}
+
+impl From<MessagesAuthorization> for QueryAuthorization {
+    fn from(auth: MessagesAuthorization) -> Self {
+        match auth {
+            MessagesAuthorization::Owner => Self {
+                include_delete_initial_write: false,
+                include_encoded_data: true,
+                include_shadow_filters: true,
+                role_record_id: None,
+            },
+            MessagesAuthorization::Grant { metadata_only } => Self {
+                include_delete_initial_write: false,
+                include_encoded_data: !metadata_only,
+                include_shadow_filters: !metadata_only,
+                role_record_id: None,
+            },
+            MessagesAuthorization::Role(role_auth) => Self {
+                include_delete_initial_write: true,
+                include_encoded_data: !role_auth.metadata_only,
+                include_shadow_filters: false,
+                role_record_id: Some(role_auth.resolved_role.role_record_id.clone()),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MessageAuthorizationKind {
     Query,

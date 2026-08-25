@@ -39,6 +39,7 @@ pub struct QueryEntry {
     pub protocol: Option<String>,
     pub message: Option<Message<Descriptor>>,
     pub encoded_data: Option<String>,
+    pub initial_write: Option<Message<Descriptor>>,
 }
 
 #[skip_serializing_none]
@@ -49,6 +50,8 @@ pub struct Query {
     pub drained: Option<bool>,
     pub fingerprint: Option<String>,
     pub error: Option<ProgressGapInfo>,
+    #[serde(rename = "roleRecordId")]
+    pub role_record_id: Option<String>,
 }
 
 impl From<Query> for Reply {

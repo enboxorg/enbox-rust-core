@@ -56,7 +56,7 @@ pub(crate) fn messages_filter_to_filter_map(
 
     if let Some(prefix) = &filter.protocol_path_prefix {
         map.insert(
-            FilterKey::Index("protocolPathPrefix".to_string()),
+            FilterKey::Index("protocolPath".to_string()),
             Filter::Subtree(SubtreeFilter {
                 subtree: prefix.clone(),
             }),
@@ -65,7 +65,7 @@ pub(crate) fn messages_filter_to_filter_map(
 
     if let Some(prefix) = &filter.context_id_prefix {
         map.insert(
-            FilterKey::Index("contextIdPrefix".to_string()),
+            FilterKey::Index("contextId".to_string()),
             Filter::Subtree(SubtreeFilter {
                 subtree: prefix.clone(),
             }),
