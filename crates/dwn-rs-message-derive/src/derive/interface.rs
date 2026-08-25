@@ -527,4 +527,3 @@ mod tests {
         assert!(expand_interface(a, m).is_err());
     }
 }
-
