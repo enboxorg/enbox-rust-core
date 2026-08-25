@@ -9,21 +9,25 @@ use serde_json::json;
 use ssi_jwk::Algorithm;
 
 use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
-use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
+use crate::cid::{
+    generate_cid_from_json, generate_dag_pb_cid_from_bytes, generate_message_cid_from_json,
+};
 use crate::descriptors::{
     MessagesSubscribeDescriptor, MessagesSyncDescriptor, RecordsWriteDescriptor,
 };
 use crate::dwn::{Handler, MethodHandlerRequest};
 use crate::errors::{DataStoreError, MessageStoreError};
-use crate::events::MessageEvent;
 use crate::handlers::messages::subscribe::MessagesSubscribeHandler;
 use crate::handlers::messages::sync::MessagesSyncHandler;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
-use crate::stores::memory::MemoryEventLog;
+use crate::stores::durable_event_log::DurableEventLog;
+use crate::stores::memory::MemoryMessageStore;
+use crate::stores::replication_feed_reader::build_token;
 use crate::stores::state_index::MemoryStateIndex;
+use crate::stores::wake::InProcessWakeBus;
 use crate::stores::{
-    DataStore, DataStoreGetResult, DataStorePutResult, EventLog, MessageQueryResult, MessageStore,
-    StateIndex, SubscriptionMessage,
+    DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
+    MessageQueryResult, MessageStore, StateIndex, SubscriptionMessage,
 };
 use crate::{message_filters, permissions, Descriptor, MapValue, Message, ProgressToken, Value};
 
@@ -175,40 +179,51 @@ async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
 
 #[tokio::test]
 async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
-    let message_store = TestMessageStore::default();
-    let mut event_log = MemoryEventLog::default();
-    event_log.open().await.unwrap();
+    const TENANT: &str = "did:example:alice";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    message_store.open().await.unwrap();
+
     let (_, stored_message) = records_write_with_inline_data();
-    let first = event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: stored_message.clone(),
-                initial_write: None,
-            },
-            event_indexes("http://example.com/notes"),
-            "first-cid",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: stored_message.clone(),
-                initial_write: None,
-            },
-            event_indexes("http://example.com/notes"),
-            "second-cid",
-        )
-        .await
-        .unwrap();
+    let first_message = retimestamped(&stored_message, "2025-01-01T00:01:00.000000Z");
+    let second_message = retimestamped(&stored_message, "2025-01-01T00:02:00.000000Z");
+    let second_cid =
+        generate_message_cid_from_json(&serde_json::to_value(&second_message).unwrap())
+            .unwrap()
+            .to_string();
+    for message in [&first_message, &second_message] {
+        let indexes = records_feed_indexes("http://example.com/notes");
+        message_store
+            .put(TENANT, message.clone(), indexes)
+            .await
+            .unwrap();
+    }
+
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
+
+    let read = EventLog::read(
+        &event_log,
+        TENANT,
+        Some(EventLogReadOptions {
+            limit: Some(1),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(read.events.len(), 1);
+    let first = read
+        .cursor
+        .expect("scan cursor after the first committed entry");
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
-    let handler =
-        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let handler = MessagesSubscribeHandler::new(
+        message_store.clone(),
+        event_log,
+        Some(Arc::new(test_resolver())),
+    );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),
@@ -242,14 +257,14 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
     match &delivered[0] {
         SubscriptionMessage::Event { cursor, .. } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
+            assert_eq!(cursor.message_cid.as_deref(), Some(second_cid.as_str()));
         }
         other => panic!("expected event, got {other:?}"),
     }
     match &delivered[1] {
         SubscriptionMessage::Eose { cursor } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
+            assert_eq!(cursor.message_cid.as_deref(), Some(second_cid.as_str()));
         }
         other => panic!("expected eose, got {other:?}"),
     }
@@ -257,37 +272,24 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
 
 #[tokio::test]
 async fn messages_subscribe_maps_progress_gap_to_410() {
-    let message_store = TestMessageStore::default();
-    let mut event_log = MemoryEventLog::new(1);
-    event_log.open().await.unwrap();
+    const TENANT: &str = "did:example:alice";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    message_store.open().await.unwrap();
+
     let (_, stored_message) = records_write_with_inline_data();
-    let mut old_cursor = event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: stored_message.clone(),
-                initial_write: None,
-            },
-            event_indexes("http://example.com/notes"),
-            "first-cid",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    old_cursor.position = "0".to_string();
-    event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: stored_message,
-                initial_write: None,
-            },
-            event_indexes("http://example.com/notes"),
-            "second-cid",
-        )
+    let indexes = records_feed_indexes("http://example.com/notes");
+    message_store
+        .put(TENANT, stored_message, indexes)
         .await
         .unwrap();
 
+    // A token from a superseded feed epoch can never resume; the reader must
+    // surface it as a structured progress gap.
+    let stale_cursor = build_token(TENANT, "00000000-superseded-epoch", 1, None);
+
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
     let handler =
         MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
     let request = signed_subscribe_message(SubscribeSpec {
@@ -295,7 +297,7 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
             protocol: Some("http://example.com/notes".to_string()),
             ..Default::default()
         }],
-        cursor: Some(old_cursor),
+        cursor: Some(stale_cursor),
         ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -307,16 +309,15 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
     assert_eq!(result.reply.status.code, 410);
     let reply_body = serde_json::to_value(&result.reply.reply).unwrap();
     assert_eq!(reply_body["error"]["code"], "ProgressGap");
-    assert_eq!(reply_body["error"]["reason"], "token_too_old");
+    assert_eq!(reply_body["error"]["reason"], "epoch_mismatch");
     assert!(result.subscription.is_none());
 }
 
 #[tokio::test]
 async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
     let mut message_store = TestMessageStore::default();
-    let mut event_log = MemoryEventLog::default();
+    let event_log = feed_backed_event_log();
     message_store.open().await.unwrap();
-    event_log.open().await.unwrap();
 
     let grant = permission_grant_message_with_scope(
         "grant-subscribe-path",
@@ -365,9 +366,8 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
 #[tokio::test]
 async fn messages_subscribe_allows_filters_covered_by_different_grants() {
     let mut message_store = TestMessageStore::default();
-    let mut event_log = MemoryEventLog::default();
+    let event_log = feed_backed_event_log();
     message_store.open().await.unwrap();
-    event_log.open().await.unwrap();
 
     for (grant_id, protocol) in [
         ("grant-notes", "http://example.com/notes"),
@@ -443,8 +443,10 @@ fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
     (cid, serde_json::from_value(stored_message).unwrap())
 }
 
-fn event_indexes(protocol: &str) -> MapValue {
-    MapValue::from([
+/// Indexes matching what real `RecordsWrite` handling commits, so feed-backed
+/// subscription filters can match seeded messages.
+fn records_feed_indexes(protocol: &str) -> KeyValues {
+    KeyValues::from([
         (
             "interface".to_string(),
             Value::String("Records".to_string()),
@@ -452,6 +454,20 @@ fn event_indexes(protocol: &str) -> MapValue {
         ("method".to_string(), Value::String("Write".to_string())),
         ("protocol".to_string(), Value::String(protocol.to_string())),
     ])
+}
+
+fn retimestamped(message: &Message<Descriptor>, timestamp: &str) -> Message<Descriptor> {
+    let mut value = serde_json::to_value(message).unwrap();
+    value["descriptor"]["messageTimestamp"] = serde_json::json!(timestamp);
+    serde_json::from_value(value).unwrap()
+}
+
+/// A durable event log over an empty feed, for tests that need a handler
+/// wired to a log without seeding any events.
+fn feed_backed_event_log() -> DurableEventLog<MemoryMessageStore, InProcessWakeBus> {
+    let wake_bus = InProcessWakeBus::new();
+    let message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    DurableEventLog::new(message_store, wake_bus, None, None)
 }
 
 async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<Descriptor> {

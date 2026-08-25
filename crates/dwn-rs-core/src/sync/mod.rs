@@ -874,7 +874,7 @@ where
         message: SubscriptionMessage,
     ) -> SyncOnceResult {
         match message {
-            SubscriptionMessage::Event { cursor, event } => {
+            SubscriptionMessage::Event { cursor, event, .. } => {
                 if let Err(error) = self
                     .validate_pull_cursor(tenant, remote, &scope, &cursor)
                     .await
@@ -933,6 +933,24 @@ where
                 result.checkpoints.push(checkpoint);
                 result
             }
+            SubscriptionMessage::Error {
+                cursor: _cursor,
+                error,
+            } => {
+                let error = SyncError::transient(error.code.to_string(), error.detail);
+                self.record_dead_letter(
+                    tenant,
+                    remote,
+                    &scope,
+                    None,
+                    DeadLetterCategory::Transient,
+                    error.clone(),
+                )
+                .await;
+                let mut result = SyncOnceResult::new(SyncRunStatus::Failed);
+                result.error = Some(error);
+                result
+            }
         }
     }
 
@@ -944,7 +962,7 @@ where
         message: SubscriptionMessage,
     ) -> SyncOnceResult {
         match message {
-            SubscriptionMessage::Event { cursor, event } => {
+            SubscriptionMessage::Event { cursor, event, .. } => {
                 if match cursor.message_cid.as_deref() {
                     Some(cid) => self.should_suppress_echo(tenant, remote, cid).await,
                     None => false,
@@ -1009,6 +1027,24 @@ where
                     .await;
                 let mut result = SyncOnceResult::new(SyncRunStatus::Completed);
                 result.checkpoints.push(checkpoint);
+                result
+            }
+            SubscriptionMessage::Error {
+                cursor: _cursor,
+                error,
+            } => {
+                let error = SyncError::transient(error.code.to_string(), error.detail);
+                self.record_dead_letter(
+                    tenant,
+                    remote,
+                    &scope,
+                    None,
+                    DeadLetterCategory::Transient,
+                    error.clone(),
+                )
+                .await;
+                let mut result = SyncOnceResult::new(SyncRunStatus::Failed);
+                result.error = Some(error);
                 result
             }
         }
@@ -1805,6 +1841,11 @@ mod tests {
                         message: empty_message(),
                         initial_write: None,
                     }),
+                    seq: None,
+                    message_cid: Some("event-cid".to_string()),
+                    is_latest_base_state: None,
+                    protocol: None,
+                    encoded_data: None,
                 },
             )
             .await;
@@ -1826,6 +1867,11 @@ mod tests {
                 message: empty_message(),
                 initial_write: None,
             }),
+            seq: None,
+            message_cid: None,
+            is_latest_base_state: None,
+            protocol: None,
+            encoded_data: None,
         };
 
         engine
@@ -1847,6 +1893,11 @@ mod tests {
                         message: empty_message(),
                         initial_write: None,
                     }),
+                    seq: None,
+                    message_cid: None,
+                    is_latest_base_state: None,
+                    protocol: None,
+                    encoded_data: None,
                 },
             )
             .await;
@@ -1942,6 +1993,11 @@ mod tests {
                         message: empty_message(),
                         initial_write: None,
                     }),
+                    seq: None,
+                    message_cid: Some("parent-cid".to_string()),
+                    is_latest_base_state: None,
+                    protocol: None,
+                    encoded_data: None,
                 },
             )
             .await;

@@ -10,7 +10,8 @@ use dwn_rs_core::dwn::builder::{
 };
 use dwn_rs_core::dwn::Dwn;
 use dwn_rs_core::handlers::records::{RecordsEventLogSubscribeHandler, RecordsSubscribeReply};
-use dwn_rs_core::stores::wake::WakePublishHandler;
+use dwn_rs_core::stores::durable_event_log::DurableEventLog;
+use dwn_rs_core::stores::wake::InProcessWakeBus;
 use dwn_rs_core::stores::SubscriptionListener;
 use dwn_rs_core::sync::endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
 use dwn_rs_core::sync::{
@@ -20,15 +21,13 @@ use dwn_rs_core::sync::{
 use dwn_rs_core::{Reply, Response};
 use tokio::sync::RwLock;
 
-use crate::{
-    SqliteEventLog, SqliteResumableTaskStore, SqliteStateIndex, SqliteStore, SqliteSyncLedger,
-};
+use crate::{SqliteResumableTaskStore, SqliteStateIndex, SqliteStore, SqliteSyncLedger};
 
 type NativeDwn = Dwn<
     SqliteStore,
     SqliteStore,
     SqliteStateIndex,
-    SqliteEventLog,
+    DurableEventLog<SqliteStore, InProcessWakeBus>,
     SqliteResumableTaskStore,
     (),
     dwn_rs_core::AllowAllTenantGate,
@@ -40,7 +39,10 @@ pub struct SqliteNativeDwn {
     state_index: SqliteStateIndex,
     sync_ledger: SqliteSyncLedger,
     dwn: Arc<NativeDwn>,
-    records_subscribe: RecordsEventLogSubscribeHandler<SqliteStore, SqliteEventLog>,
+    records_subscribe: RecordsEventLogSubscribeHandler<
+        SqliteStore,
+        DurableEventLog<SqliteStore, InProcessWakeBus>,
+    >,
     sync_identities: Arc<RwLock<BTreeMap<String, SyncIdentityOptions>>>,
 }
 
@@ -49,7 +51,12 @@ impl SqliteNativeDwn {
     pub async fn open_in_memory(
         public_key_resolver: StaticPublicKeyResolver,
     ) -> Result<Self, NativeDwnOpenError> {
-        Self::open(SqliteStore::in_memory(), public_key_resolver).await
+        let (event_log, store) = DurableEventLog::paired_message_store(
+            |publisher| Ok::<_, NativeDwnOpenError>(SqliteStore::in_memory(Some(publisher))),
+            None,
+        )?;
+
+        Self::open(store, public_key_resolver, event_log).await
     }
 
     /// Open a SQLite native node at `path` with the supplied public-key resolver.
@@ -57,14 +64,18 @@ impl SqliteNativeDwn {
         path: impl AsRef<std::path::Path>,
         public_key_resolver: StaticPublicKeyResolver,
     ) -> Result<Self, NativeDwnOpenError> {
-        // TODO: replace with InProcessBus when implemented
-        let publisher = WakePublishHandler::new(Arc::new(()));
-        Self::open(SqliteStore::new(path, publisher), public_key_resolver).await
+        let (event_log, store) = DurableEventLog::paired_message_store(
+            |publisher| Ok::<_, NativeDwnOpenError>(SqliteStore::new(path, publisher)),
+            None,
+        )?;
+
+        Self::open(store, public_key_resolver, event_log).await
     }
 
-    pub async fn open(
+    async fn open(
         store: SqliteStore,
         public_key_resolver: StaticPublicKeyResolver,
+        event_log: DurableEventLog<SqliteStore, InProcessWakeBus>,
     ) -> Result<Self, NativeDwnOpenError> {
         store
             .connection()
@@ -72,7 +83,7 @@ impl SqliteNativeDwn {
             .map_err(NativeDwnOpenError::StateIndex)?;
 
         let state_index = SqliteStateIndex::new(&store);
-        let event_log = SqliteEventLog::new(&store);
+
         let resumable_task_store = SqliteResumableTaskStore::new(&store);
         let sync_ledger = SqliteSyncLedger::new(&store);
         let stores = open_native_stores(NativeDwnStores {

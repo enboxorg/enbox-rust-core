@@ -21,7 +21,7 @@ use serde_json::{json, Value as JsonValue};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut store = SqliteStore::in_memory();
+    let mut store = SqliteStore::in_memory(None);
     store.open().await?;
 
     println!("READY");

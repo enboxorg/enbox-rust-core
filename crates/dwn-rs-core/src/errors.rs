@@ -153,6 +153,12 @@ pub enum EventLogError {
 
     #[error("unable to generate watermark: {0}")]
     WatermarkError(#[from] MonotonicError),
+
+    #[error("unsupported event log read option: {0}")]
+    UnsupportedReadOption(String),
+
+    #[error("event log is closed")]
+    Closed,
 }
 
 #[derive(Error, Debug)]

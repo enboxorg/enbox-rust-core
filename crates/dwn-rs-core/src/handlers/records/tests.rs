@@ -13,19 +13,20 @@ use ssi_jwk::Algorithm;
 use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
-    records::write_fields, ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor,
-    Records, RecordsWriteDescriptor, SubscribeDescriptor,
+    records::entry_id, records::write_fields, ConfigureDescriptor, DeleteDescriptor,
+    Protocols as ProtocolsDescriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::{Handler, MethodHandlerRequest};
 use crate::errors::{DataStoreError, MessageStoreError, StoreError};
-use crate::events::MessageEvent;
 use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::interfaces::messages::protocols::{ActionWho, Type};
 use crate::protocols::{Action, Can, Definition, RuleSet, Who};
-use crate::stores::memory::{MemoryEventLog, MemoryMessageStore};
+use crate::stores::durable_event_log::DurableEventLog;
+use crate::stores::memory::MemoryMessageStore;
+use crate::stores::replication_feed_reader::build_token;
 use crate::stores::state_index::MemoryStateIndex;
-use crate::stores::wake::{Wake, WakeError, WakePublisher};
+use crate::stores::wake::{InProcessWakeBus, Wake, WakeError, WakePublisher};
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
     MessageQueryResult, MessageStore, ReplicationFeedReader, StateIndex, SubscriptionMessage,
@@ -75,7 +76,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let write_handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
@@ -145,7 +146,7 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -223,7 +224,7 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -293,7 +294,7 @@ async fn records_delete_retains_initial_feed_position_without_extra_wake() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let write_handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
@@ -351,7 +352,7 @@ async fn records_write_rejects_older_conflicting_write() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -411,7 +412,7 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
@@ -465,7 +466,7 @@ async fn records_delete_prune_purges_descendant_records() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let write_handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
@@ -554,7 +555,7 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     data_store.open().await.unwrap();
     state_index.open().await.unwrap();
     put_squash_protocol("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
@@ -642,7 +643,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -737,7 +738,7 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store,
         state_index,
@@ -804,7 +805,7 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _, ()>::new(
+    let handler = RecordsWriteHandler::<_, _, _>::new(
         message_store.clone(),
         data_store.clone(),
         state_index,
@@ -905,37 +906,39 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
 
 #[tokio::test]
 async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
-    let mut message_store = TestMessageStore::default();
-    let mut event_log = MemoryEventLog::default();
-    message_store.open().await.unwrap();
-    event_log.open().await.unwrap();
+    const TENANT: &str = "did:example:alice";
 
-    let note = stored_note_message("2025-01-01T00:01:00.000000Z").await;
-    let first = event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: note.clone(),
-                initial_write: None,
-            },
-            record_event_indexes("http://example.com/notes", "Write"),
-            "first-cid",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: note,
-                initial_write: None,
-            },
-            record_event_indexes("http://example.com/notes", "Write"),
-            "second-cid",
-        )
-        .await
-        .unwrap();
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    message_store.open().await.unwrap();
+
+    let first_note = stored_note_message("2025-01-01T00:01:00.000000Z").await;
+    let second_note = stored_note_message("2025-01-01T00:02:00.000000Z").await;
+    let second_cid = message_cid(&second_note).unwrap();
+    for note in [&first_note, &second_note] {
+        let indexes = records_write_indexes(note, TENANT, true).unwrap();
+        message_store
+            .put(TENANT, note.clone(), indexes)
+            .await
+            .unwrap();
+    }
+
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
+
+    let read = EventLog::read(
+        &event_log,
+        TENANT,
+        Some(EventLogReadOptions {
+            limit: Some(1),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(read.events.len(), 1);
+    let first = read
+        .cursor
+        .expect("scan cursor after the first committed entry");
 
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
@@ -976,14 +979,14 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
     match &delivered[0] {
         SubscriptionMessage::Event { cursor, .. } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
+            assert_eq!(cursor.message_cid.as_deref(), Some(second_cid.as_str()));
         }
         other => panic!("expected event, got {other:?}"),
     }
     match &delivered[1] {
         SubscriptionMessage::Eose { cursor } => {
             assert_eq!(cursor.position, "2");
-            assert_eq!(cursor.message_cid.as_deref(), Some("second-cid"));
+            assert_eq!(cursor.message_cid.as_deref(), Some(second_cid.as_str()));
         }
         other => panic!("expected eose, got {other:?}"),
     }
@@ -991,38 +994,24 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
 
 #[tokio::test]
 async fn records_event_log_subscribe_maps_progress_gap_to_410() {
-    let message_store = TestMessageStore::default();
-    let mut event_log = MemoryEventLog::new(1);
-    event_log.open().await.unwrap();
+    const TENANT: &str = "did:example:alice";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    message_store.open().await.unwrap();
 
     let note = stored_note_message("2025-01-01T00:01:00.000000Z").await;
-    let mut old_cursor = event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: note.clone(),
-                initial_write: None,
-            },
-            record_event_indexes("http://example.com/notes", "Write"),
-            "first-cid",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    old_cursor.position = "0".to_string();
-    event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: note,
-                initial_write: None,
-            },
-            record_event_indexes("http://example.com/notes", "Write"),
-            "second-cid",
-        )
+    let indexes = records_write_indexes(&note, TENANT, true).unwrap();
+    message_store
+        .put(TENANT, note.clone(), indexes)
         .await
         .unwrap();
 
+    // A token from a superseded feed epoch can never resume; the reader must
+    // surface it as a structured progress gap.
+    let stale_cursor = build_token(TENANT, "00000000-superseded-epoch", 1, None);
+
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
     let handler = RecordsEventLogSubscribeHandler::new(
         message_store,
         event_log,
@@ -1033,7 +1022,7 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
             protocol: Some("http://example.com/notes".to_string()),
             ..Default::default()
         },
-        Some(old_cursor),
+        Some(stale_cursor),
         "2025-01-01T00:10:00.000000Z",
     )
     .await;
@@ -1044,29 +1033,34 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
     assert_eq!(result.reply.status.code, 410);
     let error = result.reply.reply.error.as_ref().unwrap();
     assert_eq!(error.code, crate::stores::ProgressGapCode::ProgressGap);
-    assert_eq!(error.reason, crate::stores::ProgressGapReason::TokenTooOld);
+    assert_eq!(
+        error.reason,
+        crate::stores::ProgressGapReason::EpochMismatch
+    );
     assert!(result.subscription.is_none());
 }
 
 #[tokio::test]
 async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_subscription() {
-    let mut message_store = TestMessageStore::default();
-    let mut event_log = MemoryEventLog::default();
+    const TENANT: &str = "did:example:alice";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
     message_store.open().await.unwrap();
-    event_log.open().await.unwrap();
 
     let note = stored_note_message("2025-01-01T00:01:00.000000Z").await;
-    let indexes = records_write_indexes(&note, "did:example:alice", true).unwrap();
+    let indexes = records_write_indexes(&note, TENANT, true).unwrap();
     message_store
-        .put("did:example:alice", note.clone(), indexes)
+        .put(TENANT, note.clone(), indexes)
         .await
         .unwrap();
 
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
     let delivered = Arc::new(RwLock::new(Vec::new()));
     let delivered_for_listener = delivered.clone();
     let handler = RecordsEventLogSubscribeHandler::new(
-        message_store,
-        event_log.clone(),
+        message_store.clone(),
+        event_log,
         Some(Arc::new(test_resolver())),
     );
     let request = signed_records_subscribe_message(
@@ -1094,18 +1088,21 @@ async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_su
     assert_eq!(result.reply.reply.entries.as_ref().unwrap().len(), 1);
     assert!(result.subscription.is_some());
 
-    event_log
-        .emit(
-            "did:example:alice",
-            MessageEvent {
-                message: note,
-                initial_write: None,
-            },
-            record_event_indexes("http://example.com/notes", "Write"),
-            "live-cid",
-        )
+    // Commit after the subscription opened; the wake must trigger a live drain
+    // that delivers the new event without an EOSE.
+    let live_note = stored_note_message("2025-01-01T00:02:00.000000Z").await;
+    let live_indexes = records_write_indexes(&live_note, TENANT, true).unwrap();
+    message_store
+        .put(TENANT, live_note, live_indexes)
         .await
         .unwrap();
+
+    for _ in 0..500 {
+        if !delivered.read().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     let delivered = delivered.read().unwrap();
     assert_eq!(delivered.len(), 1);
     assert!(matches!(delivered[0], SubscriptionMessage::Event { .. }));
@@ -1275,17 +1272,6 @@ async fn stored_note_message(timestamp: &str) -> Message<Descriptor> {
         .await,
     )
     .unwrap()
-}
-
-fn record_event_indexes(protocol: &str, method: &str) -> KeyValues {
-    KeyValues::from([
-        (
-            "interface".to_string(),
-            Value::String(RECORDS_INTERFACE.to_string()),
-        ),
-        ("method".to_string(), Value::String(method.to_string())),
-        ("protocol".to_string(), Value::String(protocol.to_string())),
-    ])
 }
 
 async fn signed_records_subscribe_message(

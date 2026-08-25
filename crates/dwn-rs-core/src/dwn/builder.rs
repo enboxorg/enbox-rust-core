@@ -43,29 +43,6 @@ pub struct NativeDwnConfig<MS, DS, SI, EL, RTS, Gate = AllowAllTenantGate> {
     pub tenant_gate: Gate,
 }
 
-impl<MS, DS, SI, EL, RTS, Gate> Default for NativeDwnConfig<MS, DS, SI, EL, RTS, Gate>
-where
-    MS: Default,
-    DS: Default,
-    SI: Default,
-    EL: Default,
-    RTS: Default,
-    Gate: Default,
-{
-    fn default() -> Self {
-        Self {
-            stores: NativeDwnStores {
-                message_store: MS::default(),
-                data_store: DS::default(),
-                state_index: SI::default(),
-                event_log: EL::default(),
-                resumable_task_store: RTS::default(),
-            },
-            tenant_gate: Gate::default(),
-        }
-    }
-}
-
 /// Error opening one or more native store backends.
 #[derive(Debug, thiserror::Error)]
 pub enum NativeDwnOpenError {
@@ -247,11 +224,10 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
         message_store.clone(),
         resolver.clone(),
     ));
-    dwn.register(RecordsWriteHandler::with_event_log(
+    dwn.register(RecordsWriteHandler::new(
         message_store.clone(),
         data_store.clone(),
         state_index.clone(),
-        event_log.clone(),
         resolver.clone(),
     ));
     dwn.register(RecordsReadHandler::new(

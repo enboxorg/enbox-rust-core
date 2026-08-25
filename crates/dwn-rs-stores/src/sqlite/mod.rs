@@ -15,6 +15,8 @@ pub mod store;
 mod sync_ledger;
 
 pub use self::conn::SqliteConnection;
+#[doc(hidden)]
+#[deprecated(note = "Use DurableEventLog instead")]
 pub use self::event_log::SqliteEventLog;
 pub use self::resumable_task_store::SqliteResumableTaskStore;
 pub use self::secrets_store::SqliteSecretStore;
@@ -35,7 +37,7 @@ mod tests {
 
     use bytes::Bytes;
     use dwn_rs_core::stores::replication_feed_reader::{cid_contribution, xor_in_place};
-    use dwn_rs_core::stores::wake::{Wake, WakePublishHandler, WakePublisher};
+    use dwn_rs_core::stores::wake::{Wake, WakeError, WakePublishHandler, WakePublisher};
     use futures_util::{stream, TryStreamExt};
 
     use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
@@ -192,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_store_roundtrips_inline_data_without_changing_message_cid() {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         MessageStore::open(&mut store).await.unwrap();
         let message = message(
             "2025-01-01T00:00:00.000000Z",
@@ -260,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_store_filters_sorts_counts_and_paginates() {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         MessageStore::open(&mut store).await.unwrap();
         let first = message(
             "2025-01-01T00:00:00.000000Z",
@@ -628,6 +630,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn feed_wakes_publish_only_after_the_full_transaction_is_visible() {
+        struct CommitVisibilityPublisher {
+            database_path: PathBuf,
+            /// CIDs in expected commit order; each wake must observe the row of
+            /// the next expected commit from a separate connection.
+            expected: Mutex<Vec<String>>,
+            observed: Mutex<Vec<(u64, String)>>,
+        }
+
+        impl WakePublisher for CommitVisibilityPublisher {
+            fn publish(&self, wake: Wake) -> Result<(), WakeError> {
+                let connection = rusqlite::Connection::open(&self.database_path)
+                    .map_err(|error| WakeError::PublishError(error.to_string()))?;
+                let (message_cid, indexes_json): (String, String) = connection
+                    .query_row(
+                        "SELECT message_cid, indexes_json FROM feed_entries \
+                         WHERE tenant = ?1 AND position = ?2",
+                        rusqlite::params![wake.tenant, wake.position as i64],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|error| WakeError::PublishError(error.to_string()))?;
+
+                let mut expected = self.expected.lock().unwrap();
+                let want = expected
+                    .first()
+                    .ok_or_else(|| {
+                        WakeError::PublishError("wake published without a pending commit".into())
+                    })?
+                    .clone();
+                if message_cid != want {
+                    return Err(WakeError::PublishError(format!(
+                        "wake at position {} carries {message_cid}, expected {want}",
+                        wake.position
+                    )));
+                }
+                if indexes_json.is_empty() {
+                    return Err(WakeError::PublishError(
+                        "committed feed row is missing its indexes".into(),
+                    ));
+                }
+                expected.remove(0);
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .push((wake.position, message_cid));
+                Ok(())
+            }
+        }
+
+        let path = temp_db_path("feed-wake-commit-visibility");
+        let first = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
+        let second = message("2025-01-01T00:00:01Z", "https://example.com/tasks", None);
+        let publisher = Arc::new(CommitVisibilityPublisher {
+            database_path: path.clone(),
+            expected: Mutex::new([&first, &second].map(message_cid).to_vec()),
+            observed: Mutex::new(Vec::new()),
+        });
+
+        let mut store = SqliteStore::new(&path, WakePublishHandler::new(publisher.clone()));
+        MessageStore::open(&mut store).await.unwrap();
+        MessageStore::put(&store, TENANT, first.clone(), indexes(&first))
+            .await
+            .unwrap();
+        MessageStore::put(&store, TENANT, second.clone(), indexes(&second))
+            .await
+            .unwrap();
+
+        let (positions, cids) = {
+            let observed = publisher.observed.lock().unwrap();
+            (
+                observed
+                    .iter()
+                    .map(|(position, _)| *position)
+                    .collect::<Vec<_>>(),
+                observed
+                    .iter()
+                    .map(|(_, cid)| cid.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(positions, [1, 2]);
+        assert_eq!(
+            cids.iter().map(String::as_str).collect::<Vec<_>>(),
+            [&message_cid(&first), &message_cid(&second)]
+        );
+        MessageStore::close(&mut store).await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn durable_feed_state_survives_reopen_and_wakes_only_after_commit() {
         let path = temp_db_path("durable-feed-reopen");
         let publisher = Arc::new(RecordingPublisher {
@@ -685,7 +777,7 @@ mod tests {
 
     #[tokio::test]
     async fn data_store_shares_content_addressed_blocks_and_refs() {
-        let mut store = SqliteStore::in_memory();
+        let mut store = SqliteStore::in_memory(None);
         DataStore::open(&mut store).await.unwrap();
         let bytes = Bytes::from_static(b"hello sqlite data");
         let data_cid = generate_dag_pb_cid_from_bytes(&bytes).to_string();

@@ -1,5 +1,5 @@
-//! Durable SQLite backends for [`StateIndex`], [`EventLog`], and
-//! [`ResumableTaskStore`].
+//! Durable SQLite backend for one of the native node's auxiliary stores
+//! (`StateIndex`, `EventLog`, or `ResumableTaskStore`).
 
 use std::collections::BTreeMap;
 
@@ -23,12 +23,6 @@ use crate::sqlite::{json_store_error, sqlite_store_error, SqliteStore};
 pub struct SqliteEventLog {
     inner: MemoryEventLog,
     store: SqliteStore,
-}
-
-impl Default for SqliteEventLog {
-    fn default() -> Self {
-        Self::new(&SqliteStore::in_memory())
-    }
 }
 
 impl SqliteEventLog {

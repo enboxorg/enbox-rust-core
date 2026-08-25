@@ -4,13 +4,17 @@ mod tests;
 
 pub use inner::*;
 pub use parameters::*;
+use serde_json::Value as JsonValue;
 
 pub use crate::encryption::{EncryptionInput, KeyEncryptionInput};
 
 use dwn_rs_message_derive::interface;
 use thiserror::Error;
 
-use crate::{fields::WriteFields, Descriptor, Fields, Message};
+use crate::{
+    cid::generate_cid_from_json, descriptors::messages::record_id, fields::WriteFields, Descriptor,
+    Fields, Message,
+};
 
 /// A message does not carry the RecordsWrite transport fields required by a
 /// RecordsWrite-only operation.
@@ -42,6 +46,28 @@ pub(crate) fn records_write_descriptor(
         },
         _ => Err(RecordsWriteDescriptorError::NotRecords),
     }
+}
+
+pub(crate) fn entry_id(author: &str, descriptor: &WriteDescriptor) -> Result<String, String> {
+    let mut descriptor = serde_json::to_value(descriptor).map_err(|err| err.to_string())?;
+    let object = descriptor.as_object_mut().ok_or_else(|| {
+        "RecordsWriteGetEntryIdInvalidDescriptor: descriptor must be an object".to_string()
+    })?;
+    object.insert("author".to_string(), JsonValue::String(author.to_string()));
+    generate_cid_from_json(&descriptor)
+        .map(|cid| cid.to_string())
+        .map_err(|err| err.to_string())
+}
+
+pub(crate) fn is_initial_write(
+    message: &Message<Descriptor>,
+    author: &str,
+) -> Result<bool, String> {
+    let descriptor = records_write_descriptor(message)?;
+    let Some(record_id) = record_id(message) else {
+        return Ok(false);
+    };
+    Ok(entry_id(author, descriptor)? == record_id)
 }
 
 pub fn write_tag_protocol(message: &Message<Descriptor>) -> Option<&str> {

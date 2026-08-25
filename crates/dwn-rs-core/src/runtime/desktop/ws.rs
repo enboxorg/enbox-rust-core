@@ -405,6 +405,7 @@ impl FlowController {
         let cursor = match &message {
             SubscriptionMessage::Event { cursor, .. } => cursor.clone(),
             SubscriptionMessage::Eose { cursor } => cursor.clone(),
+            SubscriptionMessage::Error { cursor, .. } => cursor.clone(),
         };
         let mut state = match self.state.lock() {
             Ok(state) => state,
@@ -446,6 +447,7 @@ impl FlowController {
             let cursor = match &message {
                 SubscriptionMessage::Event { cursor, .. } => cursor.clone(),
                 SubscriptionMessage::Eose { cursor } => cursor.clone(),
+                SubscriptionMessage::Error { cursor, .. } => cursor.clone(),
             };
             drop(state);
             self.send_message(message, cursor);

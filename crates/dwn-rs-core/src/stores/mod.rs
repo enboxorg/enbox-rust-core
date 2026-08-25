@@ -1,3 +1,4 @@
+pub mod durable_event_log;
 pub mod memory;
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
@@ -5,6 +6,7 @@ pub mod replication_feed_conformance;
 pub mod replication_feed_reader;
 pub mod state_index;
 pub mod wake;
+pub mod write_resolver;
 
 use std::{fmt::Debug, future::Future, pin::Pin};
 
@@ -75,6 +77,20 @@ pub enum ProgressGapCode {
     ProgressGap,
 }
 
+impl ProgressGapCode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProgressGap => "ProgressGap",
+        }
+    }
+}
+
+impl std::fmt::Display for ProgressGapCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressGapInfo {
@@ -119,15 +135,36 @@ pub struct EventLogSubscribeOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SubscriptionError {
+    pub code: ProgressGapCode,
+    pub detail: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
 pub enum SubscriptionMessage {
     #[serde(rename = "event")]
     Event {
         cursor: ProgressToken,
         event: Box<MessageEvent<Descriptor>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<String>,
+        #[serde(rename = "messageCid", skip_serializing_if = "Option::is_none")]
+        message_cid: Option<String>,
+        #[serde(rename = "isLatestBaseState", skip_serializing_if = "Option::is_none")]
+        is_latest_base_state: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol: Option<String>,
+        #[serde(rename = "encodedData", skip_serializing_if = "Option::is_none")]
+        encoded_data: Option<String>,
     },
     #[serde(rename = "eose")]
     Eose { cursor: ProgressToken },
+    #[serde(rename = "error")]
+    Error {
+        cursor: ProgressToken,
+        error: SubscriptionError,
+    },
 }
 
 pub type SubscriptionListener = Box<dyn Fn(SubscriptionMessage) + Send + Sync + 'static>;
@@ -154,7 +191,7 @@ pub enum EventLogTrimBound {
 
 /// Native message store contract matching the current TypeScript
 /// `MessageStore` dependency used by `DwnConfig`.
-pub trait MessageStore: Default {
+pub trait MessageStore {
     fn open(&mut self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -201,7 +238,7 @@ pub trait MessageStore: Default {
 }
 
 /// Native content-addressed data store contract.
-pub trait DataStore: Default {
+pub trait DataStore {
     fn open(&mut self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -232,7 +269,7 @@ pub trait DataStore: Default {
 }
 
 /// Native StateIndex contract for global and protocol-scoped SMT sync.
-pub trait StateIndex: Default {
+pub trait StateIndex {
     fn open(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -288,7 +325,7 @@ pub trait StateIndex: Default {
 }
 
 /// Native persistent event log contract with progress tokens and replay.
-pub trait EventLog: Default {
+pub trait EventLog {
     fn open(&mut self) -> impl Future<Output = Result<(), EventLogError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -328,7 +365,7 @@ pub trait EventLog: Default {
 }
 
 /// Native resumable task store contract.
-pub trait ResumableTaskStore: Default {
+pub trait ResumableTaskStore {
     fn open(&mut self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -429,7 +466,116 @@ impl EventLog for () {
 #[cfg(test)]
 mod enbox_store_contract_tests {
     use super::*;
+    use crate::descriptors::Records;
+    use crate::Fields;
     use serde_json::json;
+
+    fn records_write_message() -> Message<Descriptor> {
+        Message {
+            descriptor: Descriptor::Records(Box::new(Records::Write(Default::default()))),
+            fields: Fields::default(),
+        }
+    }
+
+    fn subscription_event(metadata: bool) -> SubscriptionMessage {
+        SubscriptionMessage::Event {
+            cursor: ProgressToken {
+                stream_id: "local-dwn".to_string(),
+                epoch: "epoch-1".to_string(),
+                position: "7".to_string(),
+                message_cid: Some("cid-7".to_string()),
+            },
+            event: Box::new(MessageEvent {
+                message: records_write_message(),
+                initial_write: None,
+            }),
+            seq: (metadata).then(|| "7".to_string()),
+            message_cid: (metadata).then(|| "cid-7".to_string()),
+            is_latest_base_state: (metadata).then_some(true),
+            protocol: (metadata).then(|| "https://example.com/chat".to_string()),
+            encoded_data: (metadata).then(|| "aGk=".to_string()),
+        }
+    }
+
+    #[test]
+    fn subscription_event_serializes_metadata_with_upstream_names() {
+        let value = serde_json::to_value(subscription_event(true)).unwrap();
+
+        assert_eq!(value["type"], "event");
+        assert_eq!(value["seq"], "7");
+        assert_eq!(value["messageCid"], "cid-7");
+        assert_eq!(value["isLatestBaseState"], true);
+        assert_eq!(value["protocol"], "https://example.com/chat");
+        assert_eq!(value["encodedData"], "aGk=");
+    }
+
+    #[test]
+    fn subscription_event_serializes_false_is_latest_base_state() {
+        let message = SubscriptionMessage::Event {
+            cursor: ProgressToken {
+                stream_id: "local-dwn".to_string(),
+                epoch: "epoch-1".to_string(),
+                position: "7".to_string(),
+                message_cid: Some("cid-7".to_string()),
+            },
+            event: Box::new(MessageEvent {
+                message: records_write_message(),
+                initial_write: None,
+            }),
+            seq: Some("7".to_string()),
+            message_cid: Some("cid-7".to_string()),
+            is_latest_base_state: Some(false),
+            protocol: Some("https://example.com/chat".to_string()),
+            encoded_data: Some("aGk=".to_string()),
+        };
+
+        let value = serde_json::to_value(message).unwrap();
+        assert_eq!(value["isLatestBaseState"], false);
+    }
+
+    #[test]
+    fn subscription_event_omits_absent_metadata() {
+        let value = serde_json::to_value(subscription_event(false)).unwrap();
+
+        for key in [
+            "seq",
+            "messageCid",
+            "isLatestBaseState",
+            "protocol",
+            "encodedData",
+        ] {
+            assert!(value.get(key).is_none(), "{key} must be omitted");
+        }
+    }
+
+    #[test]
+    fn subscription_event_decodes_without_metadata_for_backcompat() {
+        let json = serde_json::to_value(subscription_event(false)).unwrap();
+        let decoded = serde_json::from_value::<SubscriptionMessage>(json).unwrap();
+
+        match decoded {
+            SubscriptionMessage::Event {
+                seq,
+                message_cid,
+                is_latest_base_state,
+                protocol,
+                encoded_data,
+                ..
+            } => {
+                assert_eq!(
+                    (
+                        seq,
+                        message_cid,
+                        is_latest_base_state,
+                        protocol,
+                        encoded_data
+                    ),
+                    (None, None, None, None, None)
+                );
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
 
     #[test]
     fn progress_token_serializes_like_typescript() {

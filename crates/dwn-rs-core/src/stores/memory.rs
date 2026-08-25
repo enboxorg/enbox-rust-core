@@ -813,6 +813,11 @@ impl EventLog for MemoryEventLog {
                 listener(SubscriptionMessage::Event {
                     cursor: token.clone(),
                     event: Box::new(event.clone()),
+                    seq: Some(token.position.clone()),
+                    message_cid: token.message_cid.clone(),
+                    is_latest_base_state: None,
+                    protocol: None,
+                    encoded_data: None,
                 });
             }
 
@@ -929,6 +934,11 @@ impl EventLog for MemoryEventLog {
                             entry.message_cid.as_deref(),
                         ),
                         event: Box::new(entry.event),
+                        seq: Some(entry.seq),
+                        message_cid: entry.message_cid,
+                        is_latest_base_state: None,
+                        protocol: None,
+                        encoded_data: None,
                     });
                 }
                 listener(SubscriptionMessage::Eose {

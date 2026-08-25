@@ -15,18 +15,21 @@ use crate::handlers::records::common::{
 };
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Query;
+use crate::stores::write_resolver::InitialWriteResolver;
+use crate::stores::write_resolver::MessageStoreInitialWriteResolver;
 use crate::Message;
 use crate::Response;
 
 #[derive(Clone)]
 pub struct RecordsQueryHandler<MessageStore> {
-    message_store: MessageStore,
+    message_store: Arc<MessageStore>,
     did_resolver: Option<Arc<dyn DidResolver>>,
+    write_resolver: Arc<dyn InitialWriteResolver>,
 }
 
 impl<MessageStore> Handler for RecordsQueryHandler<MessageStore>
 where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
 {
     type Reply = Query;
     type Descriptor = RecordsQueryDescriptor;
@@ -60,7 +63,7 @@ where
                 Err(error) => return Response::bad_request(error.to_string()),
             };
 
-            let (filters, author) = match self
+            let (filters, _) = match self
                 .query_filters(tenant, &message, &descriptor, signature.as_ref())
                 .await
             {
@@ -86,13 +89,15 @@ where
                 Err(err) => return store_error_reply(err.to_string()),
             };
 
-            let entries = attach_initial_writes(
-                tenant,
-                result.messages,
-                &self.message_store,
-                author.as_deref(),
-            )
-            .await;
+            let entries =
+                match attach_initial_writes(tenant, result.messages, self.write_resolver.as_ref())
+                    .await
+                {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return store_error_reply(format!("failed to attach initial writes: {err}"))
+                    }
+                };
 
             Response::ok().with_reply(Query {
                 entries: Some(entries),
@@ -103,18 +108,23 @@ where
     }
 }
 
-impl<MessageStore> RecordsQueryHandler<MessageStore> {
+impl<MessageStore> RecordsQueryHandler<MessageStore>
+where
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
+{
     pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
+        let message_store = Arc::new(message_store);
         Self {
-            message_store,
+            message_store: message_store.clone(),
             did_resolver,
+            write_resolver: Arc::new(MessageStoreInitialWriteResolver::new(message_store)),
         }
     }
 }
 
 impl<MessageStore> RecordsQueryHandler<MessageStore>
 where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
 {
     async fn query_filters(
         &self,
@@ -142,7 +152,7 @@ where
             message,
             &descriptor.filter,
             signature,
-            &self.message_store,
+            self.message_store.as_ref(),
         )
         .await
         .map_err(|error| QueryAuthorizationResult::Unauthorized(error.to_string()))?;
@@ -151,7 +161,7 @@ where
                 tenant,
                 &descriptor.filter,
                 signature,
-                &self.message_store,
+                self.message_store.as_ref(),
                 RecordsAuthorizationKind::Query,
             )
             .await

@@ -88,6 +88,7 @@ reqwest = { version = "0.12.28", default-features = false, features = [
 z32 = "1.3.0"
 
 [dev-dependencies]
+tokio = { version = "1.39.2", features = ["test-util"] }
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 reqwest = { version = "0.12.28", default-features = false, features = [
     "json",
