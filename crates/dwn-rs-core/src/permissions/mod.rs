@@ -227,6 +227,7 @@ struct PermissionGrantData {
     connect_session: Option<ConnectSessionMetadata>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessagesGrantAccess {
     pub metadata_only: bool,
 }
@@ -1326,16 +1327,23 @@ pub async fn authorize_messages_subscribe_and_query<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let permission_grants =
+    let grants =
         fetch_and_validate_messages_grants(tenant, incoming_message, auth, message_store).await?;
 
+    authorize_messages_filter_scope(&grants, filters).await
+}
+
+pub(crate) async fn authorize_messages_filter_scope(
+    permission_grants: &ValidatedMessagesGrantSet,
+    filters: &[MessagesFilter],
+) -> Result<MessagesGrantAccess, PermissionError> {
     if filters.is_empty() {
         if !permission_grants.has_unscoped_grants() {
             return Err(GrantError::OutsideScope.into());
         }
 
         return Ok(MessagesGrantAccess {
-            metadata_only: !permission_grants.has_unscoped_grants(),
+            metadata_only: false,
         });
     }
 
@@ -1382,24 +1390,9 @@ where
         grants: vec![permission_grant.clone()],
     };
 
-    if filters.is_empty() {
-        if !permission_grants.has_unscoped_grants() {
-            return Err(GrantError::OutsideScope.into());
-        }
-        return Ok(Some(MessagesGrantAccess {
-            metadata_only: false,
-        }));
-    }
-
-    for filter in filters {
-        if !permission_grants.covers_filter(filter).await {
-            return Err(GrantError::OutsideScope.into());
-        }
-    }
-
-    Ok(Some(MessagesGrantAccess {
-        metadata_only: !permission_grants.has_unscoped_grants(),
-    }))
+    authorize_messages_filter_scope(&permission_grants, filters)
+        .await
+        .map(Some)
 }
 
 async fn fetch_and_validate_messages_grants<MessageStore>(
@@ -1972,6 +1965,305 @@ mod tests {
         .unwrap();
     }
 
+    fn messages_grant(
+        id: &str,
+        protocol: Option<&str>,
+        selector: Option<MessagesSelector>,
+    ) -> PermissionGrant {
+        PermissionGrant {
+            id: id.to_string(),
+            grantor: "did:example:alice".to_string(),
+            grantee: "did:example:bob".to_string(),
+            date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
+            date_expires: parse_time("2025-02-01T00:00:00.000000Z"),
+            delegated: None,
+            scope: PermissionScope::Messages(MessagesScope {
+                protocol: protocol.map(str::to_string),
+                selector,
+            }),
+            conditions: None,
+            connect_session: None,
+        }
+    }
+
+    fn messages_filter(protocol: &str) -> MessagesFilter {
+        MessagesFilter {
+            protocol: Some(protocol.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn messages_filter_scope_enforces_coverage_and_metadata_policy() {
+        let unscoped = ValidatedMessagesGrantSet {
+            grants: vec![messages_grant("unscoped", None, None)],
+        };
+        assert_eq!(
+            authorize_messages_filter_scope(&unscoped, &[])
+                .await
+                .unwrap(),
+            MessagesGrantAccess {
+                metadata_only: false
+            }
+        );
+        assert_eq!(
+            authorize_messages_filter_scope(
+                &unscoped,
+                &[messages_filter("https://example.com/a")],
+            )
+            .await
+            .unwrap(),
+            MessagesGrantAccess {
+                metadata_only: false
+            }
+        );
+
+        let scoped = ValidatedMessagesGrantSet {
+            grants: vec![messages_grant(
+                "scoped-a",
+                Some("https://example.com/a"),
+                None,
+            )],
+        };
+        assert!(authorize_messages_filter_scope(&scoped, &[]).await.is_err());
+        assert_eq!(
+            authorize_messages_filter_scope(&scoped, &[messages_filter("https://example.com/a")],)
+                .await
+                .unwrap(),
+            MessagesGrantAccess {
+                metadata_only: true
+            }
+        );
+        assert!(authorize_messages_filter_scope(
+            &scoped,
+            &[messages_filter("https://example.com/b")],
+        )
+        .await
+        .is_err());
+
+        let separately_covered = ValidatedMessagesGrantSet {
+            grants: vec![
+                messages_grant("scoped-a", Some("https://example.com/a"), None),
+                messages_grant("scoped-b", Some("https://example.com/b"), None),
+            ],
+        };
+        assert_eq!(
+            authorize_messages_filter_scope(
+                &separately_covered,
+                &[
+                    messages_filter("https://example.com/a"),
+                    messages_filter("https://example.com/b"),
+                ],
+            )
+            .await
+            .unwrap(),
+            MessagesGrantAccess {
+                metadata_only: true
+            }
+        );
+        assert!(authorize_messages_filter_scope(
+            &separately_covered,
+            &[
+                messages_filter("https://example.com/a"),
+                messages_filter("https://example.com/c"),
+            ],
+        )
+        .await
+        .is_err());
+
+        let mixed = ValidatedMessagesGrantSet {
+            grants: vec![
+                messages_grant("scoped", Some("https://example.com/a"), None),
+                messages_grant("unscoped", None, None),
+            ],
+        };
+        assert_eq!(
+            authorize_messages_filter_scope(&mixed, &[messages_filter("https://example.com/a")],)
+                .await
+                .unwrap(),
+            MessagesGrantAccess {
+                metadata_only: false
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_filter_scope_honors_exact_protocol_path() {
+        let grants = ValidatedMessagesGrantSet {
+            grants: vec![messages_grant(
+                "path-grant",
+                Some("https://example.com/a"),
+                Some(MessagesSelector::ProtocolPath(ProtocolPath(
+                    "thread/message".to_string(),
+                ))),
+            )],
+        };
+        let covered = MessagesFilter {
+            protocol: Some("https://example.com/a".to_string()),
+            protocol_path: Some("thread/message".to_string()),
+            ..Default::default()
+        };
+        let uncovered = MessagesFilter {
+            protocol: Some("https://example.com/a".to_string()),
+            protocol_path: Some("thread/image".to_string()),
+            ..Default::default()
+        };
+
+        assert!(authorize_messages_filter_scope(&grants, &[covered])
+            .await
+            .is_ok());
+        assert!(authorize_messages_filter_scope(&grants, &[uncovered])
+            .await
+            .is_err());
+    }
+
+    fn delegated_subscribe_message(filters: Vec<MessagesFilter>) -> Message<Descriptor> {
+        Message {
+            descriptor: Descriptor::Messages(Box::new(Messages::Subscribe(
+                MessagesSubscribeDescriptor {
+                    message_timestamp: parse_time("2025-01-01T00:10:00.000000Z"),
+                    filters,
+                    permission_grant_ids: None,
+                    cursor: None,
+                },
+            ))),
+            fields: Fields::Authorization(Authorization::default()),
+        }
+    }
+
+    fn delegated_auth(grant: Option<PermissionGrant>) -> AuthorizationContext {
+        AuthorizationContext {
+            signer: "did:example:bob".to_string(),
+            author: "did:example:alice".to_string(),
+            payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: grant.as_ref().map(|grant| grant.id.clone()),
+                permission_grant_id: None,
+                permission_grant_ids: None,
+                protocol_role: Some("thread/participant".to_string()),
+            }),
+            permission_grant_invocation: PermissionGrantInvocation::None,
+            author_delegated_grant: grant,
+        }
+    }
+
+    #[tokio::test]
+    async fn delegated_messages_grant_returns_none_full_or_metadata_only() {
+        let filter = messages_filter("https://example.com/a");
+        let message = delegated_subscribe_message(vec![filter.clone()]);
+
+        assert_eq!(
+            authorize_delegated_messages_subscribe_and_query(
+                &message,
+                &[filter.clone()],
+                &delegated_auth(None),
+                &NoopMessageStore,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+
+        let full = authorize_delegated_messages_subscribe_and_query(
+            &message,
+            &[filter.clone()],
+            &delegated_auth(Some(messages_grant("full", None, None))),
+            &NoopMessageStore,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            full,
+            Some(MessagesGrantAccess {
+                metadata_only: false
+            })
+        );
+
+        let scoped_grant = messages_grant("scoped", Some("https://example.com/a"), None);
+        let metadata = authorize_delegated_messages_subscribe_and_query(
+            &message,
+            &[filter],
+            &delegated_auth(Some(scoped_grant.clone())),
+            &NoopMessageStore,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            metadata,
+            Some(MessagesGrantAccess {
+                metadata_only: true
+            })
+        );
+
+        let empty_message = delegated_subscribe_message(Vec::new());
+        assert!(authorize_delegated_messages_subscribe_and_query(
+            &empty_message,
+            &[],
+            &delegated_auth(Some(scoped_grant)),
+            &NoopMessageStore,
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn delegated_messages_grant_rejects_wrong_parties_and_expiry() {
+        let filter = messages_filter("https://example.com/a");
+        let message = delegated_subscribe_message(vec![filter.clone()]);
+
+        let mut wrong_grantee = messages_grant("wrong-grantee", None, None);
+        wrong_grantee.grantee = "did:example:carol".to_string();
+        assert!(authorize_delegated_messages_subscribe_and_query(
+            &message,
+            &[filter.clone()],
+            &delegated_auth(Some(wrong_grantee)),
+            &NoopMessageStore,
+        )
+        .await
+        .is_err());
+
+        let mut wrong_grantor = messages_grant("wrong-grantor", None, None);
+        wrong_grantor.grantor = "did:example:carol".to_string();
+        assert!(authorize_delegated_messages_subscribe_and_query(
+            &message,
+            &[filter.clone()],
+            &delegated_auth(Some(wrong_grantor)),
+            &NoopMessageStore,
+        )
+        .await
+        .is_err());
+
+        let mut expired = messages_grant("expired", None, None);
+        expired.date_expires = parse_time("2025-01-01T00:05:00.000000Z");
+        assert!(authorize_delegated_messages_subscribe_and_query(
+            &message,
+            &[filter],
+            &delegated_auth(Some(expired)),
+            &NoopMessageStore,
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn delegated_messages_grant_rejects_revocation() {
+        let filter = messages_filter("https://example.com/a");
+        let message = delegated_subscribe_message(vec![filter.clone()]);
+
+        let result = authorize_delegated_messages_subscribe_and_query(
+            &message,
+            &[filter],
+            &delegated_auth(Some(messages_grant("revoked", None, None))),
+            &RevokedMessageStore,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(PermissionError::InvalidGrant(GrantError::Revoked))
+        ));
+    }
+
     fn parse_time(value: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(value)
             .unwrap()
@@ -2014,6 +2306,64 @@ mod tests {
         ) -> Result<MessageQueryResult, MessageStoreError> {
             Ok(MessageQueryResult {
                 messages: Vec::new(),
+                cursor: None,
+            })
+        }
+
+        async fn count(
+            &self,
+            _tenant: &str,
+            _filters: Filters,
+            _sort: Option<MessageSort>,
+        ) -> Result<u64, MessageStoreError> {
+            Ok(0)
+        }
+
+        async fn delete(&self, _tenant: &str, _cid: &str) -> Result<(), MessageStoreError> {
+            Ok(())
+        }
+
+        async fn clear(&self) -> Result<(), MessageStoreError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RevokedMessageStore;
+
+    impl MessageStore for RevokedMessageStore {
+        async fn open(&mut self) -> Result<(), MessageStoreError> {
+            Ok(())
+        }
+
+        async fn close(&mut self) {}
+
+        async fn put<D: crate::descriptors::MessageDescriptor + Send>(
+            &self,
+            _tenant: &str,
+            _message: Message<D>,
+            _indexes: BTreeMap<String, Value>,
+        ) -> Result<(), MessageStoreError> {
+            Ok(())
+        }
+
+        async fn get(
+            &self,
+            _tenant: &str,
+            _cid: &str,
+        ) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
+            Ok(None)
+        }
+
+        async fn query(
+            &self,
+            _tenant: &str,
+            _filters: Filters,
+            _sort: Option<MessageSort>,
+            _pagination: Option<Pagination>,
+        ) -> Result<MessageQueryResult, MessageStoreError> {
+            Ok(MessageQueryResult {
+                messages: vec![delegated_subscribe_message(Vec::new())],
                 cursor: None,
             })
         }

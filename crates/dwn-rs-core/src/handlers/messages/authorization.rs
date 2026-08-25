@@ -7,11 +7,7 @@ use crate::{
         RecordsAuthorizationKind,
     },
     message_filters,
-    permissions::{
-        self,
-        errors::{GrantError, PermissionError},
-        AuthorizationContext,
-    },
+    permissions::{self, errors::PermissionError, AuthorizationContext},
     stores::MessageStore,
     Descriptor, Message,
 };
@@ -42,14 +38,19 @@ pub(crate) enum MessageAuthorizationError {
         "role-authorized message filters resolved to inconsistent protocol roles from records"
     )]
     InconsistentResolvedRole,
+
+    #[error("message failed authorization")]
+    Unauthorized,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MessagesRoleAuthorization {
     pub author: String,
     pub metadata_only: bool,
     pub resolved_role: ResolvedProtocolRole,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MessagesAuthorization {
     Owner,
     Grant { metadata_only: bool },
@@ -80,7 +81,7 @@ pub(crate) async fn authorize_query_or_subscribe<MS>(
 where
     MS: MessageStore + Clone + Send + Sync + 'static,
 {
-    if auth.author == tenant {
+    if auth.author == tenant && auth.signer == tenant {
         return Ok(MessagesAuthorization::Owner);
     }
 
@@ -92,9 +93,7 @@ where
         return authorize_role(tenant, message, filters, auth, messages_store, kind).await;
     }
 
-    Err(MessageAuthorizationError::AuthorizationFailed(
-        PermissionError::InvalidGrant(GrantError::Unauthorized),
-    ))
+    Err(MessageAuthorizationError::Unauthorized)
 }
 
 async fn authorize_grant<MS>(
@@ -284,17 +283,28 @@ mod tests {
     }
 
     fn role_authorization() -> AuthorizationContext {
+        authorization_context(AUTHOR, AUTHOR, None, Some(ROLE))
+    }
+
+    fn authorization_context(
+        author: &str,
+        signer: &str,
+        grant_ids: Option<Vec<String>>,
+        protocol_role: Option<&str>,
+    ) -> AuthorizationContext {
         AuthorizationContext {
-            signer: AUTHOR.to_string(),
-            author: AUTHOR.to_string(),
+            signer: signer.to_string(),
+            author: author.to_string(),
             payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
                 descriptor_cid: String::new(),
                 delegated_grant_id: None,
                 permission_grant_id: None,
-                permission_grant_ids: None,
-                protocol_role: Some(ROLE.to_string()),
+                permission_grant_ids: grant_ids.clone(),
+                protocol_role: protocol_role.map(str::to_string),
             }),
-            permission_grant_invocation: PermissionGrantInvocation::None,
+            permission_grant_invocation: grant_ids
+                .map(PermissionGrantInvocation::Multi)
+                .unwrap_or(PermissionGrantInvocation::None),
             author_delegated_grant: None,
         }
     }
@@ -535,6 +545,88 @@ mod tests {
         assert!(matches!(
             result,
             Err(MessageAuthorizationError::ProtocolAuthorization(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn shared_dispatch_distinguishes_owner_delegate_role_and_missing_mode() {
+        let (store, message) = role_store().await;
+        let filters = [exact_filter("thread/message")];
+
+        let owner = authorize_query_or_subscribe(
+            TENANT,
+            &message,
+            &filters,
+            &authorization_context(TENANT, TENANT, None, None),
+            &store,
+            MessageAuthorizationKind::Query,
+        )
+        .await
+        .expect("tenant signed by tenant must be owner");
+        assert_eq!(owner, MessagesAuthorization::Owner);
+
+        let delegated_owner = authorize_query_or_subscribe(
+            TENANT,
+            &message,
+            &filters,
+            &authorization_context(TENANT, AUTHOR, None, None),
+            &store,
+            MessageAuthorizationKind::Query,
+        )
+        .await;
+        assert!(matches!(
+            delegated_owner,
+            Err(MessageAuthorizationError::Unauthorized)
+        ));
+
+        let role = authorize_query_or_subscribe(
+            TENANT,
+            &message,
+            &filters,
+            &role_authorization(),
+            &store,
+            MessageAuthorizationKind::Query,
+        )
+        .await
+        .expect("valid role invocation must dispatch to role authorization");
+        assert!(matches!(role, MessagesAuthorization::Role(_)));
+
+        let missing_mode = authorize_query_or_subscribe(
+            TENANT,
+            &message,
+            &filters,
+            &authorization_context(AUTHOR, AUTHOR, None, None),
+            &store,
+            MessageAuthorizationKind::Query,
+        )
+        .await;
+        assert!(matches!(
+            missing_mode,
+            Err(MessageAuthorizationError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_grant_failure_does_not_fall_back_to_valid_role() {
+        let (store, message) = role_store().await;
+        let result = authorize_query_or_subscribe(
+            TENANT,
+            &message,
+            &[exact_filter("thread/message")],
+            &authorization_context(
+                AUTHOR,
+                AUTHOR,
+                Some(vec!["missing-grant".to_string()]),
+                Some(ROLE),
+            ),
+            &store,
+            MessageAuthorizationKind::Query,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(MessageAuthorizationError::AuthorizationFailed(_))
         ));
     }
 }
