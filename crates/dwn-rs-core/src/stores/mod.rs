@@ -191,7 +191,7 @@ pub enum EventLogTrimBound {
 
 /// Native message store contract matching the current TypeScript
 /// `MessageStore` dependency used by `DwnConfig`.
-pub trait MessageStore: Default {
+pub trait MessageStore {
     fn open(&mut self) -> impl Future<Output = Result<(), MessageStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -238,7 +238,7 @@ pub trait MessageStore: Default {
 }
 
 /// Native content-addressed data store contract.
-pub trait DataStore: Default {
+pub trait DataStore {
     fn open(&mut self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -269,7 +269,7 @@ pub trait DataStore: Default {
 }
 
 /// Native StateIndex contract for global and protocol-scoped SMT sync.
-pub trait StateIndex: Default {
+pub trait StateIndex {
     fn open(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;
@@ -365,7 +365,7 @@ pub trait EventLog {
 }
 
 /// Native resumable task store contract.
-pub trait ResumableTaskStore: Default {
+pub trait ResumableTaskStore {
     fn open(&mut self) -> impl Future<Output = Result<(), ResumableTaskStoreError>> + Send;
 
     fn close(&mut self) -> impl Future<Output = ()> + Send;

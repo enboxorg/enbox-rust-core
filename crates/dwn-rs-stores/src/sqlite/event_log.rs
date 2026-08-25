@@ -25,12 +25,6 @@ pub struct SqliteEventLog {
     store: SqliteStore,
 }
 
-impl Default for SqliteEventLog {
-    fn default() -> Self {
-        Self::new(&SqliteStore::in_memory())
-    }
-}
-
 impl SqliteEventLog {
     pub fn new(store: &SqliteStore) -> Self {
         Self {

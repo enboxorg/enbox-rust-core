@@ -20,12 +20,6 @@ pub struct SqliteResumableTaskStore {
     store: SqliteStore,
 }
 
-impl Default for SqliteResumableTaskStore {
-    fn default() -> Self {
-        Self::new(&SqliteStore::in_memory())
-    }
-}
-
 impl SqliteResumableTaskStore {
     pub fn new(store: &SqliteStore) -> Self {
         Self {

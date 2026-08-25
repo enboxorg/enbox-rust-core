@@ -21,12 +21,6 @@ pub struct SqliteSyncLedger {
     store: SqliteStore,
 }
 
-impl Default for SqliteSyncLedger {
-    fn default() -> Self {
-        Self::new(&SqliteStore::in_memory())
-    }
-}
-
 impl SqliteSyncLedger {
     pub fn new(store: &SqliteStore) -> Self {
         Self {

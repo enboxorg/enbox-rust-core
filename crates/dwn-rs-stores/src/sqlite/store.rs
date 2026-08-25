@@ -16,15 +16,13 @@ pub struct SqliteStore {
     pub(crate) waker_publisher: WakePublishHandler,
 }
 
-impl Default for SqliteStore {
-    fn default() -> Self {
-        Self::in_memory()
-    }
-}
-
 impl SqliteStore {
-    pub fn in_memory() -> Self {
-        Self::new(unique_memory_uri(), WakePublishHandler::new(Arc::new(())))
+    pub fn in_memory(waker_publisher: Option<WakePublishHandler>) -> Self {
+        // if waker_publisher is none, use the no-op publisher e.g. for tests
+        let waker_publisher =
+            waker_publisher.unwrap_or_else(|| WakePublishHandler::new(Arc::new(())));
+
+        Self::new(unique_memory_uri(), waker_publisher)
     }
 
     pub fn new(path: impl AsRef<Path>, waker_publisher: WakePublishHandler) -> Self {

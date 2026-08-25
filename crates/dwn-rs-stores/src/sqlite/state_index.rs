@@ -19,12 +19,6 @@ pub struct SqliteStateIndex {
     store: SqliteStore,
 }
 
-impl Default for SqliteStateIndex {
-    fn default() -> Self {
-        Self::new(&SqliteStore::in_memory())
-    }
-}
-
 impl SqliteStateIndex {
     pub fn new(store: &SqliteStore) -> Self {
         Self {
