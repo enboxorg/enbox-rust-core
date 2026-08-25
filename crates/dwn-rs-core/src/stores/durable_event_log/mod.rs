@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
 use tokio::sync::{oneshot, Mutex, RwLock};
@@ -59,13 +59,19 @@ where
 
     /// Consumer of best-effort wake hints for newly committed feed entries.
     subscriber: S,
+}
 
-    // Background task for periodic idle re-drain. None if disabled.
-    idle_redrain_task: Option<IdleRedrainTask>,
-
-    // coordinate subscription installation and cleanup to avoid installing
-    // a subscription while another task is cleaning it up.
-    installation_gate: RwLock<()>,
+impl<R, S> Clone for DurableEventLog<R, S>
+where
+    R: ReplicationFeedReader,
+    S: WakeSubscriber + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            subscriber: self.subscriber.clone(),
+        }
+    }
 }
 
 /// IdleRedrainTask is a background task that periodically re-drains all subscriptions that have
@@ -154,18 +160,19 @@ where
             install_locks: Mutex::new(BTreeMap::new()),
             config: config.clone(),
             closed: AtomicBool::new(false),
+            idle_redrain_task: StdMutex::new(None),
+            installation_gate: RwLock::new(()),
         });
 
-        let idle_redrain_task = config
-            .idle_redrain_interval
-            .map(|period| IdleRedrainTask::spawn(period, &inner));
-
-        Self {
-            subscriber,
-            inner,
-            idle_redrain_task,
-            installation_gate: RwLock::new(()),
+        if let Some(period) = config.idle_redrain_interval {
+            let task = IdleRedrainTask::spawn(period, &inner);
+            *inner
+                .idle_redrain_task
+                .lock()
+                .expect("mutex for inner redrain failed") = Some(task);
         }
+
+        Self { subscriber, inner }
     }
 }
 
@@ -203,6 +210,12 @@ struct DurableEventLogInner<R> {
     install_locks: Mutex<BTreeMap<String, Weak<Mutex<()>>>>,
     config: DurableEventLogConfig,
     closed: AtomicBool,
+    // Background task for periodic idle re-drain. None if disabled.
+    idle_redrain_task: StdMutex<Option<IdleRedrainTask>>,
+
+    // coordinate subscription installation and cleanup to avoid installing
+    // a subscription while another task is cleaning it up.
+    installation_gate: RwLock<()>,
 }
 
 pub struct SubscriptionState {
@@ -252,12 +265,19 @@ where
             return;
         }
 
-        if let Some(task) = self.idle_redrain_task.take() {
+        let task = {
+            self.inner
+                .idle_redrain_task
+                .lock()
+                .expect("idle redrain mutex failed")
+                .take()
+        };
+        if let Some(task) = task {
             task.shutdown().await;
         }
 
         // wait for installation and cleanup to finish before we start cleaning up subscriptions
-        drop(self.installation_gate.write().await);
+        drop(self.inner.installation_gate.write().await);
 
         let subscriptions = {
             self.inner
@@ -660,7 +680,7 @@ where
         cursor: Option<ProgressToken>,
         options: Option<&EventLogSubscribeOptions>,
     ) -> Result<Arc<SubscriptionState>, EventLogError> {
-        let _install_guard = self.installation_gate.write().await;
+        let _install_guard = self.inner.installation_gate.write().await;
 
         if self.inner.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(EventLogError::Closed);
