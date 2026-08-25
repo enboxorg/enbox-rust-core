@@ -134,6 +134,10 @@ impl AuthorizationContext {
             _ => None,
         }
     }
+
+    pub fn protocol_role(&self) -> Option<&str> {
+        self.payload.protocol_role()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -221,6 +225,10 @@ struct PermissionGrantData {
     conditions: Option<PermissionConditions>,
     #[serde(rename = "connectSession", skip_serializing_if = "Option::is_none")]
     connect_session: Option<ConnectSessionMetadata>,
+}
+
+pub struct MessagesGrantAccess {
+    pub metadata_only: bool,
 }
 
 pub struct ValidatedMessagesGrantSet {
@@ -1314,7 +1322,7 @@ pub async fn authorize_messages_subscribe_and_query<MessageStore>(
     filters: &[MessagesFilter],
     auth: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<(), PermissionError>
+) -> Result<MessagesGrantAccess, PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1322,10 +1330,13 @@ where
         fetch_and_validate_messages_grants(tenant, incoming_message, auth, message_store).await?;
 
     if filters.is_empty() {
-        return permission_grants
-            .has_unscoped_grants()
-            .then_some(())
-            .ok_or(GrantError::OutsideScope.into());
+        if !permission_grants.has_unscoped_grants() {
+            return Err(GrantError::OutsideScope.into());
+        }
+
+        return Ok(MessagesGrantAccess {
+            metadata_only: !permission_grants.has_unscoped_grants(),
+        });
     }
 
     for filter in filters {
@@ -1334,7 +1345,61 @@ where
         }
     }
 
-    Ok(())
+    Ok(MessagesGrantAccess {
+        metadata_only: !permission_grants.has_unscoped_grants(),
+    })
+}
+
+/// Authorizes an embedded author-delegated grant for a MessagesQuery or
+/// MessagesSubscribe invocation.
+///
+/// Unlike [`authorize_messages_subscribe_and_query`], this validates the grant
+/// carried by the authorization itself. Its grantor is the logical author and
+/// its grantee is the signer acting on that author's behalf.
+pub(crate) async fn authorize_delegated_messages_subscribe_and_query<MessageStore>(
+    incoming_message: &Message<Descriptor>,
+    filters: &[MessagesFilter],
+    auth: &AuthorizationContext,
+    message_store: &MessageStore,
+) -> Result<Option<MessagesGrantAccess>, PermissionError>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let Some(permission_grant) = auth.author_delegated_grant.as_ref() else {
+        return Ok(None);
+    };
+
+    perform_base_validation(
+        incoming_message,
+        &auth.author,
+        &auth.signer,
+        permission_grant,
+        message_store,
+    )
+    .await?;
+
+    let permission_grants = ValidatedMessagesGrantSet {
+        grants: vec![permission_grant.clone()],
+    };
+
+    if filters.is_empty() {
+        if !permission_grants.has_unscoped_grants() {
+            return Err(GrantError::OutsideScope.into());
+        }
+        return Ok(Some(MessagesGrantAccess {
+            metadata_only: false,
+        }));
+    }
+
+    for filter in filters {
+        if !permission_grants.covers_filter(filter).await {
+            return Err(GrantError::OutsideScope.into());
+        }
+    }
+
+    Ok(Some(MessagesGrantAccess {
+        metadata_only: !permission_grants.has_unscoped_grants(),
+    }))
 }
 
 async fn fetch_and_validate_messages_grants<MessageStore>(
