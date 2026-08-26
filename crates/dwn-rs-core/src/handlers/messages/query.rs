@@ -288,7 +288,9 @@ where
     }
 }
 
-fn query_fingerprint_scopes(filters: &[message_filters::Messages]) -> Option<Vec<String>> {
+pub(crate) fn query_fingerprint_scopes(
+    filters: &[message_filters::Messages],
+) -> Option<Vec<String>> {
     if filters.is_empty() {
         return Some(vec![GLOBAL_DOMAIN.to_string()]);
     }
@@ -351,13 +353,13 @@ mod tests {
     use crate::dwn::{Handler, MethodHandlerRequest};
     use crate::errors::{EventLogError, MessageStoreError, StoreError};
     use crate::events::stream::MessageEvent;
+    use crate::fields::WriteFields;
     use crate::handlers::messages::authorization::{
         MessagesAuthorization, MessagesRoleAuthorization, QueryAuthorization,
     };
     use crate::handlers::records::common::ResolvedProtocolRole;
     use crate::stores::replication_feed_reader::{Fingerprint, ReplicationBounds};
     use crate::stores::{EventLogEntry, EventLogReadOptions, EventLogReadResult, MessageStore};
-    use crate::fields::WriteFields;
     use crate::{Fields, MapValue, ProgressToken, RangeFilter};
 
     // -----------------------------------------------------------------------
@@ -536,7 +538,11 @@ mod tests {
         ) -> Result<(), MessageStoreError> {
             Ok(())
         }
-        async fn get(&self, _: &str, _: &str) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
+        async fn get(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
             Ok(None)
         }
         async fn query(
@@ -546,9 +552,9 @@ mod tests {
             _: Option<crate::MessageSort>,
             _: Option<crate::Pagination>,
         ) -> Result<crate::stores::MessageQueryResult, MessageStoreError> {
-            Err(MessageStoreError::StoreError(StoreError::InternalException(
-                "store exploded".to_string(),
-            )))
+            Err(MessageStoreError::StoreError(
+                StoreError::InternalException("store exploded".to_string()),
+            ))
         }
         async fn count(
             &self,
@@ -584,9 +590,12 @@ mod tests {
 
     fn test_resolver() -> StaticPublicKeyResolver {
         let key_id = format!("{TENANT}#key1");
-        let jwk: JWK =
-            ed25519_jwk("A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg", None, Some(&key_id))
-                .unwrap();
+        let jwk: JWK = ed25519_jwk(
+            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+            None,
+            Some(&key_id),
+        )
+        .unwrap();
         StaticPublicKeyResolver::new(BTreeMap::from([(key_id, jwk)]))
     }
 
@@ -921,8 +930,12 @@ mod tests {
     async fn entry_fields_are_populated() {
         let msg = records_write_message();
         let mut e = entry(7, msg);
-        e.indexes.insert("protocol".to_string(), Value::String("http://example.com/notes".to_string()));
-        e.indexes.insert("isLatestBaseState".to_string(), Value::Bool(true));
+        e.indexes.insert(
+            "protocol".to_string(),
+            Value::String("http://example.com/notes".to_string()),
+        );
+        e.indexes
+            .insert("isLatestBaseState".to_string(), Value::Bool(true));
 
         let handler = handler_with_reader(MockReader::with_read(Ok(page(
             vec![e],
@@ -991,7 +1004,10 @@ mod tests {
         let msg = records_write_message();
         let mut e = entry(5, msg);
         e.encoded_data = Some("c2hvdWxkLW5vdC1hcHBlYXI".to_string());
-        e.indexes.insert("protocol".to_string(), Value::String("http://example.com/notes".to_string()));
+        e.indexes.insert(
+            "protocol".to_string(),
+            Value::String("http://example.com/notes".to_string()),
+        );
 
         let handler = handler_with_reader(MockReader::with_read(Ok(page(
             vec![e],
@@ -1117,7 +1133,11 @@ mod tests {
     async fn initial_write_has_no_inline_encoded_data() {
         let store = StubMessageStore::default();
         let inline = URL_SAFE_NO_PAD.encode(b"hello");
-        store.insert(TENANT, "record-1", records_write_message_with_inline(Some(&inline)));
+        store.insert(
+            TENANT,
+            "record-1",
+            records_write_message_with_inline(Some(&inline)),
+        );
 
         let handler: MessagesQueryHandler<StubMessageStore, MockReader> =
             MessagesQueryHandler::new(store, None, None);
@@ -1214,8 +1234,7 @@ mod tests {
 
     #[tokio::test]
     async fn fingerprint_omitted_for_noncanonical_filters() {
-        let handler =
-            handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
+        let handler = handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
         let reply = run_query(
             &handler,
             vec![message_filters::Messages {
@@ -1296,11 +1315,8 @@ mod tests {
     #[tokio::test]
     async fn drained_is_always_returned_on_success() {
         for drained_value in [true, false] {
-            let handler = handler_with_reader(MockReader::with_read(Ok(page(
-                vec![],
-                None,
-                drained_value,
-            ))));
+            let handler =
+                handler_with_reader(MockReader::with_read(Ok(page(vec![], None, drained_value))));
             let reply = run_query(&handler, vec![], None, None).await;
             assert_eq!(reply.status.code, 200);
             assert_eq!(reply.reply.drained, Some(drained_value));
@@ -1354,9 +1370,9 @@ mod tests {
 
     #[tokio::test]
     async fn other_reader_failures_return_500() {
-        let handler = handler_with_reader(MockReader::with_read(Err(
-            EventLogError::StoreError(StoreError::InternalException("db went away".to_string())),
-        )));
+        let handler = handler_with_reader(MockReader::with_read(Err(EventLogError::StoreError(
+            StoreError::InternalException("db went away".to_string()),
+        ))));
         let reply = run_query(&handler, vec![], None, None).await;
         assert_eq!(reply.status.code, 500);
         assert!(reply.status.detail.contains("db went away"));
@@ -1504,8 +1520,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_authorization_returns_400() {
-        let handler =
-            handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
+        let handler = handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
         let msg = json!({
             "descriptor": {
                 "interface": "Messages",
@@ -1521,8 +1536,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_signature_returns_400() {
-        let handler =
-            handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
+        let handler = handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
         let msg = json!({
             "descriptor": {
                 "interface": "Messages",
@@ -1544,11 +1558,14 @@ mod tests {
     #[tokio::test]
     async fn authorization_denial_returns_401() {
         // Use a different tenant so the owner check fails and no grant/role is present.
-        let handler =
-            handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
+        let handler = handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
         let msg = signed_query_message(vec![], None, None).await;
         let reply = handler
-            .run(MethodHandlerRequest::new("did:example:other-tenant", &msg, None))
+            .run(MethodHandlerRequest::new(
+                "did:example:other-tenant",
+                &msg,
+                None,
+            ))
             .await;
         assert_eq!(reply.status.code, 401);
     }
