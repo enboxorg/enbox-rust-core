@@ -8,6 +8,7 @@ pub mod state_index;
 pub mod wake;
 pub mod write_resolver;
 
+use std::sync::Arc;
 use std::{fmt::Debug, future::Future, pin::Pin};
 
 use bytes::Bytes;
@@ -136,8 +137,28 @@ pub struct EventLogSubscribeOptions {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SubscriptionError {
-    pub code: ProgressGapCode,
+    pub code: SubscriptionErrorCode,
     pub detail: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionErrorCode {
+    #[serde(rename = "ProgressGap")]
+    ProgressGap,
+    #[serde(rename = "MessagesSubscribeDeliveryAuthorizationFailed")]
+    DeliveryAuthorizationFailed,
+    #[serde(rename = "MessagesSubscribeDeliveryFailed")]
+    DeliveryFailed,
+}
+
+impl std::fmt::Display for SubscriptionErrorCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::ProgressGap => "ProgressGap",
+            Self::DeliveryAuthorizationFailed => "MessagesSubscribeDeliveryAuthorizationFailed",
+            Self::DeliveryFailed => "MessagesSubscribeDeliveryFailed",
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

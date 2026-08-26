@@ -100,6 +100,7 @@ pub struct DiffEntries {
 #[serde(rename_all = "camelCase")]
 pub struct Subscription {
     pub subscription_id: Option<String>,
+    pub role_record_id: Option<String>,
     pub error: Option<ProgressGapInfo>,
 }
 
@@ -113,6 +114,7 @@ impl HasProgressGapInfo for Subscription {
     fn with_progress_gap_info(error: crate::stores::ProgressGapInfo) -> Self {
         Self {
             subscription_id: None,
+            role_record_id: None,
             error: Some(error),
         }
     }

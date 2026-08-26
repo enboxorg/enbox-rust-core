@@ -27,7 +27,7 @@ use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWri
 use crate::stores::{
     wake::WakeSubscriber, EventLog, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, KeyValues,
-    ReplicationFeedReader, SubscriptionListener,
+    ReplicationFeedReader, SubscriptionErrorCode, SubscriptionListener,
 };
 use crate::stores::{
     EventLogEntry, MessageStore, ProgressGapCode, ProgressGapInfo, ProgressGapReason,
@@ -1146,7 +1146,7 @@ where
         if should_send {
             let cursor = gap.requested.clone();
             let error = SubscriptionError {
-                code: gap.code,
+                code: SubscriptionErrorCode::ProgressGap,
                 detail: format!(
                     "progress gap: requested={:?}, latest_available={:?}, oldest_available={:?}, reason={:?}",
                     gap.requested, gap.latest_available, gap.oldest_available, gap.reason
