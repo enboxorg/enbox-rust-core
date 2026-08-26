@@ -104,7 +104,10 @@ where
 
         let options = EventLogReadOptions {
             cursor: descriptor.cursor.clone(),
-            filters: messages_filters_to_filters(&descriptor.filters, authorization.include_shadow_filters),
+            filters: messages_filters_to_filters(
+                &descriptor.filters,
+                authorization.include_shadow_filters,
+            ),
             limit: descriptor.limit,
         };
 
@@ -239,9 +242,11 @@ where
             entry.encoded_data = encoded_data;
         }
 
-        entry.initial_write = self.entry_initial_write(tenant, &event).await?;
+        if authorization.include_delete_initial_write {
+            entry.initial_write = self.entry_initial_write(tenant, &event).await?;
+        }
 
-        return Ok(entry);
+        Ok(entry)
     }
 
     async fn entry_initial_write(
@@ -256,7 +261,7 @@ where
             return Ok(None);
         }
 
-        let initial_write = match &event.event.initial_write {
+        let mut initial_write = match &event.event.initial_write {
             Some(initial_write) => initial_write.clone().into(),
             None => {
                 let Some(record_id) = record_id(&event.event.message) else {
@@ -274,7 +279,7 @@ where
             }
         };
 
-        strip_encoded_data(&mut initial_write.clone())
+        strip_encoded_data(&mut initial_write)
             .map_err(|err| format!("Failed to strip encoded data from initial write: {}", err))?;
 
         Ok(Some(initial_write))
