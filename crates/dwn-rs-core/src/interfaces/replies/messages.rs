@@ -60,6 +60,15 @@ impl From<Query> for Reply {
     }
 }
 
+impl HasProgressGapInfo for Query {
+    fn with_progress_gap_info(error: ProgressGapInfo) -> Self {
+        Self {
+            error: Some(error),
+            ..Default::default()
+        }
+    }
+}
+
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 #[serde(rename_all = "camelCase")]
