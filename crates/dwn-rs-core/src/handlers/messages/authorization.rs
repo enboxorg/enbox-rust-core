@@ -59,10 +59,10 @@ pub(crate) enum MessagesAuthorization {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QueryAuthorization {
-    include_delete_initial_write: bool,
-    include_encoded_data: bool,
-    include_shadow_filters: bool,
-    role_record_id: Option<String>,
+    pub(crate) include_delete_initial_write: bool,
+    pub(crate) include_encoded_data: bool,
+    pub(crate) include_shadow_filters: bool,
+    pub(crate) role_record_id: Option<String>,
 }
 
 impl From<MessagesAuthorization> for QueryAuthorization {
