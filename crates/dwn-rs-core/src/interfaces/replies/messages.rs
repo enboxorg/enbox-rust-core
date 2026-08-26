@@ -101,6 +101,8 @@ pub struct DiffEntries {
 pub struct Subscription {
     pub subscription_id: Option<String>,
     pub role_record_id: Option<String>,
+    pub head: Option<ProgressToken>,
+    pub fingerprint: Option<String>,
     pub error: Option<ProgressGapInfo>,
 }
 
@@ -115,6 +117,8 @@ impl HasProgressGapInfo for Subscription {
         Self {
             subscription_id: None,
             role_record_id: None,
+            head: None,
+            fingerprint: None,
             error: Some(error),
         }
     }

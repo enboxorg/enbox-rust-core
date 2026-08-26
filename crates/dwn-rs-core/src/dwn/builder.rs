@@ -220,6 +220,7 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
     dwn.register(MessagesSubscribeHandler::new(
         message_store.clone(),
         event_log.clone(),
+        Some(replication_feed_reader),
         resolver.clone(),
     ));
     dwn.register(MessagesSyncHandler::new(

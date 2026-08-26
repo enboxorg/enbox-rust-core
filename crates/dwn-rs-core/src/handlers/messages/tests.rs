@@ -22,12 +22,12 @@ use crate::handlers::messages::sync::MessagesSyncHandler;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;
-use crate::stores::replication_feed_reader::build_token;
+use crate::stores::replication_feed_reader::{build_token, GLOBAL_DOMAIN};
 use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::wake::InProcessWakeBus;
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
-    MessageQueryResult, MessageStore, StateIndex, SubscriptionMessage,
+    MessageQueryResult, MessageStore, ReplicationFeedReader, StateIndex, SubscriptionMessage,
 };
 use crate::{message_filters, permissions, Descriptor, MapValue, Message, ProgressToken, Value};
 
@@ -222,6 +222,7 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
     let handler = MessagesSubscribeHandler::new(
         message_store.clone(),
         event_log,
+        None::<MemoryMessageStore>,
         Some(Arc::new(test_resolver())),
     );
     let request = signed_subscribe_message(SubscribeSpec {
@@ -290,8 +291,12 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
     let stale_cursor = build_token(TENANT, "00000000-superseded-epoch", 1, None);
 
     let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
-    let handler =
-        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let handler = MessagesSubscribeHandler::new(
+        message_store,
+        event_log,
+        None::<MemoryMessageStore>,
+        Some(Arc::new(test_resolver())),
+    );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),
@@ -314,6 +319,196 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
 }
 
 #[tokio::test]
+async fn messages_subscribe_stops_replay_when_grant_has_expired_at_delivery() {
+    const TENANT: &str = "did:example:alice";
+    const PROTOCOL: &str = "http://example.com/notes";
+
+    let mut authorization_store = TestMessageStore::default();
+    authorization_store.open().await.unwrap();
+    let grant = permission_grant_message("grant-expired-at-delivery", Some(PROTOCOL)).await;
+    authorization_store
+        .insert(TENANT, "grant-expired-at-delivery", grant)
+        .await;
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut feed_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    feed_store.open().await.unwrap();
+    let event_log = DurableEventLog::new(feed_store.clone(), wake_bus, None, None);
+
+    let delivered = Arc::new(RwLock::new(Vec::new()));
+    let delivered_for_listener = delivered.clone();
+    let handler = MessagesSubscribeHandler::new(
+        authorization_store,
+        event_log,
+        None::<MemoryMessageStore>,
+        Some(Arc::new(test_resolver())),
+    );
+    let request = signed_subscribe_message(SubscribeSpec {
+        filters: vec![message_filters::Messages {
+            protocol: Some(PROTOCOL.to_string()),
+            ..Default::default()
+        }],
+        permission_grant_ids: Some(vec!["grant-expired-at-delivery".to_string()]),
+        signer: bob_signer(),
+        ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+    })
+    .await;
+
+    let message = serde_json::from_value(request).unwrap();
+    let result = handler
+        .handle_subscribe(
+            TENANT,
+            &message,
+            Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
+        )
+        .await;
+
+    assert_eq!(result.reply.status.code, 200);
+
+    let (_, stored_message) = records_write_with_inline_data();
+    feed_store
+        .put(TENANT, stored_message, records_feed_indexes(PROTOCOL))
+        .await
+        .unwrap();
+    for _ in 0..20 {
+        if !delivered.read().unwrap().is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+
+    let delivered = delivered.read().unwrap();
+    assert_eq!(delivered.len(), 1);
+    let SubscriptionMessage::Error { error, .. } = &delivered[0] else {
+        panic!("delivery authorization failure expected");
+    };
+    assert_eq!(
+        error.code,
+        crate::stores::SubscriptionErrorCode::DeliveryAuthorizationFailed
+    );
+}
+
+#[tokio::test]
+async fn messages_subscribe_role_reply_identifies_the_resolved_role_record() {
+    use crate::handlers::messages::authorization::tests::{exact_filter, role_store, ROLE, TENANT};
+
+    let (message_store, _) = role_store().await;
+    let handler = MessagesSubscribeHandler::new(
+        message_store.clone(),
+        (),
+        Some(message_store),
+        Some(Arc::new(test_resolver())),
+    );
+    let request = signed_subscribe_message(SubscribeSpec {
+        filters: vec![exact_filter("thread/message")],
+        protocol_role: Some(ROLE.to_string()),
+        ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
+    })
+    .await;
+    let message = serde_json::from_value(request).unwrap();
+
+    let result = handler
+        .handle_subscribe(TENANT, &message, Box::new(|_| {}))
+        .await;
+
+    assert_eq!(
+        result.reply.status.code, 200,
+        "{}",
+        result.reply.status.detail
+    );
+    assert_eq!(
+        result.reply.reply.role_record_id.as_deref(),
+        Some("role-record-1")
+    );
+    assert!(result.reply.reply.head.is_none());
+    assert!(result.reply.reply.fingerprint.is_none());
+}
+
+#[tokio::test]
+async fn messages_subscribe_attaches_post_installation_head_and_fingerprint() {
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    let (_, stored_message) = records_write_with_inline_data();
+    message_store
+        .put(
+            TENANT,
+            stored_message,
+            records_feed_indexes("http://example.com/notes"),
+        )
+        .await
+        .unwrap();
+    let expected_fingerprint = message_store
+        .fingerprint(TENANT, &[GLOBAL_DOMAIN.to_string()])
+        .await
+        .unwrap()
+        .hex();
+
+    let handler = MessagesSubscribeHandler::new(
+        message_store.clone(),
+        (),
+        Some(message_store),
+        Some(Arc::new(test_resolver())),
+    );
+    let request = signed_subscribe_message(SubscribeSpec::new("2025-01-01T00:10:00.000000Z")).await;
+    let message = serde_json::from_value(request).unwrap();
+
+    let result = handler
+        .handle_subscribe(TENANT, &message, Box::new(|_| {}))
+        .await;
+
+    assert_eq!(result.reply.status.code, 200);
+    assert_eq!(result.reply.reply.head.as_ref().unwrap().position, "1");
+    assert_eq!(
+        result.reply.reply.fingerprint.as_deref(),
+        Some(expected_fingerprint.as_str())
+    );
+
+    let request = signed_subscribe_message(SubscribeSpec {
+        filters: vec![message_filters::Messages {
+            protocol: Some("http://example.com/notes".to_string()),
+            method: Some("Write".to_string()),
+            ..Default::default()
+        }],
+        ..SubscribeSpec::new("2025-01-01T00:11:00.000000Z")
+    })
+    .await;
+    let message = serde_json::from_value(request).unwrap();
+    let result = handler
+        .handle_subscribe(TENANT, &message, Box::new(|_| {}))
+        .await;
+    assert_eq!(result.reply.reply.head.as_ref().unwrap().position, "1");
+    assert!(result.reply.reply.fingerprint.is_none());
+}
+
+#[tokio::test]
+async fn messages_subscribe_empty_feed_uses_position_zero_snapshot() {
+    const TENANT: &str = "did:example:alice";
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    let handler = MessagesSubscribeHandler::new(
+        message_store.clone(),
+        (),
+        Some(message_store),
+        Some(Arc::new(test_resolver())),
+    );
+    let request = signed_subscribe_message(SubscribeSpec::new("2025-01-01T00:10:00.000000Z")).await;
+    let message = serde_json::from_value(request).unwrap();
+
+    let result = handler
+        .handle_subscribe(TENANT, &message, Box::new(|_| {}))
+        .await;
+
+    assert_eq!(result.reply.reply.head.as_ref().unwrap().position, "0");
+    let zero_fingerprint = "0".repeat(64);
+    assert_eq!(
+        result.reply.reply.fingerprint.as_deref(),
+        Some(zero_fingerprint.as_str())
+    );
+}
+
+#[tokio::test]
 async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
     let mut message_store = TestMessageStore::default();
     let event_log = feed_backed_event_log();
@@ -333,8 +528,12 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
         .insert("did:example:alice", "grant-subscribe-path", grant)
         .await;
 
-    let handler =
-        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let handler = MessagesSubscribeHandler::new(
+        message_store,
+        event_log,
+        None::<MemoryMessageStore>,
+        Some(Arc::new(test_resolver())),
+    );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
             protocol: Some("http://example.com/notes".to_string()),
@@ -379,8 +578,12 @@ async fn messages_subscribe_allows_filters_covered_by_different_grants() {
             .await;
     }
 
-    let handler =
-        MessagesSubscribeHandler::new(message_store, event_log, Some(Arc::new(test_resolver())));
+    let handler = MessagesSubscribeHandler::new(
+        message_store,
+        event_log,
+        None::<MemoryMessageStore>,
+        Some(Arc::new(test_resolver())),
+    );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![
             message_filters::Messages {
@@ -543,6 +746,7 @@ struct SubscribeSpec {
     timestamp: String,
     filters: Vec<message_filters::Messages>,
     permission_grant_ids: Option<Vec<String>>,
+    protocol_role: Option<String>,
     cursor: Option<ProgressToken>,
     signer: PrivateJwkSigner,
 }
@@ -553,6 +757,7 @@ impl SubscribeSpec {
             timestamp: timestamp.to_string(),
             filters: Vec::new(),
             permission_grant_ids: None,
+            protocol_role: None,
             cursor: None,
             signer: test_signer(),
         }
@@ -579,6 +784,12 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
         payload.insert(
             "permissionGrantIds".to_string(),
             serde_json::to_value(permission_grant_ids).unwrap(),
+        );
+    }
+    if let Some(protocol_role) = spec.protocol_role {
+        payload.insert(
+            "protocolRole".to_string(),
+            serde_json::Value::String(protocol_role),
         );
     }
     let signature = Jws::create(
