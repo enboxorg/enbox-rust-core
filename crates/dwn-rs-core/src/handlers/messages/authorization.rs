@@ -57,6 +57,31 @@ pub(crate) enum MessagesAuthorization {
     Role(MessagesRoleAuthorization),
 }
 
+impl MessagesAuthorization {
+    pub(crate) fn include_shadow_filters(&self) -> bool {
+        match self {
+            Self::Owner => true,
+            Self::Grant { metadata_only } => !metadata_only,
+            Self::Role(_) => false,
+        }
+    }
+
+    pub(crate) fn metadata_only(&self) -> bool {
+        match self {
+            Self::Owner => false,
+            Self::Grant { metadata_only } => *metadata_only,
+            Self::Role(role) => role.metadata_only,
+        }
+    }
+
+    pub(crate) fn role_record_id(&self) -> Option<&str> {
+        match self {
+            Self::Role(role) => Some(&role.resolved_role.role_record_id),
+            Self::Owner | Self::Grant { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QueryAuthorization {
     pub(crate) include_delete_initial_write: bool,
@@ -291,7 +316,7 @@ fn require_exact_role_filters(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
     use crate::permissions::VerifiedAuthorizationPayload;
@@ -299,13 +324,13 @@ mod tests {
     use crate::Value;
     use std::collections::BTreeMap;
 
-    const TENANT: &str = "did:example:tenant";
-    const AUTHOR: &str = "did:example:alice";
-    const PROTOCOL: &str = "https://example.com/protocol/chat";
-    const ROLE: &str = "thread/participant";
-    const CONTEXT: &str = "thread-1/message-1";
+    pub(crate) const TENANT: &str = "did:example:tenant";
+    pub(crate) const AUTHOR: &str = "did:example:alice";
+    pub(crate) const PROTOCOL: &str = "https://example.com/protocol/chat";
+    pub(crate) const ROLE: &str = "thread/participant";
+    pub(crate) const CONTEXT: &str = "thread-1/message-1";
 
-    fn exact_filter(path: &str) -> message_filters::Messages {
+    pub(crate) fn exact_filter(path: &str) -> message_filters::Messages {
         message_filters::Messages {
             interface: Some(RECORDS.to_string()),
             protocol: Some(PROTOCOL.to_string()),
@@ -315,7 +340,7 @@ mod tests {
         }
     }
 
-    fn role_authorization() -> AuthorizationContext {
+    pub(crate) fn role_authorization() -> AuthorizationContext {
         authorization_context(AUTHOR, AUTHOR, None, Some(ROLE))
     }
 
@@ -376,7 +401,7 @@ mod tests {
         .expect("protocol message must deserialize")
     }
 
-    fn role_record() -> Message<Descriptor> {
+    pub(crate) fn role_record() -> Message<Descriptor> {
         serde_json::from_value(serde_json::json!({
             "descriptor": {
                 "interface": "Records",
@@ -396,7 +421,7 @@ mod tests {
         .expect("role record must deserialize")
     }
 
-    async fn role_store() -> (MemoryMessageStore, Message<Descriptor>) {
+    pub(crate) async fn role_store() -> (MemoryMessageStore, Message<Descriptor>) {
         let store = MemoryMessageStore::default();
         let protocol = protocol_message();
         store
