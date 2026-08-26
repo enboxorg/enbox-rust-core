@@ -1278,7 +1278,7 @@ fn subscription_close(
     tenant: String,
     id: String,
 ) -> EventSubscriptionClose {
-    Box::new(move || {
+    Arc::new(move || {
         let inner = inner.clone();
         let tenant = tenant.clone();
         let id = id.clone();

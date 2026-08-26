@@ -299,6 +299,7 @@ pub struct DwnConfig<
     StateIndex = (),
     EventLog = (),
     ResumableTaskStore = (),
+    ReplicationFeedReader = (),
     DidResolver = (),
     Gate = AllowAllTenantGate,
 > {
@@ -307,6 +308,7 @@ pub struct DwnConfig<
     pub message_store: Option<MessageStore>,
     pub data_store: Option<DataStore>,
     pub state_index: Option<StateIndex>,
+    pub replication_feed_reader: Option<ReplicationFeedReader>,
     pub event_log: Option<EventLog>,
     pub resumable_task_store: Option<ResumableTaskStore>,
     pub handlers: MethodHandlerMap,
@@ -320,6 +322,7 @@ impl Default for DwnConfig {
             message_store: None,
             data_store: None,
             state_index: None,
+            replication_feed_reader: None,
             event_log: None,
             resumable_task_store: None,
             handlers: default_method_handlers(),
@@ -333,6 +336,7 @@ pub struct Dwn<
     StateIndex = (),
     EventLog = (),
     ResumableTaskStore = (),
+    ReplicationFeedReader = (),
     DidResolver = (),
     Gate = AllowAllTenantGate,
 > {
@@ -342,6 +346,7 @@ pub struct Dwn<
         StateIndex,
         EventLog,
         ResumableTaskStore,
+        ReplicationFeedReader,
         DidResolver,
         Gate,
     >,
@@ -353,8 +358,26 @@ impl Default for Dwn {
     }
 }
 
-impl<MessageStore, DataStore, StateIndex, EventLog, ResumableTaskStore, DidResolver, Gate>
-    Dwn<MessageStore, DataStore, StateIndex, EventLog, ResumableTaskStore, DidResolver, Gate>
+impl<
+        MessageStore,
+        DataStore,
+        StateIndex,
+        EventLog,
+        ResumableTaskStore,
+        ReplicationFeedReader,
+        DidResolver,
+        Gate,
+    >
+    Dwn<
+        MessageStore,
+        DataStore,
+        StateIndex,
+        EventLog,
+        ResumableTaskStore,
+        ReplicationFeedReader,
+        DidResolver,
+        Gate,
+    >
 where
     Gate: TenantGate,
 {
@@ -365,6 +388,7 @@ where
             StateIndex,
             EventLog,
             ResumableTaskStore,
+            ReplicationFeedReader,
             DidResolver,
             Gate,
         >,
@@ -510,13 +534,14 @@ mod tests {
 
     #[tokio::test]
     async fn process_message_rejects_inactive_tenant_before_dispatch() {
-        let mut dwn = Dwn::<(), (), (), (), (), (), StaticTenantGate>::new(DwnConfig {
+        let mut dwn = Dwn::<(), (), (), (), (), (), (), StaticTenantGate>::new(DwnConfig {
             tenant_gate: StaticTenantGate(TenantGateResult::inactive("tenant disabled")),
             handlers: MethodHandlerMap::new(),
             did_resolver: None,
             message_store: None,
             data_store: None,
             state_index: None,
+            replication_feed_reader: None,
             event_log: None,
             resumable_task_store: None,
         });

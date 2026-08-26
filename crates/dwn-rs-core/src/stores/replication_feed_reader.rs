@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// The global domain scope is always included in the fingerprint scopes for a tenant.
-const GLOBAL_DOMAIN: &str = "";
+pub const GLOBAL_DOMAIN: &str = "";
 
 /// Fixed-width fingerprint of the messages visible in one or more feed scopes.
 ///
@@ -188,6 +188,14 @@ fn string_index<'a>(indexes: &'a KeyValues, key: &str) -> Option<&'a str> {
     }
 }
 
+pub fn protocol_fingerprint_scope(protocol: &str) -> String {
+    format!("protocol:{protocol}")
+}
+
+pub fn permission_fingerprint_scope(protocol: &str) -> String {
+    format!("perm:{protocol}")
+}
+
 /// Derives the fingerprint scopes affected by a message.
 ///
 /// Every message contributes to the global scope (`""`). A string-valued
@@ -201,13 +209,13 @@ pub fn fingerprint_scopes(descriptor_tag_proto: Option<&str>, indexes: &KeyValue
         return scopes;
     };
 
-    scopes.push(format!("protocol:{}", protocol));
+    scopes.push(protocol_fingerprint_scope(protocol));
 
     let tagged_protocol = string_index(indexes, "tag.protocol").or(descriptor_tag_proto);
 
     if protocol == PERMISSIONS_PROTOCOL_URI {
         if let Some(tagged_protocol) = tagged_protocol {
-            scopes.push(format!("perm:{}", tagged_protocol));
+            scopes.push(permission_fingerprint_scope(tagged_protocol));
         }
     }
 

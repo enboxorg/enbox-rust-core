@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::support::*;
 use crate::stores::durable_event_log::DurableEventLogConfig;
-use crate::stores::{EventLog, EventLogSubscribeOptions, ProgressGapCode, ProgressGapReason};
+use crate::stores::{EventLog, EventLogSubscribeOptions, ProgressGapReason, SubscriptionErrorCode};
 use crate::Value;
 
 /// Bounds with existing history, so a no-cursor subscription starts above them.
@@ -331,7 +331,7 @@ async fn a_live_progress_gap_sends_one_terminal_error_and_closes() {
 
     let (cursor, error) = recorder.expect_error().await;
     assert_eq!(cursor, token(2, Some("cid-2")));
-    assert_eq!(error.code, ProgressGapCode::ProgressGap);
+    assert_eq!(error.code, SubscriptionErrorCode::ProgressGap);
     assert!(
         error.detail.contains("TokenTooOld"),
         "terminal error should carry the gap reason: {}",

@@ -814,13 +814,21 @@ where
     .await
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedProtocolRole {
+    pub protocol: String,
+    pub protocol_path: String,
+    pub context_id_prefix: Option<String>,
+    pub role_record_id: String,
+}
+
 pub(crate) async fn authorize_protocol_query_or_subscribe<MessageStore>(
     tenant: &str,
     filter: &RecordsFilter,
     auth_ctx: &AuthorizationContext,
     message_store: &MessageStore,
     kind: RecordsAuthorizationKind,
-) -> Result<(), String>
+) -> Result<ResolvedProtocolRole, String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -839,26 +847,76 @@ where
     )
     .await
     .map_err(|err| err.to_string())?;
+
     let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
         .ok_or_else(|| {
             format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
         })?;
+
+    let invoked_role = auth_ctx
+        .protocol_role()
+        .ok_or_else(|| "protocolRole is required".to_string())?;
+
     let can = match kind {
         RecordsAuthorizationKind::Subscribe => Can::Read,
         RecordsAuthorizationKind::Count | RecordsAuthorizationKind::Query => Can::Read,
         _ => Can::Read,
     };
-    authorize_actions(
+
+    resolve_query_or_subscribe_role(
         tenant,
         &auth_ctx.author,
-        auth_ctx.payload.protocol_role(),
-        &[can],
+        invoked_role,
+        protocol,
+        filter.context_id.as_deref(),
+        can,
         rule_set,
-        &[],
+        &definition,
         message_store,
-        Some(&definition),
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn resolve_query_or_subscribe_role<MessageStore>(
+    tenant: &str,
+    author: &str,
+    invoked_role: &str,
+    protocol: &str,
+    context_id_prefix: Option<&str>,
+    can: Can,
+    rule_set: &RuleSet,
+    definition: &Definition,
+    message_store: &MessageStore,
+) -> Result<ResolvedProtocolRole, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    for action in &rule_set.actions {
+        let Action::Role(action) = action else {
+            continue;
+        };
+
+        if !action.can.contains(&can) || action.role != invoked_role {
+            continue;
+        }
+
+        if let Some(role) = find_matching_role_record(
+            tenant,
+            author,
+            &action.role,
+            protocol,
+            context_id_prefix,
+            message_store,
+            definition,
+        )
+        .await?
+        {
+            return Ok(role);
+        }
+    }
+
+    Err("invoke role is not allowed or has no active role record".to_string())
 }
 
 pub(crate) async fn authorize_against_protocol<MessageStore>(
@@ -1006,6 +1064,82 @@ pub(crate) fn check_actor(
             Who::Anyone => true,
         }
     })
+}
+
+async fn find_matching_role_record<MS>(
+    tenant: &str,
+    author: &str,
+    role: &str,
+    requested_protocol: &str,
+    context_id: Option<&str>,
+    message_store: &MS,
+    definition: &Definition,
+) -> Result<Option<ResolvedProtocolRole>, String>
+where
+    MS: crate::stores::MessageStore + Sync,
+{
+    let (role_proto, role_proto_path) =
+        if let Some(parsed) = protocol_types::parse_cross_protocol_ref(role) {
+            let role_proto = definition
+                .uses
+                .as_ref()
+                .and_then(|uses| uses.get(parsed.alias))
+                .ok_or_else(|| {
+                    "ProtocolAuthorizationNotARole: cross-protocol role alias not found".to_string()
+                })?;
+            (role_proto.as_str(), parsed.protocol_path)
+        } else {
+            (requested_protocol, role)
+        };
+
+    let mut filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("method", string_filter(WRITE_METHOD)),
+        ("protocol", string_filter(role_proto)),
+        ("protocolPath", string_filter(role_proto_path)),
+        ("recipient", string_filter(author)),
+        ("isLatestBaseState", bool_filter(true)),
+    ]);
+
+    if let Some(context) = context_id {
+        let ancestor_count = role_proto_path.split('/').count().saturating_sub(1);
+        if ancestor_count > 0 {
+            let context_prefix = context
+                .split('/')
+                .take(ancestor_count)
+                .collect::<Vec<_>>()
+                .join("/");
+
+            filter.insert(
+                FilterKey::Index("contextId".to_string()),
+                Filter::Prefix(Value::String(context_prefix)),
+            );
+        }
+    };
+
+    let result = message_store
+        .query(
+            tenant,
+            Filters::from(filter),
+            None,
+            Some(Pagination::with_limit(1)),
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let Some(role_record) = result.messages.first() else {
+        return Ok(None);
+    };
+
+    let role_record_id =
+        record_id(role_record).ok_or_else(|| "recordId is required".to_string())?;
+
+    Ok(Some(ResolvedProtocolRole {
+        protocol: role_proto.to_string(),
+        protocol_path: role_proto_path.to_string(),
+        context_id_prefix: context_id.map(|s| s.to_string()),
+        role_record_id,
+    }))
 }
 
 pub(crate) async fn matching_role_record_exists<MessageStore>(
@@ -1564,7 +1698,265 @@ impl DescriptorMethod for RecordsWriteDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interfaces::messages::protocols::ActionRole;
+    use crate::stores::{memory::MemoryMessageStore, MessageStore};
     use serde_json::json;
+
+    const ROLE_TEST_TENANT: &str = "did:example:tenant";
+    const ROLE_TEST_AUTHOR: &str = "did:example:alice";
+    const ROLE_TEST_PROTOCOL: &str = "https://example.com/protocol/chat";
+
+    fn role_rule(role: &str, can: Vec<Can>) -> RuleSet {
+        RuleSet {
+            actions: vec![Action::Role(ActionRole {
+                role: role.to_string(),
+                can,
+            })],
+            ..Default::default()
+        }
+    }
+
+    fn role_definition(uses: Option<BTreeMap<String, String>>) -> Definition {
+        Definition {
+            protocol: ROLE_TEST_PROTOCOL.to_string(),
+            published: false,
+            uses,
+            types: BTreeMap::new(),
+            structure: BTreeMap::new(),
+        }
+    }
+
+    async fn put_role_record(
+        store: &MemoryMessageStore,
+        protocol: &str,
+        protocol_path: &str,
+        context_id: &str,
+        record_id: &str,
+    ) {
+        let message: Message<Descriptor> = serde_json::from_value(json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Write",
+                "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                "dateCreated": "2025-01-01T00:00:00.000000Z",
+                "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
+                "dataSize": 0,
+                "dataFormat": "application/json",
+                "protocol": protocol,
+                "protocolPath": protocol_path,
+                "recipient": ROLE_TEST_AUTHOR
+            },
+            "recordId": record_id,
+            "contextId": context_id
+        }))
+        .expect("role record must deserialize");
+
+        let indexes = BTreeMap::from([
+            (
+                "interface".to_string(),
+                Value::String(RECORDS_INTERFACE.to_string()),
+            ),
+            (
+                "method".to_string(),
+                Value::String(WRITE_METHOD.to_string()),
+            ),
+            ("protocol".to_string(), Value::String(protocol.to_string())),
+            (
+                "protocolPath".to_string(),
+                Value::String(protocol_path.to_string()),
+            ),
+            (
+                "recipient".to_string(),
+                Value::String(ROLE_TEST_AUTHOR.to_string()),
+            ),
+            ("isLatestBaseState".to_string(), Value::Bool(true)),
+            (
+                "messageTimestamp".to_string(),
+                Value::String("2025-01-01T00:00:00.000000Z".to_string()),
+            ),
+            (
+                "contextId".to_string(),
+                Value::String(context_id.to_string()),
+            ),
+        ]);
+
+        store
+            .put(ROLE_TEST_TENANT, message, indexes)
+            .await
+            .expect("role record must be stored");
+    }
+
+    #[tokio::test]
+    async fn query_role_resolution_returns_active_ordinary_role_record() {
+        let store = MemoryMessageStore::default();
+        put_role_record(
+            &store,
+            ROLE_TEST_PROTOCOL,
+            "thread/participant",
+            "thread-1",
+            "role-record-1",
+        )
+        .await;
+
+        let resolved = resolve_query_or_subscribe_role(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_AUTHOR,
+            "thread/participant",
+            ROLE_TEST_PROTOCOL,
+            Some("thread-1/message-1"),
+            Can::Read,
+            &role_rule("thread/participant", vec![Can::Read]),
+            &role_definition(None),
+            &store,
+        )
+        .await
+        .expect("active role must authorize");
+
+        assert_eq!(resolved.protocol, ROLE_TEST_PROTOCOL);
+        assert_eq!(resolved.protocol_path, "thread/participant");
+        assert_eq!(
+            resolved.context_id_prefix.as_deref(),
+            Some("thread-1/message-1")
+        );
+        assert_eq!(resolved.role_record_id, "role-record-1");
+    }
+
+    #[tokio::test]
+    async fn query_role_resolution_rejects_missing_or_wrong_role() {
+        let store = MemoryMessageStore::default();
+        let definition = role_definition(None);
+
+        let missing_record = resolve_query_or_subscribe_role(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_AUTHOR,
+            "thread/participant",
+            ROLE_TEST_PROTOCOL,
+            Some("thread-1/message-1"),
+            Can::Read,
+            &role_rule("thread/participant", vec![Can::Read]),
+            &definition,
+            &store,
+        )
+        .await;
+        assert!(missing_record.is_err());
+
+        put_role_record(
+            &store,
+            ROLE_TEST_PROTOCOL,
+            "thread/participant",
+            "thread-1",
+            "role-record-1",
+        )
+        .await;
+
+        let wrong_role = resolve_query_or_subscribe_role(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_AUTHOR,
+            "thread/moderator",
+            ROLE_TEST_PROTOCOL,
+            Some("thread-1/message-1"),
+            Can::Read,
+            &role_rule("thread/participant", vec![Can::Read]),
+            &definition,
+            &store,
+        )
+        .await;
+        assert!(wrong_role.is_err());
+
+        let wrong_action = resolve_query_or_subscribe_role(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_AUTHOR,
+            "thread/participant",
+            ROLE_TEST_PROTOCOL,
+            Some("thread-1/message-1"),
+            Can::Read,
+            &role_rule("thread/participant", vec![Can::Create]),
+            &definition,
+            &store,
+        )
+        .await;
+        assert!(wrong_action.is_err());
+    }
+
+    #[tokio::test]
+    async fn query_role_resolution_resolves_cross_protocol_role() {
+        const ROLES_PROTOCOL: &str = "https://example.com/protocol/roles";
+
+        let store = MemoryMessageStore::default();
+        put_role_record(
+            &store,
+            ROLES_PROTOCOL,
+            "team/member",
+            "team-1",
+            "cross-role-record",
+        )
+        .await;
+
+        let definition = role_definition(Some(BTreeMap::from([(
+            "roles".to_string(),
+            ROLES_PROTOCOL.to_string(),
+        )])));
+        let resolved = resolve_query_or_subscribe_role(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_AUTHOR,
+            "roles:team/member",
+            ROLE_TEST_PROTOCOL,
+            Some("team-1/thread-1"),
+            Can::Read,
+            &role_rule("roles:team/member", vec![Can::Read]),
+            &definition,
+            &store,
+        )
+        .await
+        .expect("cross-protocol role must resolve");
+
+        assert_eq!(resolved.protocol, ROLES_PROTOCOL);
+        assert_eq!(resolved.protocol_path, "team/member");
+        assert_eq!(resolved.role_record_id, "cross-role-record");
+    }
+
+    #[tokio::test]
+    async fn query_role_resolution_rejects_unknown_cross_protocol_alias_and_sibling_context() {
+        let store = MemoryMessageStore::default();
+        put_role_record(
+            &store,
+            ROLE_TEST_PROTOCOL,
+            "thread/participant",
+            "thread-1",
+            "role-record-1",
+        )
+        .await;
+
+        let unknown_alias = resolve_query_or_subscribe_role(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_AUTHOR,
+            "roles:team/member",
+            ROLE_TEST_PROTOCOL,
+            Some("team-1/thread-1"),
+            Can::Read,
+            &role_rule("roles:team/member", vec![Can::Read]),
+            &role_definition(None),
+            &store,
+        )
+        .await;
+        assert!(unknown_alias
+            .expect_err("unknown alias must fail")
+            .contains("cross-protocol role alias not found"));
+
+        let sibling_context = resolve_query_or_subscribe_role(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_AUTHOR,
+            "thread/participant",
+            ROLE_TEST_PROTOCOL,
+            Some("thread-2/message-1"),
+            Can::Read,
+            &role_rule("thread/participant", vec![Can::Read]),
+            &role_definition(None),
+            &store,
+        )
+        .await;
+        assert!(sibling_context.is_err());
+    }
 
     fn encrypted_write_message(initialization_vector: &str) -> JsonValue {
         // Non-initial write: `recordId` differs from the entry ID so the

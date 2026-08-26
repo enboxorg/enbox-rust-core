@@ -223,7 +223,10 @@ impl<'a> From<&'a MessagesFilter> for ProtocolScopeTarget<'a> {
         Self {
             protocol: value.protocol.as_deref(),
             context_id: value.context_id_prefix.as_deref(),
-            protocol_path: value.protocol_path_prefix.as_deref(),
+            protocol_path: value
+                .protocol_path
+                .as_deref()
+                .or(value.protocol_path_prefix.as_deref()),
         }
     }
 }

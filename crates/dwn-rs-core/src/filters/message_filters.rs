@@ -48,6 +48,7 @@ pub struct Messages {
     pub interface: Option<String>,
     pub method: Option<String>,
     pub protocol: Option<String>,
+    pub protocol_path: Option<String>,
     pub protocol_path_prefix: Option<String>,
     pub context_id_prefix: Option<String>,
     pub message_timestamp: Option<RangeFilter<String>>,

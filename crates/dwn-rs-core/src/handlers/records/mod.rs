@@ -1,4 +1,4 @@
-mod common;
+pub(crate) mod common;
 pub(crate) mod count;
 pub(crate) mod delete;
 pub(crate) mod query;
@@ -13,7 +13,7 @@ pub(crate) const RECORDS_INTERFACE: &str = "Records";
 pub(crate) const WRITE_METHOD: &str = "Write";
 pub(crate) const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordsAuthorizationKind {
     Write,
     Read,

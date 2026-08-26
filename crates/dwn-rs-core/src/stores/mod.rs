@@ -8,6 +8,7 @@ pub mod state_index;
 pub mod wake;
 pub mod write_resolver;
 
+use std::sync::Arc;
 use std::{fmt::Debug, future::Future, pin::Pin};
 
 use bytes::Bytes;
@@ -136,8 +137,28 @@ pub struct EventLogSubscribeOptions {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SubscriptionError {
-    pub code: ProgressGapCode,
+    pub code: SubscriptionErrorCode,
     pub detail: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionErrorCode {
+    #[serde(rename = "ProgressGap")]
+    ProgressGap,
+    #[serde(rename = "MessagesSubscribeDeliveryAuthorizationFailed")]
+    DeliveryAuthorizationFailed,
+    #[serde(rename = "MessagesSubscribeDeliveryFailed")]
+    DeliveryFailed,
+}
+
+impl std::fmt::Display for SubscriptionErrorCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::ProgressGap => "ProgressGap",
+            Self::DeliveryAuthorizationFailed => "MessagesSubscribeDeliveryAuthorizationFailed",
+            Self::DeliveryFailed => "MessagesSubscribeDeliveryFailed",
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -169,7 +190,7 @@ pub enum SubscriptionMessage {
 
 pub type SubscriptionListener = Box<dyn Fn(SubscriptionMessage) + Send + Sync + 'static>;
 pub type EventSubscriptionClose =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventLogError>> + Send>> + Send + Sync>;
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventLogError>> + Send>> + Send + Sync>;
 
 pub struct EventSubscription {
     pub id: String,
@@ -442,7 +463,7 @@ impl EventLog for () {
         async move {
             Ok(EventSubscription {
                 id,
-                close: Box::new(|| Box::pin(async { Ok(()) })),
+                close: Arc::new(|| Box::pin(async { Ok(()) })),
             })
         }
     }
