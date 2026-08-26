@@ -204,10 +204,11 @@ where
             _ => None,
         };
 
-        let is_latest_base_state = matches!(
-            event.indexes.get("isLatestBaseState"),
-            Some(Value::Bool(true))
-        );
+        let is_latest_base_state = match event.indexes.get("isLatestBaseState") {
+            Some(Value::Bool(true)) => true,
+            Some(Value::String(s)) if s == "true" => true,
+            _ => false,
+        };
 
         let mut entry = QueryEntry {
             seq: event.seq.to_string(),
