@@ -169,7 +169,7 @@ pub enum SubscriptionMessage {
 
 pub type SubscriptionListener = Box<dyn Fn(SubscriptionMessage) + Send + Sync + 'static>;
 pub type EventSubscriptionClose =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventLogError>> + Send>> + Send + Sync>;
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), EventLogError>> + Send>> + Send + Sync>;
 
 pub struct EventSubscription {
     pub id: String,
@@ -442,7 +442,7 @@ impl EventLog for () {
         async move {
             Ok(EventSubscription {
                 id,
-                close: Box::new(|| Box::pin(async { Ok(()) })),
+                close: Arc::new(|| Box::pin(async { Ok(()) })),
             })
         }
     }

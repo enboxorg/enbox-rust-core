@@ -1173,7 +1173,7 @@ where
 
         EventSubscription {
             id: subscription_id,
-            close: Box::new(move || {
+            close: Arc::new(move || {
                 let inner = Arc::clone(&inner);
                 let subscription = Arc::clone(&subscription);
                 Box::pin(async move {
