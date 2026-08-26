@@ -268,14 +268,13 @@ where
                     return Ok(None);
                 };
 
-                fetch_initial_write_message(tenant, &record_id, &self.message_store)
-                    .await?
-                    .ok_or_else(|| {
-                        format!(
-                            "Initial write message not found for recordId: {}",
-                            record_id
-                        )
-                    })?
+                let Some(initial_write) =
+                    fetch_initial_write_message(tenant, &record_id, &self.message_store).await?
+                else {
+                    return Ok(None);
+                };
+
+                initial_write
             }
         };
 
