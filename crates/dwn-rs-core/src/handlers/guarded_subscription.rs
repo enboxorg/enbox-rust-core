@@ -23,7 +23,7 @@ pub(crate) enum DeliveryDecision {
 #[derive(Clone)]
 pub(crate) struct GuardedSubscription {
     state: Arc<Mutex<GuardState>>,
-    sender: mpsc::UnboundedSender<GuardCommand>,
+    sender: mpsc::WeakUnboundedSender<GuardCommand>,
 }
 
 #[derive(Default)]
@@ -53,8 +53,11 @@ impl GuardedSubscription {
 
     /// Waits until all messages enqueued before this call have been projected.
     pub(crate) async fn flush(&self) {
+        let Some(sender) = self.sender.upgrade() else {
+            return;
+        };
         let (done, wait) = oneshot::channel();
-        if self.sender.send(GuardCommand::Flush(done)).is_ok() {
+        if sender.send(GuardCommand::Flush(done)).is_ok() {
             let _ = wait.await;
         }
     }
@@ -86,7 +89,7 @@ where
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let guard = GuardedSubscription {
         state: Arc::default(),
-        sender: sender.clone(),
+        sender: sender.downgrade(),
     };
     let worker_guard = guard.clone();
 
