@@ -24,22 +24,24 @@ use crate::handlers::{
 };
 use crate::stores::{
     DataStore as DataStoreTrait, EventLog as EventLogTrait, MessageStore as MessageStoreTrait,
-    ResumableTaskStore as ResumableTaskStoreTrait, StateIndex as StateIndexTrait,
+    ReplicationFeedReader, ResumableTaskStore as ResumableTaskStoreTrait,
+    StateIndex as StateIndexTrait,
 };
 
 /// Bundled store dependencies required by the native handler set.
 #[derive(Clone)]
-pub struct NativeDwnStores<MS, DS, SI, EL, RTS> {
+pub struct NativeDwnStores<MS, DS, SI, EL, RTS, RFR> {
     pub message_store: MS,
     pub data_store: DS,
     pub state_index: SI,
     pub event_log: EL,
     pub resumable_task_store: RTS,
+    pub replication_feed_reader: RFR,
 }
 
 /// Configuration for [`build_native_dwn`].
-pub struct NativeDwnConfig<MS, DS, SI, EL, RTS, Gate = AllowAllTenantGate> {
-    pub stores: NativeDwnStores<MS, DS, SI, EL, RTS>,
+pub struct NativeDwnConfig<MS, DS, SI, EL, RTS, RFR, Gate = AllowAllTenantGate> {
+    pub stores: NativeDwnStores<MS, DS, SI, EL, RTS, RFR>,
     pub tenant_gate: Gate,
 }
 
@@ -59,11 +61,11 @@ pub enum NativeDwnOpenError {
 }
 
 /// Open every store in `stores` and resume pending resumable tasks.
-pub async fn open_native_stores<MS, DS, SI, EL, RTS>(
-    mut stores: NativeDwnStores<MS, DS, SI, EL, RTS>,
-) -> Result<NativeDwnStores<MS, DS, SI, EL, RTS>, NativeDwnOpenError>
+pub async fn open_native_stores<MS, DS, SI, EL, RTS, RFR>(
+    mut stores: NativeDwnStores<MS, DS, SI, EL, RTS, RFR>,
+) -> Result<NativeDwnStores<MS, DS, SI, EL, RTS, RFR>, NativeDwnOpenError>
 where
-    MS: MessageStoreTrait + Clone + Send + Sync + 'static,
+    MS: MessageStoreTrait + ReplicationFeedReader + Clone + Send + Sync + 'static,
     DS: DataStoreTrait + Clone + Send + Sync + 'static,
     SI: StateIndexTrait + Clone + Send + Sync + 'static,
     EL: EventLogTrait,
@@ -93,15 +95,16 @@ where
 ///
 /// Messages that require JWS verification will fail authorization unless
 /// [`build_native_dwn_with_resolver`] is used.
-pub fn build_native_dwn<MS, DS, SI, EL, RTS, Gate>(
-    config: NativeDwnConfig<MS, DS, SI, EL, RTS, Gate>,
-) -> Dwn<MS, DS, SI, EL, RTS, (), Gate>
+pub fn build_native_dwn<MS, DS, SI, EL, RTS, RFR, Gate>(
+    config: NativeDwnConfig<MS, DS, SI, EL, RTS, RFR, Gate>,
+) -> Dwn<MS, DS, SI, EL, RTS, RFR, (), Gate>
 where
     MS: MessageStoreTrait + Clone + Send + Sync + 'static,
     DS: DataStoreTrait + Clone + Send + Sync + 'static,
     SI: StateIndexTrait + Clone + Send + Sync + 'static,
     EL: EventLogTrait + Clone + Send + Sync + 'static,
     RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
+    RFR: ReplicationFeedReader + Clone + Send + Sync + 'static,
     Gate: TenantGate + 'static,
 {
     let stores = config.stores;
@@ -114,24 +117,27 @@ where
         state_index: Some(stores.state_index.clone()),
         event_log: Some(stores.event_log.clone()),
         resumable_task_store: Some(stores.resumable_task_store.clone()),
+        replication_feed_reader: Some(stores.replication_feed_reader.clone()),
         handlers: crate::dwn::default_method_handlers(),
     });
 
-    register_native_handlers(&mut dwn, stores, None);
+    let rfr = stores.replication_feed_reader.clone();
+    register_native_handlers(&mut dwn, stores, rfr, None);
     dwn
 }
 
 /// Construct a [`Dwn`] with all handlers registered and JWS verification enabled.
-pub fn build_native_dwn_with_resolver<MS, DS, SI, EL, RTS, Gate>(
-    config: NativeDwnConfig<MS, DS, SI, EL, RTS, Gate>,
+pub fn build_native_dwn_with_resolver<MS, DS, SI, EL, RTS, RFR, Gate>(
+    config: NativeDwnConfig<MS, DS, SI, EL, RTS, RFR, Gate>,
     static_keys: StaticPublicKeyResolver,
-) -> Dwn<MS, DS, SI, EL, RTS, (), Gate>
+) -> Dwn<MS, DS, SI, EL, RTS, RFR, (), Gate>
 where
     MS: MessageStoreTrait + Clone + Send + Sync + 'static,
     DS: DataStoreTrait + Clone + Send + Sync + 'static,
     SI: StateIndexTrait + Clone + Send + Sync + 'static,
     EL: EventLogTrait + Clone + Send + Sync + 'static,
     RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
+    RFR: ReplicationFeedReader + Clone + Send + Sync + 'static,
     Gate: TenantGate + 'static,
 {
     build_native_dwn_with_did_resolver(config, resolver_with_static_keys(static_keys))
@@ -142,16 +148,17 @@ fn resolver_with_static_keys(static_keys: StaticPublicKeyResolver) -> UniversalR
 }
 
 /// Construct a [`Dwn`] with all handlers registered and a complete DID resolver.
-pub fn build_native_dwn_with_did_resolver<MS, DS, SI, EL, RTS, Gate, R>(
-    config: NativeDwnConfig<MS, DS, SI, EL, RTS, Gate>,
+pub fn build_native_dwn_with_did_resolver<MS, DS, SI, EL, RTS, RFR, Gate, R>(
+    config: NativeDwnConfig<MS, DS, SI, EL, RTS, RFR, Gate>,
     resolver: R,
-) -> Dwn<MS, DS, SI, EL, RTS, (), Gate>
+) -> Dwn<MS, DS, SI, EL, RTS, RFR, (), Gate>
 where
     MS: MessageStoreTrait + Clone + Send + Sync + 'static,
     DS: DataStoreTrait + Clone + Send + Sync + 'static,
     SI: StateIndexTrait + Clone + Send + Sync + 'static,
     EL: EventLogTrait + Clone + Send + Sync + 'static,
     RTS: ResumableTaskStoreTrait + Clone + Send + Sync + 'static,
+    RFR: ReplicationFeedReader + Clone + Send + Sync + 'static,
     Gate: TenantGate + 'static,
     R: DidResolver + 'static,
 {
@@ -165,22 +172,26 @@ where
         state_index: Some(stores.state_index.clone()),
         event_log: Some(stores.event_log.clone()),
         resumable_task_store: Some(stores.resumable_task_store.clone()),
+        replication_feed_reader: Some(stores.replication_feed_reader.clone()),
         handlers: crate::dwn::default_method_handlers(),
     });
 
+    let rfr = stores.replication_feed_reader.clone();
     let resolver: Arc<dyn DidResolver> = Arc::new(resolver);
-    register_native_handlers(&mut dwn, stores, Some(resolver));
+    register_native_handlers(&mut dwn, stores, rfr, Some(resolver));
     dwn
 }
 
 /// Register every native handler, deriving each dispatch kind from the handler's descriptor
 /// (`Dwn::register`). `resolver` is wired into all handlers (`None` disables JWS verification).
-fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
-    dwn: &mut Dwn<MS, DS, SI, EL, RTS, (), Gate>,
-    stores: NativeDwnStores<MS, DS, SI, EL, RTS>,
+fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
+    dwn: &mut Dwn<MS, DS, SI, EL, RTS, RFR, (), Gate>,
+    stores: NativeDwnStores<MS, DS, SI, EL, RTS, RFR>,
+    replication_feed_reader: RFR,
     resolver: Option<Arc<dyn DidResolver>>,
 ) where
     MS: MessageStoreTrait + Clone + Send + Sync + 'static,
+    RFR: ReplicationFeedReader + Clone + Send + Sync + 'static,
     DS: DataStoreTrait + Clone + Send + Sync + 'static,
     SI: StateIndexTrait + Clone + Send + Sync + 'static,
     EL: EventLogTrait + Clone + Send + Sync + 'static,
@@ -193,6 +204,7 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
         state_index,
         event_log,
         resumable_task_store: _,
+        replication_feed_reader: _,
     } = stores;
 
     dwn.register(MessagesReadHandler::new(
@@ -202,6 +214,7 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, Gate>(
     ));
     dwn.register(MessagesQueryHandler::new(
         message_store.clone(),
+        Some(replication_feed_reader.clone()),
         resolver.clone(),
     ));
     dwn.register(MessagesSubscribeHandler::new(

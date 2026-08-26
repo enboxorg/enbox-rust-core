@@ -156,13 +156,15 @@ pub trait DwnProcessMessage: Send + Sync {
     }
 }
 
-impl<MS, DS, SI, EL, RTS, DR, Gate> DwnProcessMessage for Dwn<MS, DS, SI, EL, RTS, DR, Gate>
+impl<MS, DS, SI, EL, RTS, RFR, DR, Gate> DwnProcessMessage
+    for Dwn<MS, DS, SI, EL, RTS, RFR, DR, Gate>
 where
     MS: Send + Sync + 'static,
     DS: Send + Sync + 'static,
     SI: Send + Sync + 'static,
     EL: Send + Sync + 'static,
     RTS: Send + Sync + 'static,
+    RFR: Send + Sync + 'static,
     DR: Send + Sync + 'static,
     Gate: TenantGate + Send + Sync + 'static,
 {
@@ -188,13 +190,15 @@ where
     }
 }
 
-impl<MS, DS, SI, EL, RTS, DR, Gate> DwnProcessMessage for Arc<Dwn<MS, DS, SI, EL, RTS, DR, Gate>>
+impl<MS, DS, SI, EL, RTS, RFR, DR, Gate> DwnProcessMessage
+    for Arc<Dwn<MS, DS, SI, EL, RTS, RFR, DR, Gate>>
 where
     MS: Send + Sync + 'static,
     DS: Send + Sync + 'static,
     SI: Send + Sync + 'static,
     EL: Send + Sync + 'static,
     RTS: Send + Sync + 'static,
+    RFR: Send + Sync + 'static,
     DR: Send + Sync + 'static,
     Gate: TenantGate + Send + Sync + 'static,
 {

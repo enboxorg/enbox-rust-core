@@ -29,6 +29,7 @@ type NativeDwn = Dwn<
     SqliteStateIndex,
     DurableEventLog<SqliteStore, InProcessWakeBus>,
     SqliteResumableTaskStore,
+    SqliteStore,
     (),
     dwn_rs_core::AllowAllTenantGate,
 >;
@@ -92,6 +93,7 @@ impl SqliteNativeDwn {
             state_index: state_index.clone(),
             event_log,
             resumable_task_store,
+            replication_feed_reader: store.clone(),
         })
         .await?;
 
