@@ -11,6 +11,7 @@ use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::messages::subscribe::SubscribeReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
+use crate::permissions::PERMISSIONS_PROTOCOL_URI;
 use crate::replies::{messages, HasProgressGapInfo};
 use crate::stores::{EventSubscription, StateHash};
 use crate::{Fields, Message, RangeFilter, Response, SubtreeFilter, Value};
@@ -33,21 +34,25 @@ pub(crate) fn messages_subscribe_descriptor(
     }
 }
 
-pub(crate) fn messages_filters_to_filters(filters: &[MessagesFilter]) -> Option<Filters> {
+pub(crate) fn messages_filters_to_filters(
+    filters: &[MessagesFilter],
+    include_shadow_filters: bool,
+) -> Option<Filters> {
     if filters.is_empty() {
         return None;
     }
     Some(Filters::from(
         filters
             .iter()
-            .map(messages_filter_to_filter_map)
+            .flat_map(|f| messages_filter_to_filter_maps(f, include_shadow_filters))
             .collect::<Vec<_>>(),
     ))
 }
 
-pub(crate) fn messages_filter_to_filter_map(
+pub(crate) fn messages_filter_to_filter_maps(
     filter: &MessagesFilter,
-) -> BTreeMap<FilterKey, Filter<crate::Value>> {
+    include_shadow_filters: bool,
+) -> Vec<BTreeMap<FilterKey, Filter<crate::Value>>> {
     let mut map = BTreeMap::new();
     insert_messages_string_filter(&mut map, "interface", filter.interface.as_ref());
     insert_messages_string_filter(&mut map, "method", filter.method.as_ref());
@@ -78,7 +83,57 @@ pub(crate) fn messages_filter_to_filter_map(
         filter.message_timestamp.clone().map(Into::into).clone(),
     );
 
-    map
+    let mut result = vec![map];
+
+    if include_shadow_filters {
+        if let Some(protocol) = &filter.protocol {
+            let mut perm_shadow = BTreeMap::new();
+            insert_messages_string_filter(
+                &mut perm_shadow,
+                "protocol",
+                Some(&PERMISSIONS_PROTOCOL_URI.to_string()),
+            );
+            perm_shadow.insert(
+                FilterKey::Tag("protocol".to_string()),
+                Filter::Equal(Value::String(protocol.clone())),
+            );
+            insert_message_range_filter(
+                &mut perm_shadow,
+                "messageTimestamp",
+                filter.message_timestamp.clone().map(Into::into),
+            );
+            result.push(perm_shadow);
+
+            // TODO(#241): add encryption-control record shadow filter for this protocol.
+
+            let has_path_scope = filter.protocol_path.is_some()
+                || filter.protocol_path_prefix.is_some()
+                || filter.context_id_prefix.is_some();
+
+            if has_path_scope {
+                let mut proto_shadow = BTreeMap::new();
+                insert_messages_string_filter(
+                    &mut proto_shadow,
+                    "interface",
+                    Some(&"Protocols".to_string()),
+                );
+                insert_messages_string_filter(
+                    &mut proto_shadow,
+                    "method",
+                    Some(&"Configure".to_string()),
+                );
+                insert_messages_string_filter(&mut proto_shadow, "protocol", Some(protocol));
+                insert_message_range_filter(
+                    &mut proto_shadow,
+                    "messageTimestamp",
+                    filter.message_timestamp.clone().map(Into::into),
+                );
+                result.push(proto_shadow);
+            }
+        }
+    }
+
+    result
 }
 
 pub(crate) fn insert_messages_string_filter(

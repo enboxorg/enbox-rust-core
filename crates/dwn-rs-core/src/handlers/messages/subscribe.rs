@@ -4,6 +4,9 @@ use std::sync::Arc;
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::{Descriptor, MessagesSubscribeDescriptor};
 use crate::dwn::HandlerContext;
+use crate::handlers::messages::authorization::{
+    authorize_query_or_subscribe, MessageAuthorizationKind, QueryAuthorization,
+};
 use crate::permissions::{self};
 use crate::replies::messages;
 use crate::stores::{EventLogSubscribeOptions, EventSubscription, SubscriptionListener};
@@ -82,7 +85,7 @@ where
             Err(detail) => return subscribe_reply(Response::bad_request(detail.to_string()), None),
         };
 
-        let authorization = match permissions::validate_authorization_signature(
+        let auth_context = match permissions::validate_authorization_signature(
             message,
             self.did_resolver.as_deref(),
             true,
@@ -108,12 +111,26 @@ where
             Err(error) => return subscribe_reply(Response::bad_request(error.to_string()), None),
         };
 
-        if let Err(detail) = self
-            .authorize_messages_subscribe(tenant, message, descriptor, &authorization)
-            .await
+        let authorization = match authorize_query_or_subscribe(
+            tenant,
+            message,
+            &descriptor.filters,
+            &auth_context,
+            &self.message_store,
+            MessageAuthorizationKind::Subscribe,
+        )
+        .await
         {
-            return subscribe_reply(Response::unauthorized(detail), None);
-        }
+            Ok(authorization) => QueryAuthorization::from(authorization),
+            Err(details) => {
+                return subscribe_reply(
+                    Response::unauthorized(format!(
+                        "MessagesSubscribeAuthorizationFailed: {details}"
+                    )),
+                    None,
+                );
+            }
+        };
 
         let subscription_id = match message.cid() {
             Ok(cid) => cid.to_string(),
@@ -125,7 +142,7 @@ where
             }
         };
 
-        let filters = messages_filters_to_filters(&descriptor.filters);
+        let filters = messages_filters_to_filters(&descriptor.filters, authorization.include_shadow_filters);
         let subscription = match self
             .event_log
             .subscribe(
@@ -149,24 +166,4 @@ where
         subscribe_reply(reply, Some(subscription))
     }
 
-    async fn authorize_messages_subscribe(
-        &self,
-        tenant: &str,
-        message: &Message<Descriptor>,
-        descriptor: &MessagesSubscribeDescriptor,
-        authorization: &permissions::AuthorizationContext,
-    ) -> Result<(), String> {
-        if authorization.author == tenant {
-            return Ok(());
-        }
-        permissions::authorize_messages_subscribe_and_query(
-            tenant,
-            message,
-            &descriptor.filters,
-            authorization,
-            &self.message_store,
-        )
-        .await
-        .map_err(|detail| format!("MessagesSubscribeAuthorizationFailed: {detail}"))
-    }
 }
