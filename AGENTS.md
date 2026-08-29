@@ -36,6 +36,16 @@ GitHub remotes only when a checkout is missing or freshness must be verified:
 `ENBOX_KNOWLEDGE_ROOT`, `ENBOX_TS_ROOT`, and `DWN_SPEC_ROOT` override the
 default sibling paths when set.
 
+## Skills
+
+Three skills are available to help in development:
+
+- `dwn-contract-discovery`: Used for semantic investigation, using the knowledgebase, TypeScript
+  and Rust
+- `dwn-implement-contract`: Used to implement an approved contract packet
+- `dwn-review-change`: A semantic review of a code change against the knowledge base, TypeScript
+  and Rust.
+
 ## Source hierarchy
 
 Keep these distinct and never collapse them:
