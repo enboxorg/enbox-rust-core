@@ -1,0 +1,15 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "permission": {
+        "external_directory": {
+            "../knowledge/**": "allow",
+            "../enbox/**": "allow",
+            "../dwn-spec/**": "allow"
+        },
+        "edit": {
+            "../knowledge/**": "deny",
+            "../enbox/**": "deny",
+            "../dwn-spec/**": "deny"
+        }
+    }
+}

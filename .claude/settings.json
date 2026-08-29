@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "../knowledge",
+      "../enbox",
+      "../dwn-spec"
+    ]
+  }
+}
