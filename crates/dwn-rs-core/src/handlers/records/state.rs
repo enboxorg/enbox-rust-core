@@ -210,7 +210,7 @@ mod tests {
     }
 
     fn cid(message: &Message<Descriptor>) -> String {
-        message_cid(message).expect("fixture must have a CID")
+        message.cid().expect("fixture must have a CID").to_string()
     }
 
     fn converge(messages: &[Message<Descriptor>], permutation: &[usize]) -> String {

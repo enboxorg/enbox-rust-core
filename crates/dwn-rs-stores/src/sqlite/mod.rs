@@ -42,7 +42,7 @@ mod tests {
 
     use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
     use dwn_rs_core::descriptors::{Records, RecordsWriteDescriptor};
-    use dwn_rs_core::fields::{MessageFields, WriteFields};
+    use dwn_rs_core::fields::WriteFields;
     use dwn_rs_core::filters::{Filter, FilterKey, Filters};
     use dwn_rs_core::stores::{DataStore, KeyValues, MessageStore};
     use dwn_rs_core::{Descriptor, Fields, Message, MessageSort, Pagination, SortDirection, Value};
@@ -91,9 +91,7 @@ mod tests {
     }
 
     fn message_cid(message: &Message<Descriptor>) -> String {
-        let mut canonical = message.clone();
-        canonical.fields.encoded_data();
-        canonical.cid().unwrap().to_string()
+        message.cid().unwrap().to_string()
     }
 
     fn non_feed_message(timestamp: &str) -> Message<Descriptor> {
@@ -201,9 +199,7 @@ mod tests {
             "https://example.com/protocol/notes",
             Some("aGVsbG8"),
         );
-        let mut cid_message = message.clone();
-        cid_message.fields.encoded_data();
-        let cid = cid_message.cid().unwrap().to_string();
+        let cid = message.cid().unwrap().to_string();
 
         MessageStore::put(
             &store,
@@ -232,9 +228,7 @@ mod tests {
             "https://example.com/protocols/notes",
             None,
         );
-        let mut cid_message = message.clone();
-        cid_message.fields.encoded_data();
-        let cid = cid_message.cid().unwrap().to_string();
+        let cid = message.cid().unwrap().to_string();
 
         let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut store).await.unwrap();

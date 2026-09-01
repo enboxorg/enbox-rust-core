@@ -27,7 +27,7 @@ use serde_json::Value as JsonValue;
 
 use crate::auth::resolver::DidResolver;
 use crate::auth::{Authorization, Jws, JwsError};
-use crate::cid::{generate_cid_from_serialized, generate_message_cid_from_json};
+use crate::cid::generate_cid_from_serialized;
 use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields},
@@ -659,7 +659,7 @@ fn validate_records_write_payload(
         .author_delegated_grant
         .as_ref()
         .map(|grant| {
-            grant.message_cid().map_err(|err| {
+            grant.cid().map_err(|err| {
                 GrantError::InvalidGrant(
                     AuthorizationRequestError::ValidationError(err.to_string()).into(),
                 )
@@ -775,7 +775,7 @@ async fn validate_embedded_author_delegated_grant(
         return Ok(None);
     };
 
-    let grant_cid = grant_message.message_cid().map_err(|err| {
+    let grant_cid = grant_message.cid().map_err(|err| {
         GrantError::InvalidGrant(AuthorizationRequestError::ValidationError(err.to_string()).into())
     })?;
     let delegated_grant_id =
@@ -1834,8 +1834,9 @@ fn message_interface_and_method(message: &Message<Descriptor>) -> (String, Strin
 }
 
 fn message_cid(message: &Message<Descriptor>) -> Result<String, AuthorizationValidationError> {
-    Ok(serde_json::to_value(message)?)
-        .and_then(|value| Ok(generate_message_cid_from_json(&value)?))
+    message
+        .cid()
+        .map_err(AuthorizationValidationError::CidParseFailed)
         .map(|cid| cid.to_string())
 }
 

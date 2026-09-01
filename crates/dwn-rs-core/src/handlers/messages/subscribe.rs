@@ -658,7 +658,7 @@ mod tests {
             .await
             .expect("active role must authorize delivery");
 
-        let role_cid = role_record().message_cid().unwrap().to_string();
+        let role_cid = role_record().cid().unwrap().to_string();
         store.delete(TENANT, &role_cid).await.unwrap();
         assert!(
             authorize_delivery(TENANT, &request, &filters, &auth_context, &expected, &store,)

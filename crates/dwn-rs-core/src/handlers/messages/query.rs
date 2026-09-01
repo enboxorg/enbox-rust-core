@@ -192,11 +192,7 @@ where
     ) -> Result<QueryEntry, String> {
         let cid = match event.message_cid {
             Some(ref cid) => cid.parse().map_err(|err| format!("Invalid CID: {}", err))?,
-            None => event
-                .event
-                .message
-                .message_cid()
-                .map_err(|err| err.to_string())?,
+            None => event.event.message.cid().map_err(|err| err.to_string())?,
         };
 
         let protocol = match event.indexes.get("protocol") {
@@ -758,7 +754,7 @@ mod tests {
 
     fn entry(seq: u64, message: Message<Descriptor>) -> EventLogEntry {
         let message_cid = message
-            .message_cid()
+            .cid()
             .ok()
             .map(|c| c.to_string())
             .unwrap_or_else(|| format!("bafk-test-cid-{seq}"));

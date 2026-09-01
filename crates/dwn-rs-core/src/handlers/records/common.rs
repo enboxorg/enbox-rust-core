@@ -7,7 +7,6 @@ use base64::Engine as _;
 use bytes::Bytes;
 use serde_json::Value as JsonValue;
 
-use crate::cid::generate_message_cid_from_json;
 use crate::descriptors::records::{entry_id, is_initial_write};
 use crate::descriptors::{
     messages::record_id,
@@ -1467,9 +1466,9 @@ pub(crate) fn message_timestamp(
 }
 
 pub(crate) fn message_cid(message: &Message<Descriptor>) -> Result<String, String> {
-    serde_json::to_value(message)
+    message
+        .cid()
         .map_err(|err| err.to_string())
-        .and_then(|value| generate_message_cid_from_json(&value).map_err(|err| err.to_string()))
         .map(|cid| cid.to_string())
 }
 

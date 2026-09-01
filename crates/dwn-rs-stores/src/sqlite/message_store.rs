@@ -46,7 +46,7 @@ impl MessageStore for SqliteStore {
         let tenant = tenant.to_string();
         let message_json = serde_json::to_string(&message)?;
         let message: Message<Descriptor> = message.into();
-        let message_cid = message.message_cid()?.to_string();
+        let message_cid = message.cid()?.to_string();
         let indexes_json = serde_json::to_string(&indexes)?;
         let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
 

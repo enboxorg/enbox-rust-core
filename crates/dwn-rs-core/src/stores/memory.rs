@@ -140,9 +140,7 @@ impl MessageStore for MemoryMessageStore {
         Message<Descriptor>: From<Message<D>>,
     {
         let message: Message<Descriptor> = message.into();
-        let mut canonical = message.clone();
-        canonical.fields.encoded_data();
-        let cid = canonical.cid()?.to_string();
+        let cid = message.cid()?.to_string();
 
         let wake = {
             let mut state = self.state.write().map_err(message_lock_error)?;
@@ -154,7 +152,7 @@ impl MessageStore for MemoryMessageStore {
                 indexes: indexes.clone(),
             };
 
-            if !is_feed_message(&canonical) {
+            if !is_feed_message(&message) {
                 state.messages.insert(msg_key, msg_row);
                 None
             } else {
@@ -516,7 +514,7 @@ impl ReplicationFeedReader for MemoryMessageStore {
 
                         if row
                             .message
-                            .message_cid()
+                            .cid()
                             .map_err(|err| {
                                 EventLogError::StoreError(StoreError::InternalException(format!(
                                     "failed to compute message CID: {err}"
@@ -1598,7 +1596,7 @@ mod tests {
     }
 
     fn stored_cid(message: &Message<Descriptor>) -> String {
-        message.message_cid().unwrap().to_string()
+        message.cid().unwrap().to_string()
     }
 
     fn idx(timestamp: &str, protocol: Option<&str>) -> KeyValues {

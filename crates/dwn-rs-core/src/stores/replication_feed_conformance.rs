@@ -87,10 +87,7 @@ fn non_feed_message(timestamp: &str) -> Message<Descriptor> {
 }
 
 fn cid(message: &Message<Descriptor>) -> String {
-    message
-        .message_cid()
-        .expect("fixture must have a CID")
-        .to_string()
+    message.cid().expect("fixture must have a CID").to_string()
 }
 
 fn indexes(protocol: Option<&str>, schema: Option<&str>, marker: &str) -> KeyValues {

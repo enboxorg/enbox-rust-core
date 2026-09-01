@@ -9,7 +9,6 @@ use std::sync::Arc;
 use base64::Engine;
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
-use dwn_rs_core::fields::MessageFields;
 use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::{DataStore, MessageStore};
 use dwn_rs_core::{Descriptor, Fields, Filters, Message, Value};
@@ -49,9 +48,7 @@ async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_mess
         "encryption": encryption
     }))
     .expect("legacy RecordsWrite fixture must deserialize");
-    let mut cid_message = message.clone();
-    cid_message.fields.encoded_data();
-    let message_cid = cid_message.cid().unwrap().to_string();
+    let message_cid = message.cid().unwrap().to_string();
 
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("legacy-encryption.sqlite");
