@@ -411,6 +411,213 @@ async fn records_delete_retains_initial_feed_position_without_extra_wake() {
 }
 
 #[tokio::test]
+async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
+    // Covers: DWN-REC-004
+    // Covers: DWN-REC-005
+    // Covers: ENBOX-REC-001
+    const TENANT: &str = "did:example:alice";
+
+    let data = Bytes::from_static(b"delete-wins payload");
+    let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+    let initial = signed_write_message(WriteSpec {
+        data_cid: data_cid.clone(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let context_id = initial["contextId"].as_str().unwrap().to_string();
+    let newer_write = signed_write_message(WriteSpec {
+        record_id: Some(record_id.clone()),
+        context_id: Some(context_id),
+        data_cid,
+        data_size: data.len() as u64,
+        date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+        published: Some(true),
+        ..WriteSpec::new("2025-01-12T00:00:00.000000Z")
+    })
+    .await;
+    let older_delete =
+        signed_delete_message(&record_id, false, "2025-01-11T00:00:00.000000Z").await;
+    let newer_write_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(newer_write.clone()).unwrap())
+            .unwrap();
+    let delete_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(older_delete.clone()).unwrap())
+            .unwrap();
+
+    for delete_first in [false, true] {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        let mut state_index = MemoryStateIndex::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        state_index.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        let write_handler = RecordsWriteHandler::<_, _, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            state_index.clone(),
+            Some(Arc::new(test_resolver())),
+        );
+        let delete_handler = RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store,
+            state_index,
+            Some(Arc::new(test_resolver())),
+        );
+        assert_eq!(
+            write_handler
+                .run(MethodHandlerRequest::new(
+                    TENANT,
+                    &initial,
+                    Some(data.clone()),
+                ))
+                .await
+                .status
+                .code,
+            202
+        );
+
+        let statuses = if delete_first {
+            let delete = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_delete, None))
+                .await
+                .status
+                .code;
+            let write = write_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
+                .await
+                .status
+                .code;
+            [delete, write]
+        } else {
+            let write = write_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
+                .await
+                .status
+                .code;
+            let delete = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_delete, None))
+                .await
+                .status
+                .code;
+            [write, delete]
+        };
+        assert_eq!(statuses, [202, if delete_first { 409 } else { 202 }]);
+
+        let retained = fetch_record_messages(TENANT, &record_id, &message_store)
+            .await
+            .unwrap();
+        let retained_cids = retained
+            .iter()
+            .map(message_cid)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(retained_cids.contains(&delete_cid));
+        assert!(!retained_cids.contains(&newer_write_cid));
+    }
+}
+
+#[tokio::test]
+async fn records_prune_wins_over_newer_plain_delete_in_both_arrival_orders() {
+    // Covers: DWN-REC-004
+    // Covers: ENBOX-REC-001
+    const TENANT: &str = "did:example:alice";
+
+    let data = Bytes::from_static(b"prune-wins payload");
+    let initial = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let older_prune = signed_delete_message(&record_id, true, "2025-01-11T00:00:00.000000Z").await;
+    let newer_delete =
+        signed_delete_message(&record_id, false, "2025-01-12T00:00:00.000000Z").await;
+    let prune_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(older_prune.clone()).unwrap())
+            .unwrap();
+    let plain_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(newer_delete.clone()).unwrap())
+            .unwrap();
+
+    for prune_first in [false, true] {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        let mut state_index = MemoryStateIndex::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        state_index.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        let write_handler = RecordsWriteHandler::<_, _, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            state_index.clone(),
+            Some(Arc::new(test_resolver())),
+        );
+        let delete_handler = RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store,
+            state_index,
+            Some(Arc::new(test_resolver())),
+        );
+        assert_eq!(
+            write_handler
+                .run(MethodHandlerRequest::new(
+                    TENANT,
+                    &initial,
+                    Some(data.clone()),
+                ))
+                .await
+                .status
+                .code,
+            202
+        );
+
+        let statuses = if prune_first {
+            let prune = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_prune, None))
+                .await
+                .status
+                .code;
+            let plain = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_delete, None))
+                .await
+                .status
+                .code;
+            [prune, plain]
+        } else {
+            let plain = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_delete, None))
+                .await
+                .status
+                .code;
+            let prune = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_prune, None))
+                .await
+                .status
+                .code;
+            [plain, prune]
+        };
+        assert_eq!(statuses, [202, if prune_first { 409 } else { 202 }]);
+
+        let retained_cids = fetch_record_messages(TENANT, &record_id, &message_store)
+            .await
+            .unwrap()
+            .iter()
+            .map(message_cid)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(retained_cids.contains(&prune_cid));
+        assert!(!retained_cids.contains(&plain_cid));
+    }
+}
+
+#[tokio::test]
 async fn records_write_rejects_older_conflicting_write() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();

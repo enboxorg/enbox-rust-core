@@ -1593,21 +1593,6 @@ where
         .map_err(|err| err.to_string())
 }
 
-pub(crate) fn can_perform_delete_against_record(
-    delete_message: &Message<Descriptor>,
-    newest_existing_message: &Message<Descriptor>,
-) -> bool {
-    let Ok(delete_descriptor) = records_delete_descriptor(delete_message) else {
-        return false;
-    };
-    if let Ok(newest_delete) = records_delete_descriptor(newest_existing_message) {
-        if !delete_descriptor.prune || newest_delete.prune {
-            return false;
-        }
-    }
-    true
-}
-
 pub(crate) fn parent_context_id(context_id: &str) -> Option<String> {
     context_id
         .rsplit_once('/')

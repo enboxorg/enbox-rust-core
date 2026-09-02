@@ -47,12 +47,6 @@ pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex = ()> {
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
-struct PreparedRecordsWriteTransition {
-    durable: LatestStateTransition,
-    retained_indexes: Vec<(String, KeyValues)>,
-    deleted_cids: Vec<String>,
-}
-
 impl<MessageStore, DataStore, StateIndex> Handler
     for RecordsWriteHandler<MessageStore, DataStore, StateIndex>
 where
@@ -241,13 +235,9 @@ where
                 RecordsTransitionPlan::Duplicate { .. }
                 | RecordsTransitionPlan::Superseded { .. } => Vec::new(),
             };
-            let PreparedRecordsWriteTransition {
-                durable,
-                retained_indexes,
-                deleted_cids,
-            } = match self.records_write_transition(
+            let transition = match self.records_write_transition(
                 &message,
-                indexes.clone(),
+                indexes,
                 &existing_messages,
                 &transition_plan,
                 &signature.author,
@@ -257,30 +247,10 @@ where
             };
             if let Err(err) = self
                 .message_store
-                .commit_latest_state(tenant, durable)
+                .commit_latest_state(tenant, transition)
                 .await
             {
                 return store_error_reply(err.to_string());
-            }
-
-            // StateIndex is temporary compatibility plumbing. MessageStore owns the
-            // atomic durable transition and is the source of truth.
-            if let Err(err) = self
-                .state_index
-                .insert(tenant, &incoming_cid, indexes)
-                .await
-            {
-                return store_error_reply(err.to_string());
-            }
-            for (cid, indexes) in retained_indexes {
-                if let Err(err) = self.state_index.insert(tenant, &cid, indexes).await {
-                    return store_error_reply(err.to_string());
-                }
-            }
-            if !deleted_cids.is_empty() {
-                if let Err(err) = self.state_index.delete(tenant, &deleted_cids).await {
-                    return store_error_reply(err.to_string());
-                }
             }
             for existing in &existing_messages {
                 if cleanup_cids
@@ -675,7 +645,7 @@ where
         existing_messages: &[Message<Descriptor>],
         plan: &RecordsTransitionPlan,
         author: &str,
-    ) -> Result<PreparedRecordsWriteTransition, String> {
+    ) -> Result<LatestStateTransition, String> {
         let outranked_cids = match plan {
             RecordsTransitionPlan::Apply { outranked_cids, .. } => outranked_cids.as_slice(),
             RecordsTransitionPlan::Duplicate { .. } => &[],
@@ -687,7 +657,6 @@ where
             }
         };
         let mut retains = Vec::new();
-        let mut retained_indexes = Vec::new();
         let mut deletes = Vec::new();
 
         for existing in existing_messages {
@@ -699,7 +668,6 @@ where
                 let mut initial_write = existing.clone();
                 set_encoded_data(&mut initial_write, None)?;
                 let indexes = records_write_indexes(&initial_write, author, false)?;
-                retained_indexes.push((existing_cid, indexes.clone()));
                 retains.push(LatestStateMutation {
                     message: initial_write,
                     indexes,
@@ -709,17 +677,13 @@ where
             }
         }
 
-        Ok(PreparedRecordsWriteTransition {
-            durable: LatestStateTransition {
-                put: LatestStateMutation {
-                    message: message.clone(),
-                    indexes,
-                },
-                retains,
-                deletes: deletes.clone(),
+        Ok(LatestStateTransition {
+            put: LatestStateMutation {
+                message: message.clone(),
+                indexes,
             },
-            retained_indexes,
-            deleted_cids: deletes,
+            retains,
+            deletes,
         })
     }
 }

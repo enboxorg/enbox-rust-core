@@ -57,6 +57,7 @@ pub(crate) enum RecordsTransitionPlan {
 ///
 /// Class precedence is `prune > plain delete > write`. Messages in the same class
 /// use `messageTimestamp`, then message CID, as the canonical tie-break.
+#[cfg(test)]
 pub(crate) fn compare_records_state(
     left: &Message<Descriptor>,
     right: &Message<Descriptor>,

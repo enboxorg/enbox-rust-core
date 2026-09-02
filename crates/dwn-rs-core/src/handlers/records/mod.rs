@@ -3,8 +3,7 @@ pub(crate) mod count;
 pub(crate) mod delete;
 pub(crate) mod query;
 pub(crate) mod read;
-// The planner is integrated into RecordsWrite/RecordsDelete in the following commits.
-#[allow(dead_code)]
+// RecordsWrite, RecordsDelete, and resumable delete rechecks share this planner.
 pub(crate) mod state;
 pub(crate) mod subscribe;
 pub(crate) mod write;
