@@ -3,14 +3,18 @@ use std::collections::BTreeMap;
 use dwn_rs_core::descriptors::records::write_tag_protocol;
 use dwn_rs_core::descriptors::MessageDescriptor;
 use dwn_rs_core::stores::replication_feed_reader::{
-    fingerprint_scopes, fold_cid_into_domain, is_feed_message, scopes_unchanged, Fingerprint,
+    build_token, fingerprint_scopes, fold_cid_into_domain, is_feed_message, scopes_unchanged,
+    Fingerprint,
 };
 use dwn_rs_core::stores::wake::Wake;
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use dwn_rs_core::errors::{MessageReplicationError, MessageStoreError, StoreError};
 use dwn_rs_core::filters::Filters;
-use dwn_rs_core::stores::{KeyValues, MessageQueryResult, MessageStore};
+use dwn_rs_core::stores::{
+    KeyValues, LatestStateMutation, LatestStateTransition, LatestStateTransitionResult,
+    MessageQueryResult, MessageStore,
+};
 use dwn_rs_core::{Descriptor, Message, MessageSort, Pagination, Query};
 use serde::Serialize;
 use serde_rusqlite::from_row;
@@ -44,63 +48,18 @@ impl MessageStore for SqliteStore {
         Message<Descriptor>: From<Message<D>>,
     {
         let tenant = tenant.to_string();
-        let message_json = serde_json::to_string(&message)?;
         let message: Message<Descriptor> = message.into();
-        let message_cid = message.cid()?.to_string();
-        let indexes_json = serde_json::to_string(&indexes)?;
-        let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
-
         let wake = self
             .connection()
             .await?
             .clone()
             .with_writer(move |connection| {
                 let tx = connection.transaction().map_err(sqlite_store_error)?;
-
-                if !is_feed_message(&message) {
-                    insert_message(&tx, &tenant, &message_cid, &message_json, &indexes_json)?;
-                    tx.commit().map_err(sqlite_store_error)?;
-                    return Ok(None);
-                }
-
-                let feed_entry = select_feed_entry(&tx, &tenant, &message_cid)?;
-                let wake: Option<Wake> = match feed_entry {
-                    Some(entry) => {
-                        if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
-                            return Err(StoreError::ReplicationError(
-                                MessageReplicationError::FingerprintScopesMismatch,
-                            ));
-                        }
-
-                        insert_message(&tx, &tenant, &message_cid, &message_json, &indexes_json)?;
-                        update_feed_entry_indexes(&tx, &tenant, &entry, &indexes)?;
-                        None
-                    }
-                    None => {
-                        let next = next_position(&tx, &tenant)?;
-                        insert_message(&tx, &tenant, &message_cid, &message_json, &indexes_json)?;
-                        insert_feed_entry(
-                            &tx,
-                            &FeedEntry {
-                                tenant: tenant.clone(),
-                                position: next,
-                                message_cid: message_cid.clone(),
-                                indexes: indexes.clone(),
-                                fingerprint_scopes: msg_scopes.clone(),
-                            },
-                        )?;
-                        update_feed_head(&tx, &tenant, next)?;
-                        upsert_feed_fingerprint(&tx, &tenant, &message_cid, &msg_scopes)?;
-
-                        Some(Wake {
-                            tenant: tenant.clone(),
-                            position: next as u64,
-                        })
-                    }
-                };
+                let result =
+                    put_message_tx(&tx, &tenant, LatestStateMutation { message, indexes })?;
 
                 tx.commit().map_err(sqlite_store_error)?;
-                Ok(wake)
+                Ok(result.wake)
             })
             .await
             .map_err(MessageStoreError::from)?;
@@ -110,6 +69,53 @@ impl MessageStore for SqliteStore {
         }
 
         Ok(())
+    }
+
+    async fn commit_latest_state(
+        &self,
+        tenant: &str,
+        transition: LatestStateTransition,
+    ) -> Result<LatestStateTransitionResult, MessageStoreError> {
+        transition.validate()?;
+        let tenant = tenant.to_string();
+        let (wake, position) = self
+            .connection()
+            .await?
+            .clone()
+            .with_writer(move |connection| {
+                let tx = connection.transaction().map_err(sqlite_store_error)?;
+                let epoch = SqliteStore::epoch_tx(&tx)?;
+                let put_result = put_message_tx(&tx, &tenant, transition.put)?;
+                for retained in transition.retains {
+                    let retained_cid = retained
+                        .message
+                        .cid()
+                        .map_err(|error| StoreError::InternalException(error.to_string()))?
+                        .to_string();
+                    if !message_exists(&tx, &tenant, &retained_cid)? {
+                        return Err(StoreError::InternalException(format!(
+                            "MessageStoreLatestStateRetainMissing: retained message '{retained_cid}' does not exist"
+                        )));
+                    }
+                    put_message_tx(&tx, &tenant, retained)?;
+                }
+                for cid in transition.deletes {
+                    delete_message_tx(&tx, &tenant, &cid)?;
+                }
+
+                let position = put_result.position.map(|(position, cid)| {
+                    build_token(&tenant, &epoch, position as u64, Some(&cid))
+                });
+                tx.commit().map_err(sqlite_store_error)?;
+                Ok((put_result.wake, position))
+            })
+            .await
+            .map_err(MessageStoreError::from)?;
+
+        if let Some(wake) = wake {
+            let _ = self.waker_publisher.publish(wake);
+        }
+        Ok(LatestStateTransitionResult { position })
     }
 
     async fn get(
@@ -200,27 +206,7 @@ impl MessageStore for SqliteStore {
 
         conn.with_writer(move |connection| {
             let tx = connection.transaction().map_err(sqlite_store_error)?;
-
-            let feed_entry = match select_feed_entry(&tx, &tenant, &cid)? {
-                Some(entry) => Some((entry.message_cid, entry.fingerprint_scopes)),
-                None => None,
-            };
-
-            tx.execute(
-                "DELETE FROM messages WHERE tenant = ?1 AND message_cid = ?2",
-                params![tenant, cid],
-            )
-            .map_err(sqlite_store_error)?;
-
-            tx.execute(
-                "DELETE FROM feed_entries WHERE tenant = ?1 AND message_cid = ?2",
-                params![tenant, cid],
-            )
-            .map_err(sqlite_store_error)?;
-
-            if let Some((feed_cid, ref scopes)) = feed_entry {
-                upsert_feed_fingerprint(&tx, &tenant, &feed_cid, scopes)?;
-            }
+            delete_message_tx(&tx, &tenant, &cid)?;
 
             tx.commit().map_err(sqlite_store_error)?;
 
@@ -268,6 +254,96 @@ pub(crate) fn generate_epoch(tx: &Transaction) -> Result<usize, StoreError> {
     .map_err(sqlite_store_error)
 }
 
+struct PutMessageResult {
+    wake: Option<Wake>,
+    position: Option<(i64, String)>,
+}
+
+fn put_message_tx(
+    tx: &Transaction,
+    tenant: &str,
+    mutation: LatestStateMutation,
+) -> Result<PutMessageResult, StoreError> {
+    let LatestStateMutation { message, indexes } = mutation;
+    let message_json = serde_json::to_string(&message)
+        .map_err(|error| StoreError::InternalException(error.to_string()))?;
+    let message_cid = message
+        .cid()
+        .map_err(|error| StoreError::InternalException(error.to_string()))?
+        .to_string();
+    let indexes_json = serde_json::to_string(&indexes)
+        .map_err(|error| StoreError::InternalException(error.to_string()))?;
+
+    if !is_feed_message(&message) {
+        insert_message(tx, tenant, &message_cid, &message_json, &indexes_json)?;
+        return Ok(PutMessageResult {
+            wake: None,
+            position: None,
+        });
+    }
+
+    let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
+    match select_feed_entry(tx, tenant, &message_cid)? {
+        Some(entry) => {
+            if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
+                return Err(StoreError::ReplicationError(
+                    MessageReplicationError::FingerprintScopesMismatch,
+                ));
+            }
+            insert_message(tx, tenant, &message_cid, &message_json, &indexes_json)?;
+            update_feed_entry_indexes(tx, tenant, &entry, &indexes)?;
+            Ok(PutMessageResult {
+                wake: None,
+                position: Some((entry.position, message_cid)),
+            })
+        }
+        None => {
+            let next = next_position(tx, tenant)?;
+            insert_message(tx, tenant, &message_cid, &message_json, &indexes_json)?;
+            insert_feed_entry(
+                tx,
+                &FeedEntry {
+                    tenant: tenant.to_string(),
+                    position: next,
+                    message_cid: message_cid.clone(),
+                    indexes,
+                    fingerprint_scopes: msg_scopes.clone(),
+                },
+            )?;
+            update_feed_head(tx, tenant, next)?;
+            upsert_feed_fingerprint(tx, tenant, &message_cid, &msg_scopes)?;
+            Ok(PutMessageResult {
+                wake: Some(Wake {
+                    tenant: tenant.to_string(),
+                    position: next as u64,
+                }),
+                position: Some((next, message_cid)),
+            })
+        }
+    }
+}
+
+fn delete_message_tx(tx: &Transaction, tenant: &str, cid: &str) -> Result<(), StoreError> {
+    let feed_entry = select_feed_entry(tx, tenant, cid)?
+        .map(|entry| (entry.message_cid, entry.fingerprint_scopes));
+
+    tx.execute(
+        "DELETE FROM messages WHERE tenant = ?1 AND message_cid = ?2",
+        params![tenant, cid],
+    )
+    .map_err(sqlite_store_error)?;
+    tx.execute(
+        "DELETE FROM feed_entries WHERE tenant = ?1 AND message_cid = ?2",
+        params![tenant, cid],
+    )
+    .map_err(sqlite_store_error)?;
+
+    if let Some((feed_cid, scopes)) = feed_entry {
+        upsert_feed_fingerprint(tx, tenant, &feed_cid, &scopes)?;
+    }
+    Ok(())
+}
+
 fn insert_message(
     tx: &Transaction,
     tenant: &str,
@@ -280,6 +356,15 @@ fn insert_message(
                              (tenant, message_cid, message_json, indexes_json) \
                              VALUES (?1, ?2, ?3, ?4)",
         params![tenant, message_cid, message_json, indexes_json],
+    )
+    .map_err(sqlite_store_error)
+}
+
+fn message_exists(tx: &Transaction, tenant: &str, message_cid: &str) -> Result<bool, StoreError> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE tenant = ?1 AND message_cid = ?2)",
+        params![tenant, message_cid],
+        |row| row.get(0),
     )
     .map_err(sqlite_store_error)
 }

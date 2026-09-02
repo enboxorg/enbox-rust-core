@@ -9,11 +9,12 @@ use serde_json::json;
 
 use super::{
     replication_feed_reader::{build_token, cid_contribution, xor_in_place, Fingerprint},
-    EventLogReadOptions, KeyValues, MessageStore, ProgressGapReason, ReplicationFeedReader,
+    EventLogReadOptions, KeyValues, LatestStateMutation, LatestStateTransition, MessageStore,
+    ProgressGapReason, ReplicationFeedReader,
 };
 use crate::{
     descriptors::{DeleteDescriptor, Protocols, Records},
-    errors::EventLogError,
+    errors::{EventLogError, MessageReplicationError, MessageStoreError, StoreError},
     fields::WriteFields,
     filters::{Filter, FilterKey, Filters},
     Descriptor, Fields, Message, ProgressToken, Value,
@@ -36,10 +37,197 @@ where
     paging_resume_limits_and_filters(&factory).await;
     deletion_holes(&factory).await;
     duplicate_and_data_completion_updates(&factory).await;
+    atomic_latest_state_transitions(&factory).await;
     clear_and_epochs(&factory).await;
     progress_gaps(&factory).await;
     eligible_message_types(&factory).await;
     fingerprints(&factory).await;
+}
+
+async fn atomic_latest_state_transitions<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    // Covers: DWN-REC-006
+    let store = new_store(factory).await;
+    let retained = delete_message("retained", "2025-01-01T00:00:00Z");
+    let displaced = delete_message("displaced", "2025-01-01T00:00:01Z");
+    let winner = delete_message("winner", "2025-01-01T00:00:02Z");
+    let retained_cid = cid(&retained);
+    let displaced_cid = cid(&displaced);
+    let winner_cid = cid(&winner);
+
+    store
+        .put(
+            TENANT,
+            retained.clone(),
+            indexes(None, None, "retained-old"),
+        )
+        .await
+        .expect("seed retained message");
+    store
+        .put(TENANT, displaced, indexes(None, None, "displaced"))
+        .await
+        .expect("seed displaced message");
+
+    let result = store
+        .commit_latest_state(
+            TENANT,
+            LatestStateTransition {
+                put: LatestStateMutation {
+                    message: winner.clone(),
+                    indexes: indexes(None, None, "winner"),
+                },
+                retains: vec![LatestStateMutation {
+                    message: retained.clone(),
+                    indexes: indexes(None, None, "retained-new"),
+                }],
+                deletes: vec![displaced_cid.clone()],
+            },
+        )
+        .await
+        .expect("atomic latest-state transition");
+
+    assert_eq!(
+        result
+            .position
+            .as_ref()
+            .map(|token| token.position.as_str()),
+        Some("3")
+    );
+    assert_eq!(
+        result
+            .position
+            .as_ref()
+            .and_then(|token| token.message_cid.as_deref()),
+        Some(winner_cid.as_str())
+    );
+    assert!(store.get(TENANT, &retained_cid).await.unwrap().is_some());
+    assert_eq!(store.get(TENANT, &displaced_cid).await.unwrap(), None);
+    assert!(store.get(TENANT, &winner_cid).await.unwrap().is_some());
+
+    let page = store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .expect("read transitioned feed");
+    assert_eq!(
+        page.events
+            .iter()
+            .map(|event| (event.seq.as_str(), event.message_cid.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("1", Some(retained_cid.as_str())),
+            ("3", Some(winner_cid.as_str()))
+        ]
+    );
+    assert_eq!(markers(&page), ["retained-new", "winner"]);
+
+    // Covers: DWN-REC-003
+    // Covers: DWN-REC-006
+    let rollback_store = new_store(factory).await;
+    let existing = delete_message("existing", "2025-02-01T00:00:00Z");
+    let existing_cid = cid(&existing);
+    rollback_store
+        .put(
+            TENANT,
+            existing.clone(),
+            indexes(Some("protocol-a"), None, "existing"),
+        )
+        .await
+        .expect("seed rollback store");
+    let rejected = delete_message("rejected", "2025-02-01T00:00:01Z");
+    let rejected_cid = cid(&rejected);
+    let error = rollback_store
+        .commit_latest_state(
+            TENANT,
+            LatestStateTransition {
+                put: LatestStateMutation {
+                    message: rejected,
+                    indexes: indexes(None, None, "rejected"),
+                },
+                retains: vec![LatestStateMutation {
+                    message: existing.clone(),
+                    indexes: indexes(Some("protocol-b"), None, "invalid-reindex"),
+                }],
+                deletes: vec![],
+            },
+        )
+        .await
+        .expect_err("fingerprint scope mutation must roll back");
+    assert!(matches!(
+        error,
+        MessageStoreError::StoreError(StoreError::ReplicationError(
+            MessageReplicationError::FingerprintScopesMismatch
+        ))
+    ));
+    assert_eq!(
+        rollback_store.get(TENANT, &rejected_cid).await.unwrap(),
+        None
+    );
+    assert!(rollback_store
+        .get(TENANT, &existing_cid)
+        .await
+        .unwrap()
+        .is_some());
+    let page = rollback_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .expect("read rolled-back feed");
+    assert_eq!(page.events.len(), 1);
+    assert_eq!(page.events[0].seq, "1");
+    assert_eq!(markers(&page), ["existing"]);
+
+    let invalid_store = new_store(factory).await;
+    let put = delete_message("overlap", "2025-03-01T00:00:00Z");
+    let put_cid = cid(&put);
+    invalid_store
+        .commit_latest_state(
+            TENANT,
+            LatestStateTransition {
+                put: LatestStateMutation {
+                    message: put,
+                    indexes: indexes(None, None, "overlap"),
+                },
+                retains: vec![],
+                deletes: vec![put_cid.clone()],
+            },
+        )
+        .await
+        .expect_err("put/delete overlap must be rejected");
+    assert_eq!(invalid_store.get(TENANT, &put_cid).await.unwrap(), None);
+    assert!(invalid_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .expect("read invalid transition store")
+        .events
+        .is_empty());
+
+    let candidate = delete_message("candidate", "2025-03-01T00:00:01Z");
+    let candidate_cid = cid(&candidate);
+    let missing = delete_message("missing", "2025-03-01T00:00:00Z");
+    invalid_store
+        .commit_latest_state(
+            TENANT,
+            LatestStateTransition {
+                put: LatestStateMutation {
+                    message: candidate,
+                    indexes: indexes(None, None, "candidate"),
+                },
+                retains: vec![LatestStateMutation {
+                    message: missing,
+                    indexes: indexes(None, None, "missing"),
+                }],
+                deletes: vec![],
+            },
+        )
+        .await
+        .expect_err("missing retain must roll back");
+    assert_eq!(
+        invalid_store.get(TENANT, &candidate_cid).await.unwrap(),
+        None
+    );
 }
 
 async fn new_store<S, F, Fut>(factory: &F) -> S
