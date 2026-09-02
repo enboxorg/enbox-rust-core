@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -21,21 +20,22 @@ use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::records::common::{
-    authorize_against_protocol, bool_filter, compare_messages, context_id,
-    core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
-    existing_initial_lacks_data, fetch_newest_write, filter_map, find_initial_write,
-    governing_timestamp, message_cid, message_record_id, message_timestamp, newest_message,
-    parent_context_id, purge_record_messages, records_delete_descriptor, records_write_indexes,
-    set_encoded_data, store_error_reply, string_filter, validate_data_integrity,
-    validate_records_write_integrity, verify_immutable_properties,
+    authorize_against_protocol, bool_filter, context_id, core_protocol_error_reply,
+    delete_from_data_store_if_needed, encoded_data_bytes, existing_initial_lacks_data,
+    fetch_newest_write, filter_map, find_initial_write, governing_timestamp, message_cid,
+    message_record_id, message_timestamp, newest_message, parent_context_id, purge_record_messages,
+    records_write_indexes, set_encoded_data, store_error_reply, string_filter,
+    validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Write;
 use crate::replies::Status;
+use crate::stores::{KeyValues, LatestStateMutation, LatestStateTransition};
 use crate::Response;
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
+use super::state::{plan_records_transition, RecordsTransitionPlan};
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
 #[derive(Clone)]
@@ -45,6 +45,12 @@ pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex = ()> {
     state_index: StateIndex,
     core_protocol_registry: CoreProtocolRegistry,
     did_resolver: Option<Arc<dyn DidResolver>>,
+}
+
+struct PreparedRecordsWriteTransition {
+    durable: LatestStateTransition,
+    retained_indexes: Vec<(String, KeyValues)>,
+    deleted_cids: Vec<String>,
 }
 
 impl<MessageStore, DataStore, StateIndex> Handler
@@ -96,6 +102,54 @@ where
                 return Response::bad_request(detail);
             }
 
+            let record_id = match record_id(&message) {
+                Some(record_id) => record_id,
+                None => {
+                    return Response::bad_request(
+                        "RecordsWriteMissingRecordId: recordId is required".to_string(),
+                    )
+                }
+            };
+            let existing_messages = match self.existing_record_messages(tenant, &record_id).await {
+                Ok(messages) => messages,
+                Err(reply) => return reply,
+            };
+            let incoming_cid = match message_cid(&message) {
+                Ok(cid) => cid,
+                Err(detail) => return Response::bad_request(detail),
+            };
+            let transition_plan = match plan_records_transition(&message, &existing_messages) {
+                Ok(plan) => plan,
+                Err(detail) => return Response::bad_request(detail),
+            };
+            let has_incoming_data =
+                data.is_some() || encoded_data_bytes(&message).ok().flatten().is_some();
+            let completes_initial_data =
+                matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. })
+                    && has_incoming_data
+                    && existing_initial_lacks_data(
+                        &existing_messages
+                            .iter()
+                            .find(|existing| {
+                                message_cid(existing).as_deref() == Ok(incoming_cid.as_str())
+                            })
+                            .cloned(),
+                        &self.data_store,
+                        tenant,
+                        &record_id,
+                        &descriptor.data_cid,
+                    )
+                    .await;
+
+            // Covers: DWN-REC-003
+            // Exact replay is classified before mutable protocol, role, grant, parent,
+            // record-limit, or state-relative admission can reinterpret it.
+            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. })
+                && !completes_initial_data
+            {
+                return Response::conflict();
+            }
+
             if let Err(detail) = self
                 .validate_referential_integrity(tenant, &message, &signature.author)
                 .await
@@ -109,19 +163,6 @@ where
             {
                 return Response::unauthorized(detail);
             }
-
-            let record_id = match record_id(&message) {
-                Some(record_id) => record_id,
-                None => {
-                    return Response::bad_request(
-                        "RecordsWriteMissingRecordId: recordId is required".to_string(),
-                    )
-                }
-            };
-            let existing_messages = match self.existing_record_messages(tenant, &record_id).await {
-                Ok(messages) => messages,
-                Err(reply) => return reply,
-            };
 
             let incoming_is_initial = match is_initial_write(&message, &signature.author) {
                 Ok(is_initial) => is_initial,
@@ -146,29 +187,8 @@ where
             }
 
             let newest_existing = newest_message(&existing_messages);
-            let incoming_is_newest = newest_existing
-                .as_ref()
-                .is_none_or(|newest| compare_messages(&message, newest) == Ordering::Greater);
-
-            if !incoming_is_newest
-                && !existing_initial_lacks_data(
-                    &newest_existing,
-                    &self.data_store,
-                    tenant,
-                    &record_id,
-                    &descriptor.data_cid,
-                )
-                .await
-            {
+            if matches!(transition_plan, RecordsTransitionPlan::Superseded { .. }) {
                 return Response::conflict();
-            }
-
-            if newest_existing
-                .as_ref()
-                .and_then(|message| records_delete_descriptor(message).ok())
-                .is_some()
-            {
-                return Response::bad_request("RecordsWriteNotAllowedAfterDelete: RecordsWrite is not allowed after a RecordsDelete.".to_string());
             }
 
             let mut is_latest_base_state = false;
@@ -216,17 +236,35 @@ where
                     Ok(indexes) => indexes,
                     Err(detail) => return Response::bad_request(detail),
                 };
+            let cleanup_cids = match &transition_plan {
+                RecordsTransitionPlan::Apply { outranked_cids, .. } => outranked_cids.clone(),
+                RecordsTransitionPlan::Duplicate { .. }
+                | RecordsTransitionPlan::Superseded { .. } => Vec::new(),
+            };
+            let PreparedRecordsWriteTransition {
+                durable,
+                retained_indexes,
+                deleted_cids,
+            } = match self.records_write_transition(
+                &message,
+                indexes.clone(),
+                &existing_messages,
+                &transition_plan,
+                &signature.author,
+            ) {
+                Ok(transition) => transition,
+                Err(detail) => return Response::bad_request(detail),
+            };
             if let Err(err) = self
                 .message_store
-                .put(tenant, message.clone(), indexes.clone())
+                .commit_latest_state(tenant, durable)
                 .await
             {
                 return store_error_reply(err.to_string());
             }
-            let incoming_cid = match message_cid(&message) {
-                Ok(cid) => cid,
-                Err(detail) => return Response::bad_request(detail),
-            };
+
+            // StateIndex is temporary compatibility plumbing. MessageStore owns the
+            // atomic durable transition and is the source of truth.
             if let Err(err) = self
                 .state_index
                 .insert(tenant, &incoming_cid, indexes)
@@ -234,22 +272,32 @@ where
             {
                 return store_error_reply(err.to_string());
             }
-
-            let newest_message = if incoming_is_newest {
-                message.clone()
-            } else {
-                newest_existing.unwrap_or_else(|| message.clone())
-            };
-            if let Err(detail) = self
-                .delete_all_older_messages_but_keep_initial_write(
-                    tenant,
-                    &existing_messages,
-                    &newest_message,
-                    &signature.author,
-                )
-                .await
-            {
-                return store_error_reply(detail);
+            for (cid, indexes) in retained_indexes {
+                if let Err(err) = self.state_index.insert(tenant, &cid, indexes).await {
+                    return store_error_reply(err.to_string());
+                }
+            }
+            if !deleted_cids.is_empty() {
+                if let Err(err) = self.state_index.delete(tenant, &deleted_cids).await {
+                    return store_error_reply(err.to_string());
+                }
+            }
+            for existing in &existing_messages {
+                if cleanup_cids
+                    .iter()
+                    .any(|cid| message_cid(existing).as_deref() == Ok(cid.as_str()))
+                {
+                    if let Err(detail) = delete_from_data_store_if_needed(
+                        tenant,
+                        existing,
+                        &message,
+                        &self.data_store,
+                    )
+                    .await
+                    {
+                        return store_error_reply(detail);
+                    }
+                }
             }
 
             if descriptor.squash == Some(true) {
@@ -620,50 +668,59 @@ where
         Ok(())
     }
 
-    async fn delete_all_older_messages_but_keep_initial_write(
+    fn records_write_transition(
         &self,
-        tenant: &str,
+        message: &Message<Descriptor>,
+        indexes: KeyValues,
         existing_messages: &[Message<Descriptor>],
-        newest_message: &Message<Descriptor>,
+        plan: &RecordsTransitionPlan,
         author: &str,
-    ) -> Result<(), String> {
-        for message in existing_messages {
-            if compare_messages(message, newest_message) != Ordering::Less {
+    ) -> Result<PreparedRecordsWriteTransition, String> {
+        let outranked_cids = match plan {
+            RecordsTransitionPlan::Apply { outranked_cids, .. } => outranked_cids.as_slice(),
+            RecordsTransitionPlan::Duplicate { .. } => &[],
+            RecordsTransitionPlan::Superseded { .. } => {
+                return Err(
+                    "RecordsStateSupersededTransition: superseded write cannot be committed"
+                        .to_string(),
+                )
+            }
+        };
+        let mut retains = Vec::new();
+        let mut retained_indexes = Vec::new();
+        let mut deletes = Vec::new();
+
+        for existing in existing_messages {
+            let existing_cid = message_cid(existing)?;
+            if !outranked_cids.contains(&existing_cid) {
                 continue;
             }
-
-            delete_from_data_store_if_needed(tenant, message, newest_message, &self.data_store)
-                .await?;
-
-            let old_cid = message_cid(message)?;
-
-            if is_initial_write(message, author).unwrap_or(false) {
-                let mut initial_write = message.clone();
+            if is_initial_write(existing, author).unwrap_or(false) {
+                let mut initial_write = existing.clone();
                 set_encoded_data(&mut initial_write, None)?;
-
                 let indexes = records_write_indexes(&initial_write, author, false)?;
-
-                self.message_store
-                    .put(tenant, initial_write.clone(), indexes.clone())
-                    .await
-                    .map_err(|err| err.to_string())?;
-                let new_cid = message_cid(&initial_write)?;
-                self.state_index
-                    .insert(tenant, &new_cid, indexes)
-                    .await
-                    .map_err(|err| err.to_string())?;
+                retained_indexes.push((existing_cid, indexes.clone()));
+                retains.push(LatestStateMutation {
+                    message: initial_write,
+                    indexes,
+                });
             } else {
-                self.message_store
-                    .delete(tenant, &old_cid)
-                    .await
-                    .map_err(|err| err.to_string())?;
-                self.state_index
-                    .delete(tenant, &[old_cid])
-                    .await
-                    .map_err(|err| err.to_string())?;
+                deletes.push(existing_cid);
             }
         }
-        Ok(())
+
+        Ok(PreparedRecordsWriteTransition {
+            durable: LatestStateTransition {
+                put: LatestStateMutation {
+                    message: message.clone(),
+                    indexes,
+                },
+                retains,
+                deletes: deletes.clone(),
+            },
+            retained_indexes,
+            deleted_cids: deletes,
+        })
     }
 }
 

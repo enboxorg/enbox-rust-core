@@ -29,7 +29,8 @@ use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::wake::{InProcessWakeBus, Wake, WakeError, WakePublisher};
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
-    MessageQueryResult, MessageStore, ReplicationFeedReader, StateIndex, SubscriptionMessage,
+    LatestStateTransition, LatestStateTransitionResult, MessageQueryResult, MessageStore,
+    ReplicationFeedReader, StateIndex, SubscriptionMessage,
 };
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
@@ -283,6 +284,72 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
 }
 
 #[tokio::test]
+async fn records_write_same_cid_data_completion_keeps_one_feed_identity() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-REC-005
+    // Covers: DWN-REC-006
+    const TENANT: &str = "did:example:alice";
+
+    let publisher = RecordingWakePublisher::default();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+    let mut data_store = TestDataStore::default();
+    let mut state_index = MemoryStateIndex::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    state_index.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _, _>::new(
+        message_store.clone(),
+        data_store,
+        state_index,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"complete this retained operation");
+    let write = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let message: Message<Descriptor> = serde_json::from_value(write.clone()).unwrap();
+    let cid = message_cid(&message).unwrap();
+
+    let reply = handler
+        .run(MethodHandlerRequest::new(TENANT, &write, None))
+        .await;
+    assert_eq!(reply.status.code, 204, "{}", reply.status.detail);
+
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            TENANT,
+            &write,
+            Some(data.clone()),
+        ))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let reply = handler
+        .run(MethodHandlerRequest::new(TENANT, &write, Some(data)))
+        .await;
+    assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+
+    let feed = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(feed.events.len(), 2);
+    assert_eq!(feed.cursor.unwrap().position, "2");
+    assert_eq!(publisher.positions(), [1, 2]);
+    assert!(
+        write_fields(&message_store.get(TENANT, &cid).await.unwrap().unwrap())
+            .unwrap()
+            .encoded_data
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn records_delete_retains_initial_feed_position_without_extra_wake() {
     const TENANT: &str = "did:example:alice";
 
@@ -401,6 +468,71 @@ async fn records_write_rejects_older_conflicting_write() {
         ))
         .await;
     assert_eq!(reply.status.code, 409);
+}
+
+#[tokio::test]
+async fn records_write_exact_replay_is_classified_before_mutable_protocol_validation() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-AUTH-006
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    let mut state_index = MemoryStateIndex::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    state_index.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _, _>::new(
+        message_store.clone(),
+        data_store,
+        state_index,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"admitted before protocol removal");
+    let write = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            TENANT,
+            &write,
+            Some(data.clone()),
+        ))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let protocol_cids = message_store
+        .rows
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Protocols(_)))
+        .map(|row| row.cid.clone())
+        .collect::<Vec<_>>();
+    for cid in protocol_cids {
+        message_store.delete(TENANT, &cid).await.unwrap();
+    }
+
+    let reply = handler
+        .run(MethodHandlerRequest::new(TENANT, &write, Some(data)))
+        .await;
+    assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+    assert_eq!(
+        message_store
+            .rows
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|row| matches!(row.message.descriptor, Descriptor::Records(_)))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1584,6 +1716,39 @@ impl MessageStore for TestMessageStore {
                 .find(|row| row.tenant == tenant && row.cid == cid)
                 .map(|row| row.message.clone()))
         }
+    }
+
+    async fn commit_latest_state(
+        &self,
+        tenant: &str,
+        transition: LatestStateTransition,
+    ) -> Result<LatestStateTransitionResult, MessageStoreError> {
+        transition.validate()?;
+        let mut rows = self.rows.write().unwrap();
+        for retained in &transition.retains {
+            let cid = message_cid(&retained.message).map_err(test_store_error)?;
+            if !rows
+                .iter()
+                .any(|row| row.tenant == tenant && row.cid == cid)
+            {
+                return Err(test_store_error(format!(
+                    "retained message '{cid}' does not exist"
+                )));
+            }
+        }
+
+        for mutation in std::iter::once(transition.put).chain(transition.retains) {
+            let cid = message_cid(&mutation.message).map_err(test_store_error)?;
+            rows.retain(|row| row.tenant != tenant || row.cid != cid);
+            rows.push(TestMessageRow {
+                tenant: tenant.to_string(),
+                cid,
+                message: mutation.message,
+                indexes: mutation.indexes,
+            });
+        }
+        rows.retain(|row| row.tenant != tenant || !transition.deletes.contains(&row.cid));
+        Ok(LatestStateTransitionResult { position: None })
     }
 
     fn query(
