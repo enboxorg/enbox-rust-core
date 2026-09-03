@@ -1,8 +1,11 @@
 //! Persistence tests for SQLite auxiliary stores.
 
+mod common;
+
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
+
+use common::TempDb;
 
 use dwn_rs_core::events::MessageEvent;
 use dwn_rs_core::stores::wake::WakePublishHandler;
@@ -17,14 +20,15 @@ const TENANT: &str = "did:example:alice";
 
 #[tokio::test]
 async fn sqlite_state_index_survives_reopen() {
-    let path = temp_db_path("state-index");
+    let db = TempDb::new("state-index");
+    let path = db.path();
     let indexes = BTreeMap::from([(
         "messageTimestamp".to_string(),
         Value::String("2025-01-01T00:00:00.000000Z".to_string()),
     )]);
 
     {
-        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+        let store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut state_index = SqliteStateIndex::new(&store);
         state_index.open().await.unwrap();
         state_index
@@ -39,13 +43,12 @@ async fn sqlite_state_index_survives_reopen() {
         let root_after = reopened.get_root(TENANT).await.unwrap();
         assert_eq!(root_before, root_after);
     }
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
 async fn sqlite_event_log_survives_reopen() {
-    let path = temp_db_path("event-log");
+    let db = TempDb::new("event-log");
+    let path = db.path();
     let indexes = BTreeMap::from([(
         "messageTimestamp".to_string(),
         Value::String("2025-01-01T00:00:00.000000Z".to_string()),
@@ -65,7 +68,7 @@ async fn sqlite_event_log_survives_reopen() {
     };
 
     {
-        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+        let store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut event_log = SqliteEventLog::new(&store);
         event_log.open().await.unwrap();
         let token = event_log
@@ -83,8 +86,6 @@ async fn sqlite_event_log_survives_reopen() {
         assert!(read.cursor.is_some());
         assert_eq!(read.cursor.unwrap().epoch, token.epoch);
     }
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,13 +95,14 @@ struct SampleTask {
 
 #[tokio::test]
 async fn sqlite_resumable_task_store_survives_reopen() {
-    let path = temp_db_path("resumable-tasks");
+    let db = TempDb::new("resumable-tasks");
+    let path = db.path();
     let task = SampleTask {
         action: "delete".to_string(),
     };
 
     {
-        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+        let store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut task_store = SqliteResumableTaskStore::new(&store);
         task_store.open().await.unwrap();
         let managed = task_store.register(task.clone(), 120).await.unwrap();
@@ -111,14 +113,4 @@ async fn sqlite_resumable_task_store_survives_reopen() {
         let loaded = reopened.read::<SampleTask>(&managed.id).await.unwrap();
         assert_eq!(loaded.expect("task").task, task);
     }
-
-    let _ = std::fs::remove_file(path);
-}
-
-fn temp_db_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "dwn-rs-{name}-{}-{}.sqlite",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap()
-    ))
 }
