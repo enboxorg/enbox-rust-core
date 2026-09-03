@@ -39,7 +39,7 @@ impl Status {
         Self {
             code,
             detail: error.to_string(),
-            error_code: Some(error.code),
+            error_code: Some(error.code.to_string()),
             info: error.info,
         }
     }
@@ -222,6 +222,7 @@ impl From<()> for Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::DwnErrorCode;
 
     #[test]
     fn status_omits_absent_error_metadata() {
@@ -233,7 +234,11 @@ mod tests {
 
     #[test]
     fn status_serializes_structured_dwn_error_metadata() {
-        let error = DwnError::new("ExampleError", "example failure").with_info(
+        let error = DwnError::new(
+            DwnErrorCode::RecordsWriteGetInitialWriteNotFound,
+            "example failure",
+        )
+        .with_info(
             [("recordId".to_string(), serde_json::json!("record-1"))]
                 .into_iter()
                 .collect(),
@@ -242,8 +247,8 @@ mod tests {
             serde_json::to_value(Status::from_error(400, error)).unwrap(),
             serde_json::json!({
                 "code": 400,
-                "detail": "ExampleError: example failure",
-                "errorCode": "ExampleError",
+                "detail": "RecordsWriteGetInitialWriteNotFound: example failure",
+                "errorCode": "RecordsWriteGetInitialWriteNotFound",
                 "info": { "recordId": "record-1" }
             })
         );

@@ -15,7 +15,7 @@ use crate::descriptors::{
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::encryption::Encryption;
-use crate::errors::EventLogError;
+use crate::errors::{DwnError, DwnErrorCode, EventLogError};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::handlers::configure::fetch_protocol_definition;
@@ -931,7 +931,9 @@ where
     let descriptor = records_write_descriptor(message)?;
     let protocol = descriptor.protocol.clone();
     let protocol_path = descriptor.protocol_path.clone();
-    let governing_timestamp = governing_timestamp(tenant, message, message_store, author).await?;
+    let governing_timestamp = governing_timestamp(tenant, message, message_store, author)
+        .await
+        .map_err(|error| error.to_string())?;
     let definition = fetch_protocol_definition(
         tenant,
         protocol.as_str(),
@@ -1263,12 +1265,26 @@ where
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GoverningTimestampError {
+    #[error(transparent)]
+    Dwn(#[from] DwnError),
+    #[error("{0}")]
+    Detail(String),
+}
+
+impl From<String> for GoverningTimestampError {
+    fn from(detail: String) -> Self {
+        Self::Detail(detail)
+    }
+}
+
 pub(crate) async fn governing_timestamp<MessageStore>(
     tenant: &str,
     message: &Message<Descriptor>,
     message_store: &MessageStore,
     author: &str,
-) -> Result<String, String>
+) -> Result<String, GoverningTimestampError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1280,7 +1296,10 @@ where
     let initial = fetch_initial_write_message(tenant, &record_id, message_store)
         .await?
         .ok_or_else(|| {
-            "RecordsWriteGetInitialWriteNotFound: Initial write is not found.".to_string()
+            DwnError::new(
+                DwnErrorCode::RecordsWriteGetInitialWriteNotFound,
+                "Initial write is not found.",
+            )
         })?;
     Ok(canonical_rfc3339(message_timestamp(&initial)?))
 }

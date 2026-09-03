@@ -18,6 +18,7 @@ use crate::descriptors::{
     records::strip_encoded_data, Descriptor, MessagesSyncDescriptor, Records,
 };
 use crate::descriptors::{MessageDescriptor, DELETE};
+use crate::errors::DwnErrorCode;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::replies::messages::{self};
 use crate::replies::Status;
@@ -33,12 +34,42 @@ const MAX_SYNC_DEPTH: usize = 16;
 
 static DEFAULT_HASHES: OnceLock<Vec<StateHash>> = OnceLock::new();
 
-/// Returns true when an applied sync message should be treated as success (TS parity).
-pub fn is_sync_apply_success(status_code: i32, message: &Message<Descriptor>) -> bool {
-    match status_code {
-        200 | 202 | 204 | 409 => true,
-        404 => message.descriptor.method() == DELETE,
-        _ => false,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplicationApplyOutcome {
+    Applied,
+    Duplicate,
+    Superseded,
+    Incomplete,
+    Invalid,
+    Deferred,
+}
+
+pub fn classify_apply_reply(
+    status: &Status,
+    message: &Message<Descriptor>,
+    already_stored: bool,
+) -> ReplicationApplyOutcome {
+    // A pre-existing CID only refines the handler's ordinary conflict response.
+    // It must never turn a fresh validation or authorization failure into a duplicate.
+    if already_stored && status.code == 409 {
+        return ReplicationApplyOutcome::Duplicate;
+    }
+    match status.code {
+        200 | 202 | 204 => ReplicationApplyOutcome::Applied,
+        409 => ReplicationApplyOutcome::Superseded,
+        404 if message.descriptor.method() == DELETE => ReplicationApplyOutcome::Incomplete,
+        code if code >= 500 => ReplicationApplyOutcome::Deferred,
+        _ => match status
+            .error_code
+            .as_deref()
+            .and_then(|code| DwnErrorCode::try_from(code).ok())
+        {
+            Some(DwnErrorCode::GeneralJwsVerifierGetPublicKeyNotFound) => {
+                ReplicationApplyOutcome::Deferred
+            }
+            Some(code) if code.is_missing_dependency() => ReplicationApplyOutcome::Incomplete,
+            _ => ReplicationApplyOutcome::Invalid,
+        },
     }
 }
 
@@ -162,8 +193,28 @@ where
 
     fn apply<'a>(&'a self, tenant: &'a str, entry: SyncMessageEntry) -> SyncFuture<'a, ()> {
         let applier = self.applier.clone();
+        let message_store = self.message_store.clone();
         let tenant = tenant.to_string();
         Box::pin(async move {
+            let actual_cid = entry.message.cid().map_err(|error| {
+                SyncError::permanent("SyncApplyMessageCidFailed", error.to_string())
+            })?;
+            if actual_cid.to_string() != entry.message_cid {
+                return Err(SyncError::permanent(
+                    "SyncApplyMessageCidMismatch",
+                    format!(
+                        "entry messageCid '{}' does not match message CID '{actual_cid}'",
+                        entry.message_cid
+                    ),
+                ));
+            }
+            let already_stored = message_store
+                .get(&tenant, &actual_cid.to_string())
+                .await
+                .map_err(|error| {
+                    SyncError::transient("SyncApplyStoreReadFailed", error.to_string())
+                })?
+                .is_some();
             let reply = if let Some(encoded_data) = entry.encoded_data.as_deref() {
                 let data = URL_SAFE_NO_PAD
                     .decode(encoded_data)
@@ -180,10 +231,11 @@ where
                     .process_message(&tenant, entry.message.clone())
                     .await
             };
-            if is_sync_apply_success(reply.status.code, &entry.message) {
-                Ok(())
-            } else {
-                Err(map_apply_error(reply))
+            match classify_apply_reply(&reply.status, &entry.message, already_stored) {
+                ReplicationApplyOutcome::Applied
+                | ReplicationApplyOutcome::Duplicate
+                | ReplicationApplyOutcome::Superseded => Ok(()),
+                outcome => Err(map_apply_error(reply.status, outcome)),
             }
         })
     }
@@ -369,10 +421,11 @@ where
         let tenant = tenant.to_string();
         Box::pin(async move {
             let status = this.process_apply_message(&tenant, &entry.message).await?;
-            if is_sync_apply_success(status.code, &entry.message) {
-                Ok(())
-            } else {
-                Err(map_apply_error(Response::new(status, ())))
+            match classify_apply_reply(&status, &entry.message, false) {
+                ReplicationApplyOutcome::Applied
+                | ReplicationApplyOutcome::Duplicate
+                | ReplicationApplyOutcome::Superseded => Ok(()),
+                outcome => Err(map_apply_error(status, outcome)),
             }
         })
     }
@@ -454,11 +507,14 @@ fn reply_root(resp: Response<messages::Sync>) -> SyncResult<String> {
     })
 }
 
-fn map_apply_error<R: Default>(reply: Response<R>) -> SyncError {
-    let retryable = reply.status.code >= 500;
+fn map_apply_error(status: Status, outcome: ReplicationApplyOutcome) -> SyncError {
+    let retryable = matches!(
+        outcome,
+        ReplicationApplyOutcome::Incomplete | ReplicationApplyOutcome::Deferred
+    );
     SyncError::new(
-        "SyncApplyFailed",
-        format!("{}: {}", reply.status.code, reply.status.detail),
+        status.error_code.as_deref().unwrap_or("SyncApplyFailed"),
+        format!("{}: {}", status.code, status.detail),
         retryable,
     )
 }
@@ -784,23 +840,69 @@ mod tests {
     use crate::Fields;
 
     use super::*;
+    use crate::errors::DwnError;
 
     #[test]
-    fn apply_success_matches_typescript_semantics() {
+    fn apply_reply_classification_preserves_semantic_outcomes() {
+        // Covers: DWN-SYNC-002, DWN-AUTH-006
         let write = Message::new(
             Descriptor::Records(Box::new(Records::Write(Default::default()))),
             Fields::Write(Default::default()),
         )
         .unwrap();
-        assert!(is_sync_apply_success(202, &write));
-        assert!(is_sync_apply_success(409, &write));
+        assert_eq!(
+            classify_apply_reply(&Status::new(202, "Accepted"), &write, false),
+            ReplicationApplyOutcome::Applied
+        );
+        assert_eq!(
+            classify_apply_reply(&Status::new(409, "Conflict"), &write, false),
+            ReplicationApplyOutcome::Superseded
+        );
+        assert_eq!(
+            classify_apply_reply(&Status::new(409, "Conflict"), &write, true),
+            ReplicationApplyOutcome::Duplicate
+        );
+        assert_eq!(
+            classify_apply_reply(&Status::new(401, "Unauthorized"), &write, true),
+            ReplicationApplyOutcome::Invalid
+        );
 
         let delete = Message::new(
             Descriptor::Records(Box::new(Records::Delete(Default::default()))),
             Fields::default(),
         )
         .unwrap();
-        assert!(is_sync_apply_success(404, &delete));
-        assert!(!is_sync_apply_success(404, &write));
+        assert_eq!(
+            classify_apply_reply(&Status::new(404, "Not Found"), &delete, false),
+            ReplicationApplyOutcome::Incomplete
+        );
+        assert_eq!(
+            classify_apply_reply(&Status::new(404, "Not Found"), &write, false),
+            ReplicationApplyOutcome::Invalid
+        );
+    }
+
+    #[test]
+    fn apply_reply_classification_uses_structured_error_code() {
+        // Covers: DWN-SYNC-002
+        let write = Message::new(
+            Descriptor::Records(Box::new(Records::Write(Default::default()))),
+            Fields::Write(Default::default()),
+        )
+        .unwrap();
+        let missing = Status::from_error(
+            400,
+            DwnError::new(
+                DwnErrorCode::RecordsWriteGetInitialWriteNotFound,
+                "Initial write is not found.",
+            ),
+        );
+        assert_eq!(
+            classify_apply_reply(&missing, &write, false),
+            ReplicationApplyOutcome::Incomplete
+        );
+        let error = map_apply_error(missing, ReplicationApplyOutcome::Incomplete);
+        assert_eq!(error.code, "RecordsWriteGetInitialWriteNotFound");
+        assert!(error.retryable);
     }
 }

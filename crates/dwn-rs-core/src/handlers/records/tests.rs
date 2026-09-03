@@ -207,6 +207,43 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
 }
 
 #[tokio::test]
+async fn records_write_missing_initial_preserves_structured_error_code() {
+    // Covers: DWN-SYNC-002
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store,
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let initial = signed_write_message(WriteSpec::new("2025-01-01T00:00:00.000000Z")).await;
+    let update = signed_write_message(WriteSpec {
+        record_id: Some(initial["recordId"].as_str().unwrap().to_string()),
+        context_id: Some(initial["contextId"].as_str().unwrap().to_string()),
+        date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &update,
+            None,
+        ))
+        .await;
+
+    assert_eq!(reply.status.code, 400);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("RecordsWriteGetInitialWriteNotFound")
+    );
+}
+
+#[tokio::test]
 async fn records_write_retains_initial_feed_position_without_extra_wake() {
     const TENANT: &str = "did:example:alice";
 
@@ -929,6 +966,18 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
         ))
         .await;
     assert_eq!(reply.status.code, 409);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationSquashBackstop")
+    );
+    assert_eq!(
+        reply
+            .status
+            .info
+            .as_ref()
+            .and_then(|info| info.get("squashFloorTimestamp")),
+        Some(&json!("2025-01-01T00:01:00.000000Z"))
+    );
 }
 
 #[tokio::test]
@@ -1159,6 +1208,10 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
             ))
             .await;
         assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+        assert_eq!(
+            reply.status.error_code.as_deref(),
+            Some("ProtocolAuthorizationImmutableRecord")
+        );
         assert_eq!(
             reply.status.detail,
             format!(
