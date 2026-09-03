@@ -1,9 +1,9 @@
 //! Shared harness for [`DurableEventLog`] tests.
 //!
-//! Two harnesses cover different halves of the adapter's contract:
+//! Live commit -> wake -> drain coverage lives in the backend-neutral
+//! [`live_suite`](super::super::live_suite), run against memory here and
+//! SQLite in `dwn-rs-stores`.
 //!
-//! * [`live_harness`] pairs a [`MemoryMessageStore`] with an [`InProcessWakeBus`]
-//!   so tests exercise the real commit -> wake -> drain path.
 //! * [`scripted_harness`] drives the adapter with a [`ScriptedReader`], which can
 //!   produce feed responses a real store never would: a missing scan cursor, a
 //!   mid-drain progress gap, a transient failure, or a read held open while the
@@ -12,41 +12,32 @@
 //! Waits are bounded by [`HARNESS_TIMEOUT`]; a timeout means the adapter stopped
 //! making progress and the test fails rather than hangs.
 
-// Later commits in this series consume the rest of the harness surface.
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{mpsc, oneshot, Notify};
+use tokio::sync::{oneshot, Notify};
 use tokio::time::timeout;
 
-use crate::descriptors::{DeleteDescriptor, Protocols, Records, RecordsWriteDescriptor};
+use crate::descriptors::RecordsWriteDescriptor;
 use crate::errors::{EventLogError, StoreError};
 use crate::fields::WriteFields;
-use crate::filters::{Filter, FilterKey};
 use crate::stores::durable_event_log::{DurableEventLog, DurableEventLogConfig, ErrorFn};
-use crate::stores::memory::MemoryMessageStore;
 use crate::stores::replication_feed_reader::{build_token, Fingerprint, ReplicationBounds};
-use crate::stores::wake::{InProcessWakeBus, Wake, WakePublisher};
-use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
+use crate::stores::wake::InProcessWakeBus;
+use crate::stores::write_resolver::InitialWriteResolver;
 use crate::stores::{
-    EventLogEntry, EventLogReadOptions, EventLogReadResult, KeyValues, MessageStore,
-    ProgressGapCode, ProgressGapInfo, ProgressGapReason, ReplicationFeedReader, SubscriptionError,
-    SubscriptionListener, SubscriptionMessage,
+    EventLogEntry, EventLogReadOptions, EventLogReadResult, KeyValues, ProgressGapCode,
+    ProgressGapInfo, ProgressGapReason, ReplicationFeedReader,
 };
-use crate::{Descriptor, Fields, Filters, Message, MessageEvent, ProgressToken, Value};
+use crate::{Descriptor, Filters, Message, MessageEvent, ProgressToken};
 
-pub(crate) const TENANT: &str = "did:example:alice";
-pub(crate) const OTHER_TENANT: &str = "did:example:bob";
 pub(crate) const EPOCH: &str = "01JBQ0TESTEPOCH000000000000";
 
-/// Upper bound on any harness wait. Exceeding it is a test failure, not a retry.
-pub(crate) const HARNESS_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Window used when asserting that nothing further is delivered.
-pub(crate) const QUIET_WINDOW: Duration = Duration::from_millis(50);
+pub(crate) use super::super::live_suite::{
+    index_filters, publish_wake, recorder, recorder_with_hook, settle, test_config, write_message,
+    HARNESS_TIMEOUT, OTHER_TENANT, QUIET_WINDOW, TENANT,
+};
 
 // -------------------------------------------------------------------------
 // Token, message, and page fixtures
@@ -67,58 +58,11 @@ pub(crate) fn tenant_token(
     build_token(tenant, epoch, position, message_cid)
 }
 
-pub(crate) fn delete_message(record_id: &str, timestamp: &str) -> Message<Descriptor> {
-    Message {
-        descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(DeleteDescriptor {
-            message_timestamp: timestamp.parse().expect("valid fixture timestamp"),
-            record_id: record_id.to_string(),
-            prune: false,
-        })))),
-        fields: Fields::Authorization(Default::default()),
-    }
-}
-
-pub(crate) fn write_message(encoded_data: Option<&str>) -> Message<Descriptor> {
-    Message {
-        descriptor: Descriptor::Records(Box::new(Records::Write(Default::default()))),
-        fields: Fields::Write(WriteFields {
-            encoded_data: encoded_data.map(str::to_string),
-            ..Default::default()
-        }),
-    }
-}
-
-/// Builds indexes from string pairs, the common case for feed rows.
-pub(crate) fn indexes(pairs: &[(&str, &str)]) -> KeyValues {
-    let mut indexes = KeyValues::new();
-    for (key, value) in pairs {
-        indexes.insert((*key).to_string(), Value::String((*value).to_string()));
-    }
-    indexes
-}
-
-/// `ProtocolsConfigure` fixture, the third message type carried by the feed.
-pub(crate) fn configure_message() -> Message<Descriptor> {
-    Message {
-        descriptor: Descriptor::Protocols(Box::new(Protocols::Configure(Default::default()))),
-        fields: Fields::Authorization(Default::default()),
-    }
-}
-
-/// Stand-in for the `RecordsWrite` a resolver attaches to an update or delete.
 pub(crate) fn initial_write_message() -> Message<RecordsWriteDescriptor> {
     Message {
         descriptor: Default::default(),
         fields: WriteFields::default(),
     }
-}
-
-/// Single-index equality filter, the common subscription filter shape.
-pub(crate) fn index_filters(key: &str, value: &str) -> Filters {
-    Filters::from([[(
-        FilterKey::Index(key.to_string()),
-        Filter::Equal(Value::String(value.to_string())),
-    )]])
 }
 
 /// Feed entry at `position` carrying a `RecordsWrite` and no indexes.
@@ -271,15 +215,14 @@ struct ScriptedReaderInner {
 /// Feed reader whose responses are scripted per read.
 ///
 /// Queued responses are consumed in order. Once the script is exhausted the
-/// reader returns an empty drained page anchored at
-/// [`ScriptedReader::set_default_position`], so incidental reads (cursor
+/// reader returns an empty drained page, so incidental reads (cursor
 /// validation, empty-feed anchors, a final drain pass) never panic. Assertions
 /// are made against [`ScriptedReader::reads`] and delivered messages instead.
 ///
 /// Reads with `limit: Some(0)` — cursor validation and empty-feed anchor
-/// capture — draw from their own script ([`ScriptedReader::push_zero_limit_page`],
-/// [`ScriptedReader::push_zero_limit_error`]) so tests script paging without
-/// counting the opening reads that interleave with it.
+/// capture — draw from their own script ([`ScriptedReader::push_zero_limit_error`])
+/// so tests script paging without counting the opening reads that interleave
+/// with it.
 #[derive(Clone, Default)]
 pub(crate) struct ScriptedReader {
     inner: Arc<ScriptedReaderInner>,
@@ -292,29 +235,9 @@ impl ScriptedReader {
         reader
     }
 
-    pub(crate) fn with_epoch(epoch: &str) -> Self {
-        let reader = Self::default();
-        *reader.inner.epoch.lock().expect("epoch lock") = epoch.to_string();
-        reader
-    }
-
     /// Sets the bounds returned by `log_bounds`. `None` models an empty feed.
     pub(crate) fn set_bounds(&self, bounds: Option<ReplicationBounds>) {
         *self.inner.bounds.lock().expect("bounds lock") = bounds;
-    }
-
-    /// Fails the next `log_bounds` call.
-    pub(crate) fn fail_next_bounds(&self, factory: ErrorFactory) {
-        *self.inner.bounds_error.lock().expect("bounds error lock") = Some(factory);
-    }
-
-    /// Scan position used by the default page returned after the script is exhausted.
-    pub(crate) fn set_default_position(&self, position: u64) {
-        *self
-            .inner
-            .default_position
-            .lock()
-            .expect("default position lock") = position;
     }
 
     pub(crate) fn push_page(&self, result: EventLogReadResult) {
@@ -337,15 +260,6 @@ impl ScriptedReader {
     pub(crate) fn push_error(&self, factory: ErrorFactory) {
         self.push(ScriptedResponse {
             outcome: ScriptedOutcome::Error(factory),
-            entered: None,
-            release: None,
-        });
-    }
-
-    /// Queues a response for the next `limit: Some(0)` read.
-    pub(crate) fn push_zero_limit_page(&self, result: EventLogReadResult) {
-        self.push_zero_limit(ScriptedResponse {
-            outcome: ScriptedOutcome::Page(result),
             entered: None,
             release: None,
         });
@@ -379,11 +293,6 @@ impl ScriptedReader {
             entered: Some(entered_rx),
             release: Some(release_tx),
         }
-    }
-
-    /// Queues an error the harness can hold open; see [`ReadGate`].
-    pub(crate) fn push_gated_error(&self, factory: ErrorFactory) -> ReadGate {
-        self.push_gated(ScriptedOutcome::Error(factory))
     }
 
     fn push_gated(&self, outcome: ScriptedOutcome) -> ReadGate {
@@ -584,127 +493,65 @@ impl ReplicationFeedReader for ScriptedReader {
 // Listener recording
 // -------------------------------------------------------------------------
 
-/// One delivered `SubscriptionMessage::Event`, flattened for assertions.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct DeliveredEvent {
-    pub(crate) cursor: ProgressToken,
-    pub(crate) event: MessageEvent<Descriptor>,
-    pub(crate) seq: Option<String>,
-    pub(crate) message_cid: Option<String>,
-    pub(crate) is_latest_base_state: Option<bool>,
-    pub(crate) protocol: Option<String>,
-    pub(crate) encoded_data: Option<String>,
+/// Adapter over a [`ScriptedReader`], for feed responses a real store cannot produce.
+pub(crate) struct ScriptedHarness {
+    pub(crate) reader: ScriptedReader,
+    pub(crate) bus: InProcessWakeBus,
+    pub(crate) log: DurableEventLog<ScriptedReader, InProcessWakeBus>,
 }
 
-/// Receiving half of a [`SubscriptionListener`] built by [`recorder`].
-pub(crate) struct Recorder {
-    receiver: mpsc::UnboundedReceiver<SubscriptionMessage>,
+pub(crate) struct ScriptedHarnessBuilder {
+    reader: ScriptedReader,
+    bus: InProcessWakeBus,
+    config: DurableEventLogConfig,
+    resolver: Option<Arc<dyn InitialWriteResolver>>,
 }
 
-/// Creates a listener and the recorder that observes what it was called with.
-pub(crate) fn recorder() -> (SubscriptionListener, Recorder) {
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let listener: SubscriptionListener = Box::new(move |message| {
-        let _ = sender.send(message);
-    });
-
-    (listener, Recorder { receiver })
+pub(crate) fn scripted_harness() -> ScriptedHarnessBuilder {
+    ScriptedHarnessBuilder {
+        reader: ScriptedReader::new(),
+        bus: InProcessWakeBus::new(),
+        config: test_config(),
+        resolver: None,
+    }
 }
 
-/// Creates a listener that runs `hook` before recording each message.
-///
-/// Used for close-from-inside-the-listener coverage.
-pub(crate) fn recorder_with_hook<F>(hook: F) -> (SubscriptionListener, Recorder)
-where
-    F: Fn(&SubscriptionMessage) + Send + Sync + 'static,
-{
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let listener: SubscriptionListener = Box::new(move |message| {
-        hook(&message);
-        let _ = sender.send(message);
-    });
+impl ScriptedHarnessBuilder {
+    pub(crate) fn bus(mut self, bus: InProcessWakeBus) -> Self {
+        self.bus = bus;
+        self
+    }
 
-    (listener, Recorder { receiver })
+    pub(crate) fn config(mut self, config: DurableEventLogConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    pub(crate) fn resolver(mut self, resolver: Arc<dyn InitialWriteResolver>) -> Self {
+        self.resolver = Some(resolver);
+        self
+    }
+
+    pub(crate) fn build(self) -> ScriptedHarness {
+        let log = DurableEventLog::new(
+            self.reader.clone(),
+            self.bus.clone(),
+            self.resolver,
+            Some(self.config),
+        );
+
+        ScriptedHarness {
+            reader: self.reader,
+            bus: self.bus,
+            log,
+        }
+    }
 }
 
-impl Recorder {
-    pub(crate) async fn next_message(&mut self) -> SubscriptionMessage {
-        timeout(HARNESS_TIMEOUT, self.receiver.recv())
-            .await
-            .expect("timed out waiting for a subscription message")
-            .expect("subscription listener was dropped")
-    }
-
-    pub(crate) fn try_next(&mut self) -> Option<SubscriptionMessage> {
-        self.receiver.try_recv().ok()
-    }
-
-    pub(crate) async fn expect_event(&mut self) -> DeliveredEvent {
-        match self.next_message().await {
-            SubscriptionMessage::Event {
-                cursor,
-                event,
-                seq,
-                message_cid,
-                is_latest_base_state,
-                protocol,
-                encoded_data,
-            } => DeliveredEvent {
-                cursor,
-                event: *event,
-                seq,
-                message_cid,
-                is_latest_base_state,
-                protocol,
-                encoded_data,
-            },
-            other => panic!("expected an event, got {other:?}"),
-        }
-    }
-
-    pub(crate) async fn expect_events(&mut self, count: usize) -> Vec<DeliveredEvent> {
-        let mut events = Vec::with_capacity(count);
-        for _ in 0..count {
-            events.push(self.expect_event().await);
-        }
-        events
-    }
-
-    pub(crate) async fn expect_eose(&mut self) -> ProgressToken {
-        match self.next_message().await {
-            SubscriptionMessage::Eose { cursor } => cursor,
-            other => panic!("expected EOSE, got {other:?}"),
-        }
-    }
-
-    pub(crate) async fn expect_error(&mut self) -> (ProgressToken, SubscriptionError) {
-        match self.next_message().await {
-            SubscriptionMessage::Error { cursor, error } => (cursor, error),
-            other => panic!("expected a terminal error, got {other:?}"),
-        }
-    }
-
-    /// Asserts nothing is delivered within `window`.
-    ///
-    /// A dropped listener counts as quiet: a cleaned-up subscription releases it.
-    pub(crate) async fn expect_quiet(&mut self, window: Duration) {
-        if let Ok(Some(message)) = timeout(window, self.receiver.recv()).await {
-            panic!("expected no further messages, got {message:?}");
-        }
-    }
-
-    /// Positions (`seq`) of every event delivered so far, drained without waiting.
-    pub(crate) fn drain_event_positions(&mut self) -> Vec<String> {
-        let mut positions = Vec::new();
-        while let Some(message) = self.try_next() {
-            match message {
-                SubscriptionMessage::Event { seq, .. } => {
-                    positions.push(seq.expect("delivered events carry seq"));
-                }
-                other => panic!("expected only events, got {other:?}"),
-            }
-        }
-        positions
+impl ScriptedHarness {
+    /// Publishes a best-effort wake, as the message store would after a commit.
+    pub(crate) fn publish_wake(&self, tenant: &str, position: u64) {
+        publish_wake(&self.bus, tenant, position);
     }
 }
 
@@ -826,206 +673,4 @@ impl ErrorSink {
             )
         })
     }
-}
-
-// -------------------------------------------------------------------------
-// Adapter harnesses
-// -------------------------------------------------------------------------
-
-/// Config used by tests: no idle polling unless a test asks for it.
-pub(crate) fn test_config() -> DurableEventLogConfig {
-    DurableEventLogConfig {
-        idle_redrain_interval: None,
-        ..Default::default()
-    }
-}
-
-/// Adapter over a [`ScriptedReader`], for feed responses a real store cannot produce.
-pub(crate) struct ScriptedHarness {
-    pub(crate) reader: ScriptedReader,
-    pub(crate) bus: InProcessWakeBus,
-    pub(crate) log: DurableEventLog<ScriptedReader, InProcessWakeBus>,
-}
-
-pub(crate) struct ScriptedHarnessBuilder {
-    reader: ScriptedReader,
-    bus: InProcessWakeBus,
-    config: DurableEventLogConfig,
-    resolver: Option<Arc<dyn InitialWriteResolver>>,
-}
-
-pub(crate) fn scripted_harness() -> ScriptedHarnessBuilder {
-    ScriptedHarnessBuilder {
-        reader: ScriptedReader::new(),
-        bus: InProcessWakeBus::new(),
-        config: test_config(),
-        resolver: None,
-    }
-}
-
-impl ScriptedHarnessBuilder {
-    pub(crate) fn reader(mut self, reader: ScriptedReader) -> Self {
-        self.reader = reader;
-        self
-    }
-
-    pub(crate) fn bus(mut self, bus: InProcessWakeBus) -> Self {
-        self.bus = bus;
-        self
-    }
-
-    pub(crate) fn config(mut self, config: DurableEventLogConfig) -> Self {
-        self.config = config;
-        self
-    }
-
-    pub(crate) fn resolver(mut self, resolver: Arc<dyn InitialWriteResolver>) -> Self {
-        self.resolver = Some(resolver);
-        self
-    }
-
-    pub(crate) fn build(self) -> ScriptedHarness {
-        let log = DurableEventLog::new(
-            self.reader.clone(),
-            self.bus.clone(),
-            self.resolver,
-            Some(self.config),
-        );
-
-        ScriptedHarness {
-            reader: self.reader,
-            bus: self.bus,
-            log,
-        }
-    }
-}
-
-impl ScriptedHarness {
-    /// Publishes a best-effort wake, as the message store would after a commit.
-    pub(crate) fn publish_wake(&self, tenant: &str, position: u64) {
-        publish_wake(&self.bus, tenant, position);
-    }
-}
-
-/// Adapter over [`MemoryMessageStore`], exercising the real commit -> wake -> drain path.
-pub(crate) struct LiveHarness {
-    pub(crate) store: MemoryMessageStore,
-    pub(crate) bus: InProcessWakeBus,
-    pub(crate) log: DurableEventLog<MemoryMessageStore, InProcessWakeBus>,
-}
-
-pub(crate) struct LiveHarnessBuilder {
-    bus: InProcessWakeBus,
-    config: DurableEventLogConfig,
-    resolver: Option<Arc<dyn InitialWriteResolver>>,
-    message_store_resolver: bool,
-}
-
-pub(crate) fn live_harness() -> LiveHarnessBuilder {
-    LiveHarnessBuilder {
-        bus: InProcessWakeBus::new(),
-        config: test_config(),
-        resolver: None,
-        message_store_resolver: false,
-    }
-}
-
-impl LiveHarnessBuilder {
-    pub(crate) fn bus(mut self, bus: InProcessWakeBus) -> Self {
-        self.bus = bus;
-        self
-    }
-
-    pub(crate) fn config(mut self, config: DurableEventLogConfig) -> Self {
-        self.config = config;
-        self
-    }
-
-    pub(crate) fn resolver(mut self, resolver: Arc<dyn InitialWriteResolver>) -> Self {
-        self.resolver = Some(resolver);
-        self
-    }
-
-    /// Resolves initial writes through the harness's own message store.
-    pub(crate) fn with_message_store_resolver(mut self) -> Self {
-        self.message_store_resolver = true;
-        self
-    }
-
-    pub(crate) async fn build(self) -> LiveHarness {
-        // The publisher clone goes to the store and the subscriber clone to the
-        // adapter, so wakes follow the same path as a native assembly.
-        let mut store = MemoryMessageStore::default().with_waker_publisher(self.bus.clone());
-        store.open().await.expect("memory message store must open");
-
-        let resolver = match (self.resolver, self.message_store_resolver) {
-            (Some(resolver), _) => Some(resolver),
-            (None, true) => Some(Arc::new(MessageStoreInitialWriteResolver::new(Arc::new(
-                store.clone(),
-            ))) as Arc<dyn InitialWriteResolver>),
-            (None, false) => None,
-        };
-
-        let log =
-            DurableEventLog::new(store.clone(), self.bus.clone(), resolver, Some(self.config));
-
-        LiveHarness {
-            store,
-            bus: self.bus,
-            log,
-        }
-    }
-}
-
-impl LiveHarness {
-    /// Commits a feed message, which publishes a wake after the commit.
-    pub(crate) async fn commit(&self, tenant: &str, message: Message<Descriptor>, index: &str) {
-        self.store
-            .put(tenant, message, indexes(&[("marker", index)]))
-            .await
-            .expect("feed put");
-    }
-
-    /// Publishes a wake directly, modelling a duplicate or stale hint.
-    pub(crate) fn publish_wake(&self, tenant: &str, position: u64) {
-        publish_wake(&self.bus, tenant, position);
-    }
-
-    /// Commits a message with explicit indexes.
-    pub(crate) async fn store_put(
-        &self,
-        tenant: &str,
-        message: Message<Descriptor>,
-        indexes: KeyValues,
-    ) {
-        self.store
-            .put(tenant, message, indexes)
-            .await
-            .expect("feed put");
-    }
-
-    /// Commits a `RecordsDelete` distinguished by `marker`.
-    pub(crate) async fn commit_delete(&self, tenant: &str, marker: &str, timestamp: &str) {
-        self.commit(tenant, delete_message(marker, timestamp), marker)
-            .await;
-    }
-}
-
-/// Yields enough times for wake-bus tasks queued on this runtime to run.
-///
-/// Wake delivery is asynchronous, so a test that must observe a wake taking
-/// effect before it proceeds parks here rather than sleeping.
-pub(crate) async fn settle() {
-    for _ in 0..16 {
-        tokio::task::yield_now().await;
-    }
-}
-
-/// Publishes a wake directly, bypassing the store, to model a duplicate or stale hint.
-pub(crate) fn publish_wake(bus: &InProcessWakeBus, tenant: &str, position: u64) {
-    bus.publish(Wake {
-        tenant: tenant.to_string(),
-        position,
-    })
-    .expect("in-process wake publish");
 }
