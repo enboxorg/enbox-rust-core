@@ -1,0 +1,13 @@
+# Layer 5 store-injection expected failures (issue #169, C9).
+#
+# Each line names a dwn-sdk-js message-store spec (leaf test name from the
+# JUnit report) that is allowed to fail, with its owning issue. CI fails on
+# any failure NOT listed here, and on any listed test that starts passing
+# (stale entries must be removed, not left to rot).
+#
+# commitLatestState is the store-owned atomic transition owned by #189; the
+# Rust backend does not implement it yet, so the adapter has no method to call.
+should insert the new message, demote retained writes, and delete displaced rows in one commit #189
+should apply retains and deletes even when the new message is a duplicate #189
+should reject a retain whose replacement message does not match its target CID without applying the insert #189
+should fold the insert and delete fingerprint contributions of a shared domain without losing either #189

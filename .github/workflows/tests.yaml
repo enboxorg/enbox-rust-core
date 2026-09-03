@@ -218,4 +218,47 @@ jobs:
       - name: Run loopback interop tests
         env:
           ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
-        run: bun test tools/interop/loopback-interop.test.ts tools/interop/testsuite-injection.test.ts
+        run: bun test tools/interop/loopback-interop.test.ts
+
+  store-injection:
+    name: Layer 5 store injection (Rust SQLite vs dwn-sdk-js specs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - name: Read Enbox pin
+        id: pin
+        run: |
+          sha="$(grep -v '^#' .enbox-version | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')"
+          if [ "${#sha}" -ne 40 ]; then
+            echo "Expected a 40-character commit SHA in .enbox-version, got: ${sha}" >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: enboxorg/enbox
+          ref: ${{ steps.pin.outputs.sha }}
+          path: enbox
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Enbox workspace dependencies
+        working-directory: enbox
+        run: bun install --frozen-lockfile
+
+      - name: Run message-store specs against Rust SQLite with JUnit report
+        env:
+          ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
+        run: bun test tools/interop/testsuite-injection.test.ts --reporter=junit --reporter-outfile=/tmp/injection-junit.xml
+
+      - name: Gate on expected failures only
+        run: tools/interop/check-injection-results.sh /tmp/injection-junit.xml tools/interop/store-injection-allowlist.txt

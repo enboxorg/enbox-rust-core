@@ -18,7 +18,7 @@ This repository validates DWN behavior through **three independent layers**. The
 | 2 — Shared fixtures (TS) | `bun test tools/conformance/typescript-*.test.ts` | `typescript-conformance` | No | Partial (adapter subset) |
 | 3 — dwn-sdk-js native | `bun run --filter @enbox/dwn-sdk-js test:node` | `dwn-sdk-js-reference` | No | Yes (full SDK suite) |
 | 4 — Loopback RPC interop | `bun test tools/interop/loopback-interop.test.ts` | `loopback-interop` | Cross-runtime | Client ↔ Rust server |
-| 5 — Store injection (future) | `TestSuite.runInjectableDependentTests` | Not in CI yet | Target | Same specs, Rust stores |
+| 5 — Store injection (message-store) | `bun test tools/interop/testsuite-injection.test.ts` | `store-injection` | Yes (SQLite backend) | Yes (dwn-sdk-js store specs) |
 
 ## Shared fixture assertion matrix
 
@@ -93,8 +93,9 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | Fixture echo `message.process` replies vs real handler bodies | Rust uses `SqliteNativeDwn` dispatch for behavior cases (#106) | done |
 | Filter engine DateTime/Cid index coercion | Fixed RFC3339 range + CID string equality in `filters/matching.rs` | done |
 | HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
-| Rust-backed `TestSuite.runInjectableDependentTests` | Phase 1 scaffold in `tools/interop/testsuite-injection.test.ts` (#108); WASM path documented in [STORES_SDK_JS.md](./STORES_SDK_JS.md); FFI adapters future | partial |
+| Rust-backed `TestSuite.runInjectableDependentTests` | Message-store spec slice runs in the `store-injection` CI job via the JSON-RPC bridge (`store_injection_server` + `rust-sqlite-message-store.ts`); `commitLatestState` ×4 allowlisted in `tools/interop/store-injection-allowlist.txt` (#189); DataStore/EventLog/ResumableTaskStore adapters + full-suite injection future | partial |
 | Durable-feed sync integration for `SqliteNativeDwn` | Legacy StateIndex/`MessagesSync` integration coverage removed; replacement tracked by #187/#188/#211 | open |
+| `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe; the removed-upstream `MessagesSync` scenario is disabled (see #188) | done |
 | `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `poll_reconcile`, `sync_status` + crate README | done |
 | `enbox-ffi` agent identity surface | `initialize_agent_identity`, `current_agent_identity`, `derive_agent_keys_from_phrase` + `SqliteSecretStore`; covered in `crates/enbox-ffi/src/lib.rs` tests | done |
