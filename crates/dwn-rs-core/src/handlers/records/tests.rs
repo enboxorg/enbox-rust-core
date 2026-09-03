@@ -975,6 +975,97 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
 }
 
 #[tokio::test]
+async fn records_delete_exact_replay_is_classified_before_mutable_protocol_validation() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-AUTH-006
+    // Covers: DWN-SYNC-002
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"delete admitted before protocol removal");
+    let initial = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        write_handler
+            .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let delete = signed_delete_message(&record_id, false, "2025-01-01T00:01:00.000000Z").await;
+    assert_eq!(
+        delete_handler
+            .run(MethodHandlerRequest::new(TENANT, &delete, None))
+            .await
+            .status
+            .code,
+        202
+    );
+    let records_before = message_store
+        .rows
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Records(_)))
+        .count();
+
+    let protocol_cids = message_store
+        .rows
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Protocols(_)))
+        .map(|row| row.cid.clone())
+        .collect::<Vec<_>>();
+    for cid in protocol_cids {
+        message_store.delete(TENANT, &cid).await.unwrap();
+    }
+
+    let reply = delete_handler
+        .run(MethodHandlerRequest::new(TENANT, &delete, None))
+        .await;
+    assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+    let delete_message: Message<Descriptor> = serde_json::from_value(delete).unwrap();
+    assert_eq!(
+        crate::sync::endpoint::classify_apply_reply(&reply.status, &delete_message, true),
+        crate::sync::endpoint::ReplicationApplyOutcome::Duplicate
+    );
+    assert_eq!(
+        message_store
+            .rows
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|row| matches!(row.message.descriptor, Descriptor::Records(_)))
+            .count(),
+        records_before
+    );
+}
+
+#[tokio::test]
 async fn records_read_returns_gone_when_external_data_is_missing() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();

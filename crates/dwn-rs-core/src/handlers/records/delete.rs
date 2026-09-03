@@ -97,6 +97,16 @@ where
                 Err(detail) => return Response::bad_request(detail),
             };
 
+            // Covers: DWN-REC-003, DWN-AUTH-006
+            // An already-settled tombstone is classified before mutable grant, protocol,
+            // or role state can reinterpret its delivery.
+            if matches!(
+                transition_plan,
+                RecordsTransitionPlan::Duplicate { .. } | RecordsTransitionPlan::Superseded { .. }
+            ) {
+                return Response::conflict();
+            }
+
             let initial_write = match find_initial_write(
                 &existing_messages,
                 extract_author(&newest_existing)
@@ -126,13 +136,6 @@ where
             .await
             {
                 return Response::unauthorized(detail);
-            }
-
-            if matches!(
-                transition_plan,
-                RecordsTransitionPlan::Duplicate { .. } | RecordsTransitionPlan::Superseded { .. }
-            ) {
-                return Response::conflict();
             }
 
             if let Err(detail) = perform_records_delete(
