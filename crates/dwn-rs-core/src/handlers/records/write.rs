@@ -13,7 +13,7 @@ use crate::descriptors::records::is_initial_write;
 use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields},
-    Descriptor, RecordsWriteDescriptor,
+    Descriptor, Records, RecordsWriteDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
@@ -24,13 +24,13 @@ use crate::handlers::protocols::configure::{
     fetch_protocol_definition, ProtocolDefinitionLookupError,
 };
 use crate::handlers::records::common::{
-    authorize_against_protocol, bool_filter, context_id, core_protocol_error_reply,
-    delete_from_data_store_if_needed, encoded_data_bytes, existing_initial_lacks_data,
-    fetch_newest_write, filter_map, find_initial_write, governing_timestamp, message_cid,
-    message_record_id, message_timestamp, newest_message, parent_context_id, purge_record_messages,
-    records_write_indexes, set_encoded_data, store_error_reply, string_filter,
-    validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
-    GoverningTimestampError,
+    authorize_against_protocol, bool_filter, compare_messages, context_id,
+    core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
+    existing_initial_lacks_data, fetch_newest_write, filter_map, find_initial_write,
+    governing_timestamp, message_cid, message_record_id, message_timestamp, newest_message,
+    parent_context_id, purge_record_messages, records_write_indexes, set_encoded_data,
+    store_error_reply, string_filter, validate_data_integrity, validate_records_write_integrity,
+    verify_immutable_properties, GoverningTimestampError,
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
@@ -218,7 +218,7 @@ where
                     ));
                 };
                 if let Err(detail) = verify_immutable_properties(&initial_write, &message) {
-                    return Response::bad_request(detail);
+                    return Response::bad_request_error(detail);
                 }
             }
 
@@ -236,16 +236,38 @@ where
 
             let newest_existing = newest_message(&existing_messages);
             if matches!(transition_plan, RecordsTransitionPlan::Superseded { .. }) {
+                if newest_existing.as_ref().is_some_and(|existing| {
+                    matches!(
+                        &existing.descriptor,
+                        Descriptor::Records(records)
+                            if matches!(records.as_ref(), Records::Delete(_))
+                    ) && compare_messages(&message, existing).is_gt()
+                }) {
+                    return Response::bad_request_error(DwnError::new(
+                        DwnErrorCode::RecordsWriteNotAllowedAfterDelete,
+                        "RecordsWrite is not allowed after a RecordsDelete.",
+                    ));
+                }
                 return Response::conflict();
             }
 
             let mut is_latest_base_state = false;
             if let Some(data) = data.or_else(|| encoded_data_bytes(&message).ok().flatten()) {
-                if let Err(detail) = self
+                if let Err(error) = self
                     .process_message_with_data_stream(tenant, &mut message, data)
                     .await
                 {
-                    return Response::bad_request(detail);
+                    return match error {
+                        RecordsWriteValidationError::Dwn(error) => {
+                            Response::bad_request_error(error)
+                        }
+                        RecordsWriteValidationError::Detail(detail) => {
+                            Response::bad_request(detail)
+                        }
+                        RecordsWriteValidationError::Internal(detail) => {
+                            Response::internal_error(detail)
+                        }
+                    };
                 }
                 is_latest_base_state = true;
             } else if !incoming_is_initial {
@@ -412,8 +434,10 @@ where
         tenant: &str,
         message: &mut Message<Descriptor>,
         data: Bytes,
-    ) -> Result<(), String> {
-        let descriptor = records_write_descriptor(message)?.clone();
+    ) -> Result<(), RecordsWriteValidationError> {
+        let descriptor = records_write_descriptor(message)
+            .map_err(|error| error.to_string())?
+            .clone();
         let actual_data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
         validate_data_integrity(
             &descriptor.data_cid,
@@ -423,7 +447,8 @@ where
         )?;
 
         if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
-            set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))?;
+            set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))
+                .map_err(RecordsWriteValidationError::from)?;
             return Ok(());
         }
 
@@ -438,18 +463,22 @@ where
                 stream::iter(vec![data]),
             )
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| RecordsWriteValidationError::Internal(err.to_string()))?;
         if put_result.data_size as u64 != descriptor.data_size {
             let _ = self
                 .data_store
                 .delete(tenant, &record_id, &descriptor.data_cid)
                 .await;
-            return Err(format!(
-                "RecordsWriteDataSizeMismatch: actual data size {} bytes does not match dataSize in descriptor: {}",
-                put_result.data_size, descriptor.data_size
-            ));
+            return Err(DwnError::new(
+                DwnErrorCode::RecordsWriteDataSizeMismatch,
+                format!(
+                    "actual data size {} bytes does not match dataSize in descriptor: {}",
+                    put_result.data_size, descriptor.data_size
+                ),
+            )
+            .into());
         }
-        set_encoded_data(message, None)
+        set_encoded_data(message, None).map_err(RecordsWriteValidationError::from)
     }
 
     async fn process_message_without_data_stream(

@@ -179,9 +179,13 @@ pub(crate) fn find_initial_write(
 pub(crate) fn verify_immutable_properties(
     initial_write: &Message<Descriptor>,
     new_message: &Message<Descriptor>,
-) -> Result<(), String> {
-    let initial = records_write_descriptor(initial_write)?;
-    let new = records_write_descriptor(new_message)?;
+) -> Result<(), DwnError> {
+    let initial = records_write_descriptor(initial_write).map_err(|detail| {
+        DwnError::new(DwnErrorCode::RecordsWriteImmutablePropertyChanged, detail)
+    })?;
+    let new = records_write_descriptor(new_message).map_err(|detail| {
+        DwnError::new(DwnErrorCode::RecordsWriteImmutablePropertyChanged, detail)
+    })?;
     let changed = [
         ("interface", initial.interface(), new.interface()),
         ("method", initial.method(), new.method()),
@@ -218,8 +222,9 @@ pub(crate) fn verify_immutable_properties(
     .or_else(|| (initial.squash != new.squash).then(|| "squash".to_string()));
 
     if let Some(property) = changed {
-        return Err(format!(
-            "RecordsWriteImmutablePropertyChanged: {property} is an immutable property"
+        return Err(DwnError::new(
+            DwnErrorCode::RecordsWriteImmutablePropertyChanged,
+            format!("{property} is an immutable property"),
         ));
     }
     Ok(())
@@ -230,15 +235,17 @@ pub(crate) fn validate_data_integrity(
     expected_data_size: u64,
     actual_data_cid: &str,
     actual_data_size: u64,
-) -> Result<(), String> {
+) -> Result<(), DwnError> {
     if expected_data_cid != actual_data_cid {
-        return Err(format!(
-            "RecordsWriteDataCidMismatch: actual data CID {actual_data_cid} does not match dataCid in descriptor: {expected_data_cid}"
+        return Err(DwnError::new(
+            DwnErrorCode::RecordsWriteDataCidMismatch,
+            format!("actual data CID {actual_data_cid} does not match dataCid in descriptor: {expected_data_cid}"),
         ));
     }
     if expected_data_size != actual_data_size {
-        return Err(format!(
-            "RecordsWriteDataSizeMismatch: actual data size {actual_data_size} bytes does not match dataSize in descriptor: {expected_data_size}"
+        return Err(DwnError::new(
+            DwnErrorCode::RecordsWriteDataSizeMismatch,
+            format!("actual data size {actual_data_size} bytes does not match dataSize in descriptor: {expected_data_size}"),
         ));
     }
     Ok(())

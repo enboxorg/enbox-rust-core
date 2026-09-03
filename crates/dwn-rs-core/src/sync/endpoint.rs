@@ -67,6 +67,9 @@ pub fn classify_apply_reply(
             Some(DwnErrorCode::GeneralJwsVerifierGetPublicKeyNotFound) => {
                 ReplicationApplyOutcome::Deferred
             }
+            Some(DwnErrorCode::RecordsWriteNotAllowedAfterDelete) => {
+                ReplicationApplyOutcome::Superseded
+            }
             Some(code) if code.is_missing_dependency() => ReplicationApplyOutcome::Incomplete,
             _ => ReplicationApplyOutcome::Invalid,
         },
@@ -904,5 +907,17 @@ mod tests {
         let error = map_apply_error(missing, ReplicationApplyOutcome::Incomplete);
         assert_eq!(error.code, "RecordsWriteGetInitialWriteNotFound");
         assert!(error.retryable);
+
+        let terminal_write = Status::from_error(
+            400,
+            DwnError::new(
+                DwnErrorCode::RecordsWriteNotAllowedAfterDelete,
+                "RecordsWrite is not allowed after a RecordsDelete.",
+            ),
+        );
+        assert_eq!(
+            classify_apply_reply(&terminal_write, &write, false),
+            ReplicationApplyOutcome::Superseded
+        );
     }
 }

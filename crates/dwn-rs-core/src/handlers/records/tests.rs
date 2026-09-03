@@ -244,6 +244,88 @@ async fn records_write_missing_initial_preserves_structured_error_code() {
 }
 
 #[tokio::test]
+async fn records_write_preserves_structured_commit_validation_errors() {
+    // Covers: DWN-REC-002, DWN-SYNC-002
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store,
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"structured validation");
+    let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+    let initial = signed_write_message(WriteSpec {
+        data_cid: data_cid.clone(),
+        data_size: data.len() as u64,
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let context_id = initial["contextId"].as_str().unwrap().to_string();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let cases = [
+        (
+            WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id.clone()),
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                recipient: Some("did:example:bob".to_string()),
+                data_cid: data_cid.clone(),
+                data_size: b"structured validation".len() as u64,
+                ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+            },
+            "RecordsWriteImmutablePropertyChanged",
+        ),
+        (
+            WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id.clone()),
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                data_cid: generate_dag_pb_cid_from_bytes(b"different").to_string(),
+                data_size: b"structured validation".len() as u64,
+                ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+            },
+            "RecordsWriteDataCidMismatch",
+        ),
+        (
+            WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id.clone()),
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                data_cid: data_cid.clone(),
+                data_size: b"structured validation".len() as u64 + 1,
+                ..WriteSpec::new("2025-01-01T00:03:00.000000Z")
+            },
+            "RecordsWriteDataSizeMismatch",
+        ),
+    ];
+
+    for (spec, expected_code) in cases {
+        let update = signed_write_message(spec).await;
+        let reply = handler
+            .run(MethodHandlerRequest::new(TENANT, &update, None))
+            .await;
+        assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+        assert_eq!(reply.status.error_code.as_deref(), Some(expected_code));
+    }
+}
+
+#[tokio::test]
 async fn records_write_retains_initial_feed_position_without_extra_wake() {
     const TENANT: &str = "did:example:alice";
 
@@ -502,12 +584,14 @@ async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
                 .await
                 .status
                 .code;
-            let write = write_handler
+            let write_reply = write_handler
                 .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
-                .await
-                .status
-                .code;
-            [delete, write]
+                .await;
+            assert_eq!(
+                write_reply.status.error_code.as_deref(),
+                Some("RecordsWriteNotAllowedAfterDelete")
+            );
+            [delete, write_reply.status.code]
         } else {
             let write = write_handler
                 .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
@@ -521,7 +605,7 @@ async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
                 .code;
             [write, delete]
         };
-        assert_eq!(statuses, [202, if delete_first { 409 } else { 202 }]);
+        assert_eq!(statuses, [202, if delete_first { 400 } else { 202 }]);
 
         let retained = fetch_record_messages(TENANT, &record_id, &message_store)
             .await

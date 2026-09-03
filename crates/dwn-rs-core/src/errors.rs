@@ -24,6 +24,10 @@ pub enum DwnErrorCode {
     EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
     RecordsWriteMissingDataInPrevious,
     RecordsWriteMissingEncodedDataInPrevious,
+    RecordsWriteNotAllowedAfterDelete,
+    RecordsWriteDataCidMismatch,
+    RecordsWriteDataSizeMismatch,
+    RecordsWriteImmutablePropertyChanged,
     ProtocolAuthorizationImmutableRecord,
     ProtocolAuthorizationSquashBackstop,
 }
@@ -65,6 +69,10 @@ impl DwnErrorCode {
             Self::RecordsWriteMissingEncodedDataInPrevious => {
                 "RecordsWriteMissingEncodedDataInPrevious"
             }
+            Self::RecordsWriteNotAllowedAfterDelete => "RecordsWriteNotAllowedAfterDelete",
+            Self::RecordsWriteDataCidMismatch => "RecordsWriteDataCidMismatch",
+            Self::RecordsWriteDataSizeMismatch => "RecordsWriteDataSizeMismatch",
+            Self::RecordsWriteImmutablePropertyChanged => "RecordsWriteImmutablePropertyChanged",
             Self::ProtocolAuthorizationImmutableRecord => "ProtocolAuthorizationImmutableRecord",
             Self::ProtocolAuthorizationSquashBackstop => "ProtocolAuthorizationSquashBackstop",
         }
@@ -136,6 +144,12 @@ impl TryFrom<&str> for DwnErrorCode {
             "RecordsWriteMissingDataInPrevious" => Ok(Self::RecordsWriteMissingDataInPrevious),
             "RecordsWriteMissingEncodedDataInPrevious" => {
                 Ok(Self::RecordsWriteMissingEncodedDataInPrevious)
+            }
+            "RecordsWriteNotAllowedAfterDelete" => Ok(Self::RecordsWriteNotAllowedAfterDelete),
+            "RecordsWriteDataCidMismatch" => Ok(Self::RecordsWriteDataCidMismatch),
+            "RecordsWriteDataSizeMismatch" => Ok(Self::RecordsWriteDataSizeMismatch),
+            "RecordsWriteImmutablePropertyChanged" => {
+                Ok(Self::RecordsWriteImmutablePropertyChanged)
             }
             "ProtocolAuthorizationImmutableRecord" => {
                 Ok(Self::ProtocolAuthorizationImmutableRecord)
