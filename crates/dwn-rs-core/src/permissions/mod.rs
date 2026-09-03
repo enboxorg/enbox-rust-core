@@ -963,17 +963,15 @@ where
     Ok(())
 }
 
-pub async fn post_process_permissions_write<MessageStore, DataStore, StateIndex>(
+pub async fn post_process_permissions_write<MessageStore, DataStore>(
     tenant: &str,
     message: &Message<Descriptor>,
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
 ) -> Result<(), PermissionError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
     DataStore: crate::stores::DataStore + Sync,
-    StateIndex: crate::stores::StateIndex + Sync,
 {
     let descriptor =
         records_write_descriptor(message).map_err(|e| PermissionError::InvalidGrant(e.into()))?;
@@ -997,7 +995,6 @@ where
             None,
         )
         .await?;
-    let mut cids = Vec::new();
     for authorized_message in result.messages {
         if message_timestamp(&authorized_message) < revoke_timestamp {
             continue;
@@ -1014,10 +1011,6 @@ where
         }
         let cid = message_cid(&authorized_message)?;
         message_store.delete(tenant, &cid).await?;
-        cids.push(cid);
-    }
-    if !cids.is_empty() {
-        state_index.delete(tenant, &cids).await?;
     }
     Ok(())
 }

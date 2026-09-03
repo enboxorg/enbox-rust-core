@@ -1506,17 +1506,15 @@ where
     Ok(())
 }
 
-pub(crate) async fn purge_record_descendants<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn purge_record_descendants<MessageStore, DataStore>(
     tenant: &str,
     record_id: &str,
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
     DataStore: crate::stores::DataStore + Sync,
-    StateIndex: crate::stores::StateIndex + Sync,
 {
     let filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
@@ -1539,27 +1537,24 @@ where
             child_record_id,
             message_store,
             data_store,
-            state_index,
         ))
         .await?;
     }
     for messages in by_record.values() {
-        purge_record_messages(tenant, messages, message_store, data_store, state_index).await?;
+        purge_record_messages(tenant, messages, message_store, data_store).await?;
     }
     Ok(())
 }
 
-pub(crate) async fn purge_record_messages<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn purge_record_messages<MessageStore, DataStore>(
     tenant: &str,
     record_messages: &[Message<Descriptor>],
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
     DataStore: crate::stores::DataStore + Sync,
-    StateIndex: crate::stores::StateIndex + Sync,
 {
     if let Some(newest_write) = newest_message(
         &record_messages
@@ -1578,19 +1573,14 @@ where
                 .map_err(|err| err.to_string())?;
         }
     }
-    let mut cids = Vec::new();
     for message in record_messages {
         let cid = message_cid(message)?;
         message_store
             .delete(tenant, &cid)
             .await
             .map_err(|err| err.to_string())?;
-        cids.push(cid);
     }
-    state_index
-        .delete(tenant, &cids)
-        .await
-        .map_err(|err| err.to_string())
+    Ok(())
 }
 
 pub(crate) fn parent_context_id(context_id: &str) -> Option<String> {

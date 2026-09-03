@@ -39,20 +39,17 @@ use super::state::{plan_records_transition, RecordsTransitionPlan};
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
 #[derive(Clone)]
-pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex = ()> {
+pub struct RecordsWriteHandler<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
-    state_index: StateIndex,
     core_protocol_registry: CoreProtocolRegistry,
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
-impl<MessageStore, DataStore, StateIndex> Handler
-    for RecordsWriteHandler<MessageStore, DataStore, StateIndex>
+impl<MessageStore, DataStore> Handler for RecordsWriteHandler<MessageStore, DataStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     type Reply = Write;
     type Descriptor = RecordsWriteDescriptor;
@@ -271,14 +268,9 @@ where
             }
 
             if descriptor.squash == Some(true) {
-                if let Err(detail) = perform_records_squash(
-                    &self.message_store,
-                    &self.data_store,
-                    &self.state_index,
-                    tenant,
-                    &message,
-                )
-                .await
+                if let Err(detail) =
+                    perform_records_squash(&self.message_store, &self.data_store, tenant, &message)
+                        .await
                 {
                     return store_error_reply(detail);
                 }
@@ -292,7 +284,6 @@ where
                     CoreProtocolStores {
                         message_store: &self.message_store,
                         data_store: &self.data_store,
-                        state_index: &self.state_index,
                     },
                 )
                 .await
@@ -309,29 +300,26 @@ where
     }
 }
 
-impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
+impl<MessageStore, DataStore> RecordsWriteHandler<MessageStore, DataStore> {
     /// Construct a handler.
     pub fn new(
         message_store: MessageStore,
         data_store: DataStore,
-        state_index: StateIndex,
         did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             data_store,
-            state_index,
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             did_resolver,
         }
     }
 }
 
-impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex>
+impl<MessageStore, DataStore> RecordsWriteHandler<MessageStore, DataStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     async fn existing_record_messages(
         &self,
@@ -688,17 +676,15 @@ where
     }
 }
 
-pub(crate) async fn perform_records_squash<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn perform_records_squash<MessageStore, DataStore>(
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
     tenant: &str,
     message: &Message<Descriptor>,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     let descriptor = records_write_descriptor(message)?;
     let record_id = record_id(message)
@@ -740,8 +726,7 @@ where
             continue;
         };
         if message_timestamp(&newest)? < descriptor.message_timestamp {
-            purge_record_messages(tenant, &messages, message_store, data_store, state_index)
-                .await?;
+            purge_record_messages(tenant, &messages, message_store, data_store).await?;
         }
     }
     Ok(())

@@ -25,12 +25,11 @@ use crate::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::replication_feed_reader::build_token;
-use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::wake::{InProcessWakeBus, Wake, WakeError, WakePublisher};
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
     LatestStateTransition, LatestStateTransitionResult, MessageQueryResult, MessageStore,
-    ReplicationFeedReader, StateIndex, SubscriptionMessage,
+    ReplicationFeedReader, SubscriptionMessage,
 };
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
@@ -71,16 +70,13 @@ impl WakePublisher for RecordingWakePublisher {
 async fn records_write_read_query_and_count_published_inline_data() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let write_handler = RecordsWriteHandler::<_, _, _>::new(
+    let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
     let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
@@ -142,15 +138,12 @@ async fn records_write_read_query_and_count_published_inline_data() {
 async fn records_write_update_without_data_copies_previous_inline_data_and_keeps_initial() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -220,15 +213,12 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
     let publisher = RecordingWakePublisher::default();
     let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -293,15 +283,12 @@ async fn records_write_same_cid_data_completion_keeps_one_feed_identity() {
     let publisher = RecordingWakePublisher::default();
     let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -356,21 +343,17 @@ async fn records_delete_retains_initial_feed_position_without_extra_wake() {
     let publisher = RecordingWakePublisher::default();
     let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _>::new(
+    let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index.clone(),
         Some(Arc::new(test_resolver())),
     );
     let delete_handler = RecordsDeleteHandler::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -450,21 +433,17 @@ async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
     for delete_first in [false, true] {
         let mut message_store = TestMessageStore::default();
         let mut data_store = TestDataStore::default();
-        let mut state_index = MemoryStateIndex::default();
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
-        state_index.open().await.unwrap();
         put_notes_protocol_without_actions(TENANT, &message_store).await;
-        let write_handler = RecordsWriteHandler::<_, _, _>::new(
+        let write_handler = RecordsWriteHandler::<_, _>::new(
             message_store.clone(),
             data_store.clone(),
-            state_index.clone(),
             Some(Arc::new(test_resolver())),
         );
         let delete_handler = RecordsDeleteHandler::new(
             message_store.clone(),
             data_store,
-            state_index,
             Some(Arc::new(test_resolver())),
         );
         assert_eq!(
@@ -548,21 +527,17 @@ async fn records_prune_wins_over_newer_plain_delete_in_both_arrival_orders() {
     for prune_first in [false, true] {
         let mut message_store = TestMessageStore::default();
         let mut data_store = TestDataStore::default();
-        let mut state_index = MemoryStateIndex::default();
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
-        state_index.open().await.unwrap();
         put_notes_protocol_without_actions(TENANT, &message_store).await;
-        let write_handler = RecordsWriteHandler::<_, _, _>::new(
+        let write_handler = RecordsWriteHandler::<_, _>::new(
             message_store.clone(),
             data_store.clone(),
-            state_index.clone(),
             Some(Arc::new(test_resolver())),
         );
         let delete_handler = RecordsDeleteHandler::new(
             message_store.clone(),
             data_store,
-            state_index,
             Some(Arc::new(test_resolver())),
         );
         assert_eq!(
@@ -621,15 +596,12 @@ async fn records_prune_wins_over_newer_plain_delete_in_both_arrival_orders() {
 async fn records_write_rejects_older_conflicting_write() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -685,15 +657,12 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
 
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -746,15 +715,12 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
 async fn records_read_returns_gone_when_external_data_is_missing() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
     let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
@@ -800,21 +766,17 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
 async fn records_delete_prune_purges_descendant_records() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _>::new(
+    let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index.clone(),
         Some(Arc::new(test_resolver())),
     );
     let delete_handler = RecordsDeleteHandler::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -889,15 +851,12 @@ async fn records_delete_prune_purges_descendant_records() {
 async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_squash_protocol("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -976,16 +935,13 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
 async fn records_write_accepts_permission_grant_id_and_enforces_publication_condition() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -1071,16 +1027,13 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
 async fn records_write_accepts_embedded_author_delegated_grant() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -1138,16 +1091,13 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
 async fn permissions_revocation_cleans_grant_authorized_messages() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 

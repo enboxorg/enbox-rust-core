@@ -22,10 +22,9 @@ use super::state::{plan_records_transition, RecordsTransitionPlan};
 use super::write::perform_records_squash;
 
 #[derive(Clone)]
-pub struct RecordsDeleteHandler<MessageStore, DataStore, StateIndex> {
+pub struct RecordsDeleteHandler<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
-    state_index: StateIndex,
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
@@ -41,12 +40,10 @@ struct RecordsDeleteExecution<'a> {
     plan: &'a RecordsTransitionPlan,
 }
 
-impl<MessageStore, DataStore, StateIndex> Handler
-    for RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
+impl<MessageStore, DataStore> Handler for RecordsDeleteHandler<MessageStore, DataStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     type Reply = ();
     type Descriptor = DeleteDescriptor;
@@ -141,7 +138,6 @@ where
             if let Err(detail) = perform_records_delete(
                 &self.message_store,
                 &self.data_store,
-                &self.state_index,
                 tenant,
                 RecordsDeleteExecution {
                     message: &message,
@@ -160,35 +156,29 @@ where
     }
 }
 
-impl<MessageStore, DataStore, StateIndex>
-    RecordsDeleteHandler<MessageStore, DataStore, StateIndex>
-{
+impl<MessageStore, DataStore> RecordsDeleteHandler<MessageStore, DataStore> {
     pub fn new(
         message_store: MessageStore,
         data_store: DataStore,
-        state_index: StateIndex,
         did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             data_store,
-            state_index,
             did_resolver,
         }
     }
 }
 
-async fn perform_records_delete<MessageStore, DataStore, StateIndex>(
+async fn perform_records_delete<MessageStore, DataStore>(
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
     tenant: &str,
     execution: RecordsDeleteExecution<'_>,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     let RecordsDeleteExecution {
         message,
@@ -209,14 +199,7 @@ where
         .map_err(|err| err.to_string())?;
     let descriptor = records_delete_descriptor(message)?;
     if descriptor.prune {
-        purge_record_descendants(
-            tenant,
-            &descriptor.record_id,
-            message_store,
-            data_store,
-            state_index,
-        )
-        .await?;
+        purge_record_descendants(tenant, &descriptor.record_id, message_store, data_store).await?;
     }
 
     for existing in existing_messages {
@@ -289,17 +272,15 @@ fn prepare_records_delete_transition(
     })
 }
 
-pub(crate) async fn resume_records_delete_from_task<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn resume_records_delete_from_task<MessageStore, DataStore>(
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
     tenant: &str,
     message: &Message<Descriptor>,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     let descriptor = records_delete_descriptor(message)?;
     let existing_messages =
@@ -327,7 +308,6 @@ where
     perform_records_delete(
         message_store,
         data_store,
-        state_index,
         tenant,
         RecordsDeleteExecution {
             message,
@@ -339,17 +319,15 @@ where
     .await
 }
 
-pub(crate) async fn resume_records_squash_from_task<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn resume_records_squash_from_task<MessageStore, DataStore>(
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
     tenant: &str,
     message: &Message<Descriptor>,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    perform_records_squash(message_store, data_store, state_index, tenant, message).await
+    perform_records_squash(message_store, data_store, tenant, message).await
 }

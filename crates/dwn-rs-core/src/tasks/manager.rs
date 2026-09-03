@@ -29,23 +29,21 @@ pub struct ResumableTask {
 }
 
 #[derive(Clone)]
-pub struct ResumableTaskManager<MessageStore, DataStore, StateIndex, TaskStore> {
+pub struct ResumableTaskManager<MessageStore, DataStore, TaskStore> {
     task_store: TaskStore,
-    storage_controller: StorageController<MessageStore, DataStore, StateIndex>,
+    storage_controller: StorageController<MessageStore, DataStore>,
     batch_size: u64,
 }
 
-impl<MessageStore, DataStore, StateIndex, TaskStore>
-    ResumableTaskManager<MessageStore, DataStore, StateIndex, TaskStore>
+impl<MessageStore, DataStore, TaskStore> ResumableTaskManager<MessageStore, DataStore, TaskStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
     TaskStore: ResumableTaskStore + Clone + Send + Sync + 'static,
 {
     pub fn new(
         task_store: TaskStore,
-        storage_controller: StorageController<MessageStore, DataStore, StateIndex>,
+        storage_controller: StorageController<MessageStore, DataStore>,
     ) -> Self {
         Self {
             task_store,
