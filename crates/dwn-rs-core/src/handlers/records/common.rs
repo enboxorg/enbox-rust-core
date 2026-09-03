@@ -1427,39 +1427,6 @@ where
         .map_err(|err| err.to_string())
 }
 
-pub(crate) async fn existing_initial_lacks_data<DataStore>(
-    newest_existing: &Option<Message<Descriptor>>,
-    data_store: &DataStore,
-    tenant: &str,
-    record_id: &str,
-    data_cid: &str,
-) -> bool
-where
-    DataStore: crate::stores::DataStore + Sync,
-{
-    let Some(message) = newest_existing.as_ref() else {
-        return false;
-    };
-    let Some(author) = extract_author(message) else {
-        return false;
-    };
-    if !is_initial_write(message, &author).unwrap_or(false) {
-        return false;
-    }
-    if write_fields(message)
-        .ok()
-        .and_then(|fields| fields.encoded_data.as_ref())
-        .is_some()
-    {
-        return false;
-    }
-    data_store
-        .get(tenant, record_id, data_cid)
-        .await
-        .map(|result| result.is_none())
-        .unwrap_or(false)
-}
-
 pub(crate) fn newest_message(messages: &[Message<Descriptor>]) -> Option<Message<Descriptor>> {
     messages.iter().cloned().max_by(compare_messages)
 }

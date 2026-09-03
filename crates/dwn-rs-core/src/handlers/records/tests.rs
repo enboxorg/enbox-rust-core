@@ -423,7 +423,7 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
 }
 
 #[tokio::test]
-async fn records_write_same_cid_data_completion_keeps_one_feed_identity() {
+async fn records_write_data_bearing_exact_replay_is_non_mutating() {
     // Covers: DWN-REC-003
     // Covers: DWN-REC-005
     // Covers: DWN-REC-006
@@ -441,7 +441,7 @@ async fn records_write_same_cid_data_completion_keeps_one_feed_identity() {
         Some(Arc::new(test_resolver())),
     );
 
-    let data = Bytes::from_static(b"complete this retained operation");
+    let data = Bytes::from_static(b"data arriving after the signed operation");
     let write = signed_write_message(WriteSpec {
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
@@ -464,10 +464,6 @@ async fn records_write_same_cid_data_completion_keeps_one_feed_identity() {
             Some(data.clone()),
         ))
         .await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-    let reply = handler
-        .run(MethodHandlerRequest::new(TENANT, &write, Some(data)))
-        .await;
     assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
 
     let feed = message_store
@@ -481,8 +477,124 @@ async fn records_write_same_cid_data_completion_keeps_one_feed_identity() {
         write_fields(&message_store.get(TENANT, &cid).await.unwrap().unwrap())
             .unwrap()
             .encoded_data
-            .is_some()
+            .is_none()
     );
+}
+
+#[tokio::test]
+async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delete() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-REC-005
+    // Covers: ENBOX-REC-001
+    const TENANT: &str = "did:example:alice";
+
+    for tombstoned in [false, true] {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        let write_handler = RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        );
+        let delete_handler = RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store,
+            Some(Arc::new(test_resolver())),
+        );
+
+        let data = Bytes::from_static(b"late initial data");
+        let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+        let initial = signed_write_message(WriteSpec {
+            data_cid: data_cid.clone(),
+            data_size: data.len() as u64,
+            published: Some(true),
+            ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+        })
+        .await;
+        let record_id = initial["recordId"].as_str().unwrap().to_string();
+        let context_id = initial["contextId"].as_str().unwrap().to_string();
+        let initial_message: Message<Descriptor> = serde_json::from_value(initial.clone()).unwrap();
+        let initial_cid = message_cid(&initial_message).unwrap();
+        assert_eq!(
+            write_handler
+                .run(MethodHandlerRequest::new(TENANT, &initial, None))
+                .await
+                .status
+                .code,
+            204
+        );
+
+        let winner = if tombstoned {
+            let delete =
+                signed_delete_message(&record_id, false, "2025-01-01T00:05:00.000000Z").await;
+            assert_eq!(
+                delete_handler
+                    .run(MethodHandlerRequest::new(TENANT, &delete, None))
+                    .await
+                    .status
+                    .code,
+                202
+            );
+            serde_json::from_value::<Message<Descriptor>>(delete).unwrap()
+        } else {
+            let update = signed_write_message(WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id),
+                data_cid,
+                data_size: data.len() as u64,
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                published: Some(true),
+                ..WriteSpec::new("2025-01-01T00:05:00.000000Z")
+            })
+            .await;
+            assert_eq!(
+                write_handler
+                    .run(MethodHandlerRequest::new(
+                        TENANT,
+                        &update,
+                        Some(data.clone())
+                    ))
+                    .await
+                    .status
+                    .code,
+                202
+            );
+            serde_json::from_value::<Message<Descriptor>>(update).unwrap()
+        };
+        let winner_cid = message_cid(&winner).unwrap();
+
+        let reply = write_handler
+            .run(MethodHandlerRequest::new(
+                TENANT,
+                &initial,
+                Some(data.clone()),
+            ))
+            .await;
+        assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+
+        let rows = message_store.rows.read().unwrap();
+        let record_rows = rows
+            .iter()
+            .filter(|row| message_record_id(&row.message).as_deref() == Some(record_id.as_str()))
+            .collect::<Vec<_>>();
+        let latest = record_rows
+            .iter()
+            .filter(|row| row.indexes.get("isLatestBaseState") == Some(&Value::Bool(true)))
+            .collect::<Vec<_>>();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].cid, winner_cid);
+        let retained_initial = record_rows
+            .iter()
+            .find(|row| row.cid == initial_cid)
+            .unwrap();
+        assert!(write_fields(&retained_initial.message)
+            .unwrap()
+            .encoded_data
+            .is_none());
+    }
 }
 
 #[tokio::test]

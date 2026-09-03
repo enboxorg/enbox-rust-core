@@ -26,11 +26,11 @@ use crate::handlers::protocols::configure::{
 use crate::handlers::records::common::{
     authorize_against_protocol, bool_filter, compare_messages, context_id,
     core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
-    existing_initial_lacks_data, fetch_newest_write, filter_map, find_initial_write,
-    governing_timestamp, message_cid, message_record_id, message_timestamp, newest_message,
-    parent_context_id, purge_record_messages, records_write_indexes, set_encoded_data,
-    store_error_reply, string_filter, validate_data_integrity, validate_records_write_integrity,
-    verify_immutable_properties, GoverningTimestampError,
+    fetch_newest_write, filter_map, find_initial_write, governing_timestamp, message_cid,
+    message_record_id, message_timestamp, newest_message, parent_context_id, purge_record_messages,
+    records_write_indexes, set_encoded_data, store_error_reply, string_filter,
+    validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
+    GoverningTimestampError,
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
@@ -148,39 +148,14 @@ where
                 Ok(messages) => messages,
                 Err(reply) => return reply,
             };
-            let incoming_cid = match message_cid(&message) {
-                Ok(cid) => cid,
-                Err(detail) => return Response::bad_request(detail),
-            };
             let transition_plan = match plan_records_transition(&message, &existing_messages) {
                 Ok(plan) => plan,
                 Err(detail) => return Response::bad_request(detail),
             };
-            let has_incoming_data =
-                data.is_some() || encoded_data_bytes(&message).ok().flatten().is_some();
-            let completes_initial_data =
-                matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. })
-                    && has_incoming_data
-                    && existing_initial_lacks_data(
-                        &existing_messages
-                            .iter()
-                            .find(|existing| {
-                                message_cid(existing).as_deref() == Ok(incoming_cid.as_str())
-                            })
-                            .cloned(),
-                        &self.data_store,
-                        tenant,
-                        &record_id,
-                        &descriptor.data_cid,
-                    )
-                    .await;
-
             // Covers: DWN-REC-003
             // Exact replay is classified before mutable protocol, role, grant, parent,
             // record-limit, or state-relative admission can reinterpret it.
-            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. })
-                && !completes_initial_data
-            {
+            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. }) {
                 return Response::conflict();
             }
 
