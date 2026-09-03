@@ -292,6 +292,18 @@ where
     if matches!(plan, RecordsTransitionPlan::Superseded { .. }) {
         return Ok(());
     }
+    if matches!(plan, RecordsTransitionPlan::Duplicate { .. }) {
+        if descriptor.prune {
+            purge_record_descendants(tenant, &descriptor.record_id, message_store, data_store)
+                .await?;
+        }
+        for existing in &existing_messages {
+            if records_write_descriptor(existing).is_ok() {
+                delete_from_data_store_if_needed(tenant, existing, message, data_store).await?;
+            }
+        }
+        return Ok(());
+    }
     let initial_write = find_initial_write(
         &existing_messages,
         extract_author(&newest_existing)

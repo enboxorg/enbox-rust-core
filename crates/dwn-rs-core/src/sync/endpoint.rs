@@ -919,5 +919,20 @@ mod tests {
             classify_apply_reply(&terminal_write, &write, false),
             ReplicationApplyOutcome::Superseded
         );
+
+        let immutable_permission = Status::from_error(
+            400,
+            DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationImmutableRecord,
+                "permission records cannot be updated",
+            ),
+        );
+        assert_eq!(
+            classify_apply_reply(&immutable_permission, &write, false),
+            ReplicationApplyOutcome::Invalid
+        );
+        let error = map_apply_error(immutable_permission, ReplicationApplyOutcome::Invalid);
+        assert_eq!(error.code, "ProtocolAuthorizationImmutableRecord");
+        assert!(!error.retryable);
     }
 }

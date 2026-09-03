@@ -210,6 +210,15 @@ mod tests {
         }
     }
 
+    fn distinct_delete(timestamp: &str, prune: bool) -> Message<Descriptor> {
+        let mut message = delete(timestamp, prune);
+        let Fields::Authorization(authorization) = &mut message.fields else {
+            unreachable!("delete fixture has authorization fields")
+        };
+        authorization.owner_signature = Some(Default::default());
+        message
+    }
+
     fn cid(message: &Message<Descriptor>) -> String {
         message.cid().expect("fixture must have a CID").to_string()
     }
@@ -289,6 +298,52 @@ mod tests {
         let messages = [tied_a, tied_b];
         assert_eq!(converge(&messages, &[0, 1]), expected);
         assert_eq!(converge(&messages, &[1, 0]), expected);
+    }
+
+    #[test]
+    fn equal_timestamp_cid_ties_converge_for_every_state_class() {
+        // Covers: DWN-REC-004
+        // Covers: ENBOX-REC-001
+        let timestamp = "2025-01-12T00:00:00Z";
+        let pairs = [
+            [write(timestamp, "a"), write(timestamp, "b")],
+            [delete(timestamp, false), distinct_delete(timestamp, false)],
+            [delete(timestamp, true), distinct_delete(timestamp, true)],
+        ];
+
+        for messages in pairs {
+            let expected = cid(&messages[0]).max(cid(&messages[1]));
+            assert_eq!(converge(&messages, &[0, 1]), expected);
+            assert_eq!(converge(&messages, &[1, 0]), expected);
+        }
+    }
+
+    #[test]
+    fn mixed_candidate_set_converges_in_every_arrival_order() {
+        // Covers: DWN-REC-004
+        // Covers: ENBOX-REC-001
+        let candidates = [
+            write("2025-01-10T00:00:00Z", "w1"),
+            write("2025-01-12T00:00:00Z", "w2"),
+            delete("2025-01-13T00:00:00Z", false),
+            delete("2025-01-09T00:00:00Z", true),
+        ];
+        let expected = cid(&candidates[3]);
+
+        for a in 0..4 {
+            for b in 0..4 {
+                if b == a {
+                    continue;
+                }
+                for c in 0..4 {
+                    if c == a || c == b {
+                        continue;
+                    }
+                    let d = (0..4).find(|index| ![a, b, c].contains(index)).unwrap();
+                    assert_eq!(converge(&candidates, &[a, b, c, d]), expected);
+                }
+            }
+        }
     }
 
     #[test]
