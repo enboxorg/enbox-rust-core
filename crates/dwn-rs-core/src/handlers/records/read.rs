@@ -128,10 +128,7 @@ where
                     return Response::unauthorized(detail);
                 }
                 return Response::new(
-                    replies::Status {
-                        code: 404,
-                        detail: "Not Found".to_string(),
-                    },
+                    replies::Status::new(404, "Not Found"),
                     Read {
                         entry: Some(ReadEntry {
                             records_delete: Some(matched_message.clone()),

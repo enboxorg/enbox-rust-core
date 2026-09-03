@@ -38,4 +38,4 @@ Both stacks use SMT diff/repair (`MessagesSync` pull) as the authoritative recon
 ## Tests
 
 - Unit: `crates/dwn-rs-core/src/sync.rs` (`poll_reconcile`, `enter_degraded_poll`, `reconcile_after_live_disconnect`)
-- Integration: `crates/dwn-rs-stores/tests/sync_integration.rs` (`http_poll_reconcile_pulls_incremental_records`, `live_poll_handoff_catches_up_after_subscription_drop`)
+- Durable-feed integration replacement: tracked by #187/#188/#211 after removal of the legacy StateIndex/`MessagesSync` scenarios.

@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -14,45 +13,86 @@ use crate::descriptors::records::is_initial_write;
 use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields},
-    Descriptor, RecordsWriteDescriptor,
+    Descriptor, Records, RecordsWriteDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
+use crate::errors::{DwnError, DwnErrorCode};
 use crate::filters::{Filter, FilterKey, Filters};
+use crate::handlers::protocols::configure::{
+    fetch_protocol_definition, ProtocolDefinitionLookupError,
+};
 use crate::handlers::records::common::{
     authorize_against_protocol, bool_filter, compare_messages, context_id,
     core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
-    existing_initial_lacks_data, fetch_newest_write, filter_map, find_initial_write,
-    governing_timestamp, message_cid, message_record_id, message_timestamp, newest_message,
-    parent_context_id, purge_record_messages, records_delete_descriptor, records_write_indexes,
-    set_encoded_data, store_error_reply, string_filter, validate_data_integrity,
-    validate_records_write_integrity, verify_immutable_properties,
+    fetch_newest_write, filter_map, find_initial_write, governing_timestamp, message_cid,
+    message_record_id, message_timestamp, newest_message, parent_context_id, purge_record_messages,
+    records_write_indexes, set_encoded_data, store_error_reply, string_filter,
+    validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
+    GoverningTimestampError,
 };
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Write;
 use crate::replies::Status;
+use crate::stores::{KeyValues, LatestStateMutation, LatestStateTransition};
 use crate::Response;
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
 
+use super::state::{plan_records_transition, RecordsTransitionPlan};
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
 #[derive(Clone)]
-pub struct RecordsWriteHandler<MessageStore, DataStore, StateIndex = ()> {
+pub struct RecordsWriteHandler<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
-    state_index: StateIndex,
     core_protocol_registry: CoreProtocolRegistry,
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
-impl<MessageStore, DataStore, StateIndex> Handler
-    for RecordsWriteHandler<MessageStore, DataStore, StateIndex>
+#[derive(Debug, thiserror::Error)]
+enum RecordsWriteValidationError {
+    #[error(transparent)]
+    Dwn(#[from] DwnError),
+    #[error("{0}")]
+    Detail(String),
+    #[error("{0}")]
+    Internal(String),
+}
+
+impl From<String> for RecordsWriteValidationError {
+    fn from(detail: String) -> Self {
+        Self::Detail(detail)
+    }
+}
+
+impl From<GoverningTimestampError> for RecordsWriteValidationError {
+    fn from(error: GoverningTimestampError) -> Self {
+        match error {
+            GoverningTimestampError::Dwn(error) => Self::Dwn(error),
+            GoverningTimestampError::Detail(detail) => Self::Detail(detail),
+        }
+    }
+}
+
+impl From<ProtocolDefinitionLookupError> for RecordsWriteValidationError {
+    fn from(error: ProtocolDefinitionLookupError) -> Self {
+        match error {
+            ProtocolDefinitionLookupError::NotFound(protocol) => Self::Dwn(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationProtocolNotFound,
+                format!("unable to find protocol definition for {protocol}"),
+            )),
+            ProtocolDefinitionLookupError::Store(detail) => Self::Internal(detail),
+            ProtocolDefinitionLookupError::InvalidMessage(detail) => Self::Detail(detail),
+        }
+    }
+}
+
+impl<MessageStore, DataStore> Handler for RecordsWriteHandler<MessageStore, DataStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     type Reply = Write;
     type Descriptor = RecordsWriteDescriptor;
@@ -96,20 +136,6 @@ where
                 return Response::bad_request(detail);
             }
 
-            if let Err(detail) = self
-                .validate_referential_integrity(tenant, &message, &signature.author)
-                .await
-            {
-                return Response::bad_request(detail);
-            }
-
-            if let Err(detail) = self
-                .authorize_records_write(tenant, &message, &signature)
-                .await
-            {
-                return Response::unauthorized(detail);
-            }
-
             let record_id = match record_id(&message) {
                 Some(record_id) => record_id,
                 None => {
@@ -122,6 +148,36 @@ where
                 Ok(messages) => messages,
                 Err(reply) => return reply,
             };
+            let transition_plan = match plan_records_transition(&message, &existing_messages) {
+                Ok(plan) => plan,
+                Err(detail) => return Response::bad_request(detail),
+            };
+            // Covers: DWN-REC-003
+            // Exact replay is classified before mutable protocol, role, grant, parent,
+            // record-limit, or state-relative admission can reinterpret it.
+            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. }) {
+                return Response::conflict();
+            }
+
+            if let Err(error) = self
+                .validate_referential_integrity(tenant, &message, &signature.author)
+                .await
+            {
+                return match error {
+                    RecordsWriteValidationError::Dwn(error) => Response::bad_request_error(error),
+                    RecordsWriteValidationError::Detail(detail) => Response::bad_request(detail),
+                    RecordsWriteValidationError::Internal(detail) => {
+                        Response::internal_error(detail)
+                    }
+                };
+            }
+
+            if let Err(detail) = self
+                .authorize_records_write(tenant, &message, &signature)
+                .await
+            {
+                return Response::unauthorized(detail);
+            }
 
             let incoming_is_initial = match is_initial_write(&message, &signature.author) {
                 Ok(is_initial) => is_initial,
@@ -131,53 +187,62 @@ where
             if !incoming_is_initial {
                 let Some(initial_write) = find_initial_write(&existing_messages, &signature.author)
                 else {
-                    return Response::bad_request(
-                        "RecordsWriteGetInitialWriteNotFound: Initial write is not found."
-                            .to_string(),
-                    );
+                    return Response::bad_request_error(DwnError::new(
+                        DwnErrorCode::RecordsWriteGetInitialWriteNotFound,
+                        "Initial write is not found.",
+                    ));
                 };
                 if let Err(detail) = verify_immutable_properties(&initial_write, &message) {
-                    return Response::bad_request(detail);
+                    return Response::bad_request_error(detail);
                 }
             }
 
-            if let Err(detail) = self.enforce_squash_backstop(tenant, &message).await {
-                return Response::new(Status { code: 409, detail }, Write::default());
+            if let Err(error) = self.enforce_squash_backstop(tenant, &message).await {
+                return match error {
+                    RecordsWriteValidationError::Dwn(error) => Response::conflict_error(error),
+                    RecordsWriteValidationError::Detail(detail) => {
+                        Response::new(Status::new(409, detail), Write::default())
+                    }
+                    RecordsWriteValidationError::Internal(detail) => {
+                        Response::internal_error(detail)
+                    }
+                };
             }
 
             let newest_existing = newest_message(&existing_messages);
-            let incoming_is_newest = newest_existing
-                .as_ref()
-                .is_none_or(|newest| compare_messages(&message, newest) == Ordering::Greater);
-
-            if !incoming_is_newest
-                && !existing_initial_lacks_data(
-                    &newest_existing,
-                    &self.data_store,
-                    tenant,
-                    &record_id,
-                    &descriptor.data_cid,
-                )
-                .await
-            {
+            if matches!(transition_plan, RecordsTransitionPlan::Superseded { .. }) {
+                if newest_existing.as_ref().is_some_and(|existing| {
+                    matches!(
+                        &existing.descriptor,
+                        Descriptor::Records(records)
+                            if matches!(records.as_ref(), Records::Delete(_))
+                    ) && compare_messages(&message, existing).is_gt()
+                }) {
+                    return Response::bad_request_error(DwnError::new(
+                        DwnErrorCode::RecordsWriteNotAllowedAfterDelete,
+                        "RecordsWrite is not allowed after a RecordsDelete.",
+                    ));
+                }
                 return Response::conflict();
-            }
-
-            if newest_existing
-                .as_ref()
-                .and_then(|message| records_delete_descriptor(message).ok())
-                .is_some()
-            {
-                return Response::bad_request("RecordsWriteNotAllowedAfterDelete: RecordsWrite is not allowed after a RecordsDelete.".to_string());
             }
 
             let mut is_latest_base_state = false;
             if let Some(data) = data.or_else(|| encoded_data_bytes(&message).ok().flatten()) {
-                if let Err(detail) = self
+                if let Err(error) = self
                     .process_message_with_data_stream(tenant, &mut message, data)
                     .await
                 {
-                    return Response::bad_request(detail);
+                    return match error {
+                        RecordsWriteValidationError::Dwn(error) => {
+                            Response::bad_request_error(error)
+                        }
+                        RecordsWriteValidationError::Detail(detail) => {
+                            Response::bad_request(detail)
+                        }
+                        RecordsWriteValidationError::Internal(detail) => {
+                            Response::internal_error(detail)
+                        }
+                    };
                 }
                 is_latest_base_state = true;
             } else if !incoming_is_initial {
@@ -185,9 +250,12 @@ where
                     .as_ref()
                     .filter(|message| records_write_descriptor(message).is_ok())
                 else {
-                    return Response::bad_request("RecordsWriteMissingDataInPrevious: No dataStream was provided and unable to get data from previous message".to_string());
+                    return Response::bad_request_error(DwnError::new(
+                        DwnErrorCode::RecordsWriteMissingDataInPrevious,
+                        "No dataStream was provided and unable to get data from previous message",
+                    ));
                 };
-                if let Err(detail) = self
+                if let Err(error) = self
                     .process_message_without_data_stream(
                         tenant,
                         &mut message,
@@ -195,7 +263,17 @@ where
                     )
                     .await
                 {
-                    return Response::bad_request(detail);
+                    return match error {
+                        RecordsWriteValidationError::Dwn(error) => {
+                            Response::bad_request_error(error)
+                        }
+                        RecordsWriteValidationError::Detail(detail) => {
+                            Response::bad_request(detail)
+                        }
+                        RecordsWriteValidationError::Internal(detail) => {
+                            Response::internal_error(detail)
+                        }
+                    };
                 }
                 is_latest_base_state = true;
             }
@@ -216,51 +294,50 @@ where
                     Ok(indexes) => indexes,
                     Err(detail) => return Response::bad_request(detail),
                 };
-            if let Err(err) = self
-                .message_store
-                .put(tenant, message.clone(), indexes.clone())
-                .await
-            {
-                return store_error_reply(err.to_string());
-            }
-            let incoming_cid = match message_cid(&message) {
-                Ok(cid) => cid,
+            let cleanup_cids = match &transition_plan {
+                RecordsTransitionPlan::Apply { outranked_cids, .. } => outranked_cids.clone(),
+                RecordsTransitionPlan::Duplicate { .. }
+                | RecordsTransitionPlan::Superseded { .. } => Vec::new(),
+            };
+            let transition = match self.records_write_transition(
+                &message,
+                indexes,
+                &existing_messages,
+                &transition_plan,
+                &signature.author,
+            ) {
+                Ok(transition) => transition,
                 Err(detail) => return Response::bad_request(detail),
             };
             if let Err(err) = self
-                .state_index
-                .insert(tenant, &incoming_cid, indexes)
+                .message_store
+                .commit_latest_state(tenant, transition)
                 .await
             {
                 return store_error_reply(err.to_string());
             }
-
-            let newest_message = if incoming_is_newest {
-                message.clone()
-            } else {
-                newest_existing.unwrap_or_else(|| message.clone())
-            };
-            if let Err(detail) = self
-                .delete_all_older_messages_but_keep_initial_write(
-                    tenant,
-                    &existing_messages,
-                    &newest_message,
-                    &signature.author,
-                )
-                .await
-            {
-                return store_error_reply(detail);
+            for existing in &existing_messages {
+                if cleanup_cids
+                    .iter()
+                    .any(|cid| message_cid(existing).as_deref() == Ok(cid.as_str()))
+                {
+                    if let Err(detail) = delete_from_data_store_if_needed(
+                        tenant,
+                        existing,
+                        &message,
+                        &self.data_store,
+                    )
+                    .await
+                    {
+                        return store_error_reply(detail);
+                    }
+                }
             }
 
             if descriptor.squash == Some(true) {
-                if let Err(detail) = perform_records_squash(
-                    &self.message_store,
-                    &self.data_store,
-                    &self.state_index,
-                    tenant,
-                    &message,
-                )
-                .await
+                if let Err(detail) =
+                    perform_records_squash(&self.message_store, &self.data_store, tenant, &message)
+                        .await
                 {
                     return store_error_reply(detail);
                 }
@@ -274,7 +351,6 @@ where
                     CoreProtocolStores {
                         message_store: &self.message_store,
                         data_store: &self.data_store,
-                        state_index: &self.state_index,
                     },
                 )
                 .await
@@ -291,29 +367,26 @@ where
     }
 }
 
-impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex> {
+impl<MessageStore, DataStore> RecordsWriteHandler<MessageStore, DataStore> {
     /// Construct a handler.
     pub fn new(
         message_store: MessageStore,
         data_store: DataStore,
-        state_index: StateIndex,
         did_resolver: Option<Arc<dyn DidResolver>>,
     ) -> Self {
         Self {
             message_store,
             data_store,
-            state_index,
             core_protocol_registry: CoreProtocolRegistry::with_permissions(),
             did_resolver,
         }
     }
 }
 
-impl<MessageStore, DataStore, StateIndex> RecordsWriteHandler<MessageStore, DataStore, StateIndex>
+impl<MessageStore, DataStore> RecordsWriteHandler<MessageStore, DataStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     async fn existing_record_messages(
         &self,
@@ -336,8 +409,10 @@ where
         tenant: &str,
         message: &mut Message<Descriptor>,
         data: Bytes,
-    ) -> Result<(), String> {
-        let descriptor = records_write_descriptor(message)?.clone();
+    ) -> Result<(), RecordsWriteValidationError> {
+        let descriptor = records_write_descriptor(message)
+            .map_err(|error| error.to_string())?
+            .clone();
         let actual_data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
         validate_data_integrity(
             &descriptor.data_cid,
@@ -347,7 +422,8 @@ where
         )?;
 
         if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
-            set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))?;
+            set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))
+                .map_err(RecordsWriteValidationError::from)?;
             return Ok(());
         }
 
@@ -362,18 +438,22 @@ where
                 stream::iter(vec![data]),
             )
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| RecordsWriteValidationError::Internal(err.to_string()))?;
         if put_result.data_size as u64 != descriptor.data_size {
             let _ = self
                 .data_store
                 .delete(tenant, &record_id, &descriptor.data_cid)
                 .await;
-            return Err(format!(
-                "RecordsWriteDataSizeMismatch: actual data size {} bytes does not match dataSize in descriptor: {}",
-                put_result.data_size, descriptor.data_size
-            ));
+            return Err(DwnError::new(
+                DwnErrorCode::RecordsWriteDataSizeMismatch,
+                format!(
+                    "actual data size {} bytes does not match dataSize in descriptor: {}",
+                    put_result.data_size, descriptor.data_size
+                ),
+            )
+            .into());
         }
-        set_encoded_data(message, None)
+        set_encoded_data(message, None).map_err(RecordsWriteValidationError::from)
     }
 
     async fn process_message_without_data_stream(
@@ -381,9 +461,12 @@ where
         tenant: &str,
         message: &mut Message<Descriptor>,
         newest_existing_write: &Message<Descriptor>,
-    ) -> Result<(), String> {
-        let descriptor = records_write_descriptor(message)?.clone();
-        let newest_descriptor = records_write_descriptor(newest_existing_write)?;
+    ) -> Result<(), RecordsWriteValidationError> {
+        let descriptor = records_write_descriptor(message)
+            .map_err(|error| error.to_string())?
+            .clone();
+        let newest_descriptor =
+            records_write_descriptor(newest_existing_write).map_err(|error| error.to_string())?;
         validate_data_integrity(
             &descriptor.data_cid,
             descriptor.data_size,
@@ -396,8 +479,14 @@ where
                 .map_err(|error| error.to_string())?
                 .encoded_data
                 .clone()
-                .ok_or_else(|| "RecordsWriteMissingEncodedDataInPrevious: No dataStream was provided and unable to get data from previous message".to_string())?;
-            set_encoded_data(message, Some(encoded_data))?;
+                .ok_or_else(|| {
+                    DwnError::new(
+                        DwnErrorCode::RecordsWriteMissingEncodedDataInPrevious,
+                        "No dataStream was provided and unable to get data from previous message",
+                    )
+                })?;
+            set_encoded_data(message, Some(encoded_data))
+                .map_err(RecordsWriteValidationError::from)?;
             return Ok(());
         }
 
@@ -411,9 +500,13 @@ where
             .map_err(|err| err.to_string())?
             .is_some();
         if !has_data {
-            return Err("RecordsWriteMissingDataInPrevious: No dataStream was provided and unable to get data from previous message".to_string());
+            return Err(DwnError::new(
+                DwnErrorCode::RecordsWriteMissingDataInPrevious,
+                "No dataStream was provided and unable to get data from previous message",
+            )
+            .into());
         }
-        set_encoded_data(message, None)
+        set_encoded_data(message, None).map_err(RecordsWriteValidationError::from)
     }
 
     async fn validate_referential_integrity(
@@ -421,8 +514,8 @@ where
         tenant: &str,
         message: &Message<Descriptor>,
         author: &str,
-    ) -> Result<(), String> {
-        let descriptor = records_write_descriptor(message)?;
+    ) -> Result<(), RecordsWriteValidationError> {
+        let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
         let protocol_path = descriptor.protocol_path.clone();
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
@@ -439,14 +532,13 @@ where
                     )
                 })?
         } else {
-            crate::handlers::protocols::configure::fetch_protocol_definition(
+            fetch_protocol_definition(
                 tenant,
                 &descriptor.protocol,
                 &self.message_store,
                 Some(&governing_timestamp),
             )
-            .await
-            .map_err(|err| err.to_string())?
+            .await?
         };
         let rule_set = protocol_types::get_rule_set_at_path(
             descriptor.protocol_path.as_str(),
@@ -456,13 +548,24 @@ where
             format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
         })?;
 
+        if rule_set.immutable == Some(true) && !is_initial_write(message, author)? {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationImmutableRecord,
+                format!(
+                    "record at protocol path '{protocol_path}' is immutable: updates are not allowed."
+                ),
+            )
+            .into());
+        }
+
         if let Some(size) = &rule_set.size {
             if let Some(min) = size.min {
                 if descriptor.data_size < min {
                     return Err(format!(
                         "ProtocolAuthorizationInvalidDataSize: dataSize {} is smaller than minimum {}",
                         descriptor.data_size, min
-                    ));
+                    )
+                    .into());
                 }
             }
             if let Some(max) = size.max {
@@ -470,7 +573,8 @@ where
                     return Err(format!(
                         "ProtocolAuthorizationInvalidDataSize: dataSize {} exceeds maximum {}",
                         descriptor.data_size, max
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -478,7 +582,7 @@ where
         if descriptor.squash == Some(true)
             && (rule_set.squash != Some(true) || !is_initial_write(message, author)?)
         {
-            return Err("ProtocolAuthorizationInvalidSquash: squash writes must be initial writes at a $squash path".to_string());
+            return Err("ProtocolAuthorizationInvalidSquash: squash writes must be initial writes at a $squash path".to_string().into());
         }
 
         if let Some(parent_id) = &descriptor.parent_id {
@@ -497,7 +601,8 @@ where
             if !context_id.starts_with(&format!("{parent_context}/")) {
                 return Err(
                     "ProtocolAuthorizationContextMismatch: contextId must be under parent context"
-                        .to_string(),
+                        .to_string()
+                        .into(),
                 );
             }
         }
@@ -554,9 +659,9 @@ where
         &self,
         tenant: &str,
         message: &Message<Descriptor>,
-    ) -> Result<(), String> {
-        let descriptor = records_write_descriptor(message)?;
-        let definition = match crate::handlers::protocols::configure::fetch_protocol_definition(
+    ) -> Result<(), RecordsWriteValidationError> {
+        let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
+        let definition = match fetch_protocol_definition(
             tenant,
             &descriptor.protocol,
             &self.message_store,
@@ -610,74 +715,84 @@ where
         };
         let newest_timestamp = message_timestamp(newest_squash)?;
         if descriptor.message_timestamp <= newest_timestamp {
-            return Err(format!(
-                "ProtocolAuthorizationSquashBackstop: incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
-                canonical_rfc3339(descriptor.message_timestamp),
-                canonical_rfc3339(newest_timestamp),
-                &descriptor.protocol_path
-            ));
+            let squash_floor_timestamp = canonical_rfc3339(newest_timestamp);
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationSquashBackstop,
+                format!(
+                    "incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
+                    canonical_rfc3339(descriptor.message_timestamp),
+                    squash_floor_timestamp,
+                    &descriptor.protocol_path
+                ),
+            )
+            .with_info(BTreeMap::from([(
+                "squashFloorTimestamp".to_string(),
+                serde_json::Value::String(squash_floor_timestamp),
+            )]))
+            .into());
         }
         Ok(())
     }
 
-    async fn delete_all_older_messages_but_keep_initial_write(
+    fn records_write_transition(
         &self,
-        tenant: &str,
+        message: &Message<Descriptor>,
+        indexes: KeyValues,
         existing_messages: &[Message<Descriptor>],
-        newest_message: &Message<Descriptor>,
+        plan: &RecordsTransitionPlan,
         author: &str,
-    ) -> Result<(), String> {
-        for message in existing_messages {
-            if compare_messages(message, newest_message) != Ordering::Less {
+    ) -> Result<LatestStateTransition, String> {
+        let outranked_cids = match plan {
+            RecordsTransitionPlan::Apply { outranked_cids, .. } => outranked_cids.as_slice(),
+            RecordsTransitionPlan::Duplicate { .. } => &[],
+            RecordsTransitionPlan::Superseded { .. } => {
+                return Err(
+                    "RecordsStateSupersededTransition: superseded write cannot be committed"
+                        .to_string(),
+                )
+            }
+        };
+        let mut retains = Vec::new();
+        let mut deletes = Vec::new();
+
+        for existing in existing_messages {
+            let existing_cid = message_cid(existing)?;
+            if !outranked_cids.contains(&existing_cid) {
                 continue;
             }
-
-            delete_from_data_store_if_needed(tenant, message, newest_message, &self.data_store)
-                .await?;
-
-            let old_cid = message_cid(message)?;
-
-            if is_initial_write(message, author).unwrap_or(false) {
-                let mut initial_write = message.clone();
+            if is_initial_write(existing, author).unwrap_or(false) {
+                let mut initial_write = existing.clone();
                 set_encoded_data(&mut initial_write, None)?;
-
                 let indexes = records_write_indexes(&initial_write, author, false)?;
-
-                self.message_store
-                    .put(tenant, initial_write.clone(), indexes.clone())
-                    .await
-                    .map_err(|err| err.to_string())?;
-                let new_cid = message_cid(&initial_write)?;
-                self.state_index
-                    .insert(tenant, &new_cid, indexes)
-                    .await
-                    .map_err(|err| err.to_string())?;
+                retains.push(LatestStateMutation {
+                    message: initial_write,
+                    indexes,
+                });
             } else {
-                self.message_store
-                    .delete(tenant, &old_cid)
-                    .await
-                    .map_err(|err| err.to_string())?;
-                self.state_index
-                    .delete(tenant, &[old_cid])
-                    .await
-                    .map_err(|err| err.to_string())?;
+                deletes.push(existing_cid);
             }
         }
-        Ok(())
+
+        Ok(LatestStateTransition {
+            put: LatestStateMutation {
+                message: message.clone(),
+                indexes,
+            },
+            retains,
+            deletes,
+        })
     }
 }
 
-pub(crate) async fn perform_records_squash<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn perform_records_squash<MessageStore, DataStore>(
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
     tenant: &str,
     message: &Message<Descriptor>,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     let descriptor = records_write_descriptor(message)?;
     let record_id = record_id(message)
@@ -719,8 +834,7 @@ where
             continue;
         };
         if message_timestamp(&newest)? < descriptor.message_timestamp {
-            purge_record_messages(tenant, &messages, message_store, data_store, state_index)
-                .await?;
+            purge_record_messages(tenant, &messages, message_store, data_store).await?;
         }
     }
     Ok(())

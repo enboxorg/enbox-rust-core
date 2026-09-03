@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+use crate::errors::{DwnError, DwnErrorInfo};
 use crate::stores::ProgressGapInfo;
 
 /// Implemented by reply bodies that can report a state-index progress gap.
@@ -18,6 +19,30 @@ pub trait HasProgressGapInfo: Default {
 pub struct Status {
     pub code: i32,
     pub detail: String,
+    #[serde(rename = "errorCode", skip_serializing_if = "Option::is_none", default)]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub info: Option<DwnErrorInfo>,
+}
+
+impl Status {
+    pub fn new(code: i32, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+            error_code: None,
+            info: None,
+        }
+    }
+
+    pub fn from_error(code: i32, error: DwnError) -> Self {
+        Self {
+            code,
+            detail: error.to_string(),
+            error_code: Some(error.code.to_string()),
+            info: error.info,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -38,10 +63,7 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 200,
-                detail: "OK".to_string(),
-            },
+            status: Status::new(200, "OK"),
             reply: R::default(),
         }
     }
@@ -51,10 +73,17 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 400,
-                detail: detail.into(),
-            },
+            status: Status::new(400, detail),
+            reply: R::default(),
+        }
+    }
+
+    pub fn bad_request_error(error: DwnError) -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status::from_error(400, error),
             reply: R::default(),
         }
     }
@@ -64,10 +93,7 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 401,
-                detail: detail.into(),
-            },
+            status: Status::new(401, detail),
             reply: R::default(),
         }
     }
@@ -77,10 +103,7 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 501,
-                detail: detail.into(),
-            },
+            status: Status::new(501, detail),
             reply: R::default(),
         }
     }
@@ -90,7 +113,7 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status { code: 500, detail },
+            status: Status::new(500, detail),
             reply: R::default(),
         }
     }
@@ -100,20 +123,14 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 404,
-                detail: "Not Found".into(),
-            },
+            status: Status::new(404, "Not Found"),
             reply: R::default(),
         }
     }
 
     pub fn not_found_with_reply(reply: R) -> Self {
         Self {
-            status: Status {
-                code: 404,
-                detail: "Not Found".into(),
-            },
+            status: Status::new(404, "Not Found"),
             reply,
         }
     }
@@ -123,7 +140,7 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status { code: 410, detail },
+            status: Status::new(410, detail),
             reply,
         }
     }
@@ -133,10 +150,17 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 409,
-                detail: "Conflict".into(),
-            },
+            status: Status::new(409, "Conflict"),
+            reply: R::default(),
+        }
+    }
+
+    pub fn conflict_error(error: DwnError) -> Self
+    where
+        R: Default,
+    {
+        Self {
+            status: Status::from_error(409, error),
             reply: R::default(),
         }
     }
@@ -146,10 +170,7 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 204,
-                detail: "No Content".into(),
-            },
+            status: Status::new(204, "No Content"),
             reply: R::default(),
         }
     }
@@ -159,10 +180,7 @@ impl<R> Response<R> {
         R: Default,
     {
         Self {
-            status: Status {
-                code: 202,
-                detail: "Accepted".into(),
-            },
+            status: Status::new(202, "Accepted"),
             reply: R::default(),
         }
     }
@@ -198,5 +216,41 @@ pub enum Reply {
 impl From<()> for Reply {
     fn from(_: ()) -> Self {
         Reply::Empty
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::errors::DwnErrorCode;
+
+    #[test]
+    fn status_omits_absent_error_metadata() {
+        assert_eq!(
+            serde_json::to_value(Status::new(409, "Conflict")).unwrap(),
+            serde_json::json!({ "code": 409, "detail": "Conflict" })
+        );
+    }
+
+    #[test]
+    fn status_serializes_structured_dwn_error_metadata() {
+        let error = DwnError::new(
+            DwnErrorCode::RecordsWriteGetInitialWriteNotFound,
+            "example failure",
+        )
+        .with_info(
+            [("recordId".to_string(), serde_json::json!("record-1"))]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(
+            serde_json::to_value(Status::from_error(400, error)).unwrap(),
+            serde_json::json!({
+                "code": 400,
+                "detail": "RecordsWriteGetInitialWriteNotFound: example failure",
+                "errorCode": "RecordsWriteGetInitialWriteNotFound",
+                "info": { "recordId": "record-1" }
+            })
+        );
     }
 }

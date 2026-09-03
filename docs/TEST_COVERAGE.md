@@ -40,7 +40,7 @@ This repository validates DWN behavior through **three independent layers**. The
 | `jwe.decrypt` | yes | `typescript-jwe.test.ts` | utils/encryption specs | — | covered |
 | `state-index.operations` | yes | — (no TS adapter; upstream removed StateIndex) | removed upstream | — | rust extension (#188) |
 | `messages-sync.replies` | yes | — (no TS adapter; upstream removed MessagesSync) | removed upstream | — | rust extension (#188) |
-| `native-sync.engine` | yes (`native_dwn_sync_integration.rs`) | — | — | — | covered |
+| `native-sync.engine` | — | — | — | — | legacy StateIndex coverage removed; durable-feed replacement tracked by #187/#188/#211 |
 | `progress-token.replay` | yes (`sqlite_event_log_progress_integration.rs`, `sync_ledger_integration.rs`) | — | handlers/subscribe specs | — | partial |
 | `descriptor.roundtrip` | yes | `typescript-descriptor-roundtrip.test.ts` | handler descriptor specs | — | covered |
 | `message.process` | yes (`SqliteNativeDwn`) | `typescript-message-process.test.ts` | handlers/*.spec.ts | partial (RPC smoke) | partial |
@@ -94,7 +94,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | Filter engine DateTime/Cid index coercion | Fixed RFC3339 range + CID string equality in `filters/matching.rs` | done |
 | HTTP RecordsWrite data not wired to handler | `process_message_with_data` + loopback processor pass request body | done |
 | Rust-backed `TestSuite.runInjectableDependentTests` | Phase 1 scaffold in `tools/interop/testsuite-injection.test.ts` (#108); WASM path documented in [STORES_SDK_JS.md](./STORES_SDK_JS.md); FFI adapters future | partial |
-| `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
+| Durable-feed sync integration for `SqliteNativeDwn` | Legacy StateIndex/`MessagesSync` integration coverage removed; replacement tracked by #187/#188/#211 | open |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe; the removed-upstream `MessagesSync` scenario is disabled (see #188) | done |
 | `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `poll_reconcile`, `sync_status` + crate README | done |
 | `enbox-ffi` agent identity surface | `initialize_agent_identity`, `current_agent_identity`, `derive_agent_keys_from_phrase` + `SqliteSecretStore`; covered in `crates/enbox-ffi/src/lib.rs` tests | done |
@@ -104,7 +104,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `UniversalResolver` DID method coverage | `did:jwk`, `did:key` (Ed25519 + secp256k1), and `did:web`; complete SSI document parsing, SSRF/redirect policy, fallback anti-shadowing, document-ID validation, and end-to-end JWS verification are covered without live network calls | done |
 | `enbox-ffi` mobile runtime status | `initialize_runtime`, `unlock_with_reason`, `lock`, `begin_background_task`, `end_background_task`; covered in `enbox-ffi` tests | done |
 | `enbox-ffi` resume-pending sync | `list_pending_scopes`, `resume_pending` (batch deadline + per-scope `sync_once`); covered in `enbox-ffi` tests including a seeded-checkpoint drain | done |
-| Multi-node sync integration (direct + HTTP) | `crates/dwn-rs-stores/tests/sync_integration.rs` (6 scenarios in `cargo test --workspace`) | done |
+| Multi-node sync integration (direct + HTTP) | Legacy StateIndex/`MessagesSync` scenarios removed; durable-feed replacements tracked by #187/#188/#211 | open |
 | Live/poll reconciliation vs HTTP remote | `poll_reconcile_with_http`, `reconcile_after_live_disconnect`; see [SYNC_LIVE_POLL.md](./SYNC_LIVE_POLL.md) | done |
 | Fuzz specs expensive / non-deterministic | Run nightly in Enbox CI, not every PR here | by design |
 

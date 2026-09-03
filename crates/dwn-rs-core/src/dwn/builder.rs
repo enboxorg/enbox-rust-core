@@ -80,7 +80,6 @@ where
     let storage_controller = crate::tasks::controller::StorageController::new(
         stores.message_store.clone(),
         stores.data_store.clone(),
-        stores.state_index.clone(),
     );
     let task_manager = crate::tasks::manager::ResumableTaskManager::new(
         stores.resumable_task_store.clone(),
@@ -231,7 +230,6 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
     ));
     dwn.register(ProtocolsConfigureHandler::new(
         message_store.clone(),
-        state_index.clone(),
         resolver.clone(),
     ));
     dwn.register(ProtocolsQueryHandler::new(
@@ -241,7 +239,6 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
     dwn.register(RecordsWriteHandler::new(
         message_store.clone(),
         data_store.clone(),
-        state_index.clone(),
         resolver.clone(),
     ));
     dwn.register(RecordsReadHandler::new(
@@ -260,7 +257,6 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
     dwn.register(RecordsDeleteHandler::new(
         message_store.clone(),
         data_store.clone(),
-        state_index.clone(),
         resolver.clone(),
     ));
     dwn.register(RecordsSubscribeHandler::new(message_store, resolver));

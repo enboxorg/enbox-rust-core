@@ -7,7 +7,6 @@ use base64::Engine as _;
 use bytes::Bytes;
 use serde_json::Value as JsonValue;
 
-use crate::cid::generate_message_cid_from_json;
 use crate::descriptors::records::{entry_id, is_initial_write};
 use crate::descriptors::{
     messages::record_id,
@@ -16,7 +15,7 @@ use crate::descriptors::{
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::encryption::Encryption;
-use crate::errors::EventLogError;
+use crate::errors::{DwnError, DwnErrorCode, EventLogError};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::handlers::configure::fetch_protocol_definition;
@@ -180,9 +179,13 @@ pub(crate) fn find_initial_write(
 pub(crate) fn verify_immutable_properties(
     initial_write: &Message<Descriptor>,
     new_message: &Message<Descriptor>,
-) -> Result<(), String> {
-    let initial = records_write_descriptor(initial_write)?;
-    let new = records_write_descriptor(new_message)?;
+) -> Result<(), DwnError> {
+    let initial = records_write_descriptor(initial_write).map_err(|detail| {
+        DwnError::new(DwnErrorCode::RecordsWriteImmutablePropertyChanged, detail)
+    })?;
+    let new = records_write_descriptor(new_message).map_err(|detail| {
+        DwnError::new(DwnErrorCode::RecordsWriteImmutablePropertyChanged, detail)
+    })?;
     let changed = [
         ("interface", initial.interface(), new.interface()),
         ("method", initial.method(), new.method()),
@@ -219,8 +222,9 @@ pub(crate) fn verify_immutable_properties(
     .or_else(|| (initial.squash != new.squash).then(|| "squash".to_string()));
 
     if let Some(property) = changed {
-        return Err(format!(
-            "RecordsWriteImmutablePropertyChanged: {property} is an immutable property"
+        return Err(DwnError::new(
+            DwnErrorCode::RecordsWriteImmutablePropertyChanged,
+            format!("{property} is an immutable property"),
         ));
     }
     Ok(())
@@ -231,15 +235,17 @@ pub(crate) fn validate_data_integrity(
     expected_data_size: u64,
     actual_data_cid: &str,
     actual_data_size: u64,
-) -> Result<(), String> {
+) -> Result<(), DwnError> {
     if expected_data_cid != actual_data_cid {
-        return Err(format!(
-            "RecordsWriteDataCidMismatch: actual data CID {actual_data_cid} does not match dataCid in descriptor: {expected_data_cid}"
+        return Err(DwnError::new(
+            DwnErrorCode::RecordsWriteDataCidMismatch,
+            format!("actual data CID {actual_data_cid} does not match dataCid in descriptor: {expected_data_cid}"),
         ));
     }
     if expected_data_size != actual_data_size {
-        return Err(format!(
-            "RecordsWriteDataSizeMismatch: actual data size {actual_data_size} bytes does not match dataSize in descriptor: {expected_data_size}"
+        return Err(DwnError::new(
+            DwnErrorCode::RecordsWriteDataSizeMismatch,
+            format!("actual data size {actual_data_size} bytes does not match dataSize in descriptor: {expected_data_size}"),
         ));
     }
     Ok(())
@@ -932,7 +938,9 @@ where
     let descriptor = records_write_descriptor(message)?;
     let protocol = descriptor.protocol.clone();
     let protocol_path = descriptor.protocol_path.clone();
-    let governing_timestamp = governing_timestamp(tenant, message, message_store, author).await?;
+    let governing_timestamp = governing_timestamp(tenant, message, message_store, author)
+        .await
+        .map_err(|error| error.to_string())?;
     let definition = fetch_protocol_definition(
         tenant,
         protocol.as_str(),
@@ -1264,12 +1272,26 @@ where
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GoverningTimestampError {
+    #[error(transparent)]
+    Dwn(#[from] DwnError),
+    #[error("{0}")]
+    Detail(String),
+}
+
+impl From<String> for GoverningTimestampError {
+    fn from(detail: String) -> Self {
+        Self::Detail(detail)
+    }
+}
+
 pub(crate) async fn governing_timestamp<MessageStore>(
     tenant: &str,
     message: &Message<Descriptor>,
     message_store: &MessageStore,
     author: &str,
-) -> Result<String, String>
+) -> Result<String, GoverningTimestampError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1281,7 +1303,10 @@ where
     let initial = fetch_initial_write_message(tenant, &record_id, message_store)
         .await?
         .ok_or_else(|| {
-            "RecordsWriteGetInitialWriteNotFound: Initial write is not found.".to_string()
+            DwnError::new(
+                DwnErrorCode::RecordsWriteGetInitialWriteNotFound,
+                "Initial write is not found.",
+            )
         })?;
     Ok(canonical_rfc3339(message_timestamp(&initial)?))
 }
@@ -1402,39 +1427,6 @@ where
         .map_err(|err| err.to_string())
 }
 
-pub(crate) async fn existing_initial_lacks_data<DataStore>(
-    newest_existing: &Option<Message<Descriptor>>,
-    data_store: &DataStore,
-    tenant: &str,
-    record_id: &str,
-    data_cid: &str,
-) -> bool
-where
-    DataStore: crate::stores::DataStore + Sync,
-{
-    let Some(message) = newest_existing.as_ref() else {
-        return false;
-    };
-    let Some(author) = extract_author(message) else {
-        return false;
-    };
-    if !is_initial_write(message, &author).unwrap_or(false) {
-        return false;
-    }
-    if write_fields(message)
-        .ok()
-        .and_then(|fields| fields.encoded_data.as_ref())
-        .is_some()
-    {
-        return false;
-    }
-    data_store
-        .get(tenant, record_id, data_cid)
-        .await
-        .map(|result| result.is_none())
-        .unwrap_or(false)
-}
-
 pub(crate) fn newest_message(messages: &[Message<Descriptor>]) -> Option<Message<Descriptor>> {
     messages.iter().cloned().max_by(compare_messages)
 }
@@ -1467,9 +1459,9 @@ pub(crate) fn message_timestamp(
 }
 
 pub(crate) fn message_cid(message: &Message<Descriptor>) -> Result<String, String> {
-    serde_json::to_value(message)
+    message
+        .cid()
         .map_err(|err| err.to_string())
-        .and_then(|value| generate_message_cid_from_json(&value).map_err(|err| err.to_string()))
         .map(|cid| cid.to_string())
 }
 
@@ -1507,17 +1499,15 @@ where
     Ok(())
 }
 
-pub(crate) async fn purge_record_descendants<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn purge_record_descendants<MessageStore, DataStore>(
     tenant: &str,
     record_id: &str,
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
     DataStore: crate::stores::DataStore + Sync,
-    StateIndex: crate::stores::StateIndex + Sync,
 {
     let filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
@@ -1540,27 +1530,24 @@ where
             child_record_id,
             message_store,
             data_store,
-            state_index,
         ))
         .await?;
     }
     for messages in by_record.values() {
-        purge_record_messages(tenant, messages, message_store, data_store, state_index).await?;
+        purge_record_messages(tenant, messages, message_store, data_store).await?;
     }
     Ok(())
 }
 
-pub(crate) async fn purge_record_messages<MessageStore, DataStore, StateIndex>(
+pub(crate) async fn purge_record_messages<MessageStore, DataStore>(
     tenant: &str,
     record_messages: &[Message<Descriptor>],
     message_store: &MessageStore,
     data_store: &DataStore,
-    state_index: &StateIndex,
 ) -> Result<(), String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
     DataStore: crate::stores::DataStore + Sync,
-    StateIndex: crate::stores::StateIndex + Sync,
 {
     if let Some(newest_write) = newest_message(
         &record_messages
@@ -1579,34 +1566,14 @@ where
                 .map_err(|err| err.to_string())?;
         }
     }
-    let mut cids = Vec::new();
     for message in record_messages {
         let cid = message_cid(message)?;
         message_store
             .delete(tenant, &cid)
             .await
             .map_err(|err| err.to_string())?;
-        cids.push(cid);
     }
-    state_index
-        .delete(tenant, &cids)
-        .await
-        .map_err(|err| err.to_string())
-}
-
-pub(crate) fn can_perform_delete_against_record(
-    delete_message: &Message<Descriptor>,
-    newest_existing_message: &Message<Descriptor>,
-) -> bool {
-    let Ok(delete_descriptor) = records_delete_descriptor(delete_message) else {
-        return false;
-    };
-    if let Ok(newest_delete) = records_delete_descriptor(newest_existing_message) {
-        if !delete_descriptor.prune || newest_delete.prune {
-            return false;
-        }
-    }
-    true
+    Ok(())
 }
 
 pub(crate) fn parent_context_id(context_id: &str) -> Option<String> {
@@ -1646,10 +1613,7 @@ pub(crate) fn core_protocol_error_reply<R: Default>(
 
 pub(crate) fn store_error_reply<R: Default>(detail: impl Into<String>) -> Response<R> {
     Response {
-        status: Status {
-            code: 500,
-            detail: detail.into(),
-        },
+        status: Status::new(500, detail),
         reply: R::default(),
     }
 }
@@ -1670,10 +1634,7 @@ where
 {
     match error {
         EventLogError::ProgressGap(gap_info) => Response {
-            status: Status {
-                code: 410,
-                detail: "Progress token gap".to_string(),
-            },
+            status: Status::new(410, "Progress token gap"),
             reply: R::with_progress_gap_info(*gap_info),
         },
         other => Response::internal_error(other.to_string()),

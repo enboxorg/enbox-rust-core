@@ -24,27 +24,20 @@ pub struct ResumableRecordsSquashData {
 }
 
 #[derive(Clone)]
-pub struct StorageController<MessageStore, DataStore, StateIndex> {
+pub struct StorageController<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
-    state_index: StateIndex,
 }
 
-impl<MessageStore, DataStore, StateIndex> StorageController<MessageStore, DataStore, StateIndex>
+impl<MessageStore, DataStore> StorageController<MessageStore, DataStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
-    pub fn new(
-        message_store: MessageStore,
-        data_store: DataStore,
-        state_index: StateIndex,
-    ) -> Self {
+    pub fn new(message_store: MessageStore, data_store: DataStore) -> Self {
         Self {
             message_store,
             data_store,
-            state_index,
         }
     }
 
@@ -55,7 +48,6 @@ where
         resume_records_delete_from_task(
             &self.message_store,
             &self.data_store,
-            &self.state_index,
             &data.tenant,
             &data.message,
         )
@@ -69,7 +61,6 @@ where
         resume_records_squash_from_task(
             &self.message_store,
             &self.data_store,
-            &self.state_index,
             &data.tenant,
             &data.message,
         )

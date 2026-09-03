@@ -8,6 +8,7 @@ pub mod state_index;
 pub mod wake;
 pub mod write_resolver;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::{fmt::Debug, future::Future, pin::Pin};
 
@@ -49,6 +50,62 @@ pub type StateHash = [u8; 32];
 pub struct MessageQueryResult {
     pub messages: Vec<Message<Descriptor>>,
     pub cursor: Option<Cursor>,
+}
+
+/// A message and its complete replacement query projection inside an atomic
+/// latest-state transition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LatestStateMutation {
+    pub message: Message<Descriptor>,
+    pub indexes: KeyValues,
+}
+
+/// One indivisible retained-state transition decided by DWN admission.
+///
+/// The store does not decide which messages win. It atomically persists the
+/// supplied new winner, retained-message reindexing, displaced-message removal,
+/// and the corresponding durable-feed effects.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LatestStateTransition {
+    pub put: LatestStateMutation,
+    pub retains: Vec<LatestStateMutation>,
+    pub deletes: Vec<String>,
+}
+
+impl LatestStateTransition {
+    /// Rejects ambiguous transitions before a backend starts its transaction.
+    pub fn validate(&self) -> Result<(), MessageStoreError> {
+        let put_cid = self.put.message.cid()?.to_string();
+        let mut mutated = BTreeSet::from([put_cid.clone()]);
+
+        for retained in &self.retains {
+            let cid = retained.message.cid()?.to_string();
+            if !mutated.insert(cid.clone()) {
+                return Err(invalid_latest_state_transition(format!(
+                    "message CID '{cid}' occurs more than once in put/retains"
+                )));
+            }
+        }
+        for cid in &self.deletes {
+            if !mutated.insert(cid.clone()) {
+                return Err(invalid_latest_state_transition(format!(
+                    "message CID '{cid}' is both mutated and deleted"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn invalid_latest_state_transition(detail: String) -> MessageStoreError {
+    MessageStoreError::StoreError(StoreError::InternalException(format!(
+        "MessageStoreLatestStateTransitionInvalid: {detail}"
+    )))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestStateTransitionResult {
+    pub position: Option<ProgressToken>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -226,6 +283,26 @@ pub trait MessageStore {
     where
         D: MessageDescriptor + Send,
         Message<Descriptor>: From<Message<D>>;
+
+    /// Atomically commits a complete latest-state transition and its durable
+    /// feed projection.
+    ///
+    /// Production stores must override this fail-closed default. It exists so
+    /// narrow read-only test doubles do not accidentally claim atomic support.
+    fn commit_latest_state(
+        &self,
+        _tenant: &str,
+        _transition: LatestStateTransition,
+    ) -> impl Future<Output = Result<LatestStateTransitionResult, MessageStoreError>> + Send {
+        async {
+            Err(MessageStoreError::StoreError(
+                StoreError::InternalException(
+                    "MessageStoreAtomicLatestStateUnsupported: store does not implement atomic latest-state transitions"
+                        .to_string(),
+                ),
+            ))
+        }
+    }
 
     fn get(
         &self,

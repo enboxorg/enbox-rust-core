@@ -12,10 +12,9 @@ use crate::permissions::{
 use crate::{Descriptor, Message};
 
 /// Bundled store references passed to core protocol post-processing hooks.
-pub struct CoreProtocolStores<'a, MessageStore, DataStore, StateIndex> {
+pub struct CoreProtocolStores<'a, MessageStore, DataStore> {
     pub message_store: &'a MessageStore,
     pub data_store: &'a DataStore,
-    pub state_index: &'a StateIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,16 +96,15 @@ impl CoreProtocolRegistry {
         Ok(())
     }
 
-    pub async fn post_process_write<MessageStore, DataStore, StateIndex>(
+    pub async fn post_process_write<MessageStore, DataStore>(
         &self,
         tenant: &str,
         message: &Message<Descriptor>,
-        stores: CoreProtocolStores<'_, MessageStore, DataStore, StateIndex>,
+        stores: CoreProtocolStores<'_, MessageStore, DataStore>,
     ) -> Result<(), String>
     where
         MessageStore: crate::stores::MessageStore + Sync,
         DataStore: crate::stores::DataStore + Sync,
-        StateIndex: crate::stores::StateIndex + Sync,
     {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
             post_process_permissions_write(
@@ -114,7 +112,6 @@ impl CoreProtocolRegistry {
                 message,
                 stores.message_store,
                 stores.data_store,
-                stores.state_index,
             )
             .await
             .map_err(|error| error.to_string())?;

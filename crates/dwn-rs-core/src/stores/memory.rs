@@ -23,8 +23,9 @@ use crate::stores::wake::{Wake, WakePublishHandler, WakePublisher};
 use crate::stores::{
     EventLog, EventLogEntry, EventLogReadOptions, EventLogReadResult, EventLogReplayBounds,
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
-    KeyValues, ManagedResumableTask, MessageQueryResult, MessageStore, ProgressGapCode,
-    ProgressGapInfo, ProgressGapReason, ProgressToken, ReplicationFeedReader, ResumableTaskStore,
+    KeyValues, LatestStateMutation, LatestStateTransition, LatestStateTransitionResult,
+    ManagedResumableTask, MessageQueryResult, MessageStore, ProgressGapCode, ProgressGapInfo,
+    ProgressGapReason, ProgressToken, ReplicationFeedReader, ResumableTaskStore,
     SubscriptionListener, SubscriptionMessage,
 };
 use crate::{
@@ -112,6 +113,126 @@ impl MemoryMessageStore {
     }
 }
 
+fn put_message_state(
+    state: &mut MemoryMessageState,
+    tenant: &str,
+    mutation: LatestStateMutation,
+) -> Result<Option<Wake>, MessageStoreError> {
+    let LatestStateMutation { message, indexes } = mutation;
+    let cid = message.cid()?.to_string();
+    let msg_key = (tenant.to_string(), cid.clone());
+    let msg_row = MessageRow {
+        cid: cid.clone(),
+        message: message.clone(),
+        indexes: indexes.clone(),
+    };
+
+    if !is_feed_message(&message) {
+        state.messages.insert(msg_key, msg_row);
+        return Ok(None);
+    }
+
+    let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
+    match state.positions_by_cid.get(&msg_key).copied() {
+        Some(position) => {
+            let entry = state
+                .entries
+                .get(&(tenant.to_string(), position))
+                .ok_or_else(|| {
+                    MessageStoreError::StoreError(StoreError::InternalException(
+                        "feed entry missing for existing feed position".to_string(),
+                    ))
+                })?;
+
+            if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
+                return Err(MessageStoreError::StoreError(StoreError::ReplicationError(
+                    MessageReplicationError::FingerprintScopesMismatch,
+                )));
+            }
+
+            state.messages.insert(msg_key, msg_row);
+            state
+                .entries
+                .get_mut(&(tenant.to_string(), position))
+                .expect("in-memory feed positions are generated canonically")
+                .indexes = indexes;
+            Ok(None)
+        }
+        None => {
+            let next_position = state
+                .heads
+                .get(tenant)
+                .copied()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or(MessageStoreError::StoreError(StoreError::ReplicationError(
+                    MessageReplicationError::FeedPositionOverflow,
+                )))?;
+
+            state.messages.insert(msg_key, msg_row);
+            state.entries.insert(
+                (tenant.to_string(), next_position),
+                MemoryFeedEntry {
+                    fingerprint_scopes: msg_scopes.clone(),
+                    indexes,
+                    message_cid: cid.clone(),
+                },
+            );
+            state
+                .positions_by_cid
+                .insert((tenant.to_string(), cid.clone()), next_position);
+            state.heads.insert(tenant.to_string(), next_position);
+            fold_cid_into_domain(&mut state.fingerprints, tenant, &cid, &msg_scopes);
+
+            Ok(Some(Wake {
+                tenant: tenant.to_string(),
+                position: next_position,
+            }))
+        }
+    }
+}
+
+fn delete_message_state(
+    state: &mut MemoryMessageState,
+    tenant: &str,
+    cid: &str,
+) -> Result<(), MessageStoreError> {
+    let key = (tenant.to_string(), cid.to_string());
+    let feed = match state.positions_by_cid.get(&key).copied() {
+        Some(position) => {
+            let entry = state
+                .entries
+                .get(&(tenant.to_string(), position))
+                .ok_or_else(|| {
+                    MessageStoreError::StoreError(StoreError::InternalException(
+                        "feed entry missing for existing feed position".to_string(),
+                    ))
+                })?;
+            if entry.message_cid != cid {
+                return Err(MessageStoreError::StoreError(
+                    StoreError::InternalException(
+                        "feed entry message CID mismatch for existing feed position".to_string(),
+                    ),
+                ));
+            }
+            Some((
+                position,
+                entry.fingerprint_scopes.clone(),
+                entry.message_cid.clone(),
+            ))
+        }
+        None => None,
+    };
+
+    state.messages.remove(&key);
+    if let Some((position, scopes, stored_cid)) = feed {
+        state.entries.remove(&(tenant.to_string(), position));
+        state.positions_by_cid.remove(&key);
+        fold_cid_into_domain(&mut state.fingerprints, tenant, &stored_cid, &scopes);
+    }
+    Ok(())
+}
+
 impl MessageStore for MemoryMessageStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
         self.state
@@ -140,91 +261,9 @@ impl MessageStore for MemoryMessageStore {
         Message<Descriptor>: From<Message<D>>,
     {
         let message: Message<Descriptor> = message.into();
-        let mut canonical = message.clone();
-        canonical.fields.encoded_data();
-        let cid = canonical.cid()?.to_string();
-
         let wake = {
             let mut state = self.state.write().map_err(message_lock_error)?;
-
-            let msg_key = (tenant.to_string(), cid.clone());
-            let msg_row = MessageRow {
-                cid: cid.clone(),
-                message: message.clone(),
-                indexes: indexes.clone(),
-            };
-
-            if !is_feed_message(&canonical) {
-                state.messages.insert(msg_key, msg_row);
-                None
-            } else {
-                let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
-
-                match state.positions_by_cid.get(&msg_key).copied() {
-                    Some(position) => {
-                        let entry = state
-                            .entries
-                            .get(&(tenant.to_string(), position))
-                            .ok_or_else(|| {
-                                MessageStoreError::StoreError(StoreError::InternalException(
-                                    "feed entry missing for existing feed position".to_string(),
-                                ))
-                            })?;
-
-                        if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
-                            return Err(MessageStoreError::StoreError(
-                                StoreError::ReplicationError(
-                                    MessageReplicationError::FingerprintScopesMismatch,
-                                ),
-                            ));
-                        }
-
-                        state.messages.insert(msg_key, msg_row);
-                        state
-                            .entries
-                            .get_mut(&(tenant.to_string(), position))
-                            .expect("in-memory feed positions are generated canonically")
-                            .indexes = indexes;
-
-                        None
-                    }
-                    None => {
-                        let next_position = state
-                            .heads
-                            .get(tenant)
-                            .copied()
-                            .unwrap_or(0)
-                            .checked_add(1)
-                            .ok_or(MessageStoreError::StoreError(StoreError::ReplicationError(
-                                MessageReplicationError::FeedPositionOverflow,
-                            )))?;
-
-                        state.messages.insert(msg_key, msg_row);
-
-                        state.entries.insert(
-                            (tenant.to_string(), next_position),
-                            MemoryFeedEntry {
-                                fingerprint_scopes: msg_scopes.clone(),
-                                indexes,
-                                message_cid: cid.clone(),
-                            },
-                        );
-
-                        state
-                            .positions_by_cid
-                            .insert((tenant.to_string(), cid.clone()), next_position);
-
-                        state.heads.insert(tenant.to_string(), next_position);
-
-                        fold_cid_into_domain(&mut state.fingerprints, tenant, &cid, &msg_scopes);
-
-                        Some(Wake {
-                            tenant: tenant.to_string(),
-                            position: next_position,
-                        })
-                    }
-                }
-            }
+            put_message_state(&mut state, tenant, LatestStateMutation { message, indexes })?
         };
 
         if let Some(wake) = wake {
@@ -232,6 +271,52 @@ impl MessageStore for MemoryMessageStore {
         }
 
         Ok(())
+    }
+
+    async fn commit_latest_state(
+        &self,
+        tenant: &str,
+        transition: LatestStateTransition,
+    ) -> Result<LatestStateTransitionResult, MessageStoreError> {
+        transition.validate()?;
+        let (wake, position) = {
+            let mut state = self.state.write().map_err(message_lock_error)?;
+            let mut staged = state.clone();
+
+            let put_cid = transition.put.message.cid()?.to_string();
+            let wake = put_message_state(&mut staged, tenant, transition.put)?;
+            for retained in transition.retains {
+                let retained_cid = retained.message.cid()?.to_string();
+                if !staged
+                    .messages
+                    .contains_key(&(tenant.to_string(), retained_cid.clone()))
+                {
+                    return Err(MessageStoreError::StoreError(
+                        StoreError::InternalException(format!(
+                            "MessageStoreLatestStateRetainMissing: retained message '{retained_cid}' does not exist"
+                        )),
+                    ));
+                }
+                put_message_state(&mut staged, tenant, retained)?;
+            }
+            for cid in transition.deletes {
+                delete_message_state(&mut staged, tenant, &cid)?;
+            }
+
+            let position = staged
+                .positions_by_cid
+                .get(&(tenant.to_string(), put_cid.clone()))
+                .copied()
+                .map(|position| build_token(tenant, &staged.epoch, position, Some(&put_cid)));
+            *state = staged;
+            (wake, position)
+        };
+
+        if let Some(wake) = wake {
+            let _ = self.waker_publisher.publish(wake);
+        }
+
+        Ok(LatestStateTransitionResult { position })
     }
 
     async fn get(
@@ -249,45 +334,7 @@ impl MessageStore for MemoryMessageStore {
 
     async fn delete(&self, tenant: &str, cid: &str) -> Result<(), MessageStoreError> {
         let mut state = self.state.write().map_err(message_lock_error)?;
-        let key = (tenant.to_string(), cid.to_string());
-
-        let feed = match state.positions_by_cid.get(&key).copied() {
-            Some(position) => {
-                let entry = state
-                    .entries
-                    .get(&(tenant.to_string(), position))
-                    .ok_or_else(|| {
-                        MessageStoreError::StoreError(StoreError::InternalException(
-                            "feed entry missing for existing feed position".to_string(),
-                        ))
-                    })?;
-
-                if entry.message_cid != cid {
-                    return Err(MessageStoreError::StoreError(
-                        StoreError::InternalException(
-                            "feed entry message CID mismatch for existing feed position"
-                                .to_string(),
-                        ),
-                    ));
-                }
-
-                Some((
-                    position,
-                    entry.fingerprint_scopes.clone(),
-                    entry.message_cid.clone(),
-                ))
-            }
-            None => None,
-        };
-
-        state.messages.remove(&key);
-        if let Some((position, scopes, stored_cid)) = feed {
-            state.entries.remove(&(tenant.to_string(), position));
-            state.positions_by_cid.remove(&key);
-            fold_cid_into_domain(&mut state.fingerprints, tenant, &stored_cid, &scopes);
-        }
-
-        Ok(())
+        delete_message_state(&mut state, tenant, cid)
     }
 
     async fn clear(&self) -> Result<(), MessageStoreError> {
@@ -516,7 +563,7 @@ impl ReplicationFeedReader for MemoryMessageStore {
 
                         if row
                             .message
-                            .message_cid()
+                            .cid()
                             .map_err(|err| {
                                 EventLogError::StoreError(StoreError::InternalException(format!(
                                     "failed to compute message CID: {err}"
@@ -1391,6 +1438,7 @@ mod tests {
     use crate::descriptors::{DeleteDescriptor, Records};
     use crate::fields::WriteFields;
     use crate::filters::{Filter, FilterKey};
+    use crate::stores::replication_feed_conformance;
     use crate::stores::replication_feed_reader::{cid_contribution, xor_in_place};
     use crate::stores::wake::{WakeError, WakePublisher};
     use crate::{Fields, Pagination};
@@ -1401,6 +1449,11 @@ mod tests {
     struct RecordingWakePublisher {
         wakes: Arc<Mutex<Vec<(String, u64)>>>,
         fail: bool,
+    }
+
+    #[tokio::test]
+    async fn memory_conforms_to_replication_feed_contract() {
+        replication_feed_conformance::run(|| async { MemoryMessageStore::default() }).await;
     }
 
     impl RecordingWakePublisher {
@@ -1598,7 +1651,7 @@ mod tests {
     }
 
     fn stored_cid(message: &Message<Descriptor>) -> String {
-        message.message_cid().unwrap().to_string()
+        message.cid().unwrap().to_string()
     }
 
     fn idx(timestamp: &str, protocol: Option<&str>) -> KeyValues {

@@ -42,9 +42,11 @@ mod tests {
 
     use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
     use dwn_rs_core::descriptors::{Records, RecordsWriteDescriptor};
-    use dwn_rs_core::fields::{MessageFields, WriteFields};
+    use dwn_rs_core::fields::WriteFields;
     use dwn_rs_core::filters::{Filter, FilterKey, Filters};
-    use dwn_rs_core::stores::{DataStore, KeyValues, MessageStore};
+    use dwn_rs_core::stores::{
+        DataStore, KeyValues, LatestStateMutation, LatestStateTransition, MessageStore,
+    };
     use dwn_rs_core::{Descriptor, Fields, Message, MessageSort, Pagination, SortDirection, Value};
     use rusqlite::OptionalExtension;
 
@@ -91,9 +93,7 @@ mod tests {
     }
 
     fn message_cid(message: &Message<Descriptor>) -> String {
-        let mut canonical = message.clone();
-        canonical.fields.encoded_data();
-        canonical.cid().unwrap().to_string()
+        message.cid().unwrap().to_string()
     }
 
     fn non_feed_message(timestamp: &str) -> Message<Descriptor> {
@@ -201,9 +201,7 @@ mod tests {
             "https://example.com/protocol/notes",
             Some("aGVsbG8"),
         );
-        let mut cid_message = message.clone();
-        cid_message.fields.encoded_data();
-        let cid = cid_message.cid().unwrap().to_string();
+        let cid = message.cid().unwrap().to_string();
 
         MessageStore::put(
             &store,
@@ -232,9 +230,7 @@ mod tests {
             "https://example.com/protocols/notes",
             None,
         );
-        let mut cid_message = message.clone();
-        cid_message.fields.encoded_data();
-        let cid = cid_message.cid().unwrap().to_string();
+        let cid = message.cid().unwrap().to_string();
 
         let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut store).await.unwrap();
@@ -771,6 +767,79 @@ mod tests {
             .unwrap()
             .iter()
             .all(|(_, _, committed)| *committed));
+        MessageStore::close(&mut reopened).await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn atomic_latest_state_transition_survives_reopen() {
+        // Covers: DWN-REC-006
+        let path = temp_db_path("latest-state-transition-reopen");
+        let first = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
+        let displaced = message("2025-01-01T00:00:01Z", "https://example.com/notes", None);
+        let winner = message("2025-01-01T00:00:02Z", "https://example.com/notes", None);
+        let first_cid = message_cid(&first);
+        let displaced_cid = message_cid(&displaced);
+        let winner_cid = message_cid(&winner);
+
+        let mut store = SqliteStore::new(&path, WakePublishHandler::default());
+        MessageStore::open(&mut store).await.unwrap();
+        MessageStore::put(&store, TENANT, first.clone(), indexes(&first))
+            .await
+            .unwrap();
+        MessageStore::put(&store, TENANT, displaced, indexes(&winner))
+            .await
+            .unwrap();
+
+        let mut retained_indexes = indexes(&first);
+        retained_indexes.insert("isLatestBaseState".to_string(), Value::Bool(false));
+        let result = MessageStore::commit_latest_state(
+            &store,
+            TENANT,
+            LatestStateTransition {
+                put: LatestStateMutation {
+                    message: winner.clone(),
+                    indexes: indexes(&winner),
+                },
+                retains: vec![LatestStateMutation {
+                    message: first,
+                    indexes: retained_indexes,
+                }],
+                deletes: vec![displaced_cid.clone()],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result
+                .position
+                .as_ref()
+                .map(|token| token.position.as_str()),
+            Some("3")
+        );
+        let epoch = feed_epoch(&store).await;
+        MessageStore::close(&mut store).await;
+
+        let mut reopened = SqliteStore::new(&path, WakePublishHandler::default());
+        MessageStore::open(&mut reopened).await.unwrap();
+        assert_eq!(feed_epoch(&reopened).await, epoch);
+        assert_eq!(feed_head(&reopened).await, Some(3));
+        assert_eq!(
+            feed_rows(&reopened)
+                .await
+                .into_iter()
+                .map(|(position, cid, _)| (position, cid))
+                .collect::<Vec<_>>(),
+            [(1, first_cid), (3, winner_cid.clone())]
+        );
+        assert!(MessageStore::get(&reopened, TENANT, &displaced_cid)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(MessageStore::get(&reopened, TENANT, &winner_cid)
+            .await
+            .unwrap()
+            .is_some());
         MessageStore::close(&mut reopened).await;
         let _ = std::fs::remove_file(path);
     }

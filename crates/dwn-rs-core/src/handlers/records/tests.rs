@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::Bound;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -25,11 +26,11 @@ use crate::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::replication_feed_reader::build_token;
-use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::wake::{InProcessWakeBus, Wake, WakeError, WakePublisher};
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
-    MessageQueryResult, MessageStore, ReplicationFeedReader, StateIndex, SubscriptionMessage,
+    LatestStateTransition, LatestStateTransitionResult, MessageQueryResult, MessageStore,
+    ReplicationFeedReader, SubscriptionMessage,
 };
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
@@ -70,16 +71,13 @@ impl WakePublisher for RecordingWakePublisher {
 async fn records_write_read_query_and_count_published_inline_data() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let write_handler = RecordsWriteHandler::<_, _, _>::new(
+    let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
     let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
@@ -141,15 +139,12 @@ async fn records_write_read_query_and_count_published_inline_data() {
 async fn records_write_update_without_data_copies_previous_inline_data_and_keeps_initial() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -213,21 +208,166 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
 }
 
 #[tokio::test]
+async fn records_write_missing_initial_is_repairable_after_dependency_arrives() {
+    // Covers: DWN-SYNC-002
+    // Covers: DWN-AUTH-006
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let initial = signed_write_message(WriteSpec::new("2025-01-01T00:00:00.000000Z")).await;
+    let update = signed_write_message(WriteSpec {
+        record_id: Some(initial["recordId"].as_str().unwrap().to_string()),
+        context_id: Some(initial["contextId"].as_str().unwrap().to_string()),
+        date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &update,
+            None,
+        ))
+        .await;
+
+    assert_eq!(reply.status.code, 400);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("RecordsWriteGetInitialWriteNotFound")
+    );
+
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &initial,
+            Some(Bytes::new()),
+        ))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &update,
+            Some(Bytes::new()),
+        ))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    assert_eq!(
+        fetch_record_messages(
+            "did:example:alice",
+            initial["recordId"].as_str().unwrap(),
+            &message_store
+        )
+        .await
+        .unwrap()
+        .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn records_write_preserves_structured_commit_validation_errors() {
+    // Covers: DWN-REC-002, DWN-SYNC-002
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store,
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"structured validation");
+    let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+    let initial = signed_write_message(WriteSpec {
+        data_cid: data_cid.clone(),
+        data_size: data.len() as u64,
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let context_id = initial["contextId"].as_str().unwrap().to_string();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let cases = [
+        (
+            WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id.clone()),
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                recipient: Some("did:example:bob".to_string()),
+                data_cid: data_cid.clone(),
+                data_size: b"structured validation".len() as u64,
+                ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+            },
+            "RecordsWriteImmutablePropertyChanged",
+        ),
+        (
+            WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id.clone()),
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                data_cid: generate_dag_pb_cid_from_bytes(b"different").to_string(),
+                data_size: b"structured validation".len() as u64,
+                ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+            },
+            "RecordsWriteDataCidMismatch",
+        ),
+        (
+            WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id.clone()),
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                data_cid: data_cid.clone(),
+                data_size: b"structured validation".len() as u64 + 1,
+                ..WriteSpec::new("2025-01-01T00:03:00.000000Z")
+            },
+            "RecordsWriteDataSizeMismatch",
+        ),
+    ];
+
+    for (spec, expected_code) in cases {
+        let update = signed_write_message(spec).await;
+        let reply = handler
+            .run(MethodHandlerRequest::new(TENANT, &update, None))
+            .await;
+        assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+        assert_eq!(reply.status.error_code.as_deref(), Some(expected_code));
+    }
+}
+
+#[tokio::test]
 async fn records_write_retains_initial_feed_position_without_extra_wake() {
     const TENANT: &str = "did:example:alice";
 
     let publisher = RecordingWakePublisher::default();
     let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -283,27 +423,198 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
 }
 
 #[tokio::test]
+async fn records_write_data_bearing_exact_replay_is_non_mutating() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-REC-005
+    // Covers: DWN-REC-006
+    const TENANT: &str = "did:example:alice";
+
+    let publisher = RecordingWakePublisher::default();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"data arriving after the signed operation");
+    let write = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let message: Message<Descriptor> = serde_json::from_value(write.clone()).unwrap();
+    let cid = message_cid(&message).unwrap();
+
+    let reply = handler
+        .run(MethodHandlerRequest::new(TENANT, &write, None))
+        .await;
+    assert_eq!(reply.status.code, 204, "{}", reply.status.detail);
+
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            TENANT,
+            &write,
+            Some(data.clone()),
+        ))
+        .await;
+    assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+
+    let feed = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(feed.events.len(), 2);
+    assert_eq!(feed.cursor.unwrap().position, "2");
+    assert_eq!(publisher.positions(), [1, 2]);
+    assert!(
+        write_fields(&message_store.get(TENANT, &cid).await.unwrap().unwrap())
+            .unwrap()
+            .encoded_data
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delete() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-REC-005
+    // Covers: ENBOX-REC-001
+    const TENANT: &str = "did:example:alice";
+
+    for tombstoned in [false, true] {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        let write_handler = RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        );
+        let delete_handler = RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store,
+            Some(Arc::new(test_resolver())),
+        );
+
+        let data = Bytes::from_static(b"late initial data");
+        let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+        let initial = signed_write_message(WriteSpec {
+            data_cid: data_cid.clone(),
+            data_size: data.len() as u64,
+            published: Some(true),
+            ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+        })
+        .await;
+        let record_id = initial["recordId"].as_str().unwrap().to_string();
+        let context_id = initial["contextId"].as_str().unwrap().to_string();
+        let initial_message: Message<Descriptor> = serde_json::from_value(initial.clone()).unwrap();
+        let initial_cid = message_cid(&initial_message).unwrap();
+        assert_eq!(
+            write_handler
+                .run(MethodHandlerRequest::new(TENANT, &initial, None))
+                .await
+                .status
+                .code,
+            204
+        );
+
+        let winner = if tombstoned {
+            let delete =
+                signed_delete_message(&record_id, false, "2025-01-01T00:05:00.000000Z").await;
+            assert_eq!(
+                delete_handler
+                    .run(MethodHandlerRequest::new(TENANT, &delete, None))
+                    .await
+                    .status
+                    .code,
+                202
+            );
+            serde_json::from_value::<Message<Descriptor>>(delete).unwrap()
+        } else {
+            let update = signed_write_message(WriteSpec {
+                record_id: Some(record_id.clone()),
+                context_id: Some(context_id),
+                data_cid,
+                data_size: data.len() as u64,
+                date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+                published: Some(true),
+                ..WriteSpec::new("2025-01-01T00:05:00.000000Z")
+            })
+            .await;
+            assert_eq!(
+                write_handler
+                    .run(MethodHandlerRequest::new(
+                        TENANT,
+                        &update,
+                        Some(data.clone())
+                    ))
+                    .await
+                    .status
+                    .code,
+                202
+            );
+            serde_json::from_value::<Message<Descriptor>>(update).unwrap()
+        };
+        let winner_cid = message_cid(&winner).unwrap();
+
+        let reply = write_handler
+            .run(MethodHandlerRequest::new(
+                TENANT,
+                &initial,
+                Some(data.clone()),
+            ))
+            .await;
+        assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+
+        let rows = message_store.rows.read().unwrap();
+        let record_rows = rows
+            .iter()
+            .filter(|row| message_record_id(&row.message).as_deref() == Some(record_id.as_str()))
+            .collect::<Vec<_>>();
+        let latest = record_rows
+            .iter()
+            .filter(|row| row.indexes.get("isLatestBaseState") == Some(&Value::Bool(true)))
+            .collect::<Vec<_>>();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].cid, winner_cid);
+        let retained_initial = record_rows
+            .iter()
+            .find(|row| row.cid == initial_cid)
+            .unwrap();
+        assert!(write_fields(&retained_initial.message)
+            .unwrap()
+            .encoded_data
+            .is_none());
+    }
+}
+
+#[tokio::test]
 async fn records_delete_retains_initial_feed_position_without_extra_wake() {
     const TENANT: &str = "did:example:alice";
 
     let publisher = RecordingWakePublisher::default();
     let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions(TENANT, &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _>::new(
+    let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index.clone(),
         Some(Arc::new(test_resolver())),
     );
     let delete_handler = RecordsDeleteHandler::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -344,18 +655,216 @@ async fn records_delete_retains_initial_feed_position_without_extra_wake() {
 }
 
 #[tokio::test]
+async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
+    // Covers: DWN-REC-004
+    // Covers: DWN-REC-005
+    // Covers: ENBOX-REC-001
+    const TENANT: &str = "did:example:alice";
+
+    let data = Bytes::from_static(b"delete-wins payload");
+    let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+    let initial = signed_write_message(WriteSpec {
+        data_cid: data_cid.clone(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let context_id = initial["contextId"].as_str().unwrap().to_string();
+    let newer_write = signed_write_message(WriteSpec {
+        record_id: Some(record_id.clone()),
+        context_id: Some(context_id),
+        data_cid,
+        data_size: data.len() as u64,
+        date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+        published: Some(true),
+        ..WriteSpec::new("2025-01-12T00:00:00.000000Z")
+    })
+    .await;
+    let older_delete =
+        signed_delete_message(&record_id, false, "2025-01-11T00:00:00.000000Z").await;
+    let newer_write_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(newer_write.clone()).unwrap())
+            .unwrap();
+    let delete_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(older_delete.clone()).unwrap())
+            .unwrap();
+
+    for delete_first in [false, true] {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        let write_handler = RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        );
+        let delete_handler = RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store,
+            Some(Arc::new(test_resolver())),
+        );
+        assert_eq!(
+            write_handler
+                .run(MethodHandlerRequest::new(
+                    TENANT,
+                    &initial,
+                    Some(data.clone()),
+                ))
+                .await
+                .status
+                .code,
+            202
+        );
+
+        let statuses = if delete_first {
+            let delete = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_delete, None))
+                .await
+                .status
+                .code;
+            let write_reply = write_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
+                .await;
+            assert_eq!(
+                write_reply.status.error_code.as_deref(),
+                Some("RecordsWriteNotAllowedAfterDelete")
+            );
+            [delete, write_reply.status.code]
+        } else {
+            let write = write_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
+                .await
+                .status
+                .code;
+            let delete = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_delete, None))
+                .await
+                .status
+                .code;
+            [write, delete]
+        };
+        assert_eq!(statuses, [202, if delete_first { 400 } else { 202 }]);
+
+        let retained = fetch_record_messages(TENANT, &record_id, &message_store)
+            .await
+            .unwrap();
+        let retained_cids = retained
+            .iter()
+            .map(message_cid)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(retained_cids.contains(&delete_cid));
+        assert!(!retained_cids.contains(&newer_write_cid));
+    }
+}
+
+#[tokio::test]
+async fn records_prune_wins_over_newer_plain_delete_in_both_arrival_orders() {
+    // Covers: DWN-REC-004
+    // Covers: ENBOX-REC-001
+    const TENANT: &str = "did:example:alice";
+
+    let data = Bytes::from_static(b"prune-wins payload");
+    let initial = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let older_prune = signed_delete_message(&record_id, true, "2025-01-11T00:00:00.000000Z").await;
+    let newer_delete =
+        signed_delete_message(&record_id, false, "2025-01-12T00:00:00.000000Z").await;
+    let prune_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(older_prune.clone()).unwrap())
+            .unwrap();
+    let plain_cid =
+        message_cid(&serde_json::from_value::<Message<Descriptor>>(newer_delete.clone()).unwrap())
+            .unwrap();
+
+    for prune_first in [false, true] {
+        let mut message_store = TestMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        let write_handler = RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        );
+        let delete_handler = RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store,
+            Some(Arc::new(test_resolver())),
+        );
+        assert_eq!(
+            write_handler
+                .run(MethodHandlerRequest::new(
+                    TENANT,
+                    &initial,
+                    Some(data.clone()),
+                ))
+                .await
+                .status
+                .code,
+            202
+        );
+
+        let statuses = if prune_first {
+            let prune = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_prune, None))
+                .await
+                .status
+                .code;
+            let plain = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_delete, None))
+                .await
+                .status
+                .code;
+            [prune, plain]
+        } else {
+            let plain = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &newer_delete, None))
+                .await
+                .status
+                .code;
+            let prune = delete_handler
+                .run(MethodHandlerRequest::new(TENANT, &older_prune, None))
+                .await
+                .status
+                .code;
+            [plain, prune]
+        };
+        assert_eq!(statuses, [202, if prune_first { 409 } else { 202 }]);
+
+        let retained_cids = fetch_record_messages(TENANT, &record_id, &message_store)
+            .await
+            .unwrap()
+            .iter()
+            .map(message_cid)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(retained_cids.contains(&prune_cid));
+        assert!(!retained_cids.contains(&plain_cid));
+    }
+}
+
+#[tokio::test]
 async fn records_write_rejects_older_conflicting_write() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -404,18 +913,168 @@ async fn records_write_rejects_older_conflicting_write() {
 }
 
 #[tokio::test]
+async fn records_write_exact_replay_is_classified_before_mutable_protocol_validation() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-AUTH-006
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"admitted before protocol removal");
+    let write = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let reply = handler
+        .run(MethodHandlerRequest::new(
+            TENANT,
+            &write,
+            Some(data.clone()),
+        ))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let protocol_cids = message_store
+        .rows
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Protocols(_)))
+        .map(|row| row.cid.clone())
+        .collect::<Vec<_>>();
+    for cid in protocol_cids {
+        message_store.delete(TENANT, &cid).await.unwrap();
+    }
+
+    let reply = handler
+        .run(MethodHandlerRequest::new(TENANT, &write, Some(data)))
+        .await;
+    assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+    assert_eq!(
+        message_store
+            .rows
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|row| matches!(row.message.descriptor, Descriptor::Records(_)))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn records_delete_exact_replay_is_classified_before_mutable_protocol_validation() {
+    // Covers: DWN-REC-003
+    // Covers: DWN-AUTH-006
+    // Covers: DWN-SYNC-002
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"delete admitted before protocol removal");
+    let initial = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        write_handler
+            .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let delete = signed_delete_message(&record_id, false, "2025-01-01T00:01:00.000000Z").await;
+    assert_eq!(
+        delete_handler
+            .run(MethodHandlerRequest::new(TENANT, &delete, None))
+            .await
+            .status
+            .code,
+        202
+    );
+    let records_before = message_store
+        .rows
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Records(_)))
+        .count();
+
+    let protocol_cids = message_store
+        .rows
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Protocols(_)))
+        .map(|row| row.cid.clone())
+        .collect::<Vec<_>>();
+    for cid in protocol_cids {
+        message_store.delete(TENANT, &cid).await.unwrap();
+    }
+
+    let reply = delete_handler
+        .run(MethodHandlerRequest::new(TENANT, &delete, None))
+        .await;
+    assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+    let delete_message: Message<Descriptor> = serde_json::from_value(delete).unwrap();
+    assert_eq!(
+        crate::sync::endpoint::classify_apply_reply(&reply.status, &delete_message, true),
+        crate::sync::endpoint::ReplicationApplyOutcome::Duplicate
+    );
+    assert_eq!(
+        message_store
+            .rows
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|row| matches!(row.message.descriptor, Descriptor::Records(_)))
+            .count(),
+        records_before
+    );
+}
+
+#[tokio::test]
 async fn records_read_returns_gone_when_external_data_is_missing() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
     let read_handler = RecordsReadHandler::new(message_store.clone(), data_store.clone(), None);
@@ -461,21 +1120,17 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
 async fn records_delete_prune_purges_descendant_records() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
-    let write_handler = RecordsWriteHandler::<_, _, _>::new(
+    let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index.clone(),
         Some(Arc::new(test_resolver())),
     );
     let delete_handler = RecordsDeleteHandler::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -547,18 +1202,181 @@ async fn records_delete_prune_purges_descendant_records() {
 }
 
 #[tokio::test]
+async fn records_delete_cleanup_failure_is_safe_and_resumable() {
+    // Covers: DWN-REC-006
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from(vec![7u8; (MAX_ENCODED_DATA_SIZE + 1) as usize]);
+    let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+    let write = signed_write_message(WriteSpec {
+        data_cid: data_cid.clone(),
+        data_size: data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = write["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        write_handler
+            .run(MethodHandlerRequest::new(TENANT, &write, Some(data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let delete = signed_delete_message(&record_id, false, "2025-01-01T00:01:00.000000Z").await;
+    let delete_message: Message<Descriptor> = serde_json::from_value(delete.clone()).unwrap();
+    data_store.fail_delete.store(true, Ordering::SeqCst);
+    let reply = delete_handler
+        .run(MethodHandlerRequest::new(TENANT, &delete, None))
+        .await;
+    assert_eq!(reply.status.code, 500, "{}", reply.status.detail);
+
+    let retained = fetch_record_messages(TENANT, &record_id, &message_store)
+        .await
+        .unwrap();
+    assert_eq!(newest_message(&retained), Some(delete_message.clone()));
+    assert!(data_store
+        .get(TENANT, &record_id, &data_cid)
+        .await
+        .unwrap()
+        .is_some());
+
+    data_store.fail_delete.store(false, Ordering::SeqCst);
+    resume_records_delete_from_task(&message_store, &data_store, TENANT, &delete_message)
+        .await
+        .unwrap();
+    assert!(data_store
+        .get(TENANT, &record_id, &data_cid)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        newest_message(
+            &fetch_record_messages(TENANT, &record_id, &message_store)
+                .await
+                .unwrap()
+        ),
+        Some(delete_message)
+    );
+}
+
+#[tokio::test]
+async fn superseded_prune_task_rechecks_winner_and_does_not_purge_descendants() {
+    // Covers: DWN-REC-004
+    // Covers: DWN-REC-006
+    // Covers: ENBOX-REC-001
+    const TENANT: &str = "did:example:alice";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    let parent_data = Bytes::from_static(b"parent");
+    let parent = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&parent_data).to_string(),
+        data_size: parent_data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let parent_record_id = parent["recordId"].as_str().unwrap().to_string();
+    let parent_context_id = parent["contextId"].as_str().unwrap().to_string();
+    assert_eq!(
+        write_handler
+            .run(MethodHandlerRequest::new(
+                TENANT,
+                &parent,
+                Some(parent_data)
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let losing_prune =
+        signed_delete_message(&parent_record_id, true, "2025-01-01T00:01:00.000000Z").await;
+    let winning_prune =
+        signed_delete_message(&parent_record_id, true, "2025-01-01T00:02:00.000000Z").await;
+    assert_eq!(
+        delete_handler
+            .run(MethodHandlerRequest::new(TENANT, &winning_prune, None))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    // Model descendant work appearing after the winning task completed. A stale task must
+    // not repeat destructive work merely because its message was once runnable.
+    let child = signed_write_message(WriteSpec {
+        parent_id: Some(parent_record_id.clone()),
+        parent_context_id: Some(parent_context_id),
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:03:00.000000Z")
+    })
+    .await;
+    let child_record_id = child["recordId"].as_str().unwrap().to_string();
+    let child_message: Message<Descriptor> = serde_json::from_value(child).unwrap();
+    let child_author = extract_author(&child_message).unwrap();
+    let child_indexes = records_write_indexes(&child_message, &child_author, true).unwrap();
+    message_store
+        .put(TENANT, child_message, child_indexes)
+        .await
+        .unwrap();
+
+    let losing_prune: Message<Descriptor> = serde_json::from_value(losing_prune).unwrap();
+    resume_records_delete_from_task(&message_store, &data_store, TENANT, &losing_prune)
+        .await
+        .unwrap();
+    assert!(
+        !fetch_record_messages(TENANT, &child_record_id, &message_store)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_squash_protocol("did:example:alice", &message_store).await;
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -631,22 +1449,31 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
         ))
         .await;
     assert_eq!(reply.status.code, 409);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationSquashBackstop")
+    );
+    assert_eq!(
+        reply
+            .status
+            .info
+            .as_ref()
+            .and_then(|info| info.get("squashFloorTimestamp")),
+        Some(&json!("2025-01-01T00:01:00.000000Z"))
+    );
 }
 
 #[tokio::test]
 async fn records_write_accepts_permission_grant_id_and_enforces_publication_condition() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -729,19 +1556,165 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
 }
 
 #[tokio::test]
+async fn permissions_request_grant_and_revocation_reject_updates() {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+    let scope = r#"{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}"#;
+    let tags = Some(MapValue::from([(
+        "protocol".to_string(),
+        Value::String("http://example.com/notes".to_string()),
+    )]));
+    let grant_data = Bytes::from(format!(
+        r#"{{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{scope}}}"#
+    ));
+    let grant = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        recipient: Some("did:example:bob".to_string()),
+        tags: tags.clone(),
+        data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+        data_size: grant_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let grant_id = grant["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &grant,
+                Some(grant_data.clone())
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let request_data = Bytes::from(format!(r#"{{"delegated":false,"scope":{scope}}}"#));
+    let request = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REQUEST_PATH.to_string(),
+        tags: tags.clone(),
+        data_cid: generate_dag_pb_cid_from_bytes(&request_data).to_string(),
+        data_size: request_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &request,
+                Some(request_data.clone())
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let revocation_data = Bytes::from_static(br#"{"description":"revoke"}"#);
+    let revocation = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        parent_id: Some(grant_id.clone()),
+        parent_context_id: Some(grant_id),
+        tags,
+        data_cid: generate_dag_pb_cid_from_bytes(&revocation_data).to_string(),
+        data_size: revocation_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &revocation,
+                Some(revocation_data.clone())
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    // Covers: DWN-REC-002, DWN-AUTH-006
+    for (path, initial, data) in [
+        (permissions::PERMISSIONS_REQUEST_PATH, request, request_data),
+        (permissions::PERMISSIONS_GRANT_PATH, grant, grant_data),
+        (
+            permissions::PERMISSIONS_REVOCATION_PATH,
+            revocation,
+            revocation_data,
+        ),
+    ] {
+        let mut update_spec = WriteSpec::new("2025-01-01T00:03:00.000000Z");
+        update_spec.date_created = initial["descriptor"]["dateCreated"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        update_spec.record_id = Some(initial["recordId"].as_str().unwrap().to_string());
+        update_spec.context_id = Some(initial["contextId"].as_str().unwrap().to_string());
+        update_spec.parent_id = initial["descriptor"]["parentId"]
+            .as_str()
+            .map(str::to_string);
+        update_spec.protocol = permissions::PERMISSIONS_PROTOCOL_URI.to_string();
+        update_spec.protocol_path = path.to_string();
+        update_spec.recipient = initial["descriptor"]["recipient"]
+            .as_str()
+            .map(str::to_string);
+        update_spec.tags = initial["descriptor"]["tags"]
+            .as_object()
+            .map(|tags| serde_json::from_value(tags.clone().into()).unwrap());
+        update_spec.data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+        update_spec.data_size = data.len() as u64;
+        update_spec.data_format = "application/json".to_string();
+        let update = signed_write_message(update_spec).await;
+
+        let reply = handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &update,
+                Some(data),
+            ))
+            .await;
+        assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+        assert_eq!(
+            reply.status.error_code.as_deref(),
+            Some("ProtocolAuthorizationImmutableRecord")
+        );
+        assert_eq!(
+            reply.status.detail,
+            format!(
+                "ProtocolAuthorizationImmutableRecord: record at protocol path '{path}' is immutable: updates are not allowed."
+            )
+        );
+    }
+}
+
+#[tokio::test]
 async fn records_write_accepts_embedded_author_delegated_grant() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -799,16 +1772,13 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
 async fn permissions_revocation_cleans_grant_authorized_messages() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    state_index.open().await.unwrap();
     put_notes_protocol_without_actions("did:example:alice", &message_store).await;
 
-    let handler = RecordsWriteHandler::<_, _, _>::new(
+    let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     );
 
@@ -1586,6 +2556,39 @@ impl MessageStore for TestMessageStore {
         }
     }
 
+    async fn commit_latest_state(
+        &self,
+        tenant: &str,
+        transition: LatestStateTransition,
+    ) -> Result<LatestStateTransitionResult, MessageStoreError> {
+        transition.validate()?;
+        let mut rows = self.rows.write().unwrap();
+        for retained in &transition.retains {
+            let cid = message_cid(&retained.message).map_err(test_store_error)?;
+            if !rows
+                .iter()
+                .any(|row| row.tenant == tenant && row.cid == cid)
+            {
+                return Err(test_store_error(format!(
+                    "retained message '{cid}' does not exist"
+                )));
+            }
+        }
+
+        for mutation in std::iter::once(transition.put).chain(transition.retains) {
+            let cid = message_cid(&mutation.message).map_err(test_store_error)?;
+            rows.retain(|row| row.tenant != tenant || row.cid != cid);
+            rows.push(TestMessageRow {
+                tenant: tenant.to_string(),
+                cid,
+                message: mutation.message,
+                indexes: mutation.indexes,
+            });
+        }
+        rows.retain(|row| row.tenant != tenant || !transition.deletes.contains(&row.cid));
+        Ok(LatestStateTransitionResult { position: None })
+    }
+
     fn query(
         &self,
         tenant: &str,
@@ -1675,6 +2678,7 @@ type TestDataValues = Arc<RwLock<BTreeMap<TestDataKey, Bytes>>>;
 #[derive(Clone, Default)]
 struct TestDataStore {
     values: TestDataValues,
+    fail_delete: Arc<AtomicBool>,
 }
 
 impl DataStore for TestDataStore {
@@ -1739,12 +2743,18 @@ impl DataStore for TestDataStore {
         data_cid: &str,
     ) -> impl Future<Output = Result<(), DataStoreError>> + Send {
         let values = self.values.clone();
+        let fail_delete = self.fail_delete.clone();
         let key = (
             tenant.to_string(),
             record_id.to_string(),
             data_cid.to_string(),
         );
         async move {
+            if fail_delete.load(Ordering::SeqCst) {
+                return Err(DataStoreError::StoreError(StoreError::InternalException(
+                    "injected data delete failure".to_string(),
+                )));
+            }
             values.write().unwrap().remove(&key);
             Ok(())
         }

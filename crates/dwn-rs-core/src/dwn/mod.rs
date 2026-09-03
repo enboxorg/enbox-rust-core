@@ -99,10 +99,7 @@ pub struct DwnReply {
 impl DwnReply {
     pub fn new(code: i32, detail: impl Into<String>) -> Self {
         Self {
-            status: Status {
-                code,
-                detail: detail.into(),
-            },
+            status: Status::new(code, detail),
             body: BTreeMap::new(),
         }
     }

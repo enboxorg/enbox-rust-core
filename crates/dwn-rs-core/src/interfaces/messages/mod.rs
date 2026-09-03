@@ -5,7 +5,7 @@ pub mod protocols;
 use std::collections::TryReserveError;
 
 use crate::auth::{jws, Jws};
-use crate::cid::{generate_cid_from_serialized, generate_message_cid_from_json};
+use crate::cid::generate_message_cid_from_json;
 use crate::fields::MessageFields;
 use crate::{auth::Authorization, interfaces::messages::descriptors::MessageParameters};
 use cid::Cid;
@@ -65,12 +65,11 @@ impl<D> Message<D>
 where
     D: MessageDescriptor,
 {
+    /// Return the stable CID of this signed DWN operation.
+    ///
+    /// Transport-only inline `encodedData` is excluded so metadata-only and
+    /// data-complete representations of the same operation have one identity.
     pub fn cid(&self) -> Result<Cid, EncodeError<TryReserveError>> {
-        generate_cid_from_serialized(self)
-    }
-
-    /// Return the DWN message CID, excluding transport-only inline `encodedData`.
-    pub fn message_cid(&self) -> Result<Cid, EncodeError<TryReserveError>> {
         let value =
             serde_json::to_value(self).map_err(|error| EncodeError::Msg(error.to_string()))?;
         generate_message_cid_from_json(&value)
@@ -121,13 +120,9 @@ where
     ) -> Result<Authorization, ValidationError> {
         let delegated_grant_id: Option<Cid> = if let Some(delegated_grant) = delegated_grant.clone()
         {
-            Some(
-                delegated_grant
-                    .message_cid()
-                    .map_err(|err| ValidationError {
-                        message: err.to_string(),
-                    })?,
-            )
+            Some(delegated_grant.cid().map_err(|err| ValidationError {
+                message: err.to_string(),
+            })?)
         } else {
             None
         };
@@ -267,7 +262,7 @@ mod test {
     use chrono::Utc;
     use descriptors::{ReadDescriptor, Records, RecordsWriteDescriptor};
     use dwn_rs_message_derive::descriptor;
-    use fields::MessageFields;
+    use fields::{MessageFields, WriteFields};
     use serde_json::json;
 
     use crate::{auth::Authorization, canonical_rfc3339};
@@ -369,6 +364,23 @@ mod test {
         let expected = Message::new(descriptor, fields).unwrap();
 
         assert_eq!(message, expected);
+    }
+
+    #[test]
+    fn cid_is_stable_across_inline_data_transport_representations() {
+        let without_data = Message {
+            descriptor: Descriptor::Records(Box::new(Records::Write(Default::default()))),
+            fields: Fields::Write(WriteFields::default()),
+        };
+        let with_data = Message {
+            descriptor: without_data.descriptor.clone(),
+            fields: Fields::Write(WriteFields {
+                encoded_data: Some("dGVzdA".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        assert_eq!(without_data.cid().unwrap(), with_data.cid().unwrap());
     }
 
     #[test]

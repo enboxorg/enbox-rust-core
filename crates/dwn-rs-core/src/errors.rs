@@ -1,9 +1,188 @@
-use std::{collections::TryReserveError, convert::Infallible};
+use std::{collections::BTreeMap, collections::TryReserveError, convert::Infallible};
 
 use thiserror::Error;
 use ulid::MonotonicError;
 
 use crate::{stores::ProgressGapInfo, FilterError, QueryError};
+
+pub type DwnErrorInfo = BTreeMap<String, serde_json::Value>;
+
+/// Stable DWN error identifiers carried across handler and replication boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DwnErrorCode {
+    GeneralJwsVerifierGetPublicKeyNotFound,
+    ProtocolAuthorizationProtocolNotFound,
+    ProtocolsConfigureComposedProtocolNotInstalled,
+    ProtocolAuthorizationParentRecordNotFound,
+    ProtocolAuthorizationCrossProtocolParentNotFound,
+    ProtocolAuthorizationParentNotFoundConstructingRecordChain,
+    RecordsWriteGetInitialWriteNotFound,
+    GrantAuthorizationGrantMissing,
+    ProtocolAuthorizationMatchingRoleRecordNotFound,
+    ProtocolAuthorizationEncryptionRoleAudienceMissing,
+    EncryptionControlValidateDeliveryAudienceMissing,
+    EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
+    RecordsWriteMissingDataInPrevious,
+    RecordsWriteMissingEncodedDataInPrevious,
+    RecordsWriteNotAllowedAfterDelete,
+    RecordsWriteDataCidMismatch,
+    RecordsWriteDataSizeMismatch,
+    RecordsWriteImmutablePropertyChanged,
+    ProtocolAuthorizationImmutableRecord,
+    ProtocolAuthorizationSquashBackstop,
+}
+
+impl DwnErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GeneralJwsVerifierGetPublicKeyNotFound => {
+                "GeneralJwsVerifierGetPublicKeyNotFound"
+            }
+            Self::ProtocolAuthorizationProtocolNotFound => "ProtocolAuthorizationProtocolNotFound",
+            Self::ProtocolsConfigureComposedProtocolNotInstalled => {
+                "ProtocolsConfigureComposedProtocolNotInstalled"
+            }
+            Self::ProtocolAuthorizationParentRecordNotFound => {
+                "ProtocolAuthorizationParentRecordNotFound"
+            }
+            Self::ProtocolAuthorizationCrossProtocolParentNotFound => {
+                "ProtocolAuthorizationCrossProtocolParentNotFound"
+            }
+            Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain => {
+                "ProtocolAuthorizationParentNotFoundConstructingRecordChain"
+            }
+            Self::RecordsWriteGetInitialWriteNotFound => "RecordsWriteGetInitialWriteNotFound",
+            Self::GrantAuthorizationGrantMissing => "GrantAuthorizationGrantMissing",
+            Self::ProtocolAuthorizationMatchingRoleRecordNotFound => {
+                "ProtocolAuthorizationMatchingRoleRecordNotFound"
+            }
+            Self::ProtocolAuthorizationEncryptionRoleAudienceMissing => {
+                "ProtocolAuthorizationEncryptionRoleAudienceMissing"
+            }
+            Self::EncryptionControlValidateDeliveryAudienceMissing => {
+                "EncryptionControlValidateDeliveryAudienceMissing"
+            }
+            Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing => {
+                "EncryptionControlValidateDeliveryRecipientRoleRecordMissing"
+            }
+            Self::RecordsWriteMissingDataInPrevious => "RecordsWriteMissingDataInPrevious",
+            Self::RecordsWriteMissingEncodedDataInPrevious => {
+                "RecordsWriteMissingEncodedDataInPrevious"
+            }
+            Self::RecordsWriteNotAllowedAfterDelete => "RecordsWriteNotAllowedAfterDelete",
+            Self::RecordsWriteDataCidMismatch => "RecordsWriteDataCidMismatch",
+            Self::RecordsWriteDataSizeMismatch => "RecordsWriteDataSizeMismatch",
+            Self::RecordsWriteImmutablePropertyChanged => "RecordsWriteImmutablePropertyChanged",
+            Self::ProtocolAuthorizationImmutableRecord => "ProtocolAuthorizationImmutableRecord",
+            Self::ProtocolAuthorizationSquashBackstop => "ProtocolAuthorizationSquashBackstop",
+        }
+    }
+
+    pub const fn is_missing_dependency(self) -> bool {
+        matches!(
+            self,
+            Self::ProtocolAuthorizationProtocolNotFound
+                | Self::ProtocolsConfigureComposedProtocolNotInstalled
+                | Self::ProtocolAuthorizationParentRecordNotFound
+                | Self::ProtocolAuthorizationCrossProtocolParentNotFound
+                | Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain
+                | Self::RecordsWriteGetInitialWriteNotFound
+                | Self::GrantAuthorizationGrantMissing
+                | Self::ProtocolAuthorizationMatchingRoleRecordNotFound
+                | Self::ProtocolAuthorizationEncryptionRoleAudienceMissing
+                | Self::EncryptionControlValidateDeliveryAudienceMissing
+                | Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing
+                | Self::RecordsWriteMissingDataInPrevious
+                | Self::RecordsWriteMissingEncodedDataInPrevious
+        )
+    }
+}
+
+impl std::fmt::Display for DwnErrorCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<&str> for DwnErrorCode {
+    type Error = ();
+
+    fn try_from(code: &str) -> Result<Self, Self::Error> {
+        match code {
+            "GeneralJwsVerifierGetPublicKeyNotFound" => {
+                Ok(Self::GeneralJwsVerifierGetPublicKeyNotFound)
+            }
+            "ProtocolAuthorizationProtocolNotFound" => {
+                Ok(Self::ProtocolAuthorizationProtocolNotFound)
+            }
+            "ProtocolsConfigureComposedProtocolNotInstalled" => {
+                Ok(Self::ProtocolsConfigureComposedProtocolNotInstalled)
+            }
+            "ProtocolAuthorizationParentRecordNotFound" => {
+                Ok(Self::ProtocolAuthorizationParentRecordNotFound)
+            }
+            "ProtocolAuthorizationCrossProtocolParentNotFound" => {
+                Ok(Self::ProtocolAuthorizationCrossProtocolParentNotFound)
+            }
+            "ProtocolAuthorizationParentNotFoundConstructingRecordChain" => {
+                Ok(Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain)
+            }
+            "RecordsWriteGetInitialWriteNotFound" => Ok(Self::RecordsWriteGetInitialWriteNotFound),
+            "GrantAuthorizationGrantMissing" => Ok(Self::GrantAuthorizationGrantMissing),
+            "ProtocolAuthorizationMatchingRoleRecordNotFound" => {
+                Ok(Self::ProtocolAuthorizationMatchingRoleRecordNotFound)
+            }
+            "ProtocolAuthorizationEncryptionRoleAudienceMissing" => {
+                Ok(Self::ProtocolAuthorizationEncryptionRoleAudienceMissing)
+            }
+            "EncryptionControlValidateDeliveryAudienceMissing" => {
+                Ok(Self::EncryptionControlValidateDeliveryAudienceMissing)
+            }
+            "EncryptionControlValidateDeliveryRecipientRoleRecordMissing" => {
+                Ok(Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing)
+            }
+            "RecordsWriteMissingDataInPrevious" => Ok(Self::RecordsWriteMissingDataInPrevious),
+            "RecordsWriteMissingEncodedDataInPrevious" => {
+                Ok(Self::RecordsWriteMissingEncodedDataInPrevious)
+            }
+            "RecordsWriteNotAllowedAfterDelete" => Ok(Self::RecordsWriteNotAllowedAfterDelete),
+            "RecordsWriteDataCidMismatch" => Ok(Self::RecordsWriteDataCidMismatch),
+            "RecordsWriteDataSizeMismatch" => Ok(Self::RecordsWriteDataSizeMismatch),
+            "RecordsWriteImmutablePropertyChanged" => {
+                Ok(Self::RecordsWriteImmutablePropertyChanged)
+            }
+            "ProtocolAuthorizationImmutableRecord" => {
+                Ok(Self::ProtocolAuthorizationImmutableRecord)
+            }
+            "ProtocolAuthorizationSquashBackstop" => Ok(Self::ProtocolAuthorizationSquashBackstop),
+            _ => Err(()),
+        }
+    }
+}
+
+/// A DWN failure with a stable machine-readable code and optional structured data.
+#[derive(Error, Debug, Clone, PartialEq)]
+#[error("{code}: {detail}")]
+pub struct DwnError {
+    pub code: DwnErrorCode,
+    pub detail: String,
+    pub info: Option<DwnErrorInfo>,
+}
+
+impl DwnError {
+    pub fn new(code: DwnErrorCode, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+            info: None,
+        }
+    }
+
+    pub fn with_info(mut self, info: DwnErrorInfo) -> Self {
+        self.info = Some(info);
+        self
+    }
+}
 
 /// Convert a `PoisonError` (or any `RwLock`/`Mutex` lock failure) into a
 /// [`StoreError::InternalException`].
