@@ -1620,10 +1620,7 @@ pub(crate) fn core_protocol_error_reply<R: Default>(
 
 pub(crate) fn store_error_reply<R: Default>(detail: impl Into<String>) -> Response<R> {
     Response {
-        status: Status {
-            code: 500,
-            detail: detail.into(),
-        },
+        status: Status::new(500, detail),
         reply: R::default(),
     }
 }
@@ -1644,10 +1641,7 @@ where
 {
     match error {
         EventLogError::ProgressGap(gap_info) => Response {
-            status: Status {
-                code: 410,
-                detail: "Progress token gap".to_string(),
-            },
+            status: Status::new(410, "Progress token gap"),
             reply: R::with_progress_gap_info(*gap_info),
         },
         other => Response::internal_error(other.to_string()),

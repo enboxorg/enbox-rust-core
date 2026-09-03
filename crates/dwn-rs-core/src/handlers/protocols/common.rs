@@ -273,5 +273,5 @@ pub(crate) fn validate_ref_target(
 }
 
 pub(crate) fn store_error_reply<R: Default>(detail: String) -> Response<R> {
-    Response::new(Status { code: 500, detail }, R::default())
+    Response::new(Status::new(500, detail), R::default())
 }

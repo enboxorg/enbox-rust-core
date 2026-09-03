@@ -1,9 +1,35 @@
-use std::{collections::TryReserveError, convert::Infallible};
+use std::{collections::BTreeMap, collections::TryReserveError, convert::Infallible};
 
 use thiserror::Error;
 use ulid::MonotonicError;
 
 use crate::{stores::ProgressGapInfo, FilterError, QueryError};
+
+pub type DwnErrorInfo = BTreeMap<String, serde_json::Value>;
+
+/// A DWN failure with a stable machine-readable code and optional structured data.
+#[derive(Error, Debug, Clone, PartialEq)]
+#[error("{code}: {detail}")]
+pub struct DwnError {
+    pub code: String,
+    pub detail: String,
+    pub info: Option<DwnErrorInfo>,
+}
+
+impl DwnError {
+    pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: detail.into(),
+            info: None,
+        }
+    }
+
+    pub fn with_info(mut self, info: DwnErrorInfo) -> Self {
+        self.info = Some(info);
+        self
+    }
+}
 
 /// Convert a `PoisonError` (or any `RwLock`/`Mutex` lock failure) into a
 /// [`StoreError::InternalException`].
