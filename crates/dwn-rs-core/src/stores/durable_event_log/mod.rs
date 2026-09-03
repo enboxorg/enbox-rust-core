@@ -38,6 +38,11 @@ use crate::{Descriptor, Filters, MessageEvent, ProgressToken, Value};
 #[cfg(test)]
 mod tests;
 
+/// Backend-neutral live battery, run against memory here and SQLite in
+/// `dwn-rs-stores`. Available to downstream crates via `test-utils`.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod live_suite;
+
 const DEFAULT_DRAIN_READ_LIMIT: u64 = 100;
 
 /// Read-only event log backed by a durable replication-feed reader.

@@ -40,7 +40,15 @@ export function createRustSqliteMessageStore(client: StoreInjectionClient) {
       options?: MessageStoreOptions,
     ): Promise<void> {
       checkAborted(options);
-      await client.call('put', { tenant, message, indexes });
+      const result = await client.call('put', { tenant, message, indexes }) as { messageCid?: unknown };
+      // An abort landing after the call started must still leave nothing
+      // behind: compensate with a delete so aborted puts stay unindexed.
+      if (options?.signal?.aborted === true) {
+        if (typeof result?.messageCid === 'string') {
+          await client.call('delete', { tenant, cid: result.messageCid }).catch(() => undefined);
+        }
+        throw options.signal.reason ?? new Error('Aborted');
+      }
     },
 
     async get(
@@ -91,6 +99,27 @@ export function createRustSqliteMessageStore(client: StoreInjectionClient) {
     ): Promise<void> {
       checkAborted(options);
       await client.call('delete', { tenant, cid });
+    },
+
+    async updateIndexes(
+      tenant: string,
+      messageCid: string,
+      indexes: Record<string, unknown>,
+      options?: MessageStoreOptions,
+    ): Promise<void> {
+      checkAborted(options);
+      await client.call('updateIndexes', { tenant, messageCid, indexes });
+    },
+
+    async updateMessageAndIndexes(
+      tenant: string,
+      messageCid: string,
+      message: Record<string, unknown>,
+      indexes: Record<string, unknown>,
+      options?: MessageStoreOptions,
+    ): Promise<void> {
+      checkAborted(options);
+      await client.call('updateMessageAndIndexes', { tenant, messageCid, message, indexes });
     },
   };
 }

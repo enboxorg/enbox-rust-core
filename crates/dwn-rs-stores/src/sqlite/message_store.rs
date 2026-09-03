@@ -246,6 +246,149 @@ impl MessageStore for SqliteStore {
     }
 }
 
+impl SqliteStore {
+    fn index_update_error(code: &str, detail: String) -> MessageStoreError {
+        MessageStoreError::from(StoreError::InternalException(format!("{code}: {detail}")))
+    }
+
+    /// Replaces a message's indexes wholesale (TS `updateIndexes`).
+    ///
+    /// Same row and feed position; stale columns disappear because the
+    /// indexes document is replaced, not merged. Fingerprint scopes must be
+    /// unchanged, exactly as for same-CID puts.
+    pub async fn update_indexes(
+        &self,
+        tenant: &str,
+        cid: &str,
+        indexes: KeyValues,
+    ) -> Result<(), MessageStoreError> {
+        let conn = self.connection().await?.clone();
+        let tenant = tenant.to_string();
+        let cid = cid.to_string();
+
+        conn.with_writer(move |connection| {
+            let tx = connection.transaction().map_err(sqlite_store_error)?;
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM messages WHERE tenant = ?1 AND message_cid = ?2)",
+                    params![tenant, cid],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_store_error)?;
+            if !exists {
+                return Err(StoreError::InternalException(format!(
+                    "MessageStoreUpdateIndexesMessageNotFound: no message {cid} for tenant {tenant}"
+                )));
+            }
+
+            let indexes_json = serde_json::to_string(&indexes)
+                .map_err(|err| StoreError::InternalException(err.to_string()))?;
+            if let Some(entry) = select_feed_entry(&tx, &tenant, &cid)? {
+                let msg_scopes = fingerprint_scopes_from_indexes(&indexes);
+                if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
+                    return Err(StoreError::InternalException(
+                        "MessageStoreFingerprintScopeMutation: replacement indexes change fingerprint scopes"
+                            .to_string(),
+                    ));
+                }
+                update_feed_entry_indexes(&tx, &tenant, &entry, &indexes)?;
+            }
+            tx.execute(
+                "UPDATE messages SET indexes_json = ?3 WHERE tenant = ?1 AND message_cid = ?2",
+                params![tenant, cid, indexes_json],
+            )
+            .map_err(sqlite_store_error)?;
+            tx.commit().map_err(sqlite_store_error)?;
+            Ok(())
+        })
+        .await
+        .map_err(MessageStoreError::from)?;
+        Ok(())
+    }
+
+    /// Replaces a message payload and its indexes (TS `updateMessageAndIndexes`).
+    ///
+    /// Rejects replacements whose CID does not match the target, without
+    /// touching the stored row.
+    pub async fn update_message_and_indexes(
+        &self,
+        tenant: &str,
+        cid: &str,
+        message: Message<Descriptor>,
+        indexes: KeyValues,
+    ) -> Result<(), MessageStoreError> {
+        let computed = message
+            .cid()
+            .map_err(|err| {
+                Self::index_update_error(
+                    "MessageStoreUpdateMessageAndIndexesCidMismatch",
+                    format!("cannot compute replacement CID: {err}"),
+                )
+            })?
+            .to_string();
+        if computed != cid {
+            return Err(Self::index_update_error(
+                "MessageStoreUpdateMessageAndIndexesCidMismatch",
+                format!("replacement message CID {computed} does not match target CID {cid}"),
+            ));
+        }
+        let message_json = serde_json::to_string(&message).map_err(MessageStoreError::from)?;
+
+        let conn = self.connection().await?.clone();
+        let tenant = tenant.to_string();
+        let cid = cid.to_string();
+
+        conn.with_writer(move |connection| {
+            let tx = connection.transaction().map_err(sqlite_store_error)?;
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM messages WHERE tenant = ?1 AND message_cid = ?2)",
+                    params![tenant, cid],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_store_error)?;
+            if !exists {
+                return Err(StoreError::InternalException(format!(
+                    "MessageStoreUpdateMessageAndIndexesMessageNotFound: no message {cid} for tenant {tenant}"
+                )));
+            }
+
+            let indexes_json = serde_json::to_string(&indexes)
+                .map_err(|err| StoreError::InternalException(err.to_string()))?;
+            if let Some(entry) = select_feed_entry(&tx, &tenant, &cid)? {
+                let msg_scopes = fingerprint_scopes_from_indexes(&indexes);
+                if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {
+                    return Err(StoreError::InternalException(
+                        "MessageStoreFingerprintScopeMutation: replacement indexes change fingerprint scopes"
+                            .to_string(),
+                    ));
+                }
+                update_feed_entry_indexes(&tx, &tenant, &entry, &indexes)?;
+            }
+            tx.execute(
+                "UPDATE messages SET message_json = ?3, indexes_json = ?4 WHERE tenant = ?1 AND message_cid = ?2",
+                params![tenant, cid, message_json, indexes_json],
+            )
+            .map_err(sqlite_store_error)?;
+            tx.commit().map_err(sqlite_store_error)?;
+            Ok(())
+        })
+        .await
+        .map_err(MessageStoreError::from)?;
+        Ok(())
+    }
+}
+
+/// Fingerprint scopes derived from replacement indexes without a message.
+///
+/// `fingerprint_scopes` needs the descriptor tag protocol, which replacement
+/// indexes may not carry; scope membership for the mutation check comes from
+/// the `protocol` / `tag.protocol` indexes, matching how puts compute it for
+/// index-only updates.
+fn fingerprint_scopes_from_indexes(indexes: &KeyValues) -> Vec<String> {
+    fingerprint_scopes(None, indexes)
+}
+
 pub(crate) fn generate_epoch(tx: &Transaction) -> Result<usize, StoreError> {
     tx.execute(
         "INSERT INTO feed_metadata (id, epoch) VALUES (1, ?1)",

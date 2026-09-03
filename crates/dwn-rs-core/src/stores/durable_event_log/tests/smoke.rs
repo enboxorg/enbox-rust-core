@@ -7,8 +7,7 @@ use super::support::*;
 use crate::errors::EventLogError;
 use crate::stores::durable_event_log::DurableEventLogConfig;
 use crate::stores::{
-    EventLog, EventLogReadOptions, EventLogReplayBounds, EventLogSubscribeOptions,
-    EventLogTrimBound, KeyValues,
+    EventLog, EventLogReadOptions, EventLogReplayBounds, EventLogTrimBound, KeyValues,
 };
 use crate::MessageEvent;
 
@@ -178,36 +177,5 @@ async fn a_zero_idle_interval_disables_polling() {
         after_open,
         "a disabled idle timer must never poll the feed"
     );
-    recorder.expect_quiet(QUIET_WINDOW).await;
-}
-
-#[tokio::test]
-async fn live_harness_delivers_committed_events() {
-    let harness = live_harness().build().await;
-
-    let (listener, mut recorder) = recorder();
-    let _subscription = harness
-        .log
-        .subscribe(
-            TENANT,
-            "sub-1",
-            listener,
-            Some(EventLogSubscribeOptions::default()),
-        )
-        .await
-        .expect("no-cursor subscribe");
-
-    harness
-        .commit_delete(TENANT, "m1", "2025-01-01T00:00:00.000000Z")
-        .await;
-
-    let delivered = recorder.expect_event().await;
-    assert_eq!(delivered.seq.as_deref(), Some("1"));
-    assert_eq!(delivered.cursor.position, "1");
-    assert!(
-        delivered.message_cid.is_some(),
-        "feed rows carry their message CID"
-    );
-
     recorder.expect_quiet(QUIET_WINDOW).await;
 }

@@ -52,6 +52,10 @@ mod ser;
 pub mod stores;
 pub mod sync;
 pub mod tasks;
+/// Signed-message fixtures for tests. Available to unit tests always and to
+/// downstream crates via the `test-utils` feature; never in production builds.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
 pub mod value;
 
 pub use dwn::builder::{

@@ -1,3 +1,6 @@
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub mod concurrent_conformance;
 pub mod durable_event_log;
 pub mod memory;
 #[cfg(any(test, feature = "test-utils"))]
@@ -5,6 +8,9 @@ pub mod memory;
 pub mod replication_feed_conformance;
 pub mod replication_feed_reader;
 pub mod state_index;
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub mod store_conformance;
 pub mod wake;
 pub mod write_resolver;
 

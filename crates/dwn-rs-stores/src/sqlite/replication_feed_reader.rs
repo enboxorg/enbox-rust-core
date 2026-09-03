@@ -478,7 +478,22 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_conforms_to_replication_feed_contract() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
         replication_feed_conformance::run(|| async { SqliteStore::in_memory(None) }).await;
+
+        // The production path is file-backed: run the same suite on disk with
+        // a fresh file per scenario.
+        let dir = tempfile::tempdir().expect("battery tempdir");
+        let seq = AtomicU64::new(0);
+        replication_feed_conformance::run(|| async {
+            let n = seq.fetch_add(1, Ordering::Relaxed);
+            SqliteStore::new(
+                dir.path().join(format!("feed-{n}.sqlite")),
+                WakePublishHandler::new(Arc::new(())),
+            )
+        })
+        .await;
     }
 
     #[tokio::test]

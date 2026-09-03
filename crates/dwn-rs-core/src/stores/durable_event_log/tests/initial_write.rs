@@ -3,8 +3,7 @@
 
 use super::support::*;
 use crate::stores::durable_event_log::DurableEventLogConfig;
-use crate::stores::{EventLog, EventLogSubscribeOptions, KeyValues};
-use crate::Value;
+use crate::stores::{EventLog, EventLogSubscribeOptions};
 
 fn from_start() -> Option<EventLogSubscribeOptions> {
     Some(EventLogSubscribeOptions {
@@ -159,72 +158,4 @@ async fn a_resolver_failure_during_a_live_drain_keeps_the_cursor() {
 
     let reads = harness.reader.paging_reads();
     assert_eq!(reads[0].cursor, reads[1].cursor);
-}
-
-#[tokio::test]
-async fn a_delete_event_carries_the_write_it_deletes() {
-    let harness = live_harness().with_message_store_resolver().build().await;
-
-    let mut write_indexes = KeyValues::new();
-    write_indexes.insert("entryId".to_string(), Value::String("record-1".to_string()));
-    // Message stores index the timestamp; the resolver's query sorts on it.
-    write_indexes.insert(
-        "messageTimestamp".to_string(),
-        Value::String("2025-01-01T00:00:00.000000Z".to_string()),
-    );
-    harness
-        .store_put(TENANT, write_message(Some("aGVsbG8")), write_indexes)
-        .await;
-
-    // Subscribing after the write means only the delete is delivered.
-    let (listener, mut recorder) = recorder();
-    let _subscription = harness
-        .log
-        .subscribe(TENANT, "sub-1", listener, None)
-        .await
-        .expect("no-cursor subscribe");
-
-    harness
-        .commit_delete(TENANT, "record-1", "2025-01-01T00:00:00.000000Z")
-        .await;
-
-    let delivered = recorder.expect_event().await;
-    assert_eq!(delivered.seq.as_deref(), Some("2"));
-    assert!(
-        delivered.event.initial_write.is_some(),
-        "a delete resolves the RecordsWrite it removes"
-    );
-}
-
-#[tokio::test]
-async fn writes_deletes_and_configures_all_reach_subscribers_without_emit() {
-    let harness = live_harness().build().await;
-
-    let (listener, mut recorder) = recorder();
-    let _subscription = harness
-        .log
-        .subscribe(TENANT, "sub-1", listener, None)
-        .await
-        .expect("no-cursor subscribe");
-
-    harness
-        .commit(TENANT, write_message(Some("aGVsbG8")), "write")
-        .await;
-    harness
-        .commit_delete(TENANT, "record-1", "2025-01-01T00:00:00.000000Z")
-        .await;
-    harness
-        .commit(TENANT, configure_message(), "configure")
-        .await;
-
-    let delivered = recorder.expect_events(3).await;
-    let positions: Vec<_> = delivered
-        .iter()
-        .map(|event| event.seq.clone().expect("seq"))
-        .collect();
-    assert_eq!(
-        positions,
-        vec!["1".to_string(), "2".to_string(), "3".to_string()]
-    );
-    recorder.expect_quiet(QUIET_WINDOW).await;
 }
