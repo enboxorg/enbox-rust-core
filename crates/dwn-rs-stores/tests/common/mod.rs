@@ -11,6 +11,8 @@
 
 #![allow(dead_code)] // Scaffold for C1–C8; warnings would hide real ones.
 
+pub mod fixtures;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -82,7 +84,7 @@ impl TempDb {
     }
 }
 
-fn noop_waker() -> WakePublishHandler {
+pub fn noop_waker() -> WakePublishHandler {
     WakePublishHandler::new(Arc::new(()))
 }
 

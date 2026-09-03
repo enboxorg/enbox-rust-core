@@ -37,8 +37,11 @@ async fn sqlite_state_index_survives_reopen() {
             .unwrap();
         let root_before = state_index.get_root(TENANT).await.unwrap();
         state_index.close().await;
+        drop(store);
 
-        let mut reopened = SqliteStateIndex::new(&store);
+        // Fresh handle on the same file: root must survive a real reopen.
+        let fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut reopened = SqliteStateIndex::new(&fresh);
         reopened.open().await.unwrap();
         let root_after = reopened.get_root(TENANT).await.unwrap();
         assert_eq!(root_before, root_after);
@@ -77,8 +80,10 @@ async fn sqlite_event_log_survives_reopen() {
             .unwrap()
             .expect("progress token");
         event_log.close().await;
+        drop(store);
 
-        let mut reopened = SqliteEventLog::new(&store);
+        let fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut reopened = SqliteEventLog::new(&fresh);
         reopened.open().await.unwrap();
         let read = reopened.read(TENANT, None).await.unwrap();
         assert_eq!(read.events.len(), 1);
@@ -107,8 +112,10 @@ async fn sqlite_resumable_task_store_survives_reopen() {
         task_store.open().await.unwrap();
         let managed = task_store.register(task.clone(), 120).await.unwrap();
         task_store.close().await;
+        drop(store);
 
-        let mut reopened = SqliteResumableTaskStore::new(&store);
+        let fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut reopened = SqliteResumableTaskStore::new(&fresh);
         reopened.open().await.unwrap();
         let loaded = reopened.read::<SampleTask>(&managed.id).await.unwrap();
         assert_eq!(loaded.expect("task").task, task);

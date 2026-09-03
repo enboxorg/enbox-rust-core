@@ -11,24 +11,22 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use chrono::Utc;
-use dwn_rs_core::auth::{ed25519_jwk, StaticPublicKeyResolver};
-use dwn_rs_core::descriptors::{DeleteDescriptor, Records};
 use dwn_rs_core::stores::replication_feed_reader::Fingerprint;
-use dwn_rs_core::stores::wake::WakePublishHandler;
 use dwn_rs_core::stores::{
-    EventLogReadOptions, KeyValues, MessageStore, ReplicationFeedReader, ResumableTaskStore,
-    StateIndex,
+    EventLogReadOptions, MessageStore, ReplicationFeedReader, ResumableTaskStore, StateIndex,
 };
 use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{SyncCheckpoint, SyncDirection};
-use dwn_rs_core::{Descriptor, Fields, Message, Value};
+use dwn_rs_core::Value;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use common::TempDb;
+use common::fixtures::{
+    delete_message, feed_indexes as indexes, full_read, message_cid, test_resolver,
+};
+use common::{noop_waker, TempDb};
 use dwn_rs_stores::{
     SqliteNativeDwn, SqliteResumableTaskStore, SqliteStateIndex, SqliteStore, SqliteSyncLedger,
 };
@@ -37,60 +35,6 @@ const TENANT: &str = "did:example:alice";
 const OTHER_TENANT: &str = "did:example:bob";
 const PROTOCOL_NOTES: &str = "https://example.com/protocol/notes";
 const PROTOCOL_TASKS: &str = "https://example.com/protocol/tasks";
-
-fn delete_message(record_id: &str, timestamp: &str) -> Message<Descriptor> {
-    Message {
-        descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(DeleteDescriptor {
-            message_timestamp: timestamp.parse().expect("valid fixture timestamp"),
-            record_id: record_id.to_string(),
-            prune: false,
-        })))),
-        fields: Fields::Authorization(Default::default()),
-    }
-}
-
-fn cid(message: &Message<Descriptor>) -> String {
-    message
-        .message_cid()
-        .expect("fixture must have a CID")
-        .to_string()
-}
-
-fn indexes(protocol: Option<&str>, marker: &str) -> KeyValues {
-    let mut out = KeyValues::new();
-    out.insert("marker".to_string(), Value::String(marker.to_string()));
-    if let Some(protocol) = protocol {
-        out.insert("protocol".to_string(), Value::String(protocol.to_string()));
-    }
-    out
-}
-
-fn noop_waker() -> WakePublishHandler {
-    WakePublishHandler::new(Arc::new(()))
-}
-
-async fn full_read(store: &SqliteStore, tenant: &str) -> Vec<(String, String)> {
-    store
-        .log_read(tenant, EventLogReadOptions::default())
-        .await
-        .expect("feed read")
-        .events
-        .into_iter()
-        .map(|entry| (entry.seq, entry.message_cid.expect("feed entry has a CID")))
-        .collect()
-}
-
-fn test_resolver() -> StaticPublicKeyResolver {
-    StaticPublicKeyResolver::new(BTreeMap::from([(
-        "did:example:alice#key1".to_string(),
-        ed25519_jwk(
-            "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
-            None,
-            Some("did:example:alice#key1"),
-        )
-        .unwrap(),
-    )]))
-}
 
 #[tokio::test]
 async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
@@ -118,7 +62,7 @@ async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
                 &store,
                 TENANT,
                 msg.clone(),
-                indexes(Some(protocol), &format!("a{index}")),
+                indexes(Some(protocol), None, &format!("a{index}")),
             )
             .await
             .expect("alice put");
@@ -128,7 +72,7 @@ async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
                 &store,
                 OTHER_TENANT,
                 msg.clone(),
-                indexes(Some(PROTOCOL_NOTES), &format!("b{index}")),
+                indexes(Some(PROTOCOL_NOTES), None, &format!("b{index}")),
             )
             .await
             .expect("bob put");
@@ -207,15 +151,20 @@ async fn delete_holes_survive_fresh_reopen() {
         delete_message("two", "2025-01-01T00:00:01Z"),
         delete_message("three", "2025-01-01T00:00:02Z"),
     ];
-    let cids: Vec<String> = messages.iter().map(cid).collect();
+    let cids: Vec<String> = messages.iter().map(message_cid).collect();
 
     {
         let mut store = SqliteStore::new(db.path(), noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         for (index, msg) in messages.into_iter().enumerate() {
-            MessageStore::put(&store, TENANT, msg, indexes(None, &format!("m{index}")))
-                .await
-                .expect("feed put");
+            MessageStore::put(
+                &store,
+                TENANT,
+                msg,
+                indexes(None, None, &format!("m{index}")),
+            )
+            .await
+            .expect("feed put");
         }
         store.delete(TENANT, &cids[1]).await.expect("delete hole");
         store.delete(TENANT, &cids[2]).await.expect("delete head");
@@ -252,7 +201,7 @@ async fn sync_ledger_checkpoints_survive_true_db_reopen() {
         let mut store = SqliteStore::new(db.path(), noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         let msg = delete_message("ledger", "2025-01-01T00:00:00Z");
-        MessageStore::put(&store, TENANT, msg, indexes(None, "ledger"))
+        MessageStore::put(&store, TENANT, msg, indexes(None, None, "ledger"))
             .await
             .expect("feed put");
         let cursor = store
@@ -313,12 +262,12 @@ async fn native_node_open_at_resumes_from_disk() {
             .await
             .expect("node opens at path");
         let msg = delete_message("node-one", "2025-01-01T00:00:00Z");
-        let msg_cid = cid(&msg);
+        let msg_cid = message_cid(&msg);
         MessageStore::put(
             node.store(),
             TENANT,
             msg,
-            indexes(Some(PROTOCOL_NOTES), "n1"),
+            indexes(Some(PROTOCOL_NOTES), None, "n1"),
         )
         .await
         .expect("node put");
@@ -359,8 +308,8 @@ async fn legacy_v1_database_migrates_forward_on_open() {
     // The store migrated forward: the durable feed works and has an epoch.
     assert!(!store.epoch().await.expect("epoch").is_empty());
     let msg = delete_message("post-migration", "2025-01-01T00:00:00Z");
-    let msg_cid = cid(&msg);
-    MessageStore::put(&store, TENANT, msg, indexes(None, "migrated"))
+    let msg_cid = message_cid(&msg);
+    MessageStore::put(&store, TENANT, msg, indexes(None, None, "migrated"))
         .await
         .expect("put after migration");
     // `get` rehydrates stored fields rather than echoing the fixture shape

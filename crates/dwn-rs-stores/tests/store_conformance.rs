@@ -11,86 +11,23 @@
 
 mod common;
 
-use std::collections::BTreeMap;
-
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
-use dwn_rs_core::descriptors::{Records, RecordsWriteDescriptor};
-use dwn_rs_core::fields::{MessageFields, WriteFields};
 use dwn_rs_core::filters::{Filter, FilterKey, Filters};
 use dwn_rs_core::stores::memory::MemoryMessageStore;
-use dwn_rs_core::stores::{DataStore, KeyValues, MessageStore};
-use dwn_rs_core::{Descriptor, Fields, Message, MessageSort, Pagination, SortDirection, Value};
+use dwn_rs_core::stores::{DataStore, MessageStore};
+use dwn_rs_core::{MessageSort, Pagination, SortDirection, Value};
 use futures_util::{stream, TryStreamExt};
 
+use common::fixtures::{indexes_for_message as indexes, message_cid, write_message as message};
 use common::TempDb;
 
 const TENANT: &str = "did:example:alice";
 const OTHER_TENANT: &str = "did:example:bob";
 
 // ---------------------------------------------------------------------------
-// Builders
+// Cases
 // ---------------------------------------------------------------------------
-
-fn message(timestamp: &str, protocol: &str, encoded_data: Option<&str>) -> Message<Descriptor> {
-    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let descriptor =
-        Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-            protocol: protocol.to_string(),
-            protocol_path: "note".to_string(),
-            recipient: None,
-            schema: None,
-            tags: None,
-            parent_id: None,
-            data_cid: "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e".to_string(),
-            data_size: 11,
-            date_created: timestamp,
-            message_timestamp: timestamp,
-            published: None,
-            date_published: None,
-            data_format: "text/plain".to_string(),
-            permission_grant_id: None,
-            squash: None,
-        }))));
-    let fields = Fields::Write(WriteFields {
-        record_id: Some(format!("record-{timestamp}")),
-        encoded_data: encoded_data.map(ToString::to_string),
-        ..Default::default()
-    });
-
-    Message { descriptor, fields }
-}
-
-fn indexes(message: &Message<Descriptor>) -> KeyValues {
-    let mut indexes = BTreeMap::new();
-    indexes.insert(
-        "messageTimestamp".to_string(),
-        Value::String(
-            serde_json::to_value(&message.descriptor).unwrap()["messageTimestamp"]
-                .as_str()
-                .unwrap()
-                .to_string(),
-        ),
-    );
-    indexes.insert(
-        "interface".to_string(),
-        Value::String("Records".to_string()),
-    );
-    indexes.insert("method".to_string(), Value::String("Write".to_string()));
-    if let Some(protocol) = serde_json::to_value(&message.descriptor).unwrap()["protocol"].as_str()
-    {
-        indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
-    }
-    indexes
-}
-
-fn message_cid(message: &Message<Descriptor>) -> String {
-    let mut canonical = message.clone();
-    canonical.fields.encoded_data();
-    canonical.cid().unwrap().to_string()
-}
 
 fn protocol_filter(protocol: &str) -> Filters {
     Filters::from([[(
