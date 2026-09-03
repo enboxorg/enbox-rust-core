@@ -382,6 +382,7 @@ pub fn permissions_protocol_definition() -> Definition {
             (
                 "request".to_string(),
                 RuleSet {
+                    immutable: Some(true),
                     size: Some(Size {
                         min: None,
                         max: Some(10_000),
@@ -397,6 +398,7 @@ pub fn permissions_protocol_definition() -> Definition {
             (
                 "grant".to_string(),
                 RuleSet {
+                    immutable: Some(true),
                     size: Some(Size {
                         min: None,
                         max: Some(10_000),
@@ -409,6 +411,7 @@ pub fn permissions_protocol_definition() -> Definition {
                     rules: BTreeMap::from([(
                         "revocation".to_string(),
                         RuleSet {
+                            immutable: Some(true),
                             size: Some(Size {
                                 min: None,
                                 max: Some(10_000),
@@ -1865,6 +1868,24 @@ mod tests {
     use crate::errors::MessageStoreError;
     use crate::filters::message_filters::Messages as MessagesFilter;
     use crate::stores::{MessageQueryResult, MessageStore};
+
+    #[test]
+    fn permissions_records_are_immutable() {
+        let definition = permissions_protocol_definition();
+
+        assert_eq!(
+            definition.structure[PERMISSIONS_REQUEST_PATH].immutable,
+            Some(true)
+        );
+        assert_eq!(
+            definition.structure[PERMISSIONS_GRANT_PATH].immutable,
+            Some(true)
+        );
+        assert_eq!(
+            definition.structure[PERMISSIONS_GRANT_PATH].rules["revocation"].immutable,
+            Some(true)
+        );
+    }
 
     #[test]
     fn permission_grant_invocation_requires_canonical_matching_plural_fields() {

@@ -1024,6 +1024,151 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
 }
 
 #[tokio::test]
+async fn permissions_request_grant_and_revocation_reject_updates() {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+    let scope = r#"{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}"#;
+    let tags = Some(MapValue::from([(
+        "protocol".to_string(),
+        Value::String("http://example.com/notes".to_string()),
+    )]));
+    let grant_data = Bytes::from(format!(
+        r#"{{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{scope}}}"#
+    ));
+    let grant = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        recipient: Some("did:example:bob".to_string()),
+        tags: tags.clone(),
+        data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+        data_size: grant_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let grant_id = grant["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &grant,
+                Some(grant_data.clone())
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let request_data = Bytes::from(format!(r#"{{"delegated":false,"scope":{scope}}}"#));
+    let request = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REQUEST_PATH.to_string(),
+        tags: tags.clone(),
+        data_cid: generate_dag_pb_cid_from_bytes(&request_data).to_string(),
+        data_size: request_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &request,
+                Some(request_data.clone())
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let revocation_data = Bytes::from_static(br#"{"description":"revoke"}"#);
+    let revocation = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        parent_id: Some(grant_id.clone()),
+        parent_context_id: Some(grant_id),
+        tags,
+        data_cid: generate_dag_pb_cid_from_bytes(&revocation_data).to_string(),
+        data_size: revocation_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &revocation,
+                Some(revocation_data.clone())
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    // Covers: DWN-REC-002, DWN-AUTH-006
+    for (path, initial, data) in [
+        (permissions::PERMISSIONS_REQUEST_PATH, request, request_data),
+        (permissions::PERMISSIONS_GRANT_PATH, grant, grant_data),
+        (
+            permissions::PERMISSIONS_REVOCATION_PATH,
+            revocation,
+            revocation_data,
+        ),
+    ] {
+        let mut update_spec = WriteSpec::new("2025-01-01T00:03:00.000000Z");
+        update_spec.date_created = initial["descriptor"]["dateCreated"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        update_spec.record_id = Some(initial["recordId"].as_str().unwrap().to_string());
+        update_spec.context_id = Some(initial["contextId"].as_str().unwrap().to_string());
+        update_spec.parent_id = initial["descriptor"]["parentId"]
+            .as_str()
+            .map(str::to_string);
+        update_spec.protocol = permissions::PERMISSIONS_PROTOCOL_URI.to_string();
+        update_spec.protocol_path = path.to_string();
+        update_spec.recipient = initial["descriptor"]["recipient"]
+            .as_str()
+            .map(str::to_string);
+        update_spec.tags = initial["descriptor"]["tags"]
+            .as_object()
+            .map(|tags| serde_json::from_value(tags.clone().into()).unwrap());
+        update_spec.data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
+        update_spec.data_size = data.len() as u64;
+        update_spec.data_format = "application/json".to_string();
+        let update = signed_write_message(update_spec).await;
+
+        let reply = handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &update,
+                Some(data),
+            ))
+            .await;
+        assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+        assert_eq!(
+            reply.status.detail,
+            format!(
+                "ProtocolAuthorizationImmutableRecord: record at protocol path '{path}' is immutable: updates are not allowed."
+            )
+        );
+    }
+}
+
+#[tokio::test]
 async fn records_write_accepts_embedded_author_delegated_grant() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();

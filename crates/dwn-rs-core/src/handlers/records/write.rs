@@ -462,6 +462,12 @@ where
             format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
         })?;
 
+        if rule_set.immutable == Some(true) && !is_initial_write(message, author)? {
+            return Err(format!(
+                "ProtocolAuthorizationImmutableRecord: record at protocol path '{protocol_path}' is immutable: updates are not allowed."
+            ));
+        }
+
         if let Some(size) = &rule_set.size {
             if let Some(min) = size.min {
                 if descriptor.data_size < min {
