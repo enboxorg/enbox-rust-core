@@ -109,7 +109,7 @@ async fn handle_request(
             let indexes: KeyValues =
                 serde_json::from_value(params.indexes).map_err(|err| err.to_string())?;
             let message_cid = message
-                .message_cid()
+                .cid()
                 .map(|cid| cid.to_string())
                 .map_err(|err| err.to_string())?;
             store
