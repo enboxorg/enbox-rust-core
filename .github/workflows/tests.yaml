@@ -264,9 +264,13 @@ jobs:
           bun run build --filter=@enbox/dwn-sdk-js
 
       - name: Run message-store specs against Rust SQLite with JUnit report
+        # Expected failures (see the allowlist) exit nonzero; the gate step
+        # below is the verdict, so this step must not stop the job.
+        continue-on-error: true
         env:
           ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
         run: bun test tools/interop/testsuite-injection.test.ts --reporter=junit --reporter-outfile=/tmp/injection-junit.xml
 
       - name: Gate on expected failures only
+        if: always()
         run: tools/interop/check-injection-results.sh /tmp/injection-junit.xml tools/interop/store-injection-allowlist.txt
