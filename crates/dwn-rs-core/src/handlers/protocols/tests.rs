@@ -32,14 +32,9 @@ use super::common::*;
 #[tokio::test]
 async fn protocols_configure_stores_latest_base_state() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::new(
-        message_store.clone(),
-        state_index,
-        Some(Arc::new(test_resolver())),
-    );
+    let handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let older = signed_configure_message(
         "http://example.com/protocol",
         true,
@@ -154,14 +149,9 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
 #[tokio::test]
 async fn protocols_query_signed_by_tenant_returns_private_configures() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::new(
-        message_store.clone(),
-        state_index,
-        Some(Arc::new(test_resolver())),
-    );
+    let configure_handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let query_handler =
         ProtocolsQueryHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
@@ -198,14 +188,9 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
 #[tokio::test]
 async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::new(
-        message_store.clone(),
-        state_index,
-        Some(Arc::new(test_resolver())),
-    );
+    let configure_handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let query_handler = ProtocolsQueryHandler::new(
         message_store.clone(),
         Some(Arc::new(test_resolver_with_bob())),
@@ -256,14 +241,9 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
 #[tokio::test]
 async fn protocols_query_with_permission_grant_returns_private_configure() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::new(
-        message_store.clone(),
-        state_index,
-        Some(Arc::new(test_resolver())),
-    );
+    let configure_handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let query_handler = ProtocolsQueryHandler::new(
         message_store.clone(),
         Some(Arc::new(test_resolver_with_bob())),
@@ -314,11 +294,8 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
 #[tokio::test]
 async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let handler =
-        ProtocolsConfigureHandler::new(message_store, state_index, Some(Arc::new(test_resolver())));
+    let handler = ProtocolsConfigureHandler::new(message_store, Some(Arc::new(test_resolver())));
     let mut message = signed_configure_message(
         "http://example.com/original",
         true,
@@ -341,14 +318,9 @@ async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
 #[tokio::test]
 async fn protocols_configure_rejects_non_tenant_signer() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::new(
-        message_store,
-        state_index,
-        Some(Arc::new(test_resolver_with_bob())),
-    );
+    let handler =
+        ProtocolsConfigureHandler::new(message_store, Some(Arc::new(test_resolver_with_bob())));
 
     let reply = handler
         .run(MethodHandlerRequest::new(
@@ -369,14 +341,9 @@ async fn protocols_configure_rejects_non_tenant_signer() {
 #[tokio::test]
 async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::new(
-        message_store.clone(),
-        state_index,
-        Some(Arc::new(test_resolver())),
-    );
+    let handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     handler
         .run(MethodHandlerRequest::new(
@@ -427,11 +394,8 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
 #[tokio::test]
 async fn protocols_configure_validates_composition_dependencies() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let handler =
-        ProtocolsConfigureHandler::new(message_store, state_index, Some(Arc::new(test_resolver())));
+    let handler = ProtocolsConfigureHandler::new(message_store, Some(Arc::new(test_resolver())));
 
     let missing_dependency = signed_configure_descriptor(composed_descriptor(
         "http://example.com/composed-missing",
@@ -500,14 +464,11 @@ async fn protocols_configure_validates_composition_dependencies() {
 #[tokio::test]
 async fn protocol_handlers_integrate_with_dwn_dispatch() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
 
     let mut dwn = Dwn::default();
     dwn.register(ProtocolsConfigureHandler::new(
         message_store.clone(),
-        state_index,
         Some(Arc::new(test_resolver())),
     ));
     dwn.register(ProtocolsQueryHandler::new(message_store, None));
@@ -534,6 +495,13 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
 #[derive(Clone, Default)]
 struct TestMessageStore {
     rows: Arc<RwLock<Vec<TestMessageRow>>>,
+    fail_transition: Arc<AtomicBool>,
+}
+
+impl TestMessageStore {
+    fn fail_next_transition(&self) {
+        self.fail_transition.store(true, AtomicOrdering::SeqCst);
+    }
 }
 
 #[derive(Clone)]

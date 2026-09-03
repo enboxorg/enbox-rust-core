@@ -15,30 +15,23 @@ use crate::{MessageSort, SortDirection};
 use super::common::*;
 
 #[derive(Clone)]
-pub struct ProtocolsConfigureHandler<MessageStore, StateIndex> {
+pub struct ProtocolsConfigureHandler<MessageStore> {
     message_store: MessageStore,
-    state_index: StateIndex,
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
-impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateIndex> {
-    pub fn new(
-        message_store: MessageStore,
-        state_index: StateIndex,
-        did_resolver: Option<Arc<dyn DidResolver>>,
-    ) -> Self {
+impl<MessageStore> ProtocolsConfigureHandler<MessageStore> {
+    pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
         Self {
             message_store,
-            state_index,
             did_resolver,
         }
     }
 }
 
-impl<MessageStore, StateIndex> Handler for ProtocolsConfigureHandler<MessageStore, StateIndex>
+impl<MessageStore> Handler for ProtocolsConfigureHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     type Reply = Configure;
     type Descriptor = ConfigureDescriptor;
@@ -191,10 +184,9 @@ where
     }
 }
 
-impl<MessageStore, StateIndex> ProtocolsConfigureHandler<MessageStore, StateIndex>
+impl<MessageStore> ProtocolsConfigureHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    StateIndex: crate::stores::StateIndex + Clone + Send + Sync + 'static,
 {
     async fn validate_composition_dependencies(
         &self,

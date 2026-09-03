@@ -230,7 +230,6 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
     ));
     dwn.register(ProtocolsConfigureHandler::new(
         message_store.clone(),
-        state_index.clone(),
         resolver.clone(),
     ));
     dwn.register(ProtocolsQueryHandler::new(
