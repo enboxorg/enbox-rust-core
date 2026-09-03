@@ -9,7 +9,8 @@ use crate::descriptors::ConfigureDescriptor;
 use crate::dwn::HandlerContext;
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition};
 use crate::replies::protocols::Configure;
-use crate::{permissions, Handler, Pagination, Response};
+use crate::stores::{LatestStateMutation, LatestStateTransition};
+use crate::{permissions, Handler, Message, Pagination, Response};
 use crate::{MessageSort, SortDirection};
 
 use super::common::*;
@@ -71,29 +72,7 @@ where
                 Err(error) => return Response::bad_request(error.to_string()),
             };
 
-            if let Err(detail) = permissions::authorize_protocols_configure(
-                tenant,
-                &message,
-                &authorization,
-                &self.message_store,
-            )
-            .await
-            {
-                return Response::unauthorized(detail.to_string());
-            }
             let author = authorization.author.clone();
-
-            if let Err(err) = protocol_types::validate_definition(&descriptor.definition) {
-                return Response::bad_request(err.to_string());
-            }
-
-            if let Err(detail) = self
-                .validate_composition_dependencies(tenant, &descriptor.definition)
-                .await
-            {
-                return Response::bad_request(detail.to_string());
-            }
-
             let incoming_cid = match message_cid(&message) {
                 Ok(cid) => cid,
                 Err(detail) => return Response::bad_request(detail.to_string()),
@@ -111,72 +90,50 @@ where
                 Ok(result) => result.messages,
                 Err(err) => return store_error_reply(err.to_string()),
             };
-
-            let mut comparable = Vec::new();
             for existing in &existing_messages {
-                let cid = match message_cid(existing) {
-                    Ok(cid) => cid,
+                match message_cid(existing) {
+                    Ok(cid) if cid == incoming_cid => return Response::conflict(),
+                    Ok(_) => {}
                     Err(detail) => return Response::bad_request(detail),
-                };
-                if cid == incoming_cid {
-                    return Response::conflict();
                 }
-                comparable.push((cid, existing));
             }
 
-            let incoming_is_latest = comparable.iter().all(|(cid, existing)| {
-                compare_configure_messages(&incoming_cid, &message, cid, existing)
-                    == Ordering::Greater
-            });
-            let latest_existing_cid = comparable
-                .iter()
-                .max_by(|(left_cid, left), (right_cid, right)| {
-                    compare_configure_messages(left_cid, left, right_cid, right)
-                })
-                .map(|(cid, _)| cid.clone());
+            // Covers: DWN-REC-003, DWN-AUTH-006
+            // Exact replay is classified before mutable grant and composition state can
+            // reinterpret an operation that was already admitted.
+            if let Err(detail) = permissions::authorize_protocols_configure(
+                tenant,
+                &message,
+                &authorization,
+                &self.message_store,
+            )
+            .await
+            {
+                return Response::unauthorized(detail.to_string());
+            }
+            if let Err(err) = protocol_types::validate_definition(&descriptor.definition) {
+                return Response::bad_request(err.to_string());
+            }
+            if let Err(detail) = self
+                .validate_composition_dependencies(tenant, &descriptor.definition)
+                .await
+            {
+                return Response::bad_request(detail.to_string());
+            }
 
-            let indexes = configure_indexes(&descriptor, Some(&author), incoming_is_latest);
+            let transition =
+                match plan_configure_transition(message, &incoming_cid, &author, existing_messages)
+                {
+                    Ok(Some(transition)) => transition,
+                    Ok(None) => return Response::conflict(),
+                    Err(detail) => return Response::bad_request(detail),
+                };
             if let Err(err) = self
                 .message_store
-                .put(tenant, message.clone(), indexes.clone())
+                .commit_latest_state(tenant, transition)
                 .await
             {
                 return store_error_reply(err.to_string());
-            }
-            if let Err(err) = self
-                .state_index
-                .insert(tenant, &incoming_cid, indexes)
-                .await
-            {
-                return store_error_reply(err.to_string());
-            }
-
-            for existing in existing_messages {
-                let existing_cid = match message_cid(&existing) {
-                    Ok(cid) => cid,
-                    Err(detail) => return Response::bad_request(detail),
-                };
-                let existing_descriptor = match protocols_configure_descriptor(&existing) {
-                    Ok(descriptor) => descriptor,
-                    Err(detail) => return Response::bad_request(detail),
-                };
-                let existing_is_latest = !incoming_is_latest
-                    && latest_existing_cid
-                        .as_ref()
-                        .is_some_and(|latest| latest == &existing_cid);
-                let existing_author = extract_author(&existing);
-                let updated_indexes = configure_indexes(
-                    existing_descriptor,
-                    existing_author.as_deref(),
-                    existing_is_latest,
-                );
-                if let Err(err) = self
-                    .message_store
-                    .put(tenant, existing, updated_indexes)
-                    .await
-                {
-                    return store_error_reply(err.to_string());
-                }
             }
 
             Response::accepted()
@@ -224,6 +181,61 @@ where
             Err(err) => Err(err.to_string()),
         }
     }
+}
+
+fn plan_configure_transition(
+    incoming: Message<crate::Descriptor>,
+    incoming_cid: &str,
+    incoming_author: &str,
+    existing: Vec<Message<crate::Descriptor>>,
+) -> Result<Option<LatestStateTransition>, String> {
+    let mut comparable = Vec::with_capacity(existing.len());
+    for message in &existing {
+        let cid = message_cid(message)?;
+        if cid == incoming_cid {
+            return Ok(None);
+        }
+        comparable.push(cid);
+    }
+
+    let incoming_is_latest = existing.iter().zip(&comparable).all(|(message, cid)| {
+        compare_configure_messages(incoming_cid, &incoming, cid, message) == Ordering::Greater
+    });
+    let latest_existing_cid = existing
+        .iter()
+        .zip(&comparable)
+        .max_by(|(left, left_cid), (right, right_cid)| {
+            compare_configure_messages(left_cid, left, right_cid, right)
+        })
+        .map(|(_, cid)| cid.clone());
+
+    let descriptor = protocols_configure_descriptor(&incoming)?;
+    let put = LatestStateMutation {
+        indexes: configure_indexes(descriptor, Some(incoming_author), incoming_is_latest),
+        message: incoming,
+    };
+    let retains = existing
+        .into_iter()
+        .zip(comparable)
+        .map(|(message, cid)| {
+            let descriptor = protocols_configure_descriptor(&message)?;
+            let author = extract_author(&message);
+            Ok(LatestStateMutation {
+                indexes: configure_indexes(
+                    descriptor,
+                    author.as_deref(),
+                    !incoming_is_latest && latest_existing_cid.as_deref() == Some(cid.as_str()),
+                ),
+                message,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok(Some(LatestStateTransition {
+        put,
+        retains,
+        deletes: Vec::new(),
+    }))
 }
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]

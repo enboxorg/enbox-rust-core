@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::Bound;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, RwLock};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -20,8 +21,11 @@ use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, Type, Who,
 };
 use crate::protocols::RuleSet;
-use crate::stores::state_index::MemoryStateIndex;
-use crate::stores::{KeyValues, MessageQueryResult, MessageStore, StateIndex};
+use crate::stores::memory::MemoryMessageStore;
+use crate::stores::{
+    KeyValues, LatestStateMutation, LatestStateTransition, LatestStateTransitionResult,
+    MessageQueryResult, MessageStore, ReplicationFeedReader,
+};
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
     RangeFilter, SortDirection, Value,
@@ -92,16 +96,193 @@ async fn protocols_configure_stores_latest_base_state() {
 }
 
 #[tokio::test]
+async fn protocols_configure_duplicate_preserves_feed_identity() {
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    let handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+    let configure = signed_configure_message(
+        "http://example.com/duplicate",
+        true,
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &configure,
+                None
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+    let bounds_before = message_store.log_bounds("did:example:alice").await.unwrap();
+
+    // Covers: DWN-REC-003, DWN-PROTO-004
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                "did:example:alice",
+                &configure,
+                None
+            ))
+            .await
+            .status
+            .code,
+        409
+    );
+    assert_eq!(
+        message_store.log_bounds("did:example:alice").await.unwrap(),
+        bounds_before
+    );
+}
+
+#[tokio::test]
+async fn protocols_configure_arrival_orders_converge_and_retain_history() {
+    let left = signed_configure_message(
+        "http://example.com/convergent",
+        true,
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    let right = signed_configure_message(
+        "http://example.com/convergent",
+        false,
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    let left_message: Message<Descriptor> = serde_json::from_value(left.clone()).unwrap();
+    let right_message: Message<Descriptor> = serde_json::from_value(right.clone()).unwrap();
+    let expected_latest = message_cid(&left_message)
+        .unwrap()
+        .max(message_cid(&right_message).unwrap());
+
+    // Covers: DWN-PROTO-004, DWN-REC-006
+    for order in [[left.clone(), right.clone()], [right, left]] {
+        let mut message_store = TestMessageStore::default();
+        message_store.open().await.unwrap();
+        let handler =
+            ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        for configure in order {
+            assert_eq!(
+                handler
+                    .run(MethodHandlerRequest::new(
+                        "did:example:alice",
+                        &configure,
+                        None
+                    ))
+                    .await
+                    .status
+                    .code,
+                202
+            );
+        }
+
+        let retained = message_store
+            .query(
+                "did:example:alice",
+                protocol_configure_filters("http://example.com/convergent", false),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(retained.messages.len(), 2);
+
+        let latest = message_store
+            .query(
+                "did:example:alice",
+                protocol_configure_filters("http://example.com/convergent", true),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(latest.messages.len(), 1);
+        assert_eq!(message_cid(&latest.messages[0]).unwrap(), expected_latest);
+    }
+}
+
+#[tokio::test]
+async fn protocols_configure_failed_atomic_transition_preserves_previous_latest() {
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+    let handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+    let older = signed_configure_message(
+        "http://example.com/rollback",
+        true,
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    let newer = signed_configure_message(
+        "http://example.com/rollback",
+        false,
+        "2025-01-01T00:00:01.000000Z",
+    )
+    .await;
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new("did:example:alice", &older, None))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    message_store.fail_next_transition();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new("did:example:alice", &newer, None))
+            .await
+            .status
+            .code,
+        500
+    );
+
+    // Covers: DWN-PROTO-004, DWN-REC-006
+    let latest = message_store
+        .query(
+            "did:example:alice",
+            protocol_configure_filters("http://example.com/rollback", true),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(latest.messages.len(), 1);
+    assert!(
+        protocols_configure_descriptor(&latest.messages[0])
+            .unwrap()
+            .definition
+            .published
+    );
+    assert_eq!(
+        message_store
+            .query(
+                "did:example:alice",
+                protocol_configure_filters("http://example.com/rollback", false),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn protocols_query_unsigned_returns_only_published_latest_configures() {
     let mut message_store = TestMessageStore::default();
-    let mut state_index = MemoryStateIndex::default();
     message_store.open().await.unwrap();
-    state_index.open().await.unwrap();
-    let configure_handler = ProtocolsConfigureHandler::new(
-        message_store.clone(),
-        state_index,
-        Some(Arc::new(test_resolver())),
-    );
+    let configure_handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let query_handler = ProtocolsQueryHandler::new(message_store.clone(), None);
 
     configure_handler
@@ -543,6 +724,39 @@ impl MessageStore for TestMessageStore {
         }
     }
 
+    async fn commit_latest_state(
+        &self,
+        tenant: &str,
+        transition: LatestStateTransition,
+    ) -> Result<LatestStateTransitionResult, crate::errors::MessageStoreError> {
+        if self.fail_transition.swap(false, AtomicOrdering::SeqCst) {
+            return Err(test_store_error("injected transition failure".to_string()));
+        }
+        transition.validate()?;
+        let mut rows = self.rows.write().unwrap();
+        let mut staged = rows.clone();
+
+        put_test_message(&mut staged, tenant, transition.put)?;
+        for retained in transition.retains {
+            let cid = retained.message.cid()?.to_string();
+            if !staged
+                .iter()
+                .any(|row| row.tenant == tenant && row.cid == cid)
+            {
+                return Err(test_store_error(format!(
+                    "retained message '{cid}' does not exist"
+                )));
+            }
+            put_test_message(&mut staged, tenant, retained)?;
+        }
+        for cid in transition.deletes {
+            staged.retain(|row| row.tenant != tenant || row.cid != cid);
+        }
+
+        *rows = staged;
+        Ok(LatestStateTransitionResult { position: None })
+    }
+
     fn get(
         &self,
         tenant: &str,
@@ -643,6 +857,22 @@ impl MessageStore for TestMessageStore {
             Ok(())
         }
     }
+}
+
+fn put_test_message(
+    rows: &mut Vec<TestMessageRow>,
+    tenant: &str,
+    mutation: LatestStateMutation,
+) -> Result<(), crate::errors::MessageStoreError> {
+    let cid = mutation.message.cid()?.to_string();
+    rows.retain(|row| row.tenant != tenant || row.cid != cid);
+    rows.push(TestMessageRow {
+        tenant: tenant.to_string(),
+        cid,
+        message: mutation.message,
+        indexes: mutation.indexes,
+    });
+    Ok(())
 }
 
 async fn signed_configure_message(
