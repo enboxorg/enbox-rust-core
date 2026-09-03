@@ -318,7 +318,7 @@ impl SqliteStore {
         indexes: KeyValues,
     ) -> Result<(), MessageStoreError> {
         let computed = message
-            .message_cid()
+            .cid()
             .map_err(|err| {
                 Self::index_update_error(
                     "MessageStoreUpdateMessageAndIndexesCidMismatch",
