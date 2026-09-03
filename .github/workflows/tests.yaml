@@ -255,6 +255,14 @@ jobs:
         working-directory: enbox
         run: bun install --frozen-lockfile
 
+      - name: Build Enbox packages for store injection
+        working-directory: enbox
+        run: |
+          bun run build --filter=@enbox/common
+          bun run build --filter=@enbox/crypto
+          bun run build --filter=@enbox/dids
+          bun run build --filter=@enbox/dwn-sdk-js
+
       - name: Run message-store specs against Rust SQLite with JUnit report
         env:
           ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
