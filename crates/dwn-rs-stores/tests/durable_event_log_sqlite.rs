@@ -1,46 +1,109 @@
 //! Feed-backed subscriptions over the SQLite replication feed.
 //!
-//! Bundle composition (one shared bus per assembly, handler registration) lands
-//! in #230; this covers the store pairing the adapter depends on.
+//! The backend-neutral live battery runs here against sqlite-mem and
+//! sqlite-disk through [`run_live_suite`]; the tests below keep the
+//! SQLite-specific coverage (restart bounds, clear gap, empty anchor).
 
+mod common;
+
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use dwn_rs_core::descriptors::{DeleteDescriptor, Records};
 use dwn_rs_core::errors::EventLogError;
+use dwn_rs_core::stores::durable_event_log::live_suite::{
+    run_live_suite, LiveOptions, LivePair, LiveResolver,
+};
 use dwn_rs_core::stores::durable_event_log::{DurableEventLog, DurableEventLogConfig};
 use dwn_rs_core::stores::wake::{InProcessWakeBus, WakePublishHandler};
+use dwn_rs_core::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
 use dwn_rs_core::stores::{
-    EventLog, EventLogReadOptions, EventLogSubscribeOptions, KeyValues, MessageStore,
-    ProgressGapCode, ProgressGapReason, SubscriptionListener, SubscriptionMessage,
+    EventLog, EventLogReadOptions, EventLogSubscribeOptions, MessageStore, ProgressGapCode,
+    ProgressGapReason, SubscriptionListener, SubscriptionMessage,
 };
-use dwn_rs_core::{Descriptor, Fields, Message, Value};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+use common::fixtures::{delete_message, feed_indexes};
+use common::{noop_waker, TempDb, TENANT};
 use dwn_rs_stores::SqliteStore;
 
-const TENANT: &str = "did:example:alice";
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(5);
-
-static DATABASE_ID: AtomicU64 = AtomicU64::new(0);
-
-fn memory_uri() -> String {
-    format!(
-        "file:dwn-durable-{}-{}?mode=memory&cache=shared",
-        std::process::id(),
-        DATABASE_ID.fetch_add(1, Ordering::Relaxed)
-    )
-}
 
 /// Builds a SQLite store whose commits publish wakes onto `bus`.
 async fn harness(bus: &InProcessWakeBus) -> SqliteStore {
-    let mut store = SqliteStore::new(memory_uri(), WakePublishHandler::new(Arc::new(bus.clone())));
+    let mut store = SqliteStore::new(
+        common::unique_memory_uri("dwn-durable"),
+        WakePublishHandler::new(Arc::new(bus.clone())),
+    );
     MessageStore::open(&mut store)
         .await
         .expect("sqlite store must open");
     store
+}
+
+/// Live pair over one SQLite database file (or shared-cache URI): `quiet`
+/// shares state but publishes no wakes, modelling a lost wake for the idle
+/// poll to recover.
+async fn sqlite_live_pair(options: LiveOptions, path: PathBuf) -> LivePair<SqliteStore> {
+    let bus = InProcessWakeBus::new();
+    let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(bus.clone())));
+    MessageStore::open(&mut store)
+        .await
+        .expect("sqlite store must open");
+    let mut quiet = SqliteStore::new(&path, noop_waker());
+    MessageStore::open(&mut quiet)
+        .await
+        .expect("quiet handle must open");
+
+    let resolver: Option<Arc<dyn InitialWriteResolver>> = match options.resolver {
+        LiveResolver::None => None,
+        LiveResolver::MessageStore => Some(Arc::new(MessageStoreInitialWriteResolver::new(
+            Arc::new(store.clone()),
+        ))),
+    };
+    let log = DurableEventLog::new(
+        store.clone(),
+        bus.clone(),
+        resolver,
+        Some(DurableEventLogConfig {
+            idle_redrain_interval: options.idle_redrain_interval,
+            ..Default::default()
+        }),
+    );
+
+    LivePair {
+        log,
+        bus,
+        store,
+        quiet,
+    }
+}
+
+#[tokio::test]
+async fn sqlite_mem_conforms_to_live_durable_event_log_contract() {
+    run_live_suite(|options| async move {
+        sqlite_live_pair(
+            options,
+            PathBuf::from(common::unique_memory_uri("dwn-live")),
+        )
+        .await
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sqlite_disk_conforms_to_live_durable_event_log_contract() {
+    let _guard = tempfile::tempdir().expect("battery tempdir");
+    let seq = AtomicU64::new(0);
+    let dir = _guard.path().to_path_buf();
+    run_live_suite(|options| {
+        let n = seq.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("live-{n}.sqlite"));
+        async move { sqlite_live_pair(options, path).await }
+    })
+    .await;
 }
 
 fn recorder() -> (
@@ -62,30 +125,13 @@ async fn next(receiver: &mut mpsc::UnboundedReceiver<SubscriptionMessage>) -> Su
         .expect("subscription listener was dropped")
 }
 
-fn delete_message(record_id: &str, timestamp: &str) -> Message<Descriptor> {
-    Message {
-        descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(DeleteDescriptor {
-            message_timestamp: timestamp.parse().expect("valid fixture timestamp"),
-            record_id: record_id.to_string(),
-            prune: false,
-        })))),
-        fields: Fields::Authorization(Default::default()),
-    }
-}
-
-fn indexes(marker: &str) -> KeyValues {
-    let mut indexes = KeyValues::new();
-    indexes.insert("marker".to_string(), Value::String(marker.to_string()));
-    indexes.insert(
-        "messageTimestamp".to_string(),
-        Value::String("2025-01-01T00:00:00.000000Z".to_string()),
-    );
-    indexes
-}
-
 async fn commit(store: &SqliteStore, marker: &str, timestamp: &str) {
     store
-        .put(TENANT, delete_message(marker, timestamp), indexes(marker))
+        .put(
+            TENANT,
+            delete_message(marker, timestamp),
+            feed_indexes(None, None, marker),
+        )
         .await
         .expect("feed put");
 }
@@ -174,11 +220,8 @@ async fn a_resumed_subscription_replays_then_follows_the_feed() {
 #[tokio::test]
 async fn replay_positions_epoch_and_bounds_survive_a_restart() {
     let bus = InProcessWakeBus::new();
-    let database_path = std::env::temp_dir().join(format!(
-        "dwn-feed-restart-{}-{}.sqlite",
-        std::process::id(),
-        ulid::Ulid::new()
-    ));
+    let db = TempDb::new("dwn-feed-restart");
+    let database_path = db.path().to_path_buf();
 
     let oldest_before;
     let latest_before;
@@ -257,8 +300,6 @@ async fn replay_positions_epoch_and_bounds_survive_a_restart() {
 
         MessageStore::close(&mut store).await;
     }
-
-    let _ = std::fs::remove_file(database_path);
 }
 
 #[tokio::test]
