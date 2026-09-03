@@ -63,7 +63,7 @@ Delivered:
 
 - `NativeSyncEngine` integrated with `SqliteNativeDwn` (`sync_once_with_peer`, `sync_once_with_http`, `poll_reconcile_with_http`)
 - Progress token replay, EOSE, gap repair, and echo suppression (see `sqlite_event_log_progress_integration.rs`, `sync.rs` unit tests)
-- WebSocket `RecordsSubscribe` on loopback server; HTTP + direct multi-node sync tests (`sync_integration.rs`)
+- WebSocket `RecordsSubscribe` on the loopback server; legacy StateIndex/`MessagesSync` multi-node coverage has been removed pending the durable-feed replacement in #187/#188/#211
 - `enbox-ffi` durable open, `sync_once`, and sync status
 - Live/poll reconciliation vs HTTP remote — [`SYNC_LIVE_POLL.md`](SYNC_LIVE_POLL.md)
 
