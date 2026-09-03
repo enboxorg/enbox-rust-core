@@ -3,7 +3,7 @@
 //! Backend test modules call [`run`] with an async factory. The suite deliberately
 //! uses only the public [`MessageStore`] and [`ReplicationFeedReader`] contracts.
 
-use std::{collections::BTreeMap, future::Future};
+use std::{collections::BTreeMap, collections::BTreeSet, future::Future};
 
 use serde_json::json;
 
@@ -49,6 +49,9 @@ where
     malformed_cursor_rejected(&factory).await;
     token_too_old_unreachable_without_retention(&factory).await;
     log_bounds_shape(&factory).await;
+    arrival_order_converges_on_set_and_fingerprint(&factory).await;
+    delete_position_converges_on_residual_set(&factory).await;
+    duplicate_replay_order_converges(&factory).await;
 }
 
 async fn atomic_latest_state_transitions<S, F, Fut>(factory: &F)
@@ -986,4 +989,162 @@ where
         .expect("non-empty bounds");
     assert_eq!(oldest, build_token(TENANT, &epoch, 0, None));
     assert_eq!(latest, build_token(TENANT, &epoch, 2, Some(&second_cid)));
+}
+
+// Covers: DWN-REC-004 (same valid set, any order, same state).
+async fn arrival_order_converges_on_set_and_fingerprint<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let messages = [
+        delete_message("order-one", "2025-01-01T00:00:00Z"),
+        delete_message("order-two", "2025-01-01T00:00:01Z"),
+        delete_message("order-three", "2025-01-01T00:00:02Z"),
+    ];
+    let expected_cids: BTreeSet<String> = messages.iter().map(cid).collect();
+    let mut expected_fp = Fingerprint::default();
+    for message_cid in &expected_cids {
+        xor_in_place(&mut expected_fp, &cid_contribution(message_cid));
+    }
+
+    // Seqs record insertion order and differ by construction; the converged
+    // contract is the CID set, the count, and the order-insensitive fingerprint.
+    for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
+        let store = new_store(factory).await;
+        for (position, message) in order.into_iter().enumerate() {
+            store
+                .put(
+                    TENANT,
+                    messages[message].clone(),
+                    indexes(None, None, &format!("o{position}")),
+                )
+                .await
+                .expect("feed put");
+        }
+        let page = store
+            .log_read(TENANT, EventLogReadOptions::default())
+            .await
+            .expect("converged read");
+        assert_eq!(page.events.len(), 3);
+        assert_eq!(
+            page.events
+                .iter()
+                .filter_map(|entry| entry.message_cid.clone())
+                .collect::<BTreeSet<_>>(),
+            expected_cids
+        );
+        assert_eq!(
+            store
+                .fingerprint(TENANT, &["".to_string()])
+                .await
+                .expect("converged fingerprint"),
+            expected_fp
+        );
+    }
+}
+
+async fn delete_position_converges_on_residual_set<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let messages = [
+        delete_message("res-one", "2025-01-01T00:00:00Z"),
+        delete_message("res-two", "2025-01-01T00:00:01Z"),
+        delete_message("res-three", "2025-01-01T00:00:02Z"),
+    ];
+    let victim = cid(&messages[1]);
+    let expected_cids: BTreeSet<String> =
+        [cid(&messages[0]), cid(&messages[2])].into_iter().collect();
+    let mut expected_fp = Fingerprint::default();
+    for message_cid in &expected_cids {
+        xor_in_place(&mut expected_fp, &cid_contribution(message_cid));
+    }
+
+    // Delete lands at different points in the arrival order; the residual set
+    // and fingerprint still converge.
+    for order in [vec![0, 1, 2, -1], vec![0, 1, -1, 2], vec![2, 1, 0, -1]] {
+        let store = new_store(factory).await;
+        for (position, step) in order.into_iter().enumerate() {
+            if step < 0 {
+                store.delete(TENANT, &victim).await.expect("delete");
+            } else {
+                store
+                    .put(
+                        TENANT,
+                        messages[step as usize].clone(),
+                        indexes(None, None, &format!("r{position}")),
+                    )
+                    .await
+                    .expect("feed put");
+            }
+        }
+        let page = store
+            .log_read(TENANT, EventLogReadOptions::default())
+            .await
+            .expect("residual read");
+        assert_eq!(
+            page.events
+                .iter()
+                .filter_map(|entry| entry.message_cid.clone())
+                .collect::<BTreeSet<_>>(),
+            expected_cids
+        );
+        assert_eq!(
+            store
+                .fingerprint(TENANT, &["".to_string()])
+                .await
+                .expect("residual fingerprint"),
+            expected_fp
+        );
+    }
+}
+
+async fn duplicate_replay_order_converges<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    for replay_first in [false, true] {
+        let store = new_store(factory).await;
+        let message = delete_message("replay", "2025-01-01T00:00:00Z");
+        let message_cid = cid(&message);
+        if replay_first {
+            store
+                .put(TENANT, message.clone(), indexes(None, None, "dup"))
+                .await
+                .expect("duplicate put");
+        }
+        store
+            .put(TENANT, message.clone(), indexes(None, None, "orig"))
+            .await
+            .expect("original put");
+        if !replay_first {
+            store
+                .put(TENANT, message, indexes(None, None, "dup"))
+                .await
+                .expect("duplicate put");
+        }
+        let page = store
+            .log_read(TENANT, EventLogReadOptions::default())
+            .await
+            .expect("replay read");
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].seq, "1");
+        assert_eq!(
+            page.events[0].message_cid.as_deref(),
+            Some(message_cid.as_str())
+        );
+        assert_eq!(
+            store
+                .fingerprint(TENANT, &["".to_string()])
+                .await
+                .expect("replay fingerprint"),
+            cid_contribution(&message_cid)
+        );
+    }
 }
