@@ -17,10 +17,12 @@ use crate::{
     errors::{EventLogError, MessageReplicationError, MessageStoreError, StoreError},
     fields::WriteFields,
     filters::{Filter, FilterKey, Filters},
+    permissions::PERMISSIONS_PROTOCOL_URI,
     Descriptor, Fields, Message, ProgressToken, Value,
 };
 
 const TENANT: &str = "did:example:alice";
+const OTHER_TENANT: &str = "did:example:bob";
 
 /// Runs the complete durable-feed contract against stores returned by `factory`.
 ///
@@ -42,6 +44,11 @@ where
     progress_gaps(&factory).await;
     eligible_message_types(&factory).await;
     fingerprints(&factory).await;
+    perm_fingerprint_domain(&factory).await;
+    multi_tenant_isolation(&factory).await;
+    malformed_cursor_rejected(&factory).await;
+    token_too_old_unreachable_without_retention(&factory).await;
+    log_bounds_shape(&factory).await;
 }
 
 async fn atomic_latest_state_transitions<S, F, Fut>(factory: &F)
@@ -782,4 +789,201 @@ where
 #[tokio::test]
 async fn memory_message_store_conforms_to_replication_feed_contract() {
     run(|| async { super::memory::MemoryMessageStore::default() }).await;
+}
+
+async fn perm_fingerprint_domain<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let store = new_store(factory).await;
+    let target = "https://example.com/protocol/notes";
+    let message = delete_message("perm-grant", "2025-01-01T00:00:00Z");
+    let message_cid = cid(&message);
+    let mut permission_indexes = indexes(Some(PERMISSIONS_PROTOCOL_URI), None, "perm");
+    permission_indexes.insert(
+        "tag.protocol".to_string(),
+        Value::String(target.to_string()),
+    );
+    store
+        .put(TENANT, message, permission_indexes)
+        .await
+        .expect("feed put");
+
+    let expected = cid_contribution(&message_cid);
+    for scope in [
+        "".to_string(),
+        format!("protocol:{PERMISSIONS_PROTOCOL_URI}"),
+        format!("perm:{target}"),
+    ] {
+        assert_eq!(
+            store
+                .fingerprint(TENANT, std::slice::from_ref(&scope))
+                .await
+                .expect("perm fingerprint"),
+            expected,
+            "scope {scope} must carry the contribution"
+        );
+    }
+    assert_eq!(
+        store
+            .fingerprint(TENANT, &["perm:https://example.com/other".to_string()])
+            .await
+            .expect("unrelated perm fingerprint"),
+        Fingerprint::default()
+    );
+}
+
+async fn multi_tenant_isolation<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let store = new_store(factory).await;
+    let message = delete_message("tenant-one", "2025-01-01T00:00:00Z");
+    let message_cid = cid(&message);
+    store
+        .put(TENANT, message, indexes(None, None, "t1"))
+        .await
+        .expect("feed put");
+
+    let epoch = store.epoch().await.expect("epoch");
+    let other = store
+        .log_read(OTHER_TENANT, EventLogReadOptions::default())
+        .await
+        .expect("other-tenant read");
+    assert!(other.events.is_empty());
+    assert!(other.drained);
+    assert_eq!(
+        other.cursor,
+        Some(build_token(OTHER_TENANT, &epoch, 0, None))
+    );
+    assert_eq!(
+        store
+            .log_bounds(OTHER_TENANT)
+            .await
+            .expect("other-tenant bounds"),
+        None
+    );
+
+    let alice_cursor = build_token(TENANT, &epoch, 1, Some(&message_cid));
+    assert_gap(
+        store
+            .log_read(
+                OTHER_TENANT,
+                EventLogReadOptions {
+                    cursor: Some(alice_cursor),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("cross-tenant cursor must fail"),
+        ProgressGapReason::StreamMismatch,
+    );
+}
+
+async fn malformed_cursor_rejected<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let store = new_store(factory).await;
+    store
+        .put(
+            TENANT,
+            delete_message("malformed", "2025-01-01T00:00:00Z"),
+            indexes(None, None, "m"),
+        )
+        .await
+        .expect("feed put");
+    let epoch = store.epoch().await.expect("epoch");
+
+    for position in ["", "00", "01", "-1", " 1", "18446744073709551616"] {
+        let error = store
+            .log_read(
+                TENANT,
+                EventLogReadOptions {
+                    cursor: Some(ProgressToken {
+                        position: position.to_string(),
+                        ..build_token(TENANT, &epoch, 0, None)
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("malformed position must fail");
+        let EventLogError::InvalidProgressToken(value) = error else {
+            panic!("expected InvalidProgressToken, got {error:?}");
+        };
+        assert_eq!(value, position);
+    }
+}
+
+async fn token_too_old_unreachable_without_retention<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    // Neither backend implements retention trimming (`oldest_replayable` is
+    // hardcoded 0 with a `// todo: retention policy`), so TokenTooOld is
+    // unreachable. Pin the zero anchor as valid so a future retention change
+    // must update this test deliberately rather than silently.
+    let store = new_store(factory).await;
+    store
+        .put(
+            TENANT,
+            delete_message("retention", "2025-01-01T00:00:00Z"),
+            indexes(None, None, "m"),
+        )
+        .await
+        .expect("feed put");
+    let epoch = store.epoch().await.expect("epoch");
+
+    let page = store
+        .log_read(
+            TENANT,
+            EventLogReadOptions {
+                cursor: Some(build_token(TENANT, &epoch, 0, None)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("zero anchor stays valid");
+    assert_eq!(page.events.len(), 1);
+    assert!(page.drained);
+}
+
+async fn log_bounds_shape<S, F, Fut>(factory: &F)
+where
+    S: MessageStore + ReplicationFeedReader,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let store = new_store(factory).await;
+    assert_eq!(store.log_bounds(TENANT).await.expect("empty bounds"), None);
+
+    let second = delete_message("bounds-two", "2025-01-01T00:00:01Z");
+    let second_cid = cid(&second);
+    for (index, message) in [delete_message("bounds-one", "2025-01-01T00:00:00Z"), second]
+        .into_iter()
+        .enumerate()
+    {
+        store
+            .put(TENANT, message, indexes(None, None, &format!("b{index}")))
+            .await
+            .expect("feed put");
+    }
+
+    let epoch = store.epoch().await.expect("epoch");
+    let (oldest, latest) = store
+        .log_bounds(TENANT)
+        .await
+        .expect("bounds")
+        .expect("non-empty bounds");
+    assert_eq!(oldest, build_token(TENANT, &epoch, 0, None));
+    assert_eq!(latest, build_token(TENANT, &epoch, 2, Some(&second_cid)));
 }

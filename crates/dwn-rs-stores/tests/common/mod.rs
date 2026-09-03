@@ -23,6 +23,34 @@ use dwn_rs_stores::SqliteStore;
 /// Canonical tenant for battery tests.
 pub const TENANT: &str = "did:example:alice";
 
+/// Backend matrix shared by battery macros (C5/C6 build on this).
+///
+/// Memory reference types live in `dwn-rs-core`; SQLite variants are opened
+/// with the helpers below.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BackendKind {
+    Memory,
+    SqliteMem,
+    SqliteDisk,
+}
+
+impl BackendKind {
+    /// All backends a cross-implementation case must cover.
+    pub const ALL: &'static [BackendKind] = &[
+        BackendKind::Memory,
+        BackendKind::SqliteMem,
+        BackendKind::SqliteDisk,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BackendKind::Memory => "memory",
+            BackendKind::SqliteMem => "sqlite-mem",
+            BackendKind::SqliteDisk => "sqlite-disk",
+        }
+    }
+}
+
 static DATABASE_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Unique shared-memory URI with per-test isolation (no files).
