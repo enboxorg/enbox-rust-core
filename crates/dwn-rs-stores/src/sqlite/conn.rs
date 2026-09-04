@@ -79,6 +79,7 @@ struct Slot {
     conn: Mutex<Option<Connection>>,
     path: PathBuf,
     read_only: bool,
+    closed: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -92,7 +93,7 @@ struct Inner {
     /// allocation-free queue ops — never held across an await.
     checkout_queue: Mutex<VecDeque<Arc<Slot>>>,
     reader_permits: Semaphore,
-    closed: AtomicBool,
+    closed: Arc<AtomicBool>,
 }
 
 /// Shared SQLite connection handle used by auxiliary store backends.
@@ -127,16 +128,17 @@ impl SqliteConnection {
         migrate: impl FnOnce(&mut Connection) -> Result<(), StoreError> + Send + 'static,
     ) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
+        let closed = Arc::new(AtomicBool::new(false));
 
         // Writer first: the migration runs on it before any reader opens the
         // file, and every open below is awaited before the handle escapes.
-        let writer = Arc::new(Slot::open(&path, false).await?);
+        let writer = Arc::new(Slot::open(&path, false, &closed).await?);
         run_cycle(&writer, "writer", migrate).await?;
 
         let mut readers = Vec::with_capacity(READER_POOL_SIZE);
         let mut checkout_queue = VecDeque::with_capacity(READER_POOL_SIZE);
         for _ in 0..READER_POOL_SIZE {
-            let slot = Arc::new(Slot::open(&path, true).await?);
+            let slot = Arc::new(Slot::open(&path, true, &closed).await?);
             checkout_queue.push_back(Arc::clone(&slot));
             readers.push(slot);
         }
@@ -149,7 +151,7 @@ impl SqliteConnection {
                 readers,
                 checkout_queue: Mutex::new(checkout_queue),
                 reader_permits: Semaphore::new(READER_POOL_SIZE),
-                closed: AtomicBool::new(false),
+                closed,
             }),
         })
     }
@@ -165,9 +167,7 @@ impl SqliteConnection {
         // cancellation and panic, so the queue never loses a slot.
         let _return = ReturnGuard::new(&self.inner.checkout_queue, Arc::clone(&slot));
         if self.inner.closed.load(Ordering::SeqCst) {
-            return Err(StoreError::InternalException(
-                "sqlite: reader: connection set closed".to_string(),
-            ));
+            return Err(closed_set_error("reader"));
         }
         run_cycle(&slot, "reader", move |c: &mut Connection| f(c)).await
     }
@@ -180,9 +180,7 @@ impl SqliteConnection {
         let _permit = permit(&self.inner.writer_permits, &self.inner.closed, "writer").await?;
         let slot = Arc::clone(&self.inner.writer);
         if self.inner.closed.load(Ordering::SeqCst) {
-            return Err(StoreError::InternalException(
-                "sqlite: writer: connection set closed".to_string(),
-            ));
+            return Err(closed_set_error("writer"));
         }
         run_cycle(&slot, "writer", f).await
     }
@@ -364,18 +362,44 @@ where
 
 /// Take the slotted connection, reopening fresh if a cancelled predecessor's
 /// worker still owns it.
+///
+/// Never runs caller code against a closed set (issue #255): the closed flag
+/// is checked before taking and again before reopening, so a call racing
+/// `close()`+`drain()` fails explicitly instead of executing on a fresh
+/// handle of a dead set. A close landing mid-call is benign: the call
+/// linearizes before it and its connection is dropped at restore.
 fn take_or_reopen(slot: &Arc<Slot>, which: &'static str) -> Result<Connection, StoreError> {
+    if slot.closed.load(Ordering::SeqCst) {
+        return Err(closed_set_error(which));
+    }
     let taken = slot.conn.lock().unwrap_or_else(|e| e.into_inner()).take();
     match taken {
         Some(conn) => Ok(conn),
-        None => open_blocking(&slot.path, slot.read_only, which),
+        None => {
+            if slot.closed.load(Ordering::SeqCst) {
+                return Err(closed_set_error(which));
+            }
+            let conn = open_blocking(&slot.path, slot.read_only, which)?;
+            if slot.closed.load(Ordering::SeqCst) {
+                drop(conn);
+                return Err(closed_set_error(which));
+            }
+            Ok(conn)
+        }
     }
 }
 
-/// Store `conn` back into an empty slot; close it inline if the slot already
-/// holds a live connection (a cancelled predecessor's slot was reused and
-/// reopened meanwhile). Either way exactly one handle survives per slot.
+/// Store `conn` back into an empty slot; close it inline otherwise.
+///
+/// A non-empty slot means a cancelled predecessor's slot was reused and
+/// reopened meanwhile — closing the stray keeps handle accounting exact. A
+/// set closed mid-call drops instead of restoring, so no live handle survives
+/// `drain()` (issue #255).
 fn restore(slot: &Arc<Slot>, conn: Connection) {
+    if slot.closed.load(Ordering::SeqCst) {
+        drop(conn);
+        return;
+    }
     let mut guard = slot.conn.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = Some(conn);
@@ -383,23 +407,37 @@ fn restore(slot: &Arc<Slot>, conn: Connection) {
     // Else: `conn` drops here, closing the stray handle on this worker.
 }
 
+fn closed_set_error(which: &'static str) -> StoreError {
+    StoreError::InternalException(format!("sqlite: {which}: connection set closed"))
+}
+
 impl Slot {
     /// Open one connection and apply its pragmas, awaited.
-    async fn open(path: &Path, read_only: bool) -> Result<Self, StoreError> {
+    async fn open(
+        path: &Path,
+        read_only: bool,
+        closed: &Arc<AtomicBool>,
+    ) -> Result<Self, StoreError> {
         let path = path.to_path_buf();
         let opened_path = path.clone();
         let conn =
             tokio::task::spawn_blocking(move || open_blocking(&opened_path, read_only, "open"))
                 .await
                 .map_err(store_err("open"))??;
-        Ok(Self::from_conn(conn, path, read_only))
+        Ok(Self::from_conn(conn, path, read_only, Arc::clone(closed)))
     }
 
-    fn from_conn(conn: Connection, path: PathBuf, read_only: bool) -> Self {
+    fn from_conn(
+        conn: Connection,
+        path: PathBuf,
+        read_only: bool,
+        closed: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             conn: Mutex::new(Some(conn)),
             path,
             read_only,
+            closed,
         }
     }
 }

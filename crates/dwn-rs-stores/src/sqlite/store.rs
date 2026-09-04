@@ -25,6 +25,14 @@ pub struct SqliteStore {
     pub(crate) conn: Arc<Mutex<ConnState>>,
     path: Arc<Path>,
     pub(crate) waker_publisher: WakePublishHandler,
+    /// Serializes first opens (issue #255).
+    ///
+    /// Without single-flight, racing tasks each build a full eleven-handle
+    /// set and the losers close theirs inline on the executor. The mutex is
+    /// held across the awaited open only; every other state access takes the
+    /// brief state lock without holding this one, so the order is fixed and
+    /// cannot cycle.
+    open_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SqliteStore {
@@ -41,16 +49,37 @@ impl SqliteStore {
             path: Arc::from(path.as_ref()),
             conn: Arc::new(Mutex::new(ConnState::Unopened)),
             waker_publisher,
+            open_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     /// Handle to the open connection set, opening it on first use.
     ///
-    /// Operations on a closed store fail explicitly with a "closed" error;
-    /// only [`SqliteStore::open_inner`] transitions out of `Closed`.
+    /// Operations on a closed store fail explicitly with a "closed" error —
+    /// checked *before* opening, so closed handles never pay an
+    /// open-then-discard cycle just to report failure (issue #255). Only
+    /// [`SqliteStore::open_inner`] transitions out of `Closed`.
     pub(crate) async fn connection(&self) -> Result<SqliteConnection, StoreError> {
         if let Some(conn) = self.open_conn() {
             return Ok(conn);
+        }
+        if matches!(
+            *self.conn.lock().unwrap_or_else(|e| e.into_inner()),
+            ConnState::Closed
+        ) {
+            return Err(closed_error());
+        }
+        // Single-flight the build: racing tasks would otherwise each open a
+        // full handle set and discard all but one.
+        let _opening = self.open_mutex.lock().await;
+        if let Some(conn) = self.open_conn() {
+            return Ok(conn);
+        }
+        if matches!(
+            *self.conn.lock().unwrap_or_else(|e| e.into_inner()),
+            ConnState::Closed
+        ) {
+            return Err(closed_error());
         }
         let fresh = SqliteConnection::open(self.path.clone(), migrate).await?;
         let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -148,7 +177,9 @@ fn unique_memory_uri() -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::sync::Arc;
 
+    use dwn_rs_core::stores::wake::WakePublishHandler;
     use dwn_rs_core::stores::MessageStore;
     use rusqlite::Transaction;
 
@@ -380,31 +411,138 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_then_open_revives_store() {
+    async fn close_then_open_file_store_preserves_data() {
         // Issue #255: open() after close() yields a usable store instead of
         // Ok(()) over a dead connection set — through every clone, which
-        // share one lifecycle state.
-        let mut store = SqliteStore::in_memory(None);
+        // share one lifecycle state. File-backed, so committed rows must
+        // survive the cycle (a scratch table keeps this unit test free of
+        // message fixtures).
+        let _disk = crate::sqlite::conn::disk_test_guard().await;
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("revive.sqlite3");
+
+        let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut store).await.unwrap();
         let clone = store.clone();
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_writer(|connection| {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE revive_probe (value TEXT PRIMARY KEY); \
+                         INSERT INTO revive_probe VALUES ('durability-marker');",
+                    )
+                    .map_err(sqlite_store_error)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
         MessageStore::close(&mut store).await;
         MessageStore::open(&mut store).await.unwrap();
 
         for handle in [&store, &clone] {
-            let epoch: String = handle
+            let value: String = handle
                 .connection()
                 .await
                 .unwrap()
                 .with_reader(|connection| {
                     connection
-                        .query_row("SELECT epoch FROM feed_metadata WHERE id = 1", [], |row| {
-                            row.get::<_, String>(0)
-                        })
+                        .query_row("SELECT value FROM revive_probe", [], |row| row.get(0))
                         .map_err(sqlite_store_error)
                 })
                 .await
                 .unwrap();
-            assert!(!epoch.is_empty());
+            assert_eq!(value, "durability-marker");
+        }
+    }
+
+    #[tokio::test]
+    async fn close_then_open_memory_store_starts_blank() {
+        // Issue #255, SQLite semantics: a shared-cache in-memory database is
+        // destroyed when its last connection closes, so revive yields a
+        // fresh, usable — but empty — database. This pins that contract
+        // instead of letting a vacuous assertion pass on re-migrated schema.
+        let mut store = SqliteStore::in_memory(None);
+        MessageStore::open(&mut store).await.unwrap();
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_writer(|connection| {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE revive_probe (value TEXT PRIMARY KEY); \
+                         INSERT INTO revive_probe VALUES ('ephemeral');",
+                    )
+                    .map_err(sqlite_store_error)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        MessageStore::close(&mut store).await;
+        MessageStore::open(&mut store).await.unwrap();
+
+        // Usable (schema migrated)…
+        let epoch: String = store
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row("SELECT epoch FROM feed_metadata WHERE id = 1", [], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        assert!(!epoch.is_empty());
+        // …but the pre-close rows are gone with the destroyed database.
+        let remaining: i64 = store
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name = 'revive_probe'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_opens_all_succeed() {
+        // Issue #255: racing first opens single-flight instead of each
+        // building (and discarding) a full handle set. All racers must
+        // succeed; a broken single-flight would deadlock here.
+        let store = SqliteStore::in_memory(None);
+        let mut joins = Vec::new();
+        for _ in 0..16 {
+            let handle = store.clone();
+            joins.push(tokio::spawn(async move {
+                handle
+                    .connection()
+                    .await
+                    .unwrap()
+                    .with_reader(|connection| {
+                        connection
+                            .query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
+                            .map_err(sqlite_store_error)
+                    })
+                    .await
+                    .unwrap()
+            }));
+        }
+        for join in joins {
+            assert_eq!(join.await.unwrap(), 1);
         }
     }
 
