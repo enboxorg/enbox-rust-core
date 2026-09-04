@@ -362,7 +362,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     let (listener, mut recorder) = recorder();
     let _subscription = pair
@@ -387,8 +387,6 @@ where
     );
 
     recorder.expect_quiet(QUIET_WINDOW).await;
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn duplicate_wakes_do_not_duplicate_delivery<M, F, Fut>(factory: &F)
@@ -397,7 +395,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     let (listener, mut recorder) = recorder();
     let _subscription = pair
@@ -429,8 +427,6 @@ where
         vec!["1".to_string(), "2".to_string(), "3".to_string()]
     );
     recorder.expect_quiet(QUIET_WINDOW).await;
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn wake_ahead_of_feed_delivers_nothing<M, F, Fut>(factory: &F)
@@ -439,7 +435,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     let (listener, mut recorder) = recorder();
     let _subscription = pair
@@ -453,8 +449,6 @@ where
 
     recorder.expect_quiet(QUIET_WINDOW).await;
     assert!(recorder.try_next().is_none());
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn delete_carries_write_it_deletes<M, F, Fut>(factory: &F)
@@ -463,7 +457,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(
+    let pair = fresh_pair(
         factory,
         LiveOptions {
             resolver: LiveResolver::MessageStore,
@@ -500,8 +494,6 @@ where
         delivered.event.initial_write.is_some(),
         "a delete resolves the RecordsWrite it removes"
     );
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn writes_deletes_configures_reach_subscribers<M, F, Fut>(factory: &F)
@@ -510,7 +502,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     let (listener, mut recorder) = recorder();
     let _subscription = pair
@@ -533,8 +525,6 @@ where
         vec!["1".to_string(), "2".to_string(), "3".to_string()]
     );
     recorder.expect_quiet(QUIET_WINDOW).await;
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn paged_replay_delivers_exactly_once_with_single_eose<M, F, Fut>(factory: &F)
@@ -543,7 +533,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     for index in 0..10 {
         commit_delete(
@@ -594,8 +584,6 @@ where
     let eose = recorder.expect_eose().await;
     assert_eq!(eose.position, "10");
     recorder.expect_quiet(QUIET_WINDOW).await;
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn filtered_subscribe_delivers_only_matching<M, F, Fut>(factory: &F)
@@ -604,7 +592,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     let (listener, mut recorder) = recorder();
     let _subscription = pair
@@ -629,8 +617,6 @@ where
     assert_eq!(delivered[0].seq.as_deref(), Some("1"));
     assert_eq!(delivered[1].seq.as_deref(), Some("3"));
     recorder.expect_quiet(QUIET_WINDOW).await;
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn live_progress_gap_closes_subscription<M, F, Fut>(factory: &F)
@@ -639,7 +625,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     let (listener, mut recorder) = recorder();
     let _subscription = pair
@@ -659,8 +645,6 @@ where
     assert_eq!(error.code, SubscriptionErrorCode::ProgressGap);
     recorder.expect_quiet(QUIET_WINDOW).await;
     assert!(recorder.try_next().is_none());
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn close_releases_subscription<M, F, Fut>(factory: &F)
@@ -694,8 +678,6 @@ where
             .await,
         Err(EventLogError::Closed)
     ));
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn delete_without_resolver_has_no_initial_write<M, F, Fut>(factory: &F)
@@ -704,7 +686,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(factory, LiveOptions::default()).await;
+    let pair = fresh_pair(factory, LiveOptions::default()).await;
 
     let mut write_indexes = KeyValues::new();
     write_indexes.insert("entryId".to_string(), Value::String("record-1".to_string()));
@@ -730,8 +712,6 @@ where
     let delivered = recorder.expect_event().await;
     assert_eq!(delivered.seq.as_deref(), Some("2"));
     assert!(delivered.event.initial_write.is_none());
-    pair.store.close().await;
-    pair.quiet.close().await;
 }
 
 async fn dropped_wake_recovered_by_idle_poll<M, F, Fut>(factory: &F)
@@ -740,7 +720,7 @@ where
     F: Fn(LiveOptions) -> Fut,
     Fut: Future<Output = LivePair<M>>,
 {
-    let mut pair = fresh_pair(
+    let pair = fresh_pair(
         factory,
         LiveOptions {
             idle_redrain_interval: Some(Duration::from_millis(50)),
@@ -769,6 +749,4 @@ where
 
     let delivered = recorder.expect_event().await;
     assert_eq!(delivered.seq.as_deref(), Some("1"));
-    pair.store.close().await;
-    pair.quiet.close().await;
 }

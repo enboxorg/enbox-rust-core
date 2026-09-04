@@ -5,7 +5,6 @@ mod common;
 use std::sync::Arc;
 
 use dwn_rs_core::stores::wake::WakePublishHandler;
-use dwn_rs_core::stores::MessageStore;
 use dwn_rs_core::stores::SubscriptionMessage;
 use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
@@ -96,7 +95,7 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
         "enbox-sync-engine-ledger-{}.sqlite",
         ulid::Ulid::new()
     ));
-    let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+    let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
 
     {
@@ -155,8 +154,6 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
         assert_eq!(status.checkpoints[0].scope_id, SyncScope::Full.id());
     }
 
-    MessageStore::close(&mut store).await;
-    drop(store);
     let _ = std::fs::remove_file(path);
 }
 
@@ -194,7 +191,7 @@ async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
         "enbox-sync-eose-ledger-{}.sqlite",
         ulid::Ulid::new()
     ));
-    let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+    let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
     let engine = registered_engine(ledger.clone()).await;
     let cursor = sample_progress_token("2", "cid-2");
@@ -215,8 +212,6 @@ async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
     let checkpoint = loaded.checkpoints.values().next().expect("checkpoint");
     assert_eq!(checkpoint.pull_cursor.as_ref(), Some(&cursor));
 
-    MessageStore::close(&mut store).await;
-    drop(store);
     let _ = std::fs::remove_file(path);
 }
 
@@ -228,7 +223,7 @@ async fn sync_engine_persists_progress_gap_as_repairing_in_sqlite_ledger() {
         "enbox-sync-gap-ledger-{}.sqlite",
         ulid::Ulid::new()
     ));
-    let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+    let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
     let engine = registered_engine(ledger.clone()).await;
 
@@ -250,7 +245,5 @@ async fn sync_engine_persists_progress_gap_as_repairing_in_sqlite_ledger() {
         "token_too_old"
     );
 
-    MessageStore::close(&mut store).await;
-    drop(store);
     let _ = std::fs::remove_file(path);
 }

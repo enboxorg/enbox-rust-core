@@ -25,13 +25,8 @@ pub struct SqliteStore {
     pub(crate) conn: Arc<Mutex<ConnState>>,
     path: Arc<Path>,
     pub(crate) waker_publisher: WakePublishHandler,
-    /// Serializes first opens.
-    ///
-    /// Without single-flight, racing tasks each build a full eleven-handle
-    /// set and the losers close theirs inline on the executor. The mutex is
-    /// held across the awaited open only; every other state access takes the
-    /// brief state lock without holding this one, so the order is fixed and
-    /// cannot cycle.
+    /// Serializes first opens: without it, racing tasks each build a full
+    /// eleven-handle set and all but one is discarded.
     open_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -60,68 +55,38 @@ impl SqliteStore {
     /// open-then-discard cycle just to report failure. Only
     /// [`SqliteStore::open_inner`] transitions out of `Closed`.
     pub(crate) async fn connection(&self) -> Result<SqliteConnection, StoreError> {
-        if let Some(conn) = self.open_conn() {
+        if let Some(conn) = self.check_state()? {
             return Ok(conn);
-        }
-        if matches!(
-            *self.conn.lock().unwrap_or_else(|e| e.into_inner()),
-            ConnState::Closed
-        ) {
-            return Err(closed_error());
         }
         // Single-flight the build: racing tasks would otherwise each open a
-        // full handle set and discard all but one. Bounded: waiting here owns
-        // nothing, so a timeout abandons only the wait.
-        let _opening =
-            tokio::time::timeout(crate::sqlite::conn::POOL_TIMEOUT, self.open_mutex.lock())
-                .await
-                .map_err(|_| {
-                    StoreError::InternalException(
-                        "sqlite: timed out waiting to open the store".to_string(),
-                    )
-                })?;
-        if let Some(conn) = self.open_conn() {
+        // full handle set and discard all but one.
+        let _opening = self.open_mutex.lock().await;
+        if let Some(conn) = self.check_state()? {
             return Ok(conn);
-        }
-        if matches!(
-            *self.conn.lock().unwrap_or_else(|e| e.into_inner()),
-            ConnState::Closed
-        ) {
-            return Err(closed_error());
         }
         let fresh = SqliteConnection::open(self.path.clone(), migrate).await?;
         // Publish under the state lock with no awaits inside, then act
         // outside it. A redundant set (close racing our open, or a concurrent
-        // winner) goes back through `checkpoint_and_close`, so its handles
-        // still close in exactly one place — the drain — instead of inline on
-        // the executor or in the background.
-        enum Publish {
-            UseShared(SqliteConnection),
-            UseFresh,
-            Stale,
-        }
-        let outcome = {
+        // winner) still closes in exactly one place — the drain. No
+        // checkpoint: it never published, so nothing reads its WAL, and the
+        // set that did publish checkpoints when it closes.
+        let (shared, published) = {
             let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             match &*state {
-                ConnState::Open(conn) if !conn.is_closed() => Publish::UseShared(conn.clone()),
+                ConnState::Open(conn) if !conn.is_closed() => (Some(conn.clone()), false),
                 ConnState::Unopened => {
                     *state = ConnState::Open(fresh.clone());
-                    Publish::UseFresh
+                    (None, true)
                 }
-                _ => Publish::Stale,
+                _ => (None, false),
             }
         };
-        match outcome {
-            Publish::UseFresh => Ok(fresh),
-            Publish::UseShared(conn) => {
-                fresh.checkpoint_and_close().await;
-                Ok(conn)
-            }
-            Publish::Stale => {
-                fresh.checkpoint_and_close().await;
-                Err(closed_error())
-            }
+        if published {
+            return Ok(fresh);
         }
+        fresh.close();
+        fresh.drain().await;
+        shared.ok_or_else(closed_error)
     }
 
     /// Open the store, reviving it if a previous `close()` drained its
@@ -155,31 +120,12 @@ impl SqliteStore {
         }
     }
 
-    /// Mark closed and drain without checkpointing: crash-simulation close.
-    ///
-    /// Skips the explicit WAL checkpoint — kill-style durability tests use
-    /// this so they can never silently become checkpointing closes. (SQLite
-    /// itself still checkpoints on last close, so this is observationally
-    /// close to a clean close; its value is intent plus one less round-trip
-    /// in teardown-heavy tests.) Still fully awaited: handles close
-    /// sequentially in the drain, never inline on the executor, never in the
-    /// background.
-    pub async fn close_unclean(&mut self) {
-        let prev = {
-            let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-            std::mem::replace(&mut *state, ConnState::Closed)
-        };
-        if let ConnState::Open(conn) = prev {
-            conn.close();
-            conn.drain().await;
-        }
-    }
-
-    /// Cloned open handle, if any. Never opens.
-    fn open_conn(&self) -> Option<SqliteConnection> {
+    /// Shared-state read: live handle, or closed error. Never opens.
+    fn check_state(&self) -> Result<Option<SqliteConnection>, StoreError> {
         match &*self.conn.lock().unwrap_or_else(|e| e.into_inner()) {
-            ConnState::Open(conn) if !conn.is_closed() => Some(conn.clone()),
-            _ => None,
+            ConnState::Open(conn) if !conn.is_closed() => Ok(Some(conn.clone())),
+            ConnState::Unopened => Ok(None),
+            _ => Err(closed_error()),
         }
     }
 
@@ -393,7 +339,7 @@ mod tests {
     fn on_disk_reopen_preserves_epoch() {
         // Serialize file-backed tests process-wide. Plain
         // `#[test]`: no runtime is running, so blocking acquisition is safe.
-        let _disk = crate::sqlite::conn::disk_test_guard_blocking();
+        let _disk = crate::sqlite::conn::DISK_TEST_SERIAL.blocking_lock();
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("migration.sqlite3");
 
@@ -436,7 +382,6 @@ mod tests {
         assert!(tables.contains("messages"));
         assert!(tables.contains("data_blocks"));
         assert!(tables.contains("data_refs"));
-        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -504,7 +449,6 @@ mod tests {
                 .unwrap();
             assert_eq!(value, "durability-marker");
         }
-        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -565,7 +509,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 0);
-        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -573,7 +516,7 @@ mod tests {
         // Racing first opens single-flight instead of each
         // building (and discarding) a full handle set. All racers must
         // succeed; a broken single-flight would deadlock here.
-        let mut store = SqliteStore::in_memory(None);
+        let store = SqliteStore::in_memory(None);
         let mut joins = Vec::new();
         for _ in 0..16 {
             let handle = store.clone();
@@ -594,7 +537,6 @@ mod tests {
         for join in joins {
             assert_eq!(join.await.unwrap(), 1);
         }
-        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -630,64 +572,6 @@ mod tests {
             .await
             .unwrap();
         assert!(!epoch.is_empty());
-        MessageStore::close(&mut store).await;
-    }
-
-    #[tokio::test]
-    async fn close_unclean_preserves_committed_data() {
-        // Crash-simulation close skips the explicit checkpoint, but SQLite
-        // itself checkpoints on last close — so this pins what actually
-        // holds: committed rows survive an unclean close + reopen, through
-        // every clone. Its value over `close` is intent (kill-style tests
-        // must not silently become checkpointing closes) plus one less
-        // round-trip in teardown-heavy tests.
-        let _disk = crate::sqlite::conn::disk_test_guard().await;
-        let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("unclean.sqlite3");
-
-        let mut store = SqliteStore::new(
-            &path,
-            dwn_rs_core::stores::wake::WakePublishHandler::new(std::sync::Arc::new(())),
-        );
-        MessageStore::open(&mut store).await.unwrap();
-        let clone = store.clone();
-        store
-            .connection()
-            .await
-            .unwrap()
-            .with_writer(|connection| {
-                connection
-                    .execute_batch(
-                        "CREATE TABLE unclean_probe (value TEXT PRIMARY KEY); \
-                         INSERT INTO unclean_probe VALUES ('committed');",
-                    )
-                    .map_err(sqlite_store_error)?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-        store.close_unclean().await;
-        drop(store);
-        drop(clone);
-
-        let mut reopened = SqliteStore::new(
-            &path,
-            dwn_rs_core::stores::wake::WakePublishHandler::new(std::sync::Arc::new(())),
-        );
-        MessageStore::open(&mut reopened).await.unwrap();
-        let value: String = reopened
-            .connection()
-            .await
-            .unwrap()
-            .with_reader(|connection| {
-                connection
-                    .query_row("SELECT value FROM unclean_probe", [], |row| row.get(0))
-                    .map_err(sqlite_store_error)
-            })
-            .await
-            .unwrap();
-        assert_eq!(value, "committed");
-        MessageStore::close(&mut reopened).await;
     }
 
     #[tokio::test]
@@ -740,7 +624,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(total, 16 * 20);
-        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]

@@ -134,7 +134,7 @@ mod tests {
         let path = temp.path().join("vault.sqlite");
 
         {
-            let mut store = opened_store(&path).await;
+            let store = opened_store(&path).await;
             let vault = SqliteSecretStore::new(&store);
             vault
                 .put("agent:test", b"hello".to_vec())
@@ -144,11 +144,9 @@ mod tests {
                 vault.get("agent:test").await.expect("get"),
                 Some(b"hello".to_vec())
             );
-            MessageStore::close(&mut store).await;
-            drop(store);
         }
 
-        let mut store = opened_store(&path).await;
+        let store = opened_store(&path).await;
         let vault = SqliteSecretStore::new(&store);
         assert_eq!(
             vault.get("agent:test").await.expect("reopened get"),
@@ -157,7 +155,6 @@ mod tests {
         assert!(vault.delete("agent:test").await.expect("delete"));
         assert_eq!(vault.get("agent:test").await.expect("post-delete"), None);
         assert!(!vault.delete("agent:test").await.expect("delete-missing"));
-        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -168,7 +165,7 @@ mod tests {
         let path = temp.path().join("agent.sqlite");
 
         let first_did_uri = {
-            let mut store = opened_store(&path).await;
+            let store = opened_store(&path).await;
             let vault = SqliteSecretStore::new(&store);
             let service = AgentIdentityService::new(
                 DeterministicDidJwkProvider::default(),
@@ -183,12 +180,10 @@ mod tests {
                 })
                 .await
                 .expect("initialize");
-            MessageStore::close(&mut store).await;
-            drop(store);
             initialization.portable_did.uri
         };
 
-        let mut store = opened_store(&path).await;
+        let store = opened_store(&path).await;
         let vault = SqliteSecretStore::new(&store);
         let raw = vault
             .get(VAULT_PORTABLE_DID_KEY)
@@ -198,6 +193,5 @@ mod tests {
         let restored: dwn_rs_core::identity::agent::PortableDid =
             serde_json::from_slice(&raw).expect("vault json");
         assert_eq!(restored.uri, first_did_uri);
-        MessageStore::close(&mut store).await;
     }
 }

@@ -23,7 +23,6 @@ use dwn_rs_core::identity::setup::{
 };
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
-use dwn_rs_core::stores::MessageStore;
 use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
 use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
@@ -142,31 +141,17 @@ pub struct EnboxCore {
 
 impl Drop for EnboxCore {
     fn drop(&mut self) {
-        // Tear down stores explicitly while the runtime is still alive: every
-        // handle closes sequentially in the drain below, so the field drops
-        // that follow find nothing to close. No runtime *context* is needed
-        // for any of this (closes run inline or on awaited workers, never
-        // fire-and-forget). Dropping inside an async runtime would make the
-        // `block_on` panic, so refuse loudly in debug and skip teardown —
-        // field drops still run.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            debug_assert!(
-                false,
-                "EnboxCore dropped inside an async runtime; stores left unclosed"
-            );
-            return;
+        // Release the node and secret store explicitly rather than relying on
+        // field drop order, so their SQLite handles close on this thread while
+        // nothing else is touching the file. Closes run inline and
+        // sequentially as their owners drop — no runtime context needed,
+        // nothing left running in the background. If a background task still
+        // holds an `Arc<SqliteNativeDwn>` clone, that clone closes the handles
+        // when it drops instead.
+        if let Ok(mut state) = self.state.lock() {
+            state.node = None;
+            state.secret_store = None;
         }
-        self.runtime.block_on(async {
-            if let Ok(mut state) = self.state.lock() {
-                if let Some(node) = state.node.take() {
-                    // One shared cell: closing through any handle drains every
-                    // clone, including the secret store's.
-                    let mut store = node.store().clone();
-                    let _ = MessageStore::close(&mut store).await;
-                }
-                state.secret_store = None;
-            }
-        });
     }
 }
 
@@ -1519,7 +1504,7 @@ mod tests {
         // Serialize file-backed tests process-wide.
         // Plain `#[test]`: no runtime is running on this thread yet, so
         // blocking acquisition is safe.
-        let _disk = dwn_rs_stores::sqlite::conn::disk_test_guard_blocking();
+        let _disk = dwn_rs_stores::sqlite::conn::DISK_TEST_SERIAL.blocking_lock();
         let temp = tempfile::tempdir().expect("tempdir");
         let db_path = temp.path().join("enbox.sqlite");
         let path = db_path.to_string_lossy().into_owned();
@@ -1991,7 +1976,7 @@ mod tests {
         // Serialize file-backed tests process-wide.
         // Plain `#[test]`: no runtime is running on this thread yet, so
         // blocking acquisition is safe.
-        let _disk = dwn_rs_stores::sqlite::conn::disk_test_guard_blocking();
+        let _disk = dwn_rs_stores::sqlite::conn::DISK_TEST_SERIAL.blocking_lock();
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp
             .path()

@@ -148,7 +148,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut store = new_message_store(factory).await;
+    let store = new_message_store(factory).await;
     let msg = message(
         "2025-01-01T00:00:00.000000Z",
         "https://example.com/protocol/notes",
@@ -162,7 +162,6 @@ where
     // Missing CID and other-tenant isolation.
     assert_eq!(store.get(TENANT, "bafkreibogus").await.unwrap(), None);
     assert_eq!(store.get(OTHER_TENANT, &cid).await.unwrap(), None);
-    store.close().await;
 }
 
 async fn filters_sorts_counts_and_paginates<S, F, Fut>(factory: &F)
@@ -171,7 +170,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut store = new_message_store(factory).await;
+    let store = new_message_store(factory).await;
     let first = message(
         "2025-01-01T00:00:00.000000Z",
         "https://example.com/protocol/notes",
@@ -229,7 +228,6 @@ where
         .await
         .unwrap();
     assert_eq!(all.messages.len(), 2);
-    store.close().await;
 }
 
 async fn delete_removes<S, F, Fut>(factory: &F)
@@ -238,7 +236,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut store = new_message_store(factory).await;
+    let store = new_message_store(factory).await;
     let msg = message(
         "2025-01-01T00:00:00.000000Z",
         "https://example.com/protocol/notes",
@@ -263,7 +261,6 @@ where
 
     // Deleting again is idempotent.
     store.delete(TENANT, &cid).await.unwrap();
-    store.close().await;
 }
 
 // Covers: DWN-REC-003 (duplicate delivery is idempotent).
@@ -273,7 +270,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut store = new_message_store(factory).await;
+    let store = new_message_store(factory).await;
     let msg = message(
         "2025-01-01T00:00:00.000000Z",
         "https://example.com/protocol/notes",
@@ -297,7 +294,6 @@ where
     let result = store.query(TENANT, filters, None, None).await.unwrap();
     assert_eq!(result.messages.len(), 1);
     assert_eq!(store.get(TENANT, &cid).await.unwrap(), Some(msg));
-    store.close().await;
 }
 
 async fn clear_empties<S, F, Fut>(factory: &F)
@@ -306,7 +302,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut store = new_message_store(factory).await;
+    let store = new_message_store(factory).await;
     for ts in ["2025-01-01T00:00:00.000000Z", "2025-01-01T00:00:01.000000Z"] {
         let msg = message(ts, "https://example.com/protocol/notes", None);
         store.put(TENANT, msg.clone(), indexes(&msg)).await.unwrap();
@@ -318,7 +314,6 @@ where
     assert_eq!(store.count(TENANT, filters.clone(), None).await.unwrap(), 0);
     let result = store.query(TENANT, filters, None, None).await.unwrap();
     assert!(result.messages.is_empty());
-    store.close().await;
 }
 
 async fn read_data(
@@ -346,7 +341,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut store = new_data_store(factory).await;
+    let store = new_data_store(factory).await;
     let bytes = Bytes::from_static(b"hello battery data");
     let data_cid = generate_dag_pb_cid_from_bytes(&bytes).to_string();
 
@@ -398,7 +393,6 @@ where
         .await
         .unwrap();
     assert_eq!(read_data(&store, TENANT, "record-2", &data_cid).await, None);
-    store.close().await;
 }
 
 async fn missing_and_clear<S, F, Fut>(factory: &F)
@@ -407,7 +401,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut store = new_data_store(factory).await;
+    let store = new_data_store(factory).await;
     assert_eq!(
         read_data(&store, TENANT, "nope", "bafkreibogus").await,
         None
@@ -427,7 +421,6 @@ where
 
     store.clear().await.unwrap();
     assert_eq!(read_data(&store, TENANT, "record-9", &data_cid).await, None);
-    store.close().await;
 }
 
 #[tokio::test]

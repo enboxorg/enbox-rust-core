@@ -71,9 +71,7 @@ async fn wal_deleted_after_unclean_drop_still_reopens() {
             .await
             .expect("seed put");
         }
-        // Unclean close (no checkpoint): kill-style shutdown with a possibly
-        // uncheckpointed WAL, handles drained awaited.
-        store.close_unclean().await;
+        // No close: kill-style shutdown with a possibly uncheckpointed WAL.
     }
 
     // Simulate crash loss of write-ahead frames; recovery must stay structural.
@@ -110,5 +108,4 @@ async fn wal_deleted_after_unclean_drop_still_reopens() {
             "split-brain for {cid} after WAL loss"
         );
     }
-    MessageStore::close(&mut reopened).await;
 }

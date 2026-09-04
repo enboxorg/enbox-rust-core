@@ -30,7 +30,6 @@ tokio = { version = "1.39.2", features = [
     "macros",
     "sync",
     "signal",
-    "time",
 ] }
 tracing = { version = "0.1.40", default-features = false, features = [
     "attributes",
@@ -63,7 +62,7 @@ serde_rusqlite = "0.41.1"
 dwn-rs-core = { path = "../dwn-rs-core", default-features = false, features = ["test-utils"] }
 rand = "0.8.5"
 tempfile = "3.10"
-tokio = { version = "1.39.2", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1.39.2", features = ["macros", "rt", "rt-multi-thread", "time"] }
 tokio-util = "0.7.12"
 
 [[example]]

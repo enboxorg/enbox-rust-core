@@ -87,11 +87,7 @@ async fn scenario() -> Scenario {
 
 struct Nodes {
     mem: SqliteNativeDwn,
-    // `Option` so a mid-sequence restart can drop the old node (releasing its
-    // SQLite connections) *before* opening the fresh handle on the same file.
-    // Holding two live connection sets on one file piles onto the
-    // process-global Unix VFS lock.
-    disk: Option<SqliteNativeDwn>,
+    disk: SqliteNativeDwn,
     _db: TempDb,
 }
 
@@ -106,11 +102,7 @@ async fn fresh_nodes() -> Nodes {
     for node in [&mem, &disk] {
         put_notes_protocol_without_actions(TENANT, node.store()).await;
     }
-    Nodes {
-        mem,
-        disk: Some(disk),
-        _db: db,
-    }
+    Nodes { mem, disk, _db: db }
 }
 
 async fn apply(node: &SqliteNativeDwn, op: &Op) -> i32 {
@@ -219,19 +211,13 @@ async fn run_order(
     let mut disk_statuses = Vec::new();
     for (applied, index) in order.iter().enumerate() {
         if restart_disk_after == Some(applied) {
-            // Drop the old node (connections close) *before* reopening the same
-            // file, so the two connection sets never overlap.
+            // Drop then reopen the same file.
             let path = nodes._db.path().to_path_buf();
-            if let Some(mut old) = nodes.disk.take() {
-                old.close().await;
-            }
-            nodes.disk = Some(
-                SqliteNativeDwn::open_at(&path, test_resolver())
-                    .await
-                    .expect("reopen disk node"),
-            );
+            nodes.disk = SqliteNativeDwn::open_at(&path, test_resolver())
+                .await
+                .expect("reopen disk node");
         }
-        disk_statuses.push(apply(nodes.disk.as_ref().expect("disk node"), &ops[*index]).await);
+        disk_statuses.push(apply(&nodes.disk, &ops[*index]).await);
     }
     (mem_statuses, disk_statuses)
 }
@@ -239,7 +225,7 @@ async fn run_order(
 async fn states(nodes: &Nodes, record_id: &str) -> (VisibleState, VisibleState) {
     (
         visible_state(&nodes.mem, record_id).await,
-        visible_state(nodes.disk.as_ref().expect("disk node"), record_id).await,
+        visible_state(&nodes.disk, record_id).await,
     )
 }
 
@@ -271,10 +257,6 @@ async fn delete_wins_in_both_arrival_orders() {
         assert_eq!(mem_state.read_status, 404);
         assert!(mem_state.query_entries.is_empty());
         observed.push(mem_state.convergence_key());
-        nodes.mem.close().await;
-        if let Some(disk) = nodes.disk.as_mut() {
-            disk.close().await;
-        }
     }
     assert_eq!(observed[0], observed[1]);
 }
@@ -306,10 +288,6 @@ async fn newest_write_wins_and_identical_replay_rejected() {
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.read_status, 200);
     assert_eq!(mem_state.query_entries.len(), 1);
-    nodes.mem.close().await;
-    if let Some(disk) = nodes.disk.as_mut() {
-        disk.close().await;
-    }
 }
 
 #[tokio::test]
@@ -330,10 +308,6 @@ async fn stale_write_rejected_identically() {
     let (mem_state, disk_state) = states(&nodes, &scenario.record_id).await;
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.read_status, 200);
-    nodes.mem.close().await;
-    if let Some(disk) = nodes.disk.as_mut() {
-        disk.close().await;
-    }
 }
 
 #[tokio::test]
@@ -348,10 +322,6 @@ async fn duplicate_replay_converges() {
     let (mem_state, disk_state) = states(&nodes, &scenario.record_id).await;
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.query_entries.len(), 1);
-    nodes.mem.close().await;
-    if let Some(disk) = nodes.disk.as_mut() {
-        disk.close().await;
-    }
 }
 
 #[tokio::test]
@@ -366,8 +336,4 @@ async fn restart_mid_sequence_converges_with_uninterrupted_run() {
     let (mem_state, disk_state) = states(&nodes, &scenario.record_id).await;
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.read_status, 404);
-    nodes.mem.close().await;
-    if let Some(disk) = nodes.disk.as_mut() {
-        disk.close().await;
-    }
 }

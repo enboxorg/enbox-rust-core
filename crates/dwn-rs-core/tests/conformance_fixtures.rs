@@ -664,7 +664,7 @@ async fn fixture_messages_query_replies_match_typescript() {
                 case.id
             );
 
-            let mut node = SqliteNativeDwn::open_in_memory(conformance_process_resolver())
+            let node = SqliteNativeDwn::open_in_memory(conformance_process_resolver())
                 .await
                 .unwrap_or_else(|err| panic!("{} failed to open SqliteNativeDwn: {err}", case.id));
             let request = messages_query_request(case, query);
@@ -910,7 +910,6 @@ async fn assert_message_process_reply(case: &FixtureCase) {
             "{} schema validation detail",
             case.id
         );
-        node.close().await;
         return;
     }
 
@@ -942,7 +941,6 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         "{} process reply",
         case.id
     );
-    node.close().await;
 }
 
 fn conformance_process_resolver() -> StaticPublicKeyResolver {

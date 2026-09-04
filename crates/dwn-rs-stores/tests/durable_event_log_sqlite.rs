@@ -148,7 +148,7 @@ fn test_config() -> DurableEventLogConfig {
 #[tokio::test]
 async fn a_committed_message_reaches_a_live_subscription() {
     let bus = InProcessWakeBus::new();
-    let mut store = harness(&bus).await;
+    let store = harness(&bus).await;
     let log = DurableEventLog::new(store.clone(), bus.clone(), None, Some(test_config()));
 
     let (listener, mut received) = recorder();
@@ -167,13 +167,12 @@ async fn a_committed_message_reaches_a_live_subscription() {
         }
         other => panic!("expected an event, got {other:?}"),
     }
-    MessageStore::close(&mut store).await;
 }
 
 #[tokio::test]
 async fn a_resumed_subscription_replays_then_follows_the_feed() {
     let bus = InProcessWakeBus::new();
-    let mut store = harness(&bus).await;
+    let store = harness(&bus).await;
     let log = DurableEventLog::new(store.clone(), bus.clone(), None, Some(test_config()));
 
     commit(&store, "m1", "2025-01-01T00:00:00.000000Z").await;
@@ -218,7 +217,6 @@ async fn a_resumed_subscription_replays_then_follows_the_feed() {
         SubscriptionMessage::Event { seq, .. } => assert_eq!(seq.as_deref(), Some("3")),
         other => panic!("expected an event, got {other:?}"),
     }
-    MessageStore::close(&mut store).await;
 }
 
 #[tokio::test]
@@ -251,7 +249,6 @@ async fn replay_positions_epoch_and_bounds_survive_a_restart() {
             .expect("two committed messages");
         oldest_before = bounds.oldest.clone();
         latest_before = bounds.latest;
-        MessageStore::close(&mut store).await;
     }
 
     // Reopen the same database through a fresh adapter and continue from the
@@ -312,7 +309,7 @@ async fn replay_positions_epoch_and_bounds_survive_a_restart() {
 #[tokio::test]
 async fn a_cursor_from_a_cleared_feed_is_a_structured_progress_gap() {
     let bus = InProcessWakeBus::new();
-    let mut store = harness(&bus).await;
+    let store = harness(&bus).await;
     let log = DurableEventLog::new(store.clone(), bus, None, Some(test_config()));
 
     commit(&store, "m1", "2025-01-01T00:00:00.000000Z").await;
@@ -342,19 +339,17 @@ async fn a_cursor_from_a_cleared_feed_is_a_structured_progress_gap() {
     };
     assert_eq!(gap.reason, ProgressGapReason::EpochMismatch);
     assert_eq!(gap.code, ProgressGapCode::ProgressGap);
-    MessageStore::close(&mut store).await;
 }
 
 #[tokio::test]
 async fn an_empty_store_reads_as_drained_at_the_position_zero_anchor() {
     let bus = InProcessWakeBus::new();
-    let mut store = harness(&bus).await;
-    let log = DurableEventLog::new(store.clone(), bus, None, Some(test_config()));
+    let store = harness(&bus).await;
+    let log = DurableEventLog::new(store, bus, None, Some(test_config()));
 
     let read = log.read(TENANT, None).await.expect("empty read");
     assert!(read.events.is_empty());
     assert!(read.drained);
     let cursor = read.cursor.expect("authoritative anchor cursor");
     assert_eq!(cursor.position, "0");
-    MessageStore::close(&mut store).await;
 }
