@@ -459,6 +459,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_sync_ledger_survives_reopen() {
+        // Serialize file-backed tests process-wide.
         let path =
             std::env::temp_dir().join(format!("enbox-sync-ledger-{}.sqlite", ulid::Ulid::new()));
         let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));

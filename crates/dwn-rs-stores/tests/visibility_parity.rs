@@ -148,6 +148,7 @@ fn published_filter() -> JsonValue {
 
 #[tokio::test]
 async fn query_and_count_return_the_same_population() {
+    // Serialize file-backed tests process-wide.
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
@@ -168,6 +169,7 @@ async fn query_and_count_return_the_same_population() {
 
 #[tokio::test]
 async fn read_resolves_through_the_same_plan_as_query() {
+    // Serialize file-backed tests process-wide.
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
@@ -205,6 +207,7 @@ async fn read_resolves_through_the_same_plan_as_query() {
 
 #[tokio::test]
 async fn subscribe_snapshot_equals_query_at_the_same_head() {
+    // Serialize file-backed tests process-wide.
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
@@ -244,6 +247,7 @@ async fn subscribe_snapshot_equals_query_at_the_same_head() {
 
 #[tokio::test]
 async fn non_initial_entries_carry_initial_write() {
+    // Serialize file-backed tests process-wide.
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
@@ -285,6 +289,7 @@ async fn non_initial_entries_carry_initial_write() {
 
 #[tokio::test]
 async fn tombstones_are_visible_to_read_and_hidden_from_query() {
+    // Serialize file-backed tests process-wide.
     let nodes = fresh_nodes().await;
     let mut rec_a = String::new();
     for node in [&nodes.mem, &nodes.disk] {
@@ -320,6 +325,7 @@ async fn tombstones_are_visible_to_read_and_hidden_from_query() {
 
 #[tokio::test]
 async fn unpublished_writes_stay_invisible_to_anonymous_query() {
+    // Serialize file-backed tests process-wide.
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         put_notes_protocol_without_actions(TENANT, node.store()).await;

@@ -23,6 +23,7 @@ use dwn_rs_core::identity::setup::{
 };
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
+use dwn_rs_core::stores::MessageStore;
 use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
 use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
@@ -141,11 +142,28 @@ pub struct EnboxCore {
 
 impl Drop for EnboxCore {
     fn drop(&mut self) {
-        // deadpool recycles pooled SQLite connections via `spawn_blocking` on drop, which
-        // requires a Tokio runtime context. FFI callers drop the core off-runtime, so tear
-        // down everything holding a pool (node + secret store) inside the runtime before
-        // `runtime` itself is dropped — otherwise the pool drop panics with "no reactor".
-        let _guard = self.runtime.enter();
+        // Close through the store's lifecycle API rather than letting the
+        // field drops close inline: the explicit path drains under the
+        // per-file lock, so a host holding two cores open on one database
+        // cannot interleave this teardown with the other core's opens.
+        // `block_on` panics inside a runtime, so when dropped from async
+        // context fall back to the field drops — still sequential on this
+        // thread, just unserialised against other sets on the same file.
+        if tokio::runtime::Handle::try_current().is_err() {
+            self.runtime.block_on(async {
+                let node = self
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|mut state| state.node.take());
+                if let Some(node) = node {
+                    // One shared cell: closing through any handle drains every
+                    // clone, including the secret store's.
+                    let mut store = node.store().clone();
+                    MessageStore::close(&mut store).await;
+                }
+            });
+        }
         if let Ok(mut state) = self.state.lock() {
             state.node = None;
             state.secret_store = None;
@@ -1499,6 +1517,9 @@ mod tests {
 
     #[test]
     fn open_persists_at_filesystem_path() {
+        // Serialize file-backed tests process-wide.
+        // Plain `#[test]`: no runtime is running on this thread yet, so
+        // blocking acquisition is safe.
         let temp = tempfile::tempdir().expect("tempdir");
         let db_path = temp.path().join("enbox.sqlite");
         let path = db_path.to_string_lossy().into_owned();
@@ -1967,6 +1988,9 @@ mod tests {
 
     #[test]
     fn initialize_agent_identity_is_deterministic_for_a_given_phrase() {
+        // Serialize file-backed tests process-wide.
+        // Plain `#[test]`: no runtime is running on this thread yet, so
+        // blocking acquisition is safe.
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp
             .path()

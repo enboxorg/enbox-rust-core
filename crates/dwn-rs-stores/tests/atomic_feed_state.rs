@@ -36,8 +36,8 @@ impl Shutdown {
     async fn shutdown(self, store: &mut SqliteStore) {
         match self {
             Shutdown::Close => MessageStore::close(store).await,
-            // Kill-style: pools stay open, WAL may be unclean; recovery must
-            // still hold on fresh open.
+            // Kill-style: drop without closing; recovery must still hold on
+            // fresh open.
             Shutdown::Drop => {}
         }
     }
@@ -135,6 +135,7 @@ where
 
 #[tokio::test]
 async fn puts_survive_drop_without_close() {
+    // Serialize file-backed tests process-wide.
     let db = TempDb::new("puts-drop-no-close");
     let log = op_log();
     let epoch = {
@@ -162,6 +163,7 @@ async fn puts_survive_drop_without_close() {
 
 #[tokio::test]
 async fn atomic_grid_close_vs_drop_matches_uninterrupted_run() {
+    // Serialize file-backed tests process-wide.
     for shutdown in [Shutdown::Close, Shutdown::Drop] {
         // Reference: same op log on memory, no restart.
         let mut reference = MemoryMessageStore::default();
@@ -213,6 +215,7 @@ async fn atomic_grid_close_vs_drop_matches_uninterrupted_run() {
 
 #[tokio::test]
 async fn mid_sequence_restart_converges_with_uninterrupted_run() {
+    // Serialize file-backed tests process-wide.
     let log = op_log();
 
     // Uninterrupted reference on memory.
@@ -283,6 +286,7 @@ async fn mid_sequence_restart_converges_with_uninterrupted_run() {
 
 #[tokio::test]
 async fn clear_then_drop_without_close_reopens_clean() {
+    // Serialize file-backed tests process-wide.
     let db = TempDb::new("clear-drop-reopen");
     let old_cursor = {
         let mut store = SqliteStore::new(db.path(), common::noop_waker());

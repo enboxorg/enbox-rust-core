@@ -27,14 +27,14 @@ use crate::SqliteStore;
 
 impl MessageStore for SqliteStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
-        self.connection().await.map_err(MessageStoreError::from)?;
-        Ok(())
+        self.open_inner().await.map_err(MessageStoreError::from)
     }
 
     async fn close(&mut self) {
-        if let Ok(conn) = self.connection().await {
-            conn.close()
-        }
+        // Checkpoint + close only if already open; never `connection()` here,
+        // which would lazily open eleven connections just to close them
+        // again.
+        self.close_inner().await;
     }
 
     async fn put<D>(
@@ -52,7 +52,6 @@ impl MessageStore for SqliteStore {
         let wake = self
             .connection()
             .await?
-            .clone()
             .with_writer(move |connection| {
                 let tx = connection.transaction().map_err(sqlite_store_error)?;
                 let result =
@@ -81,7 +80,6 @@ impl MessageStore for SqliteStore {
         let (wake, position) = self
             .connection()
             .await?
-            .clone()
             .with_writer(move |connection| {
                 let tx = connection.transaction().map_err(sqlite_store_error)?;
                 let epoch = SqliteStore::epoch_tx(&tx)?;
@@ -158,7 +156,7 @@ impl MessageStore for SqliteStore {
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
     ) -> Result<MessageQueryResult, MessageStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
 
         let mut q = SqliteQuery::<Message<Descriptor>, MessageSort>::new(
             conn,
@@ -184,7 +182,7 @@ impl MessageStore for SqliteStore {
         filters: Filters,
         sort: Option<MessageSort>,
     ) -> Result<u64, MessageStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
 
         let mut q = SqliteQuery::<Message<Descriptor>, MessageSort>::new(
             conn,
@@ -200,7 +198,7 @@ impl MessageStore for SqliteStore {
     }
 
     async fn delete(&self, tenant: &str, cid: &str) -> Result<(), MessageStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
         let tenant = tenant.to_string();
         let cid = cid.to_string();
 
@@ -217,7 +215,7 @@ impl MessageStore for SqliteStore {
     }
 
     async fn clear(&self) -> Result<(), MessageStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
 
         async move {
             conn.with_writer(move |connection| {
@@ -262,7 +260,7 @@ impl SqliteStore {
         cid: &str,
         indexes: KeyValues,
     ) -> Result<(), MessageStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
         let tenant = tenant.to_string();
         let cid = cid.to_string();
 
@@ -334,7 +332,7 @@ impl SqliteStore {
         }
         let message_json = serde_json::to_string(&message).map_err(MessageStoreError::from)?;
 
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
         let tenant = tenant.to_string();
         let cid = cid.to_string();
 

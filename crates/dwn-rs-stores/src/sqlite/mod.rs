@@ -223,6 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_store_persists_across_reopen() {
+        // Serialize file-backed tests process-wide.
         let path = temp_db_path("message-store");
         let _ = std::fs::remove_file(&path);
         let message = message(
@@ -232,17 +233,22 @@ mod tests {
         );
         let cid = message.cid().unwrap().to_string();
 
-        let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
-        MessageStore::open(&mut store).await.unwrap();
-        MessageStore::put(
-            &store,
-            "did:example:alice",
-            message.clone(),
-            indexes(&message),
-        )
-        .await
-        .unwrap();
-        MessageStore::close(&mut store).await;
+        {
+            let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+            MessageStore::open(&mut store).await.unwrap();
+            MessageStore::put(
+                &store,
+                "did:example:alice",
+                message.clone(),
+                indexes(&message),
+            )
+            .await
+            .unwrap();
+            MessageStore::close(&mut store).await;
+            // Drop the old handle before reopening: holding two live connection
+            // sets on one file piles onto the process-global Unix VFS lock.
+            drop(store);
+        }
 
         let mut reopened = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut reopened).await.unwrap();
@@ -627,6 +633,7 @@ mod tests {
 
     #[tokio::test]
     async fn feed_wakes_publish_only_after_the_full_transaction_is_visible() {
+        // Serialize file-backed tests process-wide.
         struct CommitVisibilityPublisher {
             database_path: PathBuf,
             /// CIDs in expected commit order; each wake must observe the row of
@@ -717,6 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn durable_feed_state_survives_reopen_and_wakes_only_after_commit() {
+        // Serialize file-backed tests process-wide.
         let path = temp_db_path("durable-feed-reopen");
         let publisher = Arc::new(RecordingPublisher {
             wakes: Mutex::new(Vec::new()),
@@ -738,6 +746,8 @@ mod tests {
             .unwrap();
         let epoch = feed_epoch(&store).await;
         MessageStore::close(&mut store).await;
+        // Drop the old handle before reopening.
+        drop(store);
 
         let mut reopened = SqliteStore::new(&path, WakePublishHandler::default());
         MessageStore::open(&mut reopened).await.unwrap();
@@ -774,6 +784,7 @@ mod tests {
     #[tokio::test]
     async fn atomic_latest_state_transition_survives_reopen() {
         // Covers: DWN-REC-006
+        // Serialize file-backed tests process-wide.
         let path = temp_db_path("latest-state-transition-reopen");
         let first = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
         let displaced = message("2025-01-01T00:00:01Z", "https://example.com/notes", None);
@@ -819,6 +830,8 @@ mod tests {
         );
         let epoch = feed_epoch(&store).await;
         MessageStore::close(&mut store).await;
+        // Drop the old handle before reopening.
+        drop(store);
 
         let mut reopened = SqliteStore::new(&path, WakePublishHandler::default());
         MessageStore::open(&mut reopened).await.unwrap();

@@ -20,6 +20,7 @@ const TENANT: &str = "did:example:alice";
 
 #[tokio::test]
 async fn sqlite_state_index_survives_reopen() {
+    // Serialize file-backed tests process-wide.
     let db = TempDb::new("state-index");
     let path = db.path();
     let indexes = BTreeMap::from([(
@@ -50,6 +51,7 @@ async fn sqlite_state_index_survives_reopen() {
 
 #[tokio::test]
 async fn sqlite_event_log_survives_reopen() {
+    // Serialize file-backed tests process-wide.
     let db = TempDb::new("event-log");
     let path = db.path();
     let indexes = BTreeMap::from([(
@@ -100,6 +102,7 @@ struct SampleTask {
 
 #[tokio::test]
 async fn sqlite_resumable_task_store_survives_reopen() {
+    // Serialize file-backed tests process-wide.
     let db = TempDb::new("resumable-tasks");
     let path = db.path();
     let task = SampleTask {

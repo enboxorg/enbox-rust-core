@@ -16,16 +16,14 @@ struct DataBlockInfo {
 
 impl DataStore for SqliteStore {
     async fn open(&mut self) -> Result<(), DataStoreError> {
-        self.connection()
-            .await
-            .map(|_| ())
-            .map_err(DataStoreError::from)
+        self.open_inner().await.map_err(DataStoreError::from)
     }
 
     async fn close(&mut self) {
-        if let Ok(conn) = self.connection().await {
-            conn.close()
-        }
+        // Checkpoint + close only if already open; never `connection()` here,
+        // which would lazily open eleven connections just to close them
+        // again.
+        self.close_inner().await;
     }
 
     async fn put<T: Stream<Item = Bytes> + Send + Unpin>(
@@ -35,7 +33,7 @@ impl DataStore for SqliteStore {
         data_cid: &str,
         data_stream: T,
     ) -> Result<DataStorePutResult, DataStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
 
         let (tenant, record_id, data_cid) = (
             tenant.to_string(),
@@ -110,7 +108,7 @@ impl DataStore for SqliteStore {
         record_id: &str,
         data_cid: &str,
     ) -> Result<Option<DataStoreGetResult>, DataStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
         let tenant = tenant.to_string();
         let record_id = record_id.to_string();
         let data_cid = data_cid.to_string();
@@ -145,7 +143,7 @@ impl DataStore for SqliteStore {
         record_id: &str,
         data_cid: &str,
     ) -> Result<(), DataStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
 
         let tenant = tenant.to_string();
         let record_id = record_id.to_string();
@@ -184,7 +182,7 @@ impl DataStore for SqliteStore {
     }
 
     async fn clear(&self) -> Result<(), DataStoreError> {
-        let conn = self.connection().await?.clone();
+        let conn = self.connection().await?;
         conn.with_writer(|connection| {
             let tx = connection.transaction().map_err(sqlite_store_error)?;
 
