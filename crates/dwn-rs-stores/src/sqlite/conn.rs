@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, LazyLock, Mutex,
 };
 
 use dwn_rs_core::errors::StoreError;
@@ -12,29 +13,35 @@ use tokio::sync::{mpsc, OwnedMutexGuard, OwnedRwLockReadGuard, RwLock};
 const BUSY_TIMEOUT_MS: isize = 5000;
 const READER_POOL_SIZE: usize = 10;
 
-/// Process-wide serialization for file-backed SQLite tests.
+/// Per-database-file lifecycle locks, shared by every connection set in the
+/// process.
 ///
-/// File-backed connection sets churn real files through the process-global
-/// Unix VFS lock (open/shm/close); dozens of such sets racing across
-/// `#[tokio::test]` threads pile up on that lock and stall forever with no
-/// failing assertion. Every file-backed test holds [`disk_test_guard()`] for
-/// its whole body so only one file-backed test runs per process;
-/// memory-backed tests stay parallel. This is strictly a test-harness
-/// constraint — production opens a handful of stores, not hundreds of racing
-/// connection sets.
+/// Opening and closing a handle both enter the process-global Unix VFS lock
+/// (`findReusableFd`, `unixOpenSharedMemory`, `sqlite3_close`). Interleaving
+/// those across two *independent* sets on one file wedges that lock
+/// permanently — no holder, 0% CPU, never recovers, and the only symptom is a
+/// hang. [`SqliteConnection::drain`] already serializes closes within a set;
+/// this extends the guarantee across sets, which is what makes the hazard
+/// unreachable rather than merely unlikely.
 ///
-/// Hidden from docs: this is test infrastructure, not engine API. Note each
-/// test *binary* (and each process generally) gets its own lock instance, so
-/// this serializes within a process, not across processes.
-#[doc(hidden)]
-pub static DISK_TEST_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Two sets on one file are reachable in ordinary use: a host opening the same
+/// database twice, or a `close()` racing a first `open()` so the loser drains
+/// its freshly built set while the winner is live.
+///
+/// In-memory databases never contend — each store gets a unique URI. Entries
+/// are keyed by the path as given and are never evicted: a process opens a
+/// handful of distinct databases, so the map is bounded in practice.
+static FILE_LIFECYCLE: LazyLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Acquire the file-backed-test serialization guard.
-///
-/// Test infrastructure; see [`DISK_TEST_SERIAL`].
-#[doc(hidden)]
-pub async fn disk_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
-    DISK_TEST_SERIAL.lock().await
+fn file_lifecycle(path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    Arc::clone(
+        FILE_LIFECYCLE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(path.to_path_buf())
+            .or_default(),
+    )
 }
 
 /// Maps any error into a `StoreError`, tagged with context.
@@ -74,6 +81,9 @@ struct Inner {
     /// Serializes teardown against calls: every call holds it shared for its
     /// whole worker cycle, `drain()` takes it exclusively.
     drain_gate: Arc<RwLock<()>>,
+    /// Serializes this set's opens and closes against every *other* set on the
+    /// same file; see [`FILE_LIFECYCLE`].
+    file_lock: Arc<tokio::sync::Mutex<()>>,
     closed: Arc<AtomicBool>,
 }
 
@@ -107,6 +117,11 @@ impl SqliteConnection {
         let closed = Arc::new(AtomicBool::new(false));
         let writer_lock = Arc::new(tokio::sync::Mutex::new(()));
         let drain_gate = Arc::new(RwLock::new(()));
+        let file_lock = file_lifecycle(&path);
+
+        // Held across every open below, so no other set on this file can be
+        // draining while these handles are being created.
+        let opening = Arc::clone(&file_lock).lock_owned().await;
 
         // Writer first: the migration runs on it before any reader opens the
         // file, and every open below is awaited before the handle escapes.
@@ -138,6 +153,8 @@ impl SqliteConnection {
             readers.push(slot);
         }
 
+        drop(opening);
+
         Ok(Self {
             inner: Arc::new(Inner {
                 path,
@@ -147,6 +164,7 @@ impl SqliteConnection {
                 idle_rx: Arc::new(tokio::sync::Mutex::new(idle_rx)),
                 writer_lock,
                 drain_gate,
+                file_lock,
                 closed,
             }),
         })
@@ -250,14 +268,17 @@ impl SqliteConnection {
     /// `#[tokio::test]` teardown forever with no failing assertion. Opens are
     /// sequential for the same reason.
     ///
-    /// The exclusive gate is taken first and is deliberately unbounded:
-    /// bounding it would reintroduce exactly the concurrent closes this
-    /// function exists to prevent. Still-checked-out slots are safe to skip:
-    /// each in-flight call owns its connection outright and restore-or-drops
-    /// it on completion, so nothing is left unclosed.
+    /// The file lock excludes every other set on this database; the exclusive
+    /// gate then excludes this set's own in-flight calls. Both are
+    /// deliberately unbounded: bounding either would reintroduce exactly the
+    /// concurrent closes this function exists to prevent. Still-checked-out
+    /// slots are safe to skip: each in-flight call owns its connection
+    /// outright and restore-or-drops it on completion, so nothing is left
+    /// unclosed.
     pub(crate) async fn drain(&self) {
-        // Bound to a binding so the exclusive hold lives until the takes below
-        // complete; as a bare temporary it would drop immediately.
+        // Bound to bindings so both holds live until the takes below complete;
+        // as bare temporaries they would drop immediately.
+        let _closing = self.inner.file_lock.lock().await;
         let _exclusive = Arc::clone(&self.inner.drain_gate).write_owned().await;
         let mut slots = Vec::with_capacity(READER_POOL_SIZE + 1);
         slots.push(Arc::clone(&self.inner.writer));

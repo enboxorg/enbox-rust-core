@@ -238,7 +238,6 @@ async fn states(nodes: &Nodes, record_id: &str) -> (VisibleState, VisibleState) 
 #[tokio::test]
 async fn delete_wins_in_both_arrival_orders() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let mut observed = Vec::new();
     // Write, update, delete vs write, delete, stale-update-rejected.
@@ -273,7 +272,6 @@ async fn delete_wins_in_both_arrival_orders() {
 #[tokio::test]
 async fn newest_write_wins_and_identical_replay_rejected() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let ops = vec![
         scenario.ops[0].clone(),
@@ -293,7 +291,6 @@ async fn newest_write_wins_and_identical_replay_rejected() {
 #[tokio::test]
 async fn stale_write_rejected_identically() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     // Initial, update, then the stale initial again: rejected, state newest.
     let ops = vec![
@@ -313,7 +310,6 @@ async fn stale_write_rejected_identically() {
 #[tokio::test]
 async fn duplicate_replay_converges() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let ops = vec![scenario.ops[0].clone(), scenario.ops[0].clone()];
     let mut nodes = fresh_nodes().await;
@@ -327,7 +323,6 @@ async fn duplicate_replay_converges() {
 #[tokio::test]
 async fn restart_mid_sequence_converges_with_uninterrupted_run() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let order = vec![0, 1, 2];
     let mut nodes = fresh_nodes().await;

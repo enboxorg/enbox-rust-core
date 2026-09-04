@@ -39,7 +39,6 @@ const PROTOCOL_TASKS: &str = "https://example.com/protocol/tasks";
 #[tokio::test]
 async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let db = TempDb::new("message-feed-multi-tenant");
     let alice = [
         delete_message("a1", "2025-01-01T00:00:00Z"),
@@ -148,7 +147,6 @@ async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
 #[tokio::test]
 async fn delete_holes_survive_fresh_reopen() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let db = TempDb::new("delete-holes");
     let messages = [
         delete_message("one", "2025-01-01T00:00:00Z"),
@@ -201,7 +199,6 @@ async fn delete_holes_survive_fresh_reopen() {
 #[tokio::test]
 async fn sync_ledger_checkpoints_survive_true_db_reopen() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let db = TempDb::new("sync-ledger-true-reopen");
     let cursor = {
         let mut store = SqliteStore::new(db.path(), noop_waker());
@@ -261,7 +258,6 @@ async fn sync_ledger_checkpoints_survive_true_db_reopen() {
 #[tokio::test]
 async fn native_node_open_at_resumes_from_disk() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let dir = tempfile::tempdir().expect("battery tempdir");
     let path = dir.path().join("node.sqlite");
 
@@ -303,7 +299,6 @@ async fn native_node_open_at_resumes_from_disk() {
 #[tokio::test]
 async fn legacy_v1_database_migrates_forward_on_open() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let db = TempDb::new("legacy-v1-migrate");
     {
         let connection = Connection::open(db.path()).expect("raw open");
@@ -338,7 +333,6 @@ struct SampleTask {
 #[tokio::test]
 async fn aux_stores_multi_row_state_survives_fresh_reopen() {
     // Serialize file-backed tests process-wide.
-    let _disk = common::disk_test_guard().await;
     let db = TempDb::new("aux-multi-row");
     let task_a = SampleTask {
         action: "prune".to_string(),

@@ -88,9 +88,6 @@ pub fn noop_waker() -> WakePublishHandler {
     WakePublishHandler::new(Arc::new(()))
 }
 
-/// Re-exported test guard; see `dwn_rs_stores::sqlite::conn::disk_test_guard`.
-pub use dwn_rs_stores::sqlite::conn::disk_test_guard;
-
 /// Opened in-memory SQLite store (no durability evidence on its own).
 pub async fn open_sqlite_mem() -> SqliteStore {
     let mut store = SqliteStore::new(unique_memory_uri("dwn-169"), noop_waker());

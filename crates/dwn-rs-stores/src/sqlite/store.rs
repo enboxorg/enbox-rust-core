@@ -339,7 +339,6 @@ mod tests {
     fn on_disk_reopen_preserves_epoch() {
         // Serialize file-backed tests process-wide. Plain
         // `#[test]`: no runtime is running, so blocking acquisition is safe.
-        let _disk = crate::sqlite::conn::DISK_TEST_SERIAL.blocking_lock();
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("migration.sqlite3");
 
@@ -410,7 +409,6 @@ mod tests {
         // share one lifecycle state. File-backed, so committed rows must
         // survive the cycle (a scratch table keeps this unit test free of
         // message fixtures).
-        let _disk = crate::sqlite::conn::disk_test_guard().await;
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("revive.sqlite3");
 
@@ -626,12 +624,76 @@ mod tests {
         assert_eq!(total, 16 * 20);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn independent_sets_on_one_file_open_and_close_concurrently() {
+        // Two `SqliteStore`s on one path share no lifecycle state, so nothing
+        // inside a set orders one set's drain against another set's opens on
+        // the process-global Unix VFS lock; the per-file lifecycle lock does.
+        // This does not reproduce the wedge on its own — the within-set
+        // sequencing already suppresses it, verified by running this with the
+        // file lock removed — so it is a regression guard on concurrent
+        // independent sets, not the original repro.
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("shared.sqlite3");
+
+        let mut joins = Vec::new();
+        for task in 0..8i64 {
+            let path = path.clone();
+            joins.push(tokio::spawn(async move {
+                for round in 0..5i64 {
+                    let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+                    MessageStore::open(&mut store).await.unwrap();
+                    store
+                        .connection()
+                        .await
+                        .unwrap()
+                        .with_writer(move |connection| {
+                            connection
+                                .execute_batch(
+                                    "CREATE TABLE IF NOT EXISTS shared_probe \
+                                     (n INTEGER PRIMARY KEY);",
+                                )
+                                .map_err(sqlite_store_error)?;
+                            connection
+                                .execute(
+                                    "INSERT INTO shared_probe VALUES (?1)",
+                                    [task * 100 + round],
+                                )
+                                .map_err(sqlite_store_error)?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                    MessageStore::close(&mut store).await;
+                }
+            }));
+        }
+        for join in joins {
+            join.await.unwrap();
+        }
+
+        let mut reopened = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+        MessageStore::open(&mut reopened).await.unwrap();
+        let count: i64 = reopened
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row("SELECT COUNT(*) FROM shared_probe", [], |row| row.get(0))
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 8 * 5);
+        MessageStore::close(&mut reopened).await;
+    }
+
     #[tokio::test]
     async fn rapid_close_reopen_cycles_stay_clean() {
         // Teardown robustness under repetition: open, write, close, drop and
         // reopen the same file many times; every row must survive and no
         // cycle may stall or wedge.
-        let _disk = crate::sqlite::conn::disk_test_guard().await;
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("torture.sqlite3");
 

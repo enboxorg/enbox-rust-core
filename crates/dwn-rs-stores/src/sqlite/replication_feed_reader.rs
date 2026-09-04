@@ -443,7 +443,6 @@ mod tests {
     use dwn_rs_core::{Descriptor, Fields, Message, Value};
 
     use super::*;
-    use crate::sqlite::conn::disk_test_guard;
 
     const TENANT: &str = "did:example:alice";
 
@@ -486,7 +485,6 @@ mod tests {
         // The production path is file-backed: run the same suite on disk with
         // a fresh file per scenario, serialized against other file-backed
         // tests process-wide.
-        let _disk = disk_test_guard().await;
         let dir = tempfile::tempdir().expect("battery tempdir");
         let seq = AtomicU64::new(0);
         replication_feed_conformance::run(|| async {
@@ -704,7 +702,6 @@ mod tests {
     #[tokio::test]
     async fn reopened_store_preserves_feed_positions_bounds_and_epoch() {
         // Serialize file-backed tests process-wide.
-        let _disk = disk_test_guard().await;
         let temporary = tempfile::tempdir().expect("temporary directory");
         let path = temporary.path().join("replication-feed.sqlite3");
         let publisher = WakePublishHandler::new(Arc::new(()));

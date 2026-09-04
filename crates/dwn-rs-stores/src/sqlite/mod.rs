@@ -51,7 +51,6 @@ mod tests {
     use rusqlite::OptionalExtension;
 
     use super::*;
-    use crate::sqlite::conn::disk_test_guard;
 
     const TENANT: &str = "did:example:alice";
 
@@ -225,7 +224,6 @@ mod tests {
     #[tokio::test]
     async fn message_store_persists_across_reopen() {
         // Serialize file-backed tests process-wide.
-        let _disk = disk_test_guard().await;
         let path = temp_db_path("message-store");
         let _ = std::fs::remove_file(&path);
         let message = message(
@@ -636,7 +634,6 @@ mod tests {
     #[tokio::test]
     async fn feed_wakes_publish_only_after_the_full_transaction_is_visible() {
         // Serialize file-backed tests process-wide.
-        let _disk = disk_test_guard().await;
         struct CommitVisibilityPublisher {
             database_path: PathBuf,
             /// CIDs in expected commit order; each wake must observe the row of
@@ -728,7 +725,6 @@ mod tests {
     #[tokio::test]
     async fn durable_feed_state_survives_reopen_and_wakes_only_after_commit() {
         // Serialize file-backed tests process-wide.
-        let _disk = disk_test_guard().await;
         let path = temp_db_path("durable-feed-reopen");
         let publisher = Arc::new(RecordingPublisher {
             wakes: Mutex::new(Vec::new()),
@@ -789,7 +785,6 @@ mod tests {
     async fn atomic_latest_state_transition_survives_reopen() {
         // Covers: DWN-REC-006
         // Serialize file-backed tests process-wide.
-        let _disk = disk_test_guard().await;
         let path = temp_db_path("latest-state-transition-reopen");
         let first = message("2025-01-01T00:00:00Z", "https://example.com/notes", None);
         let displaced = message("2025-01-01T00:00:01Z", "https://example.com/notes", None);

@@ -452,7 +452,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::sqlite::conn::disk_test_guard;
     use dwn_rs_core::{
         stores::wake::WakePublishHandler,
         sync::{SyncError, SyncScope},
@@ -461,7 +460,6 @@ mod tests {
     #[tokio::test]
     async fn sqlite_sync_ledger_survives_reopen() {
         // Serialize file-backed tests process-wide.
-        let _disk = disk_test_guard().await;
         let path =
             std::env::temp_dir().join(format!("enbox-sync-ledger-{}.sqlite", ulid::Ulid::new()));
         let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
