@@ -501,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn filtered_out_corrupt_message_is_not_hydrated() {
-        let store = opened_memory_store().await;
+        let mut store = opened_memory_store().await;
         let skipped = delete_message("skipped", "2025-01-01T00:00:00Z");
         let matched = delete_message("matched", "2025-01-01T00:00:01Z");
 
@@ -548,11 +548,12 @@ mod tests {
         assert_eq!(page.events[0].seq, "2");
         assert!(page.drained);
         assert_eq!(page.cursor.expect("cursor").position, "2");
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
     async fn matching_feed_entry_without_message_is_corruption() {
-        let store = opened_memory_store().await;
+        let mut store = opened_memory_store().await;
         let message = delete_message("missing", "2025-01-01T00:00:00Z");
         MessageStore::put(&store, TENANT, message, indexes("missing"))
             .await
@@ -583,12 +584,13 @@ mod tests {
                 MessageReplicationError::MissingMessage { .. }
             ))
         ));
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
     async fn malformed_feed_metadata_is_corruption() {
         for column in ["indexes_json", "fingerprint_scopes_json"] {
-            let store = opened_memory_store().await;
+            let mut store = opened_memory_store().await;
             MessageStore::put(
                 &store,
                 TENANT,
@@ -617,12 +619,13 @@ mod tests {
                 store.log_read(TENANT, EventLogReadOptions::default()).await,
                 Err(EventLogError::StoreError(_))
             ));
+            MessageStore::close(&mut store).await;
         }
     }
 
     #[tokio::test]
     async fn message_json_with_wrong_cid_is_corruption() {
-        let store = opened_memory_store().await;
+        let mut store = opened_memory_store().await;
         MessageStore::put(
             &store,
             TENANT,
@@ -658,11 +661,12 @@ mod tests {
                 MessageReplicationError::CidsMismatch { .. }
             )))
         ));
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
     async fn invalid_fingerprint_bytes_are_corruption() {
-        let store = opened_memory_store().await;
+        let mut store = opened_memory_store().await;
         MessageStore::put(
             &store,
             TENANT,
@@ -699,6 +703,7 @@ mod tests {
             store.fingerprint(TENANT, &[String::new()]).await,
             Err(EventLogError::StoreError(_))
         ));
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -754,5 +759,6 @@ mod tests {
         );
         assert_eq!(page.cursor.expect("cursor").position, "2");
         assert!(page.drained);
+        MessageStore::close(&mut reopened).await;
     }
 }

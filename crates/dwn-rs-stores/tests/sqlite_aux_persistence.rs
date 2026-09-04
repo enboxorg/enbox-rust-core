@@ -9,7 +9,7 @@ use common::TempDb;
 
 use dwn_rs_core::events::MessageEvent;
 use dwn_rs_core::stores::wake::WakePublishHandler;
-use dwn_rs_core::stores::{EventLog, ResumableTaskStore, StateIndex};
+use dwn_rs_core::stores::{EventLog, MessageStore, ResumableTaskStore, StateIndex};
 use dwn_rs_core::{Descriptor, Message, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -30,7 +30,7 @@ async fn sqlite_state_index_survives_reopen() {
     )]);
 
     {
-        let store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut state_index = SqliteStateIndex::new(&store);
         state_index.open().await.unwrap();
         state_index
@@ -39,14 +39,17 @@ async fn sqlite_state_index_survives_reopen() {
             .unwrap();
         let root_before = state_index.get_root(TENANT).await.unwrap();
         state_index.close().await;
+        // Aux close() only clears memory; the pools close here.
+        MessageStore::close(&mut store).await;
         drop(store);
 
         // Fresh handle on the same file: root must survive a real reopen.
-        let fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut reopened = SqliteStateIndex::new(&fresh);
         reopened.open().await.unwrap();
         let root_after = reopened.get_root(TENANT).await.unwrap();
         assert_eq!(root_before, root_after);
+        MessageStore::close(&mut fresh).await;
     }
 }
 
@@ -75,7 +78,7 @@ async fn sqlite_event_log_survives_reopen() {
     };
 
     {
-        let store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut event_log = SqliteEventLog::new(&store);
         event_log.open().await.unwrap();
         let token = event_log
@@ -84,9 +87,11 @@ async fn sqlite_event_log_survives_reopen() {
             .unwrap()
             .expect("progress token");
         event_log.close().await;
+        // Aux close() only clears memory; the pools close here.
+        MessageStore::close(&mut store).await;
         drop(store);
 
-        let fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut reopened = SqliteEventLog::new(&fresh);
         reopened.open().await.unwrap();
         let read = reopened.read(TENANT, None).await.unwrap();
@@ -94,6 +99,7 @@ async fn sqlite_event_log_survives_reopen() {
         assert_eq!(read.events[0].message_cid.as_deref(), Some("bafyreihash"));
         assert!(read.cursor.is_some());
         assert_eq!(read.cursor.unwrap().epoch, token.epoch);
+        MessageStore::close(&mut fresh).await;
     }
 }
 
@@ -113,17 +119,20 @@ async fn sqlite_resumable_task_store_survives_reopen() {
     };
 
     {
-        let store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut store = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut task_store = SqliteResumableTaskStore::new(&store);
         task_store.open().await.unwrap();
         let managed = task_store.register(task.clone(), 120).await.unwrap();
         task_store.close().await;
+        // Aux close() only clears memory; the pools close here.
+        MessageStore::close(&mut store).await;
         drop(store);
 
-        let fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
+        let mut fresh = SqliteStore::new(path, WakePublishHandler::new(Arc::new(())));
         let mut reopened = SqliteResumableTaskStore::new(&fresh);
         reopened.open().await.unwrap();
         let loaded = reopened.read::<SampleTask>(&managed.id).await.unwrap();
         assert_eq!(loaded.expect("task").task, task);
+        MessageStore::close(&mut fresh).await;
     }
 }

@@ -12,7 +12,7 @@ use dwn_rs_core::dwn::Dwn;
 use dwn_rs_core::handlers::records::{RecordsEventLogSubscribeHandler, RecordsSubscribeReply};
 use dwn_rs_core::stores::durable_event_log::DurableEventLog;
 use dwn_rs_core::stores::wake::InProcessWakeBus;
-use dwn_rs_core::stores::SubscriptionListener;
+use dwn_rs_core::stores::{DataStore, MessageStore, SubscriptionListener};
 use dwn_rs_core::sync::endpoint::{DirectSyncEndpoint, HttpSyncEndpoint, SyncRequestAuthorizer};
 use dwn_rs_core::sync::{
     NativeSyncEngine, SyncError, SyncIdentityOptions, SyncOnceRequest, SyncOnceResult, SyncResult,
@@ -153,6 +153,16 @@ impl SqliteNativeDwn {
 
     pub fn store(&self) -> &SqliteStore {
         &self.store
+    }
+
+    /// Checkpoint, close, and release every SQLite handle held by this node.
+    ///
+    /// All internal stores share one connection set, so one drain covers
+    /// them all. Required before drop in test builds, which assert no live
+    /// handles are abandoned.
+    pub async fn close(&mut self) {
+        MessageStore::close(&mut self.store).await;
+        DataStore::close(&mut self.store).await;
     }
 
     pub fn sync_ledger(&self) -> &SqliteSyncLedger {

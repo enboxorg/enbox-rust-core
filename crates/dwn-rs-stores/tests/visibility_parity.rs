@@ -150,7 +150,7 @@ fn published_filter() -> JsonValue {
 async fn query_and_count_return_the_same_population() {
     // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
-    let nodes = fresh_nodes().await;
+    let mut nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
     }
@@ -166,13 +166,15 @@ async fn query_and_count_return_the_same_population() {
     assert_eq!((mem_count_status, disk_count_status), (200, 200));
     assert_eq!(mem_count, disk_count);
     assert_eq!(mem_count, mem_entries.len() as u64);
+    nodes.mem.close().await;
+    nodes.disk.close().await;
 }
 
 #[tokio::test]
 async fn read_resolves_through_the_same_plan_as_query() {
     // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
-    let nodes = fresh_nodes().await;
+    let mut nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
     }
@@ -205,13 +207,15 @@ async fn read_resolves_through_the_same_plan_as_query() {
         mem_entry["encodedData"], entries[0]["encodedData"],
         "read and query expose the same payload"
     );
+    nodes.mem.close().await;
+    nodes.disk.close().await;
 }
 
 #[tokio::test]
 async fn subscribe_snapshot_equals_query_at_the_same_head() {
     // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
-    let nodes = fresh_nodes().await;
+    let mut nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
     }
@@ -246,13 +250,15 @@ async fn subscribe_snapshot_equals_query_at_the_same_head() {
     let (_, mem_entries) = query_entries(&nodes.mem, published_filter()).await;
     let (_, disk_entries) = query_entries(&nodes.disk, published_filter()).await;
     assert_eq!(mem_entries, disk_entries);
+    nodes.mem.close().await;
+    nodes.disk.close().await;
 }
 
 #[tokio::test]
 async fn non_initial_entries_carry_initial_write() {
     // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
-    let nodes = fresh_nodes().await;
+    let mut nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         populate(node).await;
     }
@@ -289,13 +295,15 @@ async fn non_initial_entries_carry_initial_write() {
         mem_entries[0]["initialWrite"].is_object(),
         "non-initial entry must carry initialWrite"
     );
+    nodes.mem.close().await;
+    nodes.disk.close().await;
 }
 
 #[tokio::test]
 async fn tombstones_are_visible_to_read_and_hidden_from_query() {
     // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
-    let nodes = fresh_nodes().await;
+    let mut nodes = fresh_nodes().await;
     let mut rec_a = String::new();
     for node in [&nodes.mem, &nodes.disk] {
         let (a, _) = populate(node).await;
@@ -326,13 +334,15 @@ async fn tombstones_are_visible_to_read_and_hidden_from_query() {
     )
     .await;
     assert_eq!((mem_status, mem_entry), (disk_status, disk_entry));
+    nodes.mem.close().await;
+    nodes.disk.close().await;
 }
 
 #[tokio::test]
 async fn unpublished_writes_stay_invisible_to_anonymous_query() {
     // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
-    let nodes = fresh_nodes().await;
+    let mut nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         put_notes_protocol_without_actions(TENANT, node.store()).await;
         let data = payload("hidden");
@@ -356,4 +366,6 @@ async fn unpublished_writes_stay_invisible_to_anonymous_query() {
     let (_, disk_entries) = query_entries(&nodes.disk, published_filter()).await;
     assert_eq!(mem_entries, disk_entries);
     assert!(mem_entries.is_empty());
+    nodes.mem.close().await;
+    nodes.disk.close().await;
 }

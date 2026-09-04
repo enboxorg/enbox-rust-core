@@ -454,7 +454,7 @@ mod tests {
     use super::*;
     use crate::sqlite::conn::disk_test_guard;
     use dwn_rs_core::{
-        stores::wake::WakePublishHandler,
+        stores::{wake::WakePublishHandler, MessageStore},
         sync::{SyncError, SyncScope},
     };
 
@@ -464,7 +464,7 @@ mod tests {
         let _disk = disk_test_guard().await;
         let path =
             std::env::temp_dir().join(format!("enbox-sync-ledger-{}.sqlite", ulid::Ulid::new()));
-        let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+        let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         let ledger = SqliteSyncLedger::new(&store);
         let checkpoint = SyncCheckpoint {
             key: "did:example:alice|https://peer|global|Pull".to_string(),
@@ -503,6 +503,8 @@ mod tests {
             .await
             .unwrap());
 
+        MessageStore::close(&mut store).await;
+        drop(store);
         let _ = std::fs::remove_file(path);
     }
 }

@@ -140,6 +140,7 @@ async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
         .expect("resume after reopen");
     assert!(resumed.events.is_empty());
     assert!(resumed.drained);
+    MessageStore::close(&mut reopened).await;
 }
 
 /// Fresh handles on the same file keep working after this point because the
@@ -196,6 +197,7 @@ async fn delete_holes_survive_fresh_reopen() {
         .expect("non-empty history");
     assert_eq!(latest.position, "3");
     assert_eq!(latest.message_cid, None);
+    MessageStore::close(&mut reopened).await;
 }
 
 #[tokio::test]
@@ -245,7 +247,7 @@ async fn sync_ledger_checkpoints_survive_true_db_reopen() {
     };
 
     // Fresh handle on the same file: the checkpoint must still be there.
-    let fresh = SqliteStore::new(db.path(), noop_waker());
+    let mut fresh = SqliteStore::new(db.path(), noop_waker());
     let ledger = SqliteSyncLedger::new(&fresh);
     let loaded = ledger.load().await.expect("reload ledger");
     let checkpoint = loaded
@@ -256,6 +258,7 @@ async fn sync_ledger_checkpoints_survive_true_db_reopen() {
     assert_eq!(checkpoint.tenant, TENANT);
     assert_eq!(checkpoint.records_pulled, 7);
     assert_eq!(checkpoint.pull_cursor.as_ref(), Some(&cursor));
+    MessageStore::close(&mut fresh).await;
 }
 
 #[tokio::test]
@@ -266,7 +269,7 @@ async fn native_node_open_at_resumes_from_disk() {
     let path = dir.path().join("node.sqlite");
 
     let epoch = {
-        let node = SqliteNativeDwn::open_at(&path, test_resolver())
+        let mut node = SqliteNativeDwn::open_at(&path, test_resolver())
             .await
             .expect("node opens at path");
         let msg = delete_message("node-one", "2025-01-01T00:00:00Z");
@@ -284,10 +287,11 @@ async fn native_node_open_at_resumes_from_disk() {
             .await
             .expect("node get")
             .is_some());
+        node.close().await;
         epoch
     };
 
-    let node = SqliteNativeDwn::open_at(&path, test_resolver())
+    let mut node = SqliteNativeDwn::open_at(&path, test_resolver())
         .await
         .expect("node reopens at path");
     assert_eq!(node.store().epoch().await.expect("epoch"), epoch);
@@ -298,6 +302,7 @@ async fn native_node_open_at_resumes_from_disk() {
         .expect("feed read after node reopen");
     assert_eq!(page.events.len(), 1);
     assert!(page.drained);
+    node.close().await;
 }
 
 #[tokio::test]
@@ -328,6 +333,7 @@ async fn legacy_v1_database_migrates_forward_on_open() {
         .await
         .expect("get after migration")
         .is_some());
+    MessageStore::close(&mut store).await;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -348,7 +354,7 @@ async fn aux_stores_multi_row_state_survives_fresh_reopen() {
     };
 
     let (root_before, task_ids) = {
-        let store = SqliteStore::new(db.path(), noop_waker());
+        let mut store = SqliteStore::new(db.path(), noop_waker());
         let mut state_index = SqliteStateIndex::new(&store);
         state_index.open().await.unwrap();
         for (cid, ts) in [
@@ -376,11 +382,13 @@ async fn aux_stores_multi_row_state_survives_fresh_reopen() {
         let a = task_store.register(task_a.clone(), 120).await.unwrap();
         let b = task_store.register(task_b.clone(), 120).await.unwrap();
         ResumableTaskStore::close(&mut task_store).await;
+        // Aux closes only clear memory; the pools close here.
+        MessageStore::close(&mut store).await;
         (root_before, (a.id, b.id))
     };
 
     // Fresh handles on the same file.
-    let fresh = SqliteStore::new(db.path(), noop_waker());
+    let mut fresh = SqliteStore::new(db.path(), noop_waker());
     let mut state_index = SqliteStateIndex::new(&fresh);
     state_index.open().await.unwrap();
     assert_eq!(state_index.get_root(TENANT).await.unwrap(), root_before);
@@ -405,4 +413,5 @@ async fn aux_stores_multi_row_state_survives_fresh_reopen() {
             .task,
         task_b
     );
+    MessageStore::close(&mut fresh).await;
 }

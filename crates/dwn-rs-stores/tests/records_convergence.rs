@@ -222,7 +222,9 @@ async fn run_order(
             // Drop the old node (connections close) *before* reopening the same
             // file, so the two connection sets never overlap.
             let path = nodes._db.path().to_path_buf();
-            drop(nodes.disk.take());
+            if let Some(mut old) = nodes.disk.take() {
+                old.close().await;
+            }
             nodes.disk = Some(
                 SqliteNativeDwn::open_at(&path, test_resolver())
                     .await
@@ -269,6 +271,10 @@ async fn delete_wins_in_both_arrival_orders() {
         assert_eq!(mem_state.read_status, 404);
         assert!(mem_state.query_entries.is_empty());
         observed.push(mem_state.convergence_key());
+        nodes.mem.close().await;
+        if let Some(disk) = nodes.disk.as_mut() {
+            disk.close().await;
+        }
     }
     assert_eq!(observed[0], observed[1]);
 }
@@ -300,6 +306,10 @@ async fn newest_write_wins_and_identical_replay_rejected() {
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.read_status, 200);
     assert_eq!(mem_state.query_entries.len(), 1);
+    nodes.mem.close().await;
+    if let Some(disk) = nodes.disk.as_mut() {
+        disk.close().await;
+    }
 }
 
 #[tokio::test]
@@ -320,6 +330,10 @@ async fn stale_write_rejected_identically() {
     let (mem_state, disk_state) = states(&nodes, &scenario.record_id).await;
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.read_status, 200);
+    nodes.mem.close().await;
+    if let Some(disk) = nodes.disk.as_mut() {
+        disk.close().await;
+    }
 }
 
 #[tokio::test]
@@ -334,6 +348,10 @@ async fn duplicate_replay_converges() {
     let (mem_state, disk_state) = states(&nodes, &scenario.record_id).await;
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.query_entries.len(), 1);
+    nodes.mem.close().await;
+    if let Some(disk) = nodes.disk.as_mut() {
+        disk.close().await;
+    }
 }
 
 #[tokio::test]
@@ -348,4 +366,8 @@ async fn restart_mid_sequence_converges_with_uninterrupted_run() {
     let (mem_state, disk_state) = states(&nodes, &scenario.record_id).await;
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.read_status, 404);
+    nodes.mem.close().await;
+    if let Some(disk) = nodes.disk.as_mut() {
+        disk.close().await;
+    }
 }

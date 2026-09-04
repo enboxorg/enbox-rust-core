@@ -61,7 +61,7 @@ where
     Fut: Future<Output = S>,
 {
     // Covers: DWN-REC-006
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let retained = delete_message("retained", "2025-01-01T00:00:00Z");
     let displaced = delete_message("displaced", "2025-01-01T00:00:01Z");
     let winner = delete_message("winner", "2025-01-01T00:00:02Z");
@@ -136,7 +136,7 @@ where
 
     // Covers: DWN-REC-003
     // Covers: DWN-REC-006
-    let rollback_store = new_store(factory).await;
+    let mut rollback_store = new_store(factory).await;
     let existing = delete_message("existing", "2025-02-01T00:00:00Z");
     let existing_cid = cid(&existing);
     rollback_store
@@ -189,7 +189,7 @@ where
     assert_eq!(page.events[0].seq, "1");
     assert_eq!(markers(&page), ["existing"]);
 
-    let invalid_store = new_store(factory).await;
+    let mut invalid_store = new_store(factory).await;
     let put = delete_message("overlap", "2025-03-01T00:00:00Z");
     let put_cid = cid(&put);
     invalid_store
@@ -238,6 +238,9 @@ where
         invalid_store.get(TENANT, &candidate_cid).await.unwrap(),
         None
     );
+    store.close().await;
+    rollback_store.close().await;
+    invalid_store.close().await;
 }
 
 async fn new_store<S, F, Fut>(factory: &F) -> S
@@ -331,7 +334,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let epoch = store.epoch().await.expect("epoch");
     assert!(!epoch.is_empty());
     assert_eq!(store.log_bounds(TENANT).await.expect("bounds"), None);
@@ -343,6 +346,7 @@ where
     assert!(page.events.is_empty());
     assert!(page.drained);
     assert_eq!(page.cursor, Some(build_token(TENANT, &epoch, 0, None)));
+    store.close().await;
 }
 
 async fn paging_resume_limits_and_filters<S, F, Fut>(factory: &F)
@@ -351,7 +355,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     for (position, (protocol, schema)) in [("p1", "s1"), ("p1", "s2"), ("p2", "s2")]
         .into_iter()
         .enumerate()
@@ -447,6 +451,7 @@ where
     assert!(high_water.drained);
     assert_eq!(high_water.cursor.as_ref().expect("cursor").position, "3");
     assert_eq!(high_water.cursor.expect("cursor").message_cid, None);
+    store.close().await;
 }
 
 async fn deletion_holes<S, F, Fut>(factory: &F)
@@ -455,7 +460,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let messages = [
         delete_message("one", "2025-01-01T00:00:00Z"),
         delete_message("two", "2025-01-01T00:00:01Z"),
@@ -490,6 +495,7 @@ where
         .expect("non-empty position history");
     assert_eq!(latest.position, "3");
     assert_eq!(latest.message_cid, None);
+    store.close().await;
 }
 
 async fn duplicate_and_data_completion_updates<S, F, Fut>(factory: &F)
@@ -498,7 +504,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let duplicate = delete_message("duplicate", "2025-01-01T00:00:00Z");
     store
         .put(TENANT, duplicate.clone(), indexes(None, None, "old"))
@@ -549,6 +555,7 @@ where
         store.get(TENANT, &write_cid).await.expect("get"),
         Some(with_data)
     );
+    store.close().await;
 }
 
 async fn clear_and_epochs<S, F, Fut>(factory: &F)
@@ -557,7 +564,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     store
         .put(
             TENANT,
@@ -605,6 +612,7 @@ where
         .await
         .expect("post-clear read");
     assert_eq!(restarted.events[0].seq, "1");
+    store.close().await;
 }
 
 async fn progress_gaps<S, F, Fut>(factory: &F)
@@ -613,7 +621,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let message = delete_message("gap", "2025-01-01T00:00:00Z");
     let message_cid = cid(&message);
     store
@@ -672,6 +680,7 @@ where
             .expect("valid cursor")
             .drained
     );
+    store.close().await;
 }
 
 async fn eligible_message_types<S, F, Fut>(factory: &F)
@@ -680,7 +689,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let eligible = [
         write_message(None),
         delete_message("eligible-delete", "2025-01-01T00:00:00Z"),
@@ -710,6 +719,7 @@ where
         .expect("eligibility read");
     assert_eq!(markers(&page), ["e0", "e1", "e2"]);
     assert_eq!(page.cursor.expect("cursor").position, "3");
+    store.close().await;
 }
 
 async fn fingerprints<S, F, Fut>(factory: &F)
@@ -718,7 +728,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let first = delete_message("fp-one", "2025-01-01T00:00:00Z");
     let second = delete_message("fp-two", "2025-01-01T00:00:01Z");
     let first_cid = cid(&first);
@@ -787,6 +797,7 @@ where
             .expect("fingerprint after delete"),
         Fingerprint::default()
     );
+    store.close().await;
 }
 
 #[tokio::test]
@@ -800,7 +811,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let target = "https://example.com/protocol/notes";
     let message = delete_message("perm-grant", "2025-01-01T00:00:00Z");
     let message_cid = cid(&message);
@@ -836,6 +847,7 @@ where
             .expect("unrelated perm fingerprint"),
         Fingerprint::default()
     );
+    store.close().await;
 }
 
 async fn multi_tenant_isolation<S, F, Fut>(factory: &F)
@@ -844,7 +856,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let message = delete_message("tenant-one", "2025-01-01T00:00:00Z");
     let message_cid = cid(&message);
     store
@@ -885,6 +897,7 @@ where
             .expect_err("cross-tenant cursor must fail"),
         ProgressGapReason::StreamMismatch,
     );
+    store.close().await;
 }
 
 async fn malformed_cursor_rejected<S, F, Fut>(factory: &F)
@@ -893,7 +906,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     store
         .put(
             TENANT,
@@ -922,6 +935,7 @@ where
             panic!("expected InvalidProgressToken, got {error:?}");
         };
         assert_eq!(value, position);
+        store.close().await;
     }
 }
 
@@ -935,7 +949,7 @@ where
     // hardcoded 0 with a `// todo: retention policy`), so TokenTooOld is
     // unreachable. Pin the zero anchor as valid so a future retention change
     // must update this test deliberately rather than silently.
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     store
         .put(
             TENANT,
@@ -958,6 +972,7 @@ where
         .expect("zero anchor stays valid");
     assert_eq!(page.events.len(), 1);
     assert!(page.drained);
+    store.close().await;
 }
 
 async fn log_bounds_shape<S, F, Fut>(factory: &F)
@@ -966,7 +981,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     assert_eq!(store.log_bounds(TENANT).await.expect("empty bounds"), None);
 
     let second = delete_message("bounds-two", "2025-01-01T00:00:01Z");
@@ -989,6 +1004,7 @@ where
         .expect("non-empty bounds");
     assert_eq!(oldest, build_token(TENANT, &epoch, 0, None));
     assert_eq!(latest, build_token(TENANT, &epoch, 2, Some(&second_cid)));
+    store.close().await;
 }
 
 // Covers: DWN-REC-004 (same valid set, any order, same state).
@@ -1012,7 +1028,7 @@ where
     // Seqs record insertion order and differ by construction; the converged
     // contract is the CID set, the count, and the order-insensitive fingerprint.
     for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
-        let store = new_store(factory).await;
+        let mut store = new_store(factory).await;
         for (position, message) in order.into_iter().enumerate() {
             store
                 .put(
@@ -1042,6 +1058,7 @@ where
                 .expect("converged fingerprint"),
             expected_fp
         );
+        store.close().await;
     }
 }
 
@@ -1067,7 +1084,7 @@ where
     // Delete lands at different points in the arrival order; the residual set
     // and fingerprint still converge.
     for order in [vec![0, 1, 2, -1], vec![0, 1, -1, 2], vec![2, 1, 0, -1]] {
-        let store = new_store(factory).await;
+        let mut store = new_store(factory).await;
         for (position, step) in order.into_iter().enumerate() {
             if step < 0 {
                 store.delete(TENANT, &victim).await.expect("delete");
@@ -1100,6 +1117,7 @@ where
                 .expect("residual fingerprint"),
             expected_fp
         );
+        store.close().await;
     }
 }
 
@@ -1110,7 +1128,7 @@ where
     Fut: Future<Output = S>,
 {
     for replay_first in [false, true] {
-        let store = new_store(factory).await;
+        let mut store = new_store(factory).await;
         let message = delete_message("replay", "2025-01-01T00:00:00Z");
         let message_cid = cid(&message);
         if replay_first {
@@ -1146,5 +1164,6 @@ where
                 .expect("replay fingerprint"),
             cid_contribution(&message_cid)
         );
+        store.close().await;
     }
 }

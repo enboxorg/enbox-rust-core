@@ -23,6 +23,7 @@ use dwn_rs_core::identity::setup::{
 };
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
+use dwn_rs_core::stores::MessageStore;
 use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
 use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
@@ -141,15 +142,31 @@ pub struct EnboxCore {
 
 impl Drop for EnboxCore {
     fn drop(&mut self) {
-        // deadpool recycles pooled SQLite connections via `spawn_blocking` on drop, which
-        // requires a Tokio runtime context. FFI callers drop the core off-runtime, so tear
-        // down everything holding a pool (node + secret store) inside the runtime before
-        // `runtime` itself is dropped — otherwise the pool drop panics with "no reactor".
-        let _guard = self.runtime.enter();
-        if let Ok(mut state) = self.state.lock() {
-            state.node = None;
-            state.secret_store = None;
+        // Tear down stores explicitly while the runtime is still alive: every
+        // handle closes sequentially in the drain below, so the field drops
+        // that follow find nothing to close. No runtime *context* is needed
+        // for any of this (closes run inline or on awaited workers, never
+        // fire-and-forget). Dropping inside an async runtime would make the
+        // `block_on` panic, so refuse loudly in debug and skip teardown —
+        // field drops still run.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            debug_assert!(
+                false,
+                "EnboxCore dropped inside an async runtime; stores left unclosed"
+            );
+            return;
         }
+        self.runtime.block_on(async {
+            if let Ok(mut state) = self.state.lock() {
+                if let Some(node) = state.node.take() {
+                    // One shared cell: closing through any handle drains every
+                    // clone, including the secret store's.
+                    let mut store = node.store().clone();
+                    let _ = MessageStore::close(&mut store).await;
+                }
+                state.secret_store = None;
+            }
+        });
     }
 }
 

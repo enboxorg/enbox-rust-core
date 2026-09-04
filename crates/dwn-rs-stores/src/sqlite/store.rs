@@ -70,8 +70,16 @@ impl SqliteStore {
             return Err(closed_error());
         }
         // Single-flight the build: racing tasks would otherwise each open a
-        // full handle set and discard all but one.
-        let _opening = self.open_mutex.lock().await;
+        // full handle set and discard all but one. Bounded: waiting here owns
+        // nothing, so a timeout abandons only the wait.
+        let _opening =
+            tokio::time::timeout(crate::sqlite::conn::POOL_TIMEOUT, self.open_mutex.lock())
+                .await
+                .map_err(|_| {
+                    StoreError::InternalException(
+                        "sqlite: timed out waiting to open the store".to_string(),
+                    )
+                })?;
         if let Some(conn) = self.open_conn() {
             return Ok(conn);
         }
@@ -83,9 +91,10 @@ impl SqliteStore {
         }
         let fresh = SqliteConnection::open(self.path.clone(), migrate).await?;
         // Publish under the state lock with no awaits inside, then act
-        // outside it: the redundant set (close racing our open, or a
-        // concurrent winner) closes on one worker, awaited — never eleven
-        // inline closes on the executor, never in the background.
+        // outside it. A redundant set (close racing our open, or a concurrent
+        // winner) goes back through `checkpoint_and_close`, so its handles
+        // still close in exactly one place — the drain — instead of inline on
+        // the executor or in the background.
         enum Publish {
             UseShared(SqliteConnection),
             UseFresh,
@@ -105,22 +114,14 @@ impl SqliteStore {
         match outcome {
             Publish::UseFresh => Ok(fresh),
             Publish::UseShared(conn) => {
-                Self::drop_set(fresh).await;
+                fresh.checkpoint_and_close().await;
                 Ok(conn)
             }
             Publish::Stale => {
-                Self::drop_set(fresh).await;
+                fresh.checkpoint_and_close().await;
                 Err(closed_error())
             }
         }
-    }
-
-    /// Close a redundant connection set off the executor.
-    ///
-    /// Eleven sequential `sqlite3_close`s on one worker, awaited: no executor
-    /// blocking, no background stragglers, no concurrent closes.
-    async fn drop_set(conn: SqliteConnection) {
-        let _ = tokio::task::spawn_blocking(move || drop(conn)).await;
     }
 
     /// Open the store, reviving it if a previous `close()` drained its
@@ -151,6 +152,26 @@ impl SqliteStore {
         };
         if let ConnState::Open(conn) = prev {
             conn.checkpoint_and_close().await;
+        }
+    }
+
+    /// Mark closed and drain without checkpointing: crash-simulation close.
+    ///
+    /// Skips the explicit WAL checkpoint — kill-style durability tests use
+    /// this so they can never silently become checkpointing closes. (SQLite
+    /// itself still checkpoints on last close, so this is observationally
+    /// close to a clean close; its value is intent plus one less round-trip
+    /// in teardown-heavy tests.) Still fully awaited: handles close
+    /// sequentially in the drain, never inline on the executor, never in the
+    /// background.
+    pub async fn close_unclean(&mut self) {
+        let prev = {
+            let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::replace(&mut *state, ConnState::Closed)
+        };
+        if let ConnState::Open(conn) = prev {
+            conn.close();
+            conn.drain().await;
         }
     }
 
@@ -415,6 +436,7 @@ mod tests {
         assert!(tables.contains("messages"));
         assert!(tables.contains("data_blocks"));
         assert!(tables.contains("data_refs"));
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -482,6 +504,7 @@ mod tests {
                 .unwrap();
             assert_eq!(value, "durability-marker");
         }
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -542,6 +565,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 0);
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -549,7 +573,7 @@ mod tests {
         // Racing first opens single-flight instead of each
         // building (and discarding) a full handle set. All racers must
         // succeed; a broken single-flight would deadlock here.
-        let store = SqliteStore::in_memory(None);
+        let mut store = SqliteStore::in_memory(None);
         let mut joins = Vec::new();
         for _ in 0..16 {
             let handle = store.clone();
@@ -570,6 +594,7 @@ mod tests {
         for join in joins {
             assert_eq!(join.await.unwrap(), 1);
         }
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -605,5 +630,172 @@ mod tests {
             .await
             .unwrap();
         assert!(!epoch.is_empty());
+        MessageStore::close(&mut store).await;
+    }
+
+    #[tokio::test]
+    async fn close_unclean_preserves_committed_data() {
+        // Crash-simulation close skips the explicit checkpoint, but SQLite
+        // itself checkpoints on last close — so this pins what actually
+        // holds: committed rows survive an unclean close + reopen, through
+        // every clone. Its value over `close` is intent (kill-style tests
+        // must not silently become checkpointing closes) plus one less
+        // round-trip in teardown-heavy tests.
+        let _disk = crate::sqlite::conn::disk_test_guard().await;
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("unclean.sqlite3");
+
+        let mut store = SqliteStore::new(
+            &path,
+            dwn_rs_core::stores::wake::WakePublishHandler::new(std::sync::Arc::new(())),
+        );
+        MessageStore::open(&mut store).await.unwrap();
+        let clone = store.clone();
+        store
+            .connection()
+            .await
+            .unwrap()
+            .with_writer(|connection| {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE unclean_probe (value TEXT PRIMARY KEY); \
+                         INSERT INTO unclean_probe VALUES ('committed');",
+                    )
+                    .map_err(sqlite_store_error)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        store.close_unclean().await;
+        drop(store);
+        drop(clone);
+
+        let mut reopened = SqliteStore::new(
+            &path,
+            dwn_rs_core::stores::wake::WakePublishHandler::new(std::sync::Arc::new(())),
+        );
+        MessageStore::open(&mut reopened).await.unwrap();
+        let value: String = reopened
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row("SELECT value FROM unclean_probe", [], |row| row.get(0))
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        assert_eq!(value, "committed");
+        MessageStore::close(&mut reopened).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_writers_serialize_exactly() {
+        // Writer exclusivity is load-bearing (feed positions): 16 tasks
+        // incrementing one counter must total exactly, with no lost updates.
+        let mut store = SqliteStore::in_memory(None);
+        MessageStore::open(&mut store).await.unwrap();
+        let conn = store.connection().await.unwrap();
+        conn.with_writer(|connection| {
+            connection
+                .execute_batch(
+                    "CREATE TABLE writer_probe (n INTEGER); INSERT INTO writer_probe VALUES (0);",
+                )
+                .map_err(sqlite_store_error)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let mut joins = Vec::new();
+        for _ in 0..16 {
+            let writer = conn.clone();
+            joins.push(tokio::spawn(async move {
+                for _ in 0..20 {
+                    writer
+                        .with_writer(|connection| {
+                            let current: i64 = connection
+                                .query_row("SELECT n FROM writer_probe", [], |row| row.get(0))
+                                .map_err(sqlite_store_error)?;
+                            connection
+                                .execute("UPDATE writer_probe SET n = ?1", [current + 1])
+                                .map_err(sqlite_store_error)?;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+        for join in joins {
+            join.await.unwrap();
+        }
+        let total: i64 = conn
+            .with_reader(|connection| {
+                connection
+                    .query_row("SELECT n FROM writer_probe", [], |row| row.get(0))
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        assert_eq!(total, 16 * 20);
+        MessageStore::close(&mut store).await;
+    }
+
+    #[tokio::test]
+    async fn rapid_close_reopen_cycles_stay_clean() {
+        // Teardown robustness under repetition: open, write, close, drop and
+        // reopen the same file many times; every row must survive and no
+        // cycle may stall or wedge.
+        let _disk = crate::sqlite::conn::disk_test_guard().await;
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("torture.sqlite3");
+
+        for index in 0..30 {
+            let mut store = SqliteStore::new(
+                &path,
+                dwn_rs_core::stores::wake::WakePublishHandler::new(std::sync::Arc::new(())),
+            );
+            MessageStore::open(&mut store).await.unwrap();
+            store
+                .connection()
+                .await
+                .unwrap()
+                .with_writer(move |connection| {
+                    connection
+                        .execute_batch(
+                            "CREATE TABLE IF NOT EXISTS torture_probe (n INTEGER PRIMARY KEY);",
+                        )
+                        .map_err(sqlite_store_error)?;
+                    connection
+                        .execute("INSERT INTO torture_probe VALUES (?1)", [index])
+                        .map_err(sqlite_store_error)?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            MessageStore::close(&mut store).await;
+            drop(store);
+        }
+
+        let mut reopened = SqliteStore::new(
+            &path,
+            dwn_rs_core::stores::wake::WakePublishHandler::new(std::sync::Arc::new(())),
+        );
+        MessageStore::open(&mut reopened).await.unwrap();
+        let count: i64 = reopened
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row("SELECT COUNT(*) FROM torture_probe", [], |row| row.get(0))
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 30);
+        MessageStore::close(&mut reopened).await;
     }
 }

@@ -143,9 +143,10 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     concurrent_puts(&store, (0..WRITERS).map(message).collect()).await;
     positions_are_exactly(&store, WRITERS).await;
+    store.close().await;
 }
 
 async fn duplicate_puts_collapse<S, F, Fut>(factory: &F)
@@ -154,9 +155,10 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     concurrent_puts(&store, vec![message(0); WRITERS]).await;
     positions_are_exactly(&store, 1).await;
+    store.close().await;
 }
 
 async fn reads_during_writes_never_fail<S, F, Fut>(factory: &F)
@@ -165,7 +167,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     let barrier = Arc::new(Barrier::new(WRITERS + 4));
     let mut handles = Vec::new();
     for index in 0..WRITERS {
@@ -199,6 +201,7 @@ where
         handle.await.expect("task joins");
     }
     positions_are_exactly(&store, WRITERS).await;
+    store.close().await;
 }
 
 async fn delete_put_keeps_correspondence<S, F, Fut>(factory: &F)
@@ -207,7 +210,7 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = S>,
 {
-    let store = new_store(factory).await;
+    let mut store = new_store(factory).await;
     // Racers delete even CIDs while re-putting odd ones over disjoint keys;
     // the outcome is deterministic but lock pressure is real.
     let cids: Vec<String> = (0..8).map(|index| message_cid(&message(index))).collect();
@@ -239,6 +242,7 @@ where
         handle.await.expect("task joins");
     }
     assert_no_split_brain(&store, &cids).await;
+    store.close().await;
 }
 
 #[tokio::test]

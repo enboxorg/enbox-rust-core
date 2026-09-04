@@ -23,7 +23,7 @@ const TENANT: &str = "did:example:alice";
 
 #[tokio::test]
 async fn native_dwn_registers_exactly_the_current_handler_kinds() {
-    let node = SqliteNativeDwn::open_in_memory(test_resolver())
+    let mut node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
@@ -33,11 +33,12 @@ async fn native_dwn_registers_exactly_the_current_handler_kinds() {
     let expected: std::collections::BTreeSet<_> = current_handler_kinds().into_iter().collect();
 
     assert_eq!(registered, expected);
+    node.close().await;
 }
 
 #[tokio::test]
 async fn native_dwn_handlers_do_not_return_not_implemented() {
-    let node = SqliteNativeDwn::open_in_memory(test_resolver())
+    let mut node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
@@ -61,11 +62,12 @@ async fn native_dwn_handlers_do_not_return_not_implemented() {
             kind.as_str()
         );
     }
+    node.close().await;
 }
 
 #[tokio::test]
 async fn native_dwn_processes_protocols_configure_and_messages_read() {
-    let node = SqliteNativeDwn::open_in_memory(test_resolver())
+    let mut node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
@@ -91,6 +93,7 @@ async fn native_dwn_processes_protocols_configure_and_messages_read() {
     let entry = reply.entry.as_ref().expect("MessagesRead entry");
     assert_eq!(entry.cid.to_string(), configure_cid);
     assert!(entry.message.is_some());
+    node.close().await;
 }
 
 async fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> JsonValue {
@@ -202,7 +205,7 @@ fn test_resolver() -> StaticPublicKeyResolver {
 
 #[tokio::test]
 async fn fetch_protocol_definition_after_example_native_dwn_configure() {
-    let node = SqliteNativeDwn::open_in_memory(test_resolver())
+    let mut node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
@@ -220,11 +223,12 @@ async fn fetch_protocol_definition_after_example_native_dwn_configure() {
             .await
             .expect("latest protocol definition should be found");
     assert_eq!(definition.protocol, "http://example.com/native-dwn");
+    node.close().await;
 }
 
 #[tokio::test]
 async fn fetch_protocol_definition_after_default_test_protocol_configure() {
-    let node = SqliteNativeDwn::open_in_memory(test_resolver())
+    let mut node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
@@ -261,11 +265,12 @@ async fn fetch_protocol_definition_after_default_test_protocol_configure() {
     .await
     .expect("temporal protocol definition should be found");
     assert_eq!(definition.protocol, "http://test-protocol.xyz");
+    node.close().await;
 }
 
 #[tokio::test]
 async fn native_dwn_records_write_after_default_test_protocol_configure() {
-    let node = SqliteNativeDwn::open_in_memory(test_resolver())
+    let mut node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
@@ -282,6 +287,7 @@ async fn native_dwn_records_write_after_default_test_protocol_configure() {
         )
         .await;
     assert_eq!(write_reply.status.code, 202, "{write_reply:?}");
+    node.close().await;
 }
 
 async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {

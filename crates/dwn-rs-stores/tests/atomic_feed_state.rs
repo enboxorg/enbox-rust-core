@@ -36,9 +36,10 @@ impl Shutdown {
     async fn shutdown(self, store: &mut SqliteStore) {
         match self {
             Shutdown::Close => MessageStore::close(store).await,
-            // Kill-style: pools stay open, WAL may be unclean; recovery must
-            // still hold on fresh open.
-            Shutdown::Drop => {}
+            // Kill-style: no checkpoint, so the WAL may be unclean and
+            // recovery must still hold on fresh open — but the handles drain
+            // awaited, never abandoned to `Drop`.
+            Shutdown::Drop => store.close_unclean().await,
         }
     }
 }
@@ -160,6 +161,7 @@ async fn puts_survive_drop_without_close() {
             .collect::<Vec<_>>(),
         ["1", "3"]
     );
+    MessageStore::close(&mut reopened).await;
 }
 
 #[tokio::test]
@@ -212,6 +214,7 @@ async fn atomic_grid_close_vs_drop_matches_uninterrupted_run() {
         assert_eq!(actual.epoch, epoch);
         assert_eq!(reopened.log_bounds(TENANT).await.expect("bounds"), bounds);
         assert_no_split_brain(&reopened, &log.cids).await;
+        MessageStore::close(&mut reopened).await;
     }
 }
 
@@ -259,7 +262,8 @@ async fn mid_sequence_restart_converges_with_uninterrupted_run() {
             .await
             .expect("put before restart");
         }
-        // No close: kill-style interrupt mid-sequence.
+        // Unclean close (no checkpoint): kill-style interrupt mid-sequence.
+        store.close_unclean().await;
     }
     let mut reopened = SqliteStore::new(db.path(), common::noop_waker());
     MessageStore::open(&mut reopened).await.unwrap();
@@ -285,6 +289,7 @@ async fn mid_sequence_restart_converges_with_uninterrupted_run() {
     assert_eq!(actual.feed, expected.feed);
     assert_eq!(actual.fingerprint, expected.fingerprint);
     assert_no_split_brain(&reopened, &log.cids).await;
+    MessageStore::close(&mut reopened).await;
 }
 
 #[tokio::test]
@@ -306,6 +311,8 @@ async fn clear_then_drop_without_close_reopens_clean() {
             .cursor
             .expect("cursor");
         store.clear().await.expect("clear");
+        // Unclean close (no checkpoint) before the drop below.
+        store.close_unclean().await;
         cursor
     };
 
@@ -333,4 +340,5 @@ async fn clear_then_drop_without_close_reopens_clean() {
         panic!("expected progress gap, got {error:?}");
     };
     assert_eq!(gap.reason, ProgressGapReason::EpochMismatch);
+    MessageStore::close(&mut reopened).await;
 }

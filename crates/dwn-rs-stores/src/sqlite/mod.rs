@@ -220,6 +220,7 @@ mod tests {
                 .unwrap(),
             message
         );
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -398,6 +399,7 @@ mod tests {
             .unwrap();
         assert!(result.messages.is_empty());
         assert!(result.cursor.is_none());
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -471,6 +473,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2, 3]
         );
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -514,6 +517,7 @@ mod tests {
             cid_contribution(&cids[0]).as_slice()
         );
         assert_eq!(publisher.wakes.lock().unwrap().len(), 3);
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -544,6 +548,7 @@ mod tests {
             .unwrap();
         assert_eq!(feed_rows(&store).await[0].0, 1);
         assert_eq!(publisher.wakes.lock().unwrap().len(), 2);
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -585,6 +590,7 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(publisher.wakes.lock().unwrap().is_empty());
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -610,6 +616,7 @@ mod tests {
         assert_eq!(feed_head(&store).await, None);
         assert_eq!(global_fingerprint(&store).await, None);
         assert!(publisher.wakes.lock().unwrap().is_empty());
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -631,6 +638,7 @@ mod tests {
             MessageStore::get(&store, TENANT, &cid).await.unwrap(),
             Some(message)
         );
+        MessageStore::close(&mut store).await;
     }
 
     #[tokio::test]
@@ -929,6 +937,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        DataStore::close(&mut store).await;
     }
 
     fn message(timestamp: &str, protocol: &str, encoded_data: Option<&str>) -> Message<Descriptor> {
