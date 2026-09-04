@@ -38,7 +38,8 @@ use crate::replies::records::Write;
 use crate::replies::Status;
 use crate::stores::{KeyValues, LatestStateMutation, LatestStateTransition};
 use crate::Response;
-use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection, Value};
+use crate::SubtreeFilter;
+use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection};
 
 use super::state::{plan_records_transition, RecordsTransitionPlan};
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
@@ -698,7 +699,9 @@ where
             if !parent_context.is_empty() {
                 filter.insert(
                     FilterKey::Index("contextId".to_string()),
-                    Filter::Prefix(Value::String(parent_context)),
+                    Filter::Subtree(SubtreeFilter {
+                        subtree: parent_context,
+                    }),
                 );
             }
         }
@@ -811,7 +814,9 @@ where
         if !parent_context.is_empty() {
             filter.insert(
                 FilterKey::Index("contextId".to_string()),
-                Filter::Prefix(Value::String(parent_context)),
+                Filter::Subtree(SubtreeFilter {
+                    subtree: parent_context,
+                }),
             );
         }
     }

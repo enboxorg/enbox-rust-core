@@ -7,6 +7,7 @@ use crate::auth::resolver::DidResolver;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, SubscribeDescriptor};
 use crate::dwn::{Handler, HandlerContext};
+use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
@@ -75,6 +76,26 @@ where
                 }
                 Err(error) => return Response::bad_request(error.to_string()),
             };
+            // Bounded path-wide Subscribe may omit nested scope when the initial
+            // page is explicitly capped and no slash-role is invoked; mirrors
+            // `RecordsSubscribe.parse` at the parity baseline.
+            let allow_bounded_path_wide = descriptor.cursor.is_none()
+                && descriptor
+                    .pagination
+                    .as_ref()
+                    .and_then(|pagination| pagination.limit)
+                    .is_some_and(|limit| limit > 0)
+                && signature
+                    .as_ref()
+                    .and_then(|signature| signature.protocol_role())
+                    .is_none_or(|role| !role.contains('/'));
+            if let Err(reason) =
+                validate_nested_protocol_path_scope(&descriptor.filter, allow_bounded_path_wide)
+            {
+                return Response::bad_request(format!(
+                    "RecordsSubscribeNestedProtocolPathContextIdInvalid: {reason}"
+                ));
+            }
             let filters = if filter_includes_published_records(&descriptor.filter)
                 && signature.is_none()
             {

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::auth::resolver::DidResolver;
 use crate::descriptors::RecordsCountDescriptor;
 use crate::dwn::{Handler, HandlerContext};
+use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     authorize_protocol_query_or_subscribe, filter_includes_published_records,
@@ -40,6 +41,12 @@ where
                 descriptor,
                 ..
             } = ctx;
+
+            if let Err(reason) = validate_nested_protocol_path_scope(&descriptor.filter, false) {
+                return Response::bad_request(format!(
+                    "RecordsCountNestedProtocolPathContextIdInvalid: {reason}"
+                ));
+            }
 
             let signature = match permissions::validate_authorization_signature(
                 &message,

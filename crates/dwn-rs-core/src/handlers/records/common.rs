@@ -29,6 +29,7 @@ use crate::replies::records::{QueryEntry, Subscribe};
 use crate::replies::HasProgressGapInfo;
 use crate::stores::write_resolver::InitialWriteResolver;
 use crate::stores::{EventSubscription, KeyValues};
+use crate::SubtreeFilter;
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, Response, SortDirection, Value};
 
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
@@ -402,7 +403,9 @@ pub(crate) fn records_filter_to_filter_map(
     if let Some(context_id) = &filter.context_id {
         map.insert(
             FilterKey::Index("contextId".to_string()),
-            Filter::Prefix(Value::String(context_id.clone())),
+            Filter::Subtree(SubtreeFilter {
+                subtree: context_id.clone(),
+            }),
         );
     }
     if let Some(data_cid) = &filter.data_cid {
@@ -1116,7 +1119,9 @@ where
 
             filter.insert(
                 FilterKey::Index("contextId".to_string()),
-                Filter::Prefix(Value::String(context_prefix)),
+                Filter::Subtree(SubtreeFilter {
+                    subtree: context_prefix,
+                }),
             );
         }
     };
@@ -1192,7 +1197,9 @@ where
                 .join("/");
             filter.insert(
                 FilterKey::Index("contextId".to_string()),
-                Filter::Prefix(Value::String(context_prefix)),
+                Filter::Subtree(SubtreeFilter {
+                    subtree: context_prefix,
+                }),
             );
         }
     }
@@ -1994,6 +2001,23 @@ mod tests {
         assert!(
             error.starts_with("RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid"),
             "unexpected error: {error}"
+        );
+    }
+
+    // Covers: DWN-PROTO-001, DWN-PROTO-002
+    #[test]
+    fn records_filter_converts_context_id_to_boundary_aware_subtree() {
+        let filter = RecordsFilter {
+            context_id: Some("a/b".to_string()),
+            ..Default::default()
+        };
+        let map = records_filter_to_filter_map(&filter, None);
+        assert_eq!(
+            map.get(&FilterKey::Index("contextId".to_string())),
+            Some(&Filter::Subtree(SubtreeFilter {
+                subtree: "a/b".to_string(),
+            })),
+            "contextId must use boundary-aware subtree matching, never a raw lexical prefix"
         );
     }
 }
