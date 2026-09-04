@@ -211,13 +211,17 @@ async fn run_order(
     let mut disk_statuses = Vec::new();
     for (applied, index) in order.iter().enumerate() {
         if restart_disk_after == Some(applied) {
-            // Drop (pools close) then reopen the same file.
+            // Drop the old node (connections close) *before* reopening the same
+            // file, so the two connection sets never overlap (issue #255).
             let path = nodes._db.path().to_path_buf();
-            nodes.disk = SqliteNativeDwn::open_at(&path, test_resolver())
-                .await
-                .expect("reopen disk node");
+            drop(nodes.disk.take());
+            nodes.disk = Some(
+                SqliteNativeDwn::open_at(&path, test_resolver())
+                    .await
+                    .expect("reopen disk node"),
+            );
         }
-        disk_statuses.push(apply(&nodes.disk, &ops[*index]).await);
+        disk_statuses.push(apply(nodes.disk.as_ref().expect("disk node"), &ops[*index]).await);
     }
     (mem_statuses, disk_statuses)
 }

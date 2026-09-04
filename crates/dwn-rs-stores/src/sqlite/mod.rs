@@ -232,17 +232,23 @@ mod tests {
         );
         let cid = message.cid().unwrap().to_string();
 
-        let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
-        MessageStore::open(&mut store).await.unwrap();
-        MessageStore::put(
-            &store,
-            "did:example:alice",
-            message.clone(),
-            indexes(&message),
-        )
-        .await
-        .unwrap();
-        MessageStore::close(&mut store).await;
+        {
+            let mut store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+            MessageStore::open(&mut store).await.unwrap();
+            MessageStore::put(
+                &store,
+                "did:example:alice",
+                message.clone(),
+                indexes(&message),
+            )
+            .await
+            .unwrap();
+            MessageStore::close(&mut store).await;
+            // Drop the old handle before reopening: holding two live connection
+            // sets on one file piles onto the process-global Unix VFS lock
+            // (issue #255).
+            drop(store);
+        }
 
         let mut reopened = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut reopened).await.unwrap();
@@ -738,6 +744,8 @@ mod tests {
             .unwrap();
         let epoch = feed_epoch(&store).await;
         MessageStore::close(&mut store).await;
+        // Drop the old handle before reopening (issue #255).
+        drop(store);
 
         let mut reopened = SqliteStore::new(&path, WakePublishHandler::default());
         MessageStore::open(&mut reopened).await.unwrap();

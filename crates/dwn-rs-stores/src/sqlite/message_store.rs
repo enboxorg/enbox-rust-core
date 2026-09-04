@@ -32,8 +32,10 @@ impl MessageStore for SqliteStore {
     }
 
     async fn close(&mut self) {
-        if let Ok(conn) = self.connection().await {
-            conn.close()
+        // Never `connection()` here: it would lazily open pools just to close
+        // them. Checkpoint + close only if already open (issue #255).
+        if let Some(conn) = self.connection_if_open() {
+            conn.checkpoint_and_close().await;
         }
     }
 

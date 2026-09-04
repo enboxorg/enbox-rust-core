@@ -39,6 +39,15 @@ impl SqliteStore {
             .await
     }
 
+    /// Handle to the connections if this store was opened, without opening it.
+    ///
+    /// Close paths must use this: `connection()` would lazily *create* eleven
+    /// SQLite connections (and their VFS state) just to immediately close
+    /// them again (issue #255).
+    pub(crate) fn connection_if_open(&self) -> Option<&SqliteConnection> {
+        self.conn.get()
+    }
+
     pub(crate) fn epoch_tx(tx: &Transaction<'_>) -> Result<String, StoreError> {
         tx.query_row("SELECT epoch FROM feed_metadata WHERE id = 1", [], |row| {
             row.get(0)
@@ -239,6 +248,9 @@ mod tests {
 
     #[test]
     fn on_disk_reopen_preserves_epoch() {
+        // Serialize file-backed tests process-wide (issue #255). Plain
+        // `#[test]`: no runtime is running, so blocking acquisition is safe.
+        let _disk = crate::sqlite::conn::disk_test_guard_blocking();
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("migration.sqlite3");
 
