@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
+use crate::canonical_rfc3339;
 use crate::descriptors::RecordsCountDescriptor;
 use crate::dwn::{Handler, HandlerContext};
 use crate::filters::context::validate_nested_protocol_path_scope;
@@ -94,6 +95,7 @@ where
                         &descriptor.filter,
                         signature,
                         &self.message_store,
+                        &canonical_rfc3339(descriptor.message_timestamp),
                         RecordsAuthorizationKind::Count,
                     )
                     .await

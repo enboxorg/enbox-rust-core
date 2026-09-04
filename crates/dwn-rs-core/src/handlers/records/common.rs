@@ -827,11 +827,16 @@ pub(crate) struct ResolvedProtocolRole {
     pub role_record_id: String,
 }
 
+/// Authorizes a role-invoking collection filter against the protocol
+/// definition governing `request_timestamp` (`DWN-PROTO-004`), never blindly
+/// the newest configuration. Every lookup failure denies: a missing
+/// definition cannot prove role authority.
 pub(crate) async fn authorize_protocol_query_or_subscribe<MessageStore>(
     tenant: &str,
     filter: &RecordsFilter,
     auth_ctx: &AuthorizationContext,
     message_store: &MessageStore,
+    request_timestamp: &str,
     kind: RecordsAuthorizationKind,
 ) -> Result<ResolvedProtocolRole, String>
 where
@@ -848,7 +853,7 @@ where
         tenant,
         protocol,
         message_store,
-        None,
+        Some(request_timestamp),
     )
     .await
     .map_err(|err| err.to_string())?;
@@ -1663,7 +1668,7 @@ impl DescriptorMethod for RecordsWriteDescriptor {
 mod tests {
     use super::*;
     use crate::interfaces::messages::protocols::ActionRole;
-    use crate::stores::{memory::MemoryMessageStore, MessageStore};
+    use crate::stores::{memory::MemoryMessageStore, MessageQueryResult, MessageStore};
     use serde_json::json;
 
     const ROLE_TEST_TENANT: &str = "did:example:tenant";
@@ -2018,6 +2023,336 @@ mod tests {
                 subtree: "a/b".to_string(),
             })),
             "contextId must use boundary-aware subtree matching, never a raw lexical prefix"
+        );
+    }
+
+    const HISTORY_T1: &str = "2025-01-01T00:00:00.000000Z";
+    const HISTORY_T2: &str = "2025-01-01T00:10:00.000000Z";
+    const HISTORY_MID: &str = "2025-01-01T00:05:00.000000Z";
+    const HISTORY_LATE: &str = "2025-01-01T00:20:00.000000Z";
+    const HISTORY_EARLY: &str = "2024-01-01T00:00:00.000000Z";
+
+    fn history_configure_message(timestamp: &str, participant_read: bool) -> Message<Descriptor> {
+        let participant = if participant_read {
+            json!({ "$actions": [{"role": "thread/participant", "can": ["read"]}] })
+        } else {
+            json!({})
+        };
+        serde_json::from_value(json!({
+            "descriptor": {
+                "interface": "Protocols",
+                "method": "Configure",
+                "messageTimestamp": timestamp,
+                "definition": {
+                    "protocol": ROLE_TEST_PROTOCOL,
+                    "published": participant_read,
+                    "types": {},
+                    "structure": { "thread": { "participant": participant } }
+                }
+            }
+        }))
+        .expect("configure message must deserialize")
+    }
+
+    async fn put_history_configure(
+        store: &MemoryMessageStore,
+        timestamp: &str,
+        participant_read: bool,
+    ) {
+        let message = history_configure_message(timestamp, participant_read);
+        let is_configure = matches!(
+            &message.descriptor,
+            Descriptor::Protocols(protocols)
+                if matches!(protocols.as_ref(), crate::descriptors::Protocols::Configure(_))
+        );
+        assert!(is_configure, "seeded message must be a ProtocolsConfigure");
+        let indexes = BTreeMap::from([
+            (
+                "interface".to_string(),
+                Value::String("Protocols".to_string()),
+            ),
+            ("method".to_string(), Value::String("Configure".to_string())),
+            (
+                "messageTimestamp".to_string(),
+                Value::String(timestamp.to_string()),
+            ),
+            (
+                "protocol".to_string(),
+                Value::String(ROLE_TEST_PROTOCOL.to_string()),
+            ),
+            ("published".to_string(), Value::Bool(participant_read)),
+            ("isLatestBaseState".to_string(), Value::Bool(true)),
+        ]);
+        store
+            .put(ROLE_TEST_TENANT, message, indexes)
+            .await
+            .expect("configure must store");
+    }
+
+    fn role_query_auth_ctx() -> AuthorizationContext {
+        use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
+        use crate::permissions::VerifiedAuthorizationPayload;
+
+        AuthorizationContext {
+            signer: ROLE_TEST_AUTHOR.to_string(),
+            author: ROLE_TEST_AUTHOR.to_string(),
+            payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: None,
+                permission_grant_ids: None,
+                protocol_role: Some("thread/participant".to_string()),
+            }),
+            permission_grant_invocation: PermissionGrantInvocation::None,
+            author_delegated_grant: None,
+        }
+    }
+
+    struct FailingMessageStore;
+
+    impl crate::stores::MessageStore for FailingMessageStore {
+        async fn open(&mut self) -> Result<(), crate::errors::MessageStoreError> {
+            Ok(())
+        }
+
+        async fn close(&mut self) {}
+
+        async fn put<D>(
+            &self,
+            _tenant: &str,
+            _message: Message<D>,
+            _indexes: KeyValues,
+        ) -> Result<(), crate::errors::MessageStoreError>
+        where
+            D: crate::descriptors::MessageDescriptor + Send,
+            Message<Descriptor>: From<Message<D>>,
+        {
+            unimplemented!("read-only stub")
+        }
+
+        async fn get(
+            &self,
+            _tenant: &str,
+            _cid: &str,
+        ) -> Result<Option<Message<Descriptor>>, crate::errors::MessageStoreError> {
+            unimplemented!("read-only stub")
+        }
+
+        async fn query(
+            &self,
+            _tenant: &str,
+            _filters: Filters,
+            _sort: Option<MessageSort>,
+            _pagination: Option<Pagination>,
+        ) -> Result<MessageQueryResult, crate::errors::MessageStoreError> {
+            Err(crate::errors::MessageStoreError::StoreError(
+                crate::errors::StoreError::InternalException("failing store".to_string()),
+            ))
+        }
+
+        async fn count(
+            &self,
+            _tenant: &str,
+            _filters: Filters,
+            _sort: Option<MessageSort>,
+        ) -> Result<u64, crate::errors::MessageStoreError> {
+            unimplemented!("read-only stub")
+        }
+
+        async fn delete(
+            &self,
+            _tenant: &str,
+            _cid: &str,
+        ) -> Result<(), crate::errors::MessageStoreError> {
+            unimplemented!("read-only stub")
+        }
+
+        async fn clear(&self) -> Result<(), crate::errors::MessageStoreError> {
+            unimplemented!("read-only stub")
+        }
+    }
+
+    // Covers: DWN-PROTO-004
+    #[tokio::test]
+    async fn protocol_definition_selects_governing_version() {
+        use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
+
+        let store = MemoryMessageStore::default();
+        put_history_configure(&store, HISTORY_T1, true).await;
+        put_history_configure(&store, HISTORY_T2, false).await;
+
+        let mid = fetch_protocol_definition(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_PROTOCOL,
+            &store,
+            Some(HISTORY_MID),
+        )
+        .await
+        .expect("definition at MID must resolve");
+        assert!(mid.published, "request between configures sees v1");
+
+        let late = fetch_protocol_definition(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_PROTOCOL,
+            &store,
+            Some(HISTORY_LATE),
+        )
+        .await
+        .expect("definition after reconfigure sees v2");
+        assert!(!late.published, "request after reconfigure sees v2");
+
+        assert!(
+            matches!(
+                fetch_protocol_definition(
+                    ROLE_TEST_TENANT,
+                    ROLE_TEST_PROTOCOL,
+                    &store,
+                    Some(HISTORY_EARLY),
+                )
+                .await,
+                Err(ProtocolDefinitionLookupError::NotFound(_))
+            ),
+            "request before any configure is classified not-found"
+        );
+    }
+
+    // Covers: DWN-PROTO-001
+    #[tokio::test]
+    async fn protocol_definition_preserves_fail_closed_classification() {
+        use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
+
+        let empty = MemoryMessageStore::default();
+        assert!(
+            matches!(
+                fetch_protocol_definition(
+                    ROLE_TEST_TENANT,
+                    ROLE_TEST_PROTOCOL,
+                    &empty,
+                    Some(HISTORY_MID),
+                )
+                .await,
+                Err(ProtocolDefinitionLookupError::NotFound(_))
+            ),
+            "absent protocol is the only non-error case"
+        );
+
+        let failing = FailingMessageStore;
+        assert!(
+            matches!(
+                fetch_protocol_definition(
+                    ROLE_TEST_TENANT,
+                    ROLE_TEST_PROTOCOL,
+                    &failing,
+                    Some(HISTORY_MID),
+                )
+                .await,
+                Err(ProtocolDefinitionLookupError::Store(_))
+            ),
+            "I/O failure must surface as store error, never as absent"
+        );
+
+        let forged = MemoryMessageStore::default();
+        let message: Message<Descriptor> = serde_json::from_value(json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Write",
+                "messageTimestamp": HISTORY_T1,
+                "dateCreated": HISTORY_T1,
+                "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
+                "dataSize": 0,
+                "dataFormat": "application/json",
+                "protocol": ROLE_TEST_PROTOCOL,
+                "protocolPath": "thread/participant",
+                "recipient": ROLE_TEST_AUTHOR
+            },
+            "recordId": "forged-record",
+            "contextId": "thread-1"
+        }))
+        .expect("forged message must deserialize");
+        forged
+            .put(
+                ROLE_TEST_TENANT,
+                message,
+                BTreeMap::from([
+                    (
+                        "interface".to_string(),
+                        Value::String("Protocols".to_string()),
+                    ),
+                    ("method".to_string(), Value::String("Configure".to_string())),
+                    (
+                        "protocol".to_string(),
+                        Value::String(ROLE_TEST_PROTOCOL.to_string()),
+                    ),
+                    (
+                        "messageTimestamp".to_string(),
+                        Value::String(HISTORY_T1.to_string()),
+                    ),
+                    ("isLatestBaseState".to_string(), Value::Bool(true)),
+                ]),
+            )
+            .await
+            .expect("forged row must store");
+        assert!(
+            matches!(
+                fetch_protocol_definition(
+                    ROLE_TEST_TENANT,
+                    ROLE_TEST_PROTOCOL,
+                    &forged,
+                    Some(HISTORY_MID),
+                )
+                .await,
+                Err(ProtocolDefinitionLookupError::InvalidMessage(_))
+            ),
+            "corrupt definition must surface as invalid, never as absent"
+        );
+    }
+
+    // Covers: DWN-PROTO-004, DWN-PROTO-002
+    #[tokio::test]
+    async fn role_authorization_uses_request_time_definition() {
+        let store = MemoryMessageStore::default();
+        put_history_configure(&store, HISTORY_T1, true).await;
+        put_history_configure(&store, HISTORY_T2, false).await;
+        put_role_record(
+            &store,
+            ROLE_TEST_PROTOCOL,
+            "thread/participant",
+            "thread-1",
+            "role-record-1",
+        )
+        .await;
+        let auth_ctx = role_query_auth_ctx();
+        let filter = RecordsFilter {
+            protocol: Some(ROLE_TEST_PROTOCOL.to_string()),
+            protocol_path: Some("thread/participant".to_string()),
+            context_id: Some("thread-1/message-1".to_string()),
+            ..Default::default()
+        };
+
+        let resolved = authorize_protocol_query_or_subscribe(
+            ROLE_TEST_TENANT,
+            &filter,
+            &auth_ctx,
+            &store,
+            HISTORY_MID,
+            RecordsAuthorizationKind::Query,
+        )
+        .await
+        .expect("role allowed under v1 must authorize at MID");
+        assert_eq!(resolved.role_record_id, "role-record-1");
+
+        assert!(
+            authorize_protocol_query_or_subscribe(
+                ROLE_TEST_TENANT,
+                &filter,
+                &auth_ctx,
+                &store,
+                HISTORY_LATE,
+                RecordsAuthorizationKind::Query,
+            )
+            .await
+            .is_err(),
+            "role removed by v2 must not authorize at LATE"
         );
     }
 }

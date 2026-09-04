@@ -1,5 +1,4 @@
-//! Commit 1 of #190: `contextId` subtree selection must be boundary-aware
-//! on both store backends.
+//! `contextId` subtree selection must be boundary-aware on both store backends.
 //!
 //! Scope `a/b` selects `a/b` and `a/b/...` but never the lexical sibling
 //! `a/bc`. Memory matching runs the shared `matches_filters` engine while

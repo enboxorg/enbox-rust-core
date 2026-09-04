@@ -4,6 +4,7 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use crate::auth::resolver::DidResolver;
+use crate::canonical_rfc3339;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, SubscribeDescriptor};
 use crate::dwn::{Handler, HandlerContext};
@@ -128,6 +129,7 @@ where
                         &descriptor.filter,
                         signature,
                         self.message_store.as_ref(),
+                        &canonical_rfc3339(descriptor.message_timestamp),
                         RecordsAuthorizationKind::Subscribe,
                     )
                     .await
@@ -406,6 +408,7 @@ where
                 &descriptor.filter,
                 signature,
                 self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
                 RecordsAuthorizationKind::Subscribe,
             )
             .await

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use super::RecordsAuthorizationKind;
 use crate::auth::resolver::DidResolver;
+use crate::canonical_rfc3339;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsQueryDescriptor;
 use crate::dwn::{Handler, HandlerContext};
@@ -169,6 +170,7 @@ where
                 &descriptor.filter,
                 signature,
                 self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
                 RecordsAuthorizationKind::Query,
             )
             .await

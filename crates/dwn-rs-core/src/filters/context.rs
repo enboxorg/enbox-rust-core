@@ -1,6 +1,6 @@
 //! Boundary-aware protocol context helpers.
 //!
-//! Covers `DWN-PROTO-001`, `DWN-PROTO-002` for commit 1 of #190.
+//! Covers `DWN-PROTO-001`, `DWN-PROTO-002`.
 //!
 //! TypeScript parity source: `Records.convertFilter` maps `contextId` to
 //! `{ subtree: contextId }` and `Records.validateNestedProtocolPathScope`
@@ -32,7 +32,7 @@ pub fn is_context_subtree_match(candidate: &str, scope: &str) -> bool {
 ///
 /// Deeper-than-path, empty-segment, and trailing-separator inputs are
 /// rejected. The `$encryption/*` control-path carve-out lives with the
-/// encryption-control projection owned by #191 and is intentionally absent
+/// encryption-control projection owned elsewhere and is intentionally absent
 /// here.
 ///
 /// The returned error is the reason only, without a method-specific code:
