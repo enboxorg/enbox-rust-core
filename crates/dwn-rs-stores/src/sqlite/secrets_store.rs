@@ -108,6 +108,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::sqlite::conn::disk_test_guard;
     use dwn_rs_core::identity::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryKeyManager, MemoryPortableDidStore, VAULT_PORTABLE_DID_KEY,
@@ -127,6 +128,8 @@ mod tests {
 
     #[tokio::test]
     async fn put_get_delete_roundtrip_persists_across_reopen() {
+        // Serialize file-backed tests process-wide (issue #255).
+        let _disk = disk_test_guard().await;
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("vault.sqlite");
 
@@ -156,6 +159,8 @@ mod tests {
 
     #[tokio::test]
     async fn agent_identity_persists_portable_did_across_reopen() {
+        // Serialize file-backed tests process-wide (issue #255).
+        let _disk = disk_test_guard().await;
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("agent.sqlite");
 

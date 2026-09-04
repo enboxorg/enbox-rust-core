@@ -88,6 +88,15 @@ pub fn noop_waker() -> WakePublishHandler {
     WakePublishHandler::new(Arc::new(()))
 }
 
+/// File-backed-test serialization guard (issue #255).
+///
+/// Single source of truth lives in the library
+/// (`dwn_rs_stores::sqlite::conn::disk_test_guard`); re-exported here so
+/// integration-test call sites stay spelled `common::disk_test_guard()`.
+/// Note each test binary is its own process with its own lock instance, so
+/// this serializes within a process, not across processes.
+pub use dwn_rs_stores::sqlite::conn::disk_test_guard;
+
 /// Opened in-memory SQLite store (no durability evidence on its own).
 pub async fn open_sqlite_mem() -> SqliteStore {
     let mut store = SqliteStore::new(unique_memory_uri("dwn-169"), noop_waker());
