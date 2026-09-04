@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
@@ -14,6 +14,7 @@ use crate::events::MessageEvent;
 use crate::fields::MessageFields;
 use crate::filters::Filters;
 use crate::matching::has_valid_subtree_filters;
+use crate::stores::occupancy::{is_occupant, occupant_ids_for_rows};
 use crate::stores::replication_feed_reader::{
     build_token, derive_stream_id, fingerprint_scopes, fold_cid_into_domain, is_feed_message,
     normalize_scopes, parse_feed_position, scopes_unchanged, validate_feed_cursor, xor_in_place,
@@ -25,8 +26,8 @@ use crate::stores::{
     EventLogSubscribeOptions, EventLogTrimBound, EventSubscription, EventSubscriptionClose,
     KeyValues, LatestStateMutation, LatestStateTransition, LatestStateTransitionResult,
     ManagedResumableTask, MessageQueryResult, MessageStore, ProgressGapCode, ProgressGapInfo,
-    ProgressGapReason, ProgressToken, ReplicationFeedReader, ResumableTaskStore,
-    SubscriptionListener, SubscriptionMessage,
+    ProgressGapReason, ProgressToken, RecordLimitOccupancy, ReplicationFeedReader,
+    ResumableTaskStore, SubscriptionListener, SubscriptionMessage,
 };
 use crate::{
     compare_values, Cursor, Descriptor, FilterError, Message, MessageSort, SortDirection, Value,
@@ -233,6 +234,30 @@ fn delete_message_state(
     Ok(())
 }
 
+impl MemoryMessageStore {
+    /// Resolves the admitted occupant record IDs, or `None` when nothing
+    /// occupies a slot so callers short-circuit. Locks are released before
+    /// the caller runs its bounded query; occupancy inputs resolve first.
+    fn occupant_ids(
+        &self,
+        tenant: &str,
+        policy: &RecordLimitOccupancy,
+    ) -> Result<Option<BTreeSet<String>>, MessageStoreError> {
+        let wrap =
+            |detail: String| MessageStoreError::StoreError(StoreError::InternalException(detail));
+        let state = self.state.read().map_err(message_lock_error)?;
+        occupant_ids_for_rows(
+            state
+                .messages
+                .iter()
+                .map(|((row_tenant, _), row)| (row_tenant.as_str(), &row.indexes)),
+            tenant,
+            policy,
+        )
+        .map_err(wrap)
+    }
+}
+
 impl MessageStore for MemoryMessageStore {
     async fn open(&mut self) -> Result<(), MessageStoreError> {
         self.state
@@ -350,6 +375,7 @@ impl MessageStore for MemoryMessageStore {
         filters: Filters,
         sort: Option<crate::MessageSort>,
         pagination: Option<crate::Pagination>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> Result<crate::stores::MessageQueryResult, MessageStoreError> {
         if matches!(pagination.as_ref().and_then(|p| p.limit), Some(0)) {
             return Ok(MessageQueryResult {
@@ -357,6 +383,18 @@ impl MessageStore for MemoryMessageStore {
                 cursor: None,
             });
         }
+        let occupants = match record_limit {
+            None => None,
+            Some(policy) => match self.occupant_ids(tenant, &policy)? {
+                Some(ids) => Some(ids),
+                None => {
+                    return Ok(MessageQueryResult {
+                        messages: Vec::new(),
+                        cursor: None,
+                    });
+                }
+            },
+        };
 
         let (property, direction) = sort_property(sort.unwrap_or_default());
 
@@ -371,6 +409,10 @@ impl MessageStore for MemoryMessageStore {
                 .cloned()
                 .collect()
         };
+
+        if let Some(occupant_ids) = occupants.as_ref() {
+            rows.retain(|row| is_occupant(&row.indexes, occupant_ids));
+        }
 
         rows.retain(|row| row.indexes.contains_key(property));
 
@@ -416,19 +458,15 @@ impl MessageStore for MemoryMessageStore {
         tenant: &str,
         filters: Filters,
         sort: Option<crate::MessageSort>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> Result<u64, MessageStoreError> {
-        let property = Some(sort_property(sort.unwrap_or_default()).0);
-        let guard = self.state.read().map_err(message_lock_error)?;
-
-        Ok(guard
+        // Single occupancy gate: counting delegates to the query path so
+        // count and query populations cannot disagree.
+        Ok(self
+            .query(tenant, filters, sort, None, record_limit)
+            .await?
             .messages
-            .iter()
-            .filter(|((row_tenant, _), row)| {
-                row_tenant == tenant
-                    && matches_filters(&row.indexes, Some(&filters))
-                    && property.is_none_or(|prop| row.indexes.contains_key(prop))
-            })
-            .count() as u64)
+            .len() as u64)
     }
 }
 
@@ -2602,7 +2640,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .count("did:alice", Filters::default(), None)
+                .count("did:alice", Filters::default(), None, None)
                 .await
                 .unwrap(),
             1
@@ -2639,13 +2677,17 @@ mod tests {
             Filter::Equal(Value::String("notes".to_string())),
         )]]);
 
-        assert_eq!(store.count("t", notes.clone(), None).await.unwrap(), 2);
+        assert_eq!(
+            store.count("t", notes.clone(), None, None).await.unwrap(),
+            2
+        );
 
         let desc = store
             .query(
                 "t",
                 notes.clone(),
                 Some(MessageSort::Timestamp(SortDirection::Descending)),
+                None,
                 None,
             )
             .await
@@ -2658,6 +2700,7 @@ mod tests {
                 "t",
                 notes,
                 Some(MessageSort::Timestamp(SortDirection::Ascending)),
+                None,
                 None,
             )
             .await
@@ -2692,6 +2735,7 @@ mod tests {
                 Filters::default(),
                 sort,
                 Some(Pagination::with_limit(1)),
+                None,
             )
             .await
             .unwrap();
@@ -2704,6 +2748,7 @@ mod tests {
                 Filters::default(),
                 sort,
                 Some(Pagination::new(p1.cursor, Some(1))),
+                None,
             )
             .await
             .unwrap();
@@ -2716,6 +2761,7 @@ mod tests {
                 Filters::default(),
                 sort,
                 Some(Pagination::new(p2.cursor, Some(1))),
+                None,
             )
             .await
             .unwrap();
@@ -2745,6 +2791,7 @@ mod tests {
                 Filters::default(),
                 sort,
                 Some(Pagination::with_limit(1)),
+                None,
             )
             .await
             .unwrap();
@@ -2755,6 +2802,7 @@ mod tests {
                 Filters::default(),
                 sort,
                 Some(Pagination::new(p1.cursor.clone(), Some(1))),
+                None,
             )
             .await
             .unwrap();
@@ -2783,6 +2831,7 @@ mod tests {
                 Filters::default(),
                 None,
                 Some(Pagination::with_limit(0)),
+                None,
             )
             .await
             .unwrap();

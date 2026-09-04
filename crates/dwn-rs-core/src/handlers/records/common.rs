@@ -1137,6 +1137,7 @@ where
             Filters::from(filter),
             None,
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -1214,6 +1215,7 @@ where
             Filters::from(filter),
             None,
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -1379,7 +1381,7 @@ where
         ("recordId", string_filter(record_id)),
     ]);
     message_store
-        .query(tenant, Filters::from(filter), None, None)
+        .query(tenant, Filters::from(filter), None, None, None)
         .await
         .map(|result| result.messages)
         .map_err(|err| err.to_string())
@@ -1404,6 +1406,7 @@ where
             Filters::from(filter),
             Some(MessageSort::Timestamp(SortDirection::Descending)),
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -1429,6 +1432,7 @@ where
             Filters::from(filter),
             None,
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await
         .map(|result| result.messages.into_iter().next())
@@ -1522,7 +1526,7 @@ where
         ("parentId", string_filter(record_id)),
     ]);
     let child_messages = message_store
-        .query(tenant, Filters::from(filter), None, None)
+        .query(tenant, Filters::from(filter), None, None, None)
         .await
         .map_err(|err| err.to_string())?
         .messages;
@@ -2144,6 +2148,7 @@ mod tests {
             _filters: Filters,
             _sort: Option<MessageSort>,
             _pagination: Option<Pagination>,
+            _record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<MessageQueryResult, crate::errors::MessageStoreError> {
             Err(crate::errors::MessageStoreError::StoreError(
                 crate::errors::StoreError::InternalException("failing store".to_string()),
@@ -2155,6 +2160,7 @@ mod tests {
             _tenant: &str,
             _filters: Filters,
             _sort: Option<MessageSort>,
+            _record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<u64, crate::errors::MessageStoreError> {
             unimplemented!("read-only stub")
         }

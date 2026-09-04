@@ -88,6 +88,7 @@ where
                         true,
                     )),
                     Some(Pagination::with_limit(1)),
+                    None,
                 )
                 .await
             {

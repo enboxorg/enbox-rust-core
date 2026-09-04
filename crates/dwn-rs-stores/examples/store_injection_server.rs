@@ -153,6 +153,7 @@ async fn handle_request(
                     filters,
                     params.message_sort,
                     params.pagination,
+                    None,
                 )
                 .await
                 .map_err(|err| err.to_string())?;
@@ -171,7 +172,7 @@ async fn handle_request(
                 serde_json::from_value(params).map_err(|err| err.to_string())?;
             let filters = filters_from_json(&params.filters)?;
             store
-                .count(&params.tenant, filters, params.message_sort)
+                .count(&params.tenant, filters, params.message_sort, None)
                 .await
                 .map(|count| json!(count))
                 .map_err(|err| err.to_string())

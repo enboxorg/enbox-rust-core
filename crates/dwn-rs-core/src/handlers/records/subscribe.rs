@@ -124,6 +124,7 @@ where
                         false,
                     )),
                     descriptor.pagination.clone(),
+                    None,
                 )
                 .await
             {
@@ -293,6 +294,7 @@ where
                     false,
                 )),
                 descriptor.pagination.clone(),
+                None,
             )
             .await
         {

@@ -402,7 +402,7 @@ where
             ("recordId", string_filter(record_id)),
         ]);
         self.message_store
-            .query(tenant, Filters::from(filter), None, None)
+            .query(tenant, Filters::from(filter), None, None, None)
             .await
             .map(|result| result.messages)
             .map_err(|err| store_error_reply(err.to_string()))
@@ -713,6 +713,7 @@ where
                 Filters::from(filter),
                 Some(MessageSort::Timestamp(SortDirection::Descending)),
                 Some(Pagination::with_limit(1)),
+                None,
             )
             .await
             .map_err(|err| err.to_string())?;
@@ -821,7 +822,7 @@ where
         }
     }
     let sibling_messages = message_store
-        .query(tenant, Filters::from(filter), None, None)
+        .query(tenant, Filters::from(filter), None, None, None)
         .await
         .map_err(|err| err.to_string())?
         .messages;

@@ -86,7 +86,7 @@ where
             )]]);
 
             let result = store
-                .query(tenant, filters, None, Some(Pagination::with_limit(1)))
+                .query(tenant, filters, None, Some(Pagination::with_limit(1)), None)
                 .await
                 .map_err(|e| {
                     EventLogError::StoreError(StoreError::InternalException(format!(

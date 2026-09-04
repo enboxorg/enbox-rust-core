@@ -88,6 +88,7 @@ where
                         false,
                     )),
                     descriptor.pagination.clone(),
+                    None,
                 )
                 .await
             {

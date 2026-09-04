@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ops::Bound;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -16,8 +17,9 @@ pub struct SqliteQuery<U, T> {
     id_col: &'static str,
     payload_col: &'static str,
     index_col: &'static str,
-    or_groups: Vec<String>,     // each = "(pred AND pred ...)"
-    params: Vec<SqliteValue>,   // owned + Send, crosses spawn_blocking
+    or_groups: Vec<String>,   // each = "(pred AND pred ...)"
+    params: Vec<SqliteValue>, // owned + Send, crosses spawn_blocking
+    occupancy: Option<(String, Vec<SqliteValue>)>, // admitted-population predicate
     order: Vec<(String, bool)>, // (sql_expr, ascending)
     limit: Option<u64>,
     cursor: Option<Cursor>,
@@ -42,6 +44,7 @@ impl<U, T> SqliteQuery<U, T> {
             index_col,
             or_groups: Vec::new(),
             params: Vec::new(),
+            occupancy: None,
             order: Vec::new(),
             limit: None,
             cursor: None,
@@ -69,6 +72,84 @@ impl<U, T> SqliteQuery<U, T> {
         Ok(count as u64)
     }
 
+    /// Renders caller filters to SQL without touching builder state, so the
+    /// occupancy candidate scan reuses the exact predicate semantics.
+    pub(crate) fn render_filters(
+        index_col: &'static str,
+        filters: &Filters,
+    ) -> Result<(Vec<String>, Vec<SqliteValue>), dwn_rs_core::filters::errors::FilterError> {
+        let set: FilterSet<Alias> = filters.into();
+        let mut or_groups = Vec::new();
+        let mut params = Vec::new();
+
+        for group in set {
+            let mut preds = Vec::new();
+
+            for ((key, _alias), filter) in group {
+                let (pred, pred_params) = Self::predicate(index_col, &key, &filter)?;
+                preds.push(pred);
+                params.extend(pred_params);
+            }
+
+            if !preds.is_empty() {
+                or_groups.push(format!("({})", preds.join(" AND ")));
+            }
+        }
+
+        Ok((or_groups, params))
+    }
+
+    /// Enforces a precomputed per-group rank cutoff for record-limit
+    /// occupancy. Each group admits rows whose (`dateCreated`, `recordId`)
+    /// rank key sorts at or before its cutoff; rows without a parent form the
+    /// root group. The rank expression compares canonical timestamp strings
+    /// and record IDs with binary collation, matching the shared Rust rank
+    /// key byte-for-byte. Empty cutoffs admit nothing.
+    pub fn occupancy_cutoffs(&mut self, cutoffs: &BTreeMap<Option<String>, String>) -> &mut Self {
+        let rank = format!(
+            "(json_extract({}, '$.dateCreated') || char(0) || json_extract({}, '$.recordId'))",
+            self.index_col, self.index_col
+        );
+        let mut branches = Vec::new();
+        let mut params = Vec::new();
+        for (parent, cutoff) in cutoffs {
+            match parent {
+                None => {
+                    branches.push(format!(
+                        "(json_extract({}, '$.parentId') IS NULL AND {rank} <= ?)",
+                        self.index_col
+                    ));
+                    params.push(SqliteValue::from(cutoff.clone()));
+                }
+                Some(parent_id) => {
+                    branches.push(format!(
+                        "(json_extract({}, '$.parentId') = ? AND {rank} <= ?)",
+                        self.index_col
+                    ));
+                    params.push(SqliteValue::from(parent_id.clone()));
+                    params.push(SqliteValue::from(cutoff.clone()));
+                }
+            }
+        }
+        if branches.is_empty() {
+            self.occupancy = Some(("1 = 0".to_string(), Vec::new()));
+        } else {
+            self.occupancy = Some((format!("({})", branches.join(" OR ")), params));
+        }
+        self
+    }
+
+    fn apply_occupancy(
+        sql: &mut String,
+        params: &mut Vec<SqliteValue>,
+        occupancy: &Option<(String, Vec<SqliteValue>)>,
+    ) {
+        if let Some((predicate, occupancy_params)) = occupancy {
+            sql.push_str(&format!(" AND ({predicate})"));
+            params.extend(occupancy_params.iter().cloned());
+        }
+    }
+
     fn primary_sort(&self) -> Option<(String, bool)> {
         self.order.iter().find(|(e, _)| e != self.id_col).cloned()
     }
@@ -81,6 +162,7 @@ impl<U, T> SqliteQuery<U, T> {
             sql.push_str(&format!(" AND ({})", self.or_groups.join(" OR ")));
             params.extend(self.params.iter().cloned());
         }
+        Self::apply_occupancy(&mut sql, &mut params, &self.occupancy);
 
         if let Some((expr, _)) = self.primary_sort() {
             sql.push_str(&format!(" AND {expr} IS NOT NULL"));
@@ -90,19 +172,18 @@ impl<U, T> SqliteQuery<U, T> {
     }
 
     fn predicate(
-        &self,
+        index_col: &'static str,
         key: &FilterKey,
         filter: &Filter<Value>,
     ) -> Result<(String, Vec<SqliteValue>), FilterError> {
-        let col = json_col(self.index_col, key);
+        let col = json_col(index_col, key);
         let path = json_path(key);
-        let indexes_col = self.index_col;
 
         match filter {
             Filter::Equal(v) => {
                 let p = SqliteValue::from(v);
                 Ok((
-                format!("({col} = ? OR EXISTS (SELECT 1 FROM json_each({indexes_col}, '{path}') WHERE value = ?))"),
+                format!("({col} = ? OR EXISTS (SELECT 1 FROM json_each({index_col}, '{path}') WHERE value = ?))"),
                 vec![p.clone(), p],
             ))
             }
@@ -111,7 +192,7 @@ impl<U, T> SqliteQuery<U, T> {
                 let params = vs.iter().map(SqliteValue::from).collect::<Vec<_>>();
                 let ph = vec!["?"; params.len()].join(", ");
                 Ok((
-                format!("({col} IN ({ph}) OR EXISTS (SELECT 1 FROM json_each({indexes_col}, '{path}') WHERE value IN ({ph})))"),
+                format!("({col} IN ({ph}) OR EXISTS (SELECT 1 FROM json_each({index_col}, '{path}') WHERE value IN ({ph})))"),
                 // bound TWICE — once per IN list:
                 params.iter().cloned().chain(params.iter().cloned()).collect(),
             ))
@@ -200,22 +281,9 @@ where
         &mut self,
         filters: &Filters,
     ) -> Result<&mut Self, dwn_rs_core::filters::errors::FilterError> {
-        let set: FilterSet<Alias> = filters.into();
-
-        for group in set {
-            let mut preds = Vec::new();
-
-            for ((key, _alias), filter) in group {
-                let (pred, params) = self.predicate(&key, &filter)?;
-                preds.push(pred);
-                self.params.extend(params);
-            }
-
-            if !preds.is_empty() {
-                self.or_groups.push(format!("({})", preds.join(" AND ")));
-            }
-        }
-
+        let (or_groups, params) = Self::render_filters(self.index_col, filters)?;
+        self.or_groups.extend(or_groups);
+        self.params.extend(params);
         Ok(self)
     }
 
@@ -291,6 +359,7 @@ where
             sql.push_str(&format!(" AND ({})", self.or_groups.join(" OR ")));
             params.extend(self.params.iter().cloned());
         }
+        Self::apply_occupancy(&mut sql, &mut params, &self.occupancy);
 
         if let Some((ref expr, _)) = primary {
             sql.push_str(&format!(" AND {expr} IS NOT NULL"));

@@ -991,6 +991,7 @@ where
             )])),
             None,
             None,
+            None,
         )
         .await?;
     for authorized_message in result.messages {
@@ -1030,6 +1031,7 @@ where
             ])),
             None,
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await?;
     let Some(message) = result.messages.first() else {
@@ -1567,6 +1569,7 @@ where
             ])),
             Some(MessageSort::Timestamp(SortDirection::Ascending)),
             None,
+            None,
         )
         .await?;
     if result
@@ -1774,6 +1777,7 @@ where
             ])),
             Some(MessageSort::Timestamp(SortDirection::Descending)),
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await?;
 
@@ -2314,7 +2318,10 @@ mod tests {
             _filters: Filters,
             _sort: Option<MessageSort>,
             _pagination: Option<Pagination>,
+            _record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<MessageQueryResult, MessageStoreError> {
+            // This double holds no rows, so the occupant population is
+            // vacuously empty under any policy.
             Ok(MessageQueryResult {
                 messages: Vec::new(),
                 cursor: None,
@@ -2326,6 +2333,7 @@ mod tests {
             _tenant: &str,
             _filters: Filters,
             _sort: Option<MessageSort>,
+            _record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<u64, MessageStoreError> {
             Ok(0)
         }
@@ -2372,7 +2380,17 @@ mod tests {
             _filters: Filters,
             _sort: Option<MessageSort>,
             _pagination: Option<Pagination>,
+            record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<MessageQueryResult, MessageStoreError> {
+            // This double serves canned rows it cannot project. Fail closed
+            // rather than return unprojected rows.
+            if record_limit.is_some() {
+                return Err(MessageStoreError::StoreError(
+                    crate::errors::StoreError::InternalException(
+                        "RevokedMessageStore does not support record-limit policies".to_string(),
+                    ),
+                ));
+            }
             Ok(MessageQueryResult {
                 messages: vec![delegated_subscribe_message(Vec::new())],
                 cursor: None,
@@ -2384,6 +2402,7 @@ mod tests {
             _tenant: &str,
             _filters: Filters,
             _sort: Option<MessageSort>,
+            _record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<u64, MessageStoreError> {
             Ok(0)
         }

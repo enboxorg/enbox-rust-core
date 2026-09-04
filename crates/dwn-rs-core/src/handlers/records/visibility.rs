@@ -354,12 +354,12 @@ mod tests {
         assert_eq!(owner.visibility, VisibilityClass::Owner);
         let owner_filters = collection_filters(&owner, &filter, None, PlanMode::Snapshot);
         let owner_found = store
-            .query(PLAN_TENANT, owner_filters.clone(), None, None)
+            .query(PLAN_TENANT, owner_filters.clone(), None, None, None)
             .await
             .expect("owner query must succeed");
         assert_eq!(owner_found.messages.len(), 2);
         let owner_count = store
-            .count(PLAN_TENANT, owner_filters, None)
+            .count(PLAN_TENANT, owner_filters, None, None)
             .await
             .expect("owner count must succeed");
         assert_eq!(
@@ -383,6 +383,7 @@ mod tests {
             .query(
                 PLAN_TENANT,
                 collection_filters(&anonymous, &filter, None, PlanMode::Snapshot),
+                None,
                 None,
                 None,
             )

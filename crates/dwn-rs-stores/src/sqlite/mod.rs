@@ -330,7 +330,7 @@ mod tests {
         )]]);
         assert_eq!(
             store
-                .count("did:example:alice", filters.clone(), None)
+                .count("did:example:alice", filters.clone(), None, None)
                 .await
                 .unwrap(),
             2
@@ -342,6 +342,7 @@ mod tests {
                 filters.clone(),
                 Some(MessageSort::Timestamp(SortDirection::Descending)),
                 Some(Pagination::with_limit(1)),
+                None,
             )
             .await
             .unwrap();
@@ -354,6 +355,7 @@ mod tests {
                 filters,
                 Some(MessageSort::Timestamp(SortDirection::Descending)),
                 Some(Pagination::new(result.cursor, Some(1))),
+                None,
             )
             .await
             .unwrap();
@@ -369,6 +371,7 @@ mod tests {
                 )]]),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -379,6 +382,7 @@ mod tests {
                 "did:example:alice",
                 Filters::default(),
                 Some(MessageSort::DatePublished(SortDirection::Ascending)),
+                None,
                 None,
             )
             .await
@@ -391,6 +395,7 @@ mod tests {
                 Filters::default(),
                 Some(MessageSort::Timestamp(SortDirection::Ascending)),
                 Some(Pagination::with_limit(0)),
+                None,
             )
             .await
             .unwrap();

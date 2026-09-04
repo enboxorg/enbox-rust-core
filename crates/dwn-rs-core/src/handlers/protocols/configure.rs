@@ -84,6 +84,7 @@ where
                     protocol_configure_filters(&descriptor.definition.protocol, false),
                     Some(MessageSort::Timestamp(SortDirection::Ascending)),
                     None,
+                    None,
                 )
                 .await
             {
@@ -269,6 +270,7 @@ where
             filters,
             Some(MessageSort::Timestamp(SortDirection::Descending)),
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await
         .map_err(|err| ProtocolDefinitionLookupError::Store(err.to_string()))?;

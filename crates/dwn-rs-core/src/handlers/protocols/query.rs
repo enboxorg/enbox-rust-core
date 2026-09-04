@@ -119,6 +119,7 @@ where
                     Filters::from(filters),
                     Some(MessageSort::Timestamp(SortDirection::Ascending)),
                     None,
+                    None,
                 )
                 .await
             {

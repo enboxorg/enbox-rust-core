@@ -420,3 +420,18 @@ pub fn test_public_jwk(key_id: &str) -> JWK {
     )
     .unwrap()
 }
+
+/// Fail-closed guard for narrow test doubles that resolve entries by key
+/// without indexes and therefore cannot project occupancy.
+pub fn reject_record_limit(
+    record_limit: Option<&crate::stores::RecordLimitOccupancy>,
+) -> Result<(), crate::errors::MessageStoreError> {
+    if record_limit.is_some() {
+        return Err(crate::errors::MessageStoreError::StoreError(
+            crate::errors::StoreError::InternalException(
+                "test store does not support record-limit policies".to_string(),
+            ),
+        ));
+    }
+    Ok(())
+}

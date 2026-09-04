@@ -94,7 +94,7 @@ async fn seed(store: &impl MessageStore) -> BTreeMap<String, String> {
 
 async fn query_cids(store: &impl MessageStore, scope: &str) -> BTreeSet<String> {
     store
-        .query(TENANT, subtree_filter(scope), None, None)
+        .query(TENANT, subtree_filter(scope), None, None, None)
         .await
         .expect("subtree query must succeed")
         .messages

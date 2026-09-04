@@ -78,7 +78,7 @@ where
             };
             let filters = collection_filters(&auth, &descriptor.filter, None, PlanMode::Snapshot);
 
-            match self.message_store.count(tenant, filters, None).await {
+            match self.message_store.count(tenant, filters, None, None).await {
                 Ok(count) => Response::ok().with_reply(Count { count: Some(count) }),
                 Err(err) => store_error_reply(err.to_string()),
             }
