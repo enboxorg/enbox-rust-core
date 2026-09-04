@@ -135,7 +135,7 @@ where
 
 #[tokio::test]
 async fn puts_survive_drop_without_close() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("puts-drop-no-close");
     let log = op_log();
@@ -164,7 +164,7 @@ async fn puts_survive_drop_without_close() {
 
 #[tokio::test]
 async fn atomic_grid_close_vs_drop_matches_uninterrupted_run() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     for shutdown in [Shutdown::Close, Shutdown::Drop] {
         // Reference: same op log on memory, no restart.
@@ -217,7 +217,7 @@ async fn atomic_grid_close_vs_drop_matches_uninterrupted_run() {
 
 #[tokio::test]
 async fn mid_sequence_restart_converges_with_uninterrupted_run() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let log = op_log();
 
@@ -289,7 +289,7 @@ async fn mid_sequence_restart_converges_with_uninterrupted_run() {
 
 #[tokio::test]
 async fn clear_then_drop_without_close_reopens_clean() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("clear-drop-reopen");
     let old_cursor = {

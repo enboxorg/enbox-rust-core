@@ -89,7 +89,7 @@ const REMOTE: &str = "https://peer.example";
 
 #[tokio::test]
 async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let path = std::env::temp_dir().join(format!(
         "enbox-sync-engine-ledger-{}.sqlite",
@@ -185,7 +185,7 @@ fn sample_progress_token(position: &str, message_cid: &str) -> ProgressToken {
 
 #[tokio::test]
 async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let path = std::env::temp_dir().join(format!(
         "enbox-sync-eose-ledger-{}.sqlite",
@@ -217,7 +217,7 @@ async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
 
 #[tokio::test]
 async fn sync_engine_persists_progress_gap_as_repairing_in_sqlite_ledger() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let path = std::env::temp_dir().join(format!(
         "enbox-sync-gap-ledger-{}.sqlite",

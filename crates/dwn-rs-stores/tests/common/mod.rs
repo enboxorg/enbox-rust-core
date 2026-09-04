@@ -88,7 +88,7 @@ pub fn noop_waker() -> WakePublishHandler {
     WakePublishHandler::new(Arc::new(()))
 }
 
-/// File-backed-test serialization guard (issue #255).
+/// File-backed-test serialization guard.
 ///
 /// Single source of truth lives in the library
 /// (`dwn_rs_stores::sqlite::conn::disk_test_guard`); re-exported here so

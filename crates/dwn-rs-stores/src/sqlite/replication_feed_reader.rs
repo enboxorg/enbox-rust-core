@@ -485,7 +485,7 @@ mod tests {
 
         // The production path is file-backed: run the same suite on disk with
         // a fresh file per scenario, serialized against other file-backed
-        // tests process-wide (issue #255).
+        // tests process-wide.
         let _disk = disk_test_guard().await;
         let dir = tempfile::tempdir().expect("battery tempdir");
         let seq = AtomicU64::new(0);
@@ -703,7 +703,7 @@ mod tests {
 
     #[tokio::test]
     async fn reopened_store_preserves_feed_positions_bounds_and_epoch() {
-        // Serialize file-backed tests process-wide (issue #255).
+        // Serialize file-backed tests process-wide.
         let _disk = disk_test_guard().await;
         let temporary = tempfile::tempdir().expect("temporary directory");
         let path = temporary.path().join("replication-feed.sqlite3");
@@ -728,7 +728,7 @@ mod tests {
         let epoch = store.epoch().await.expect("epoch");
         let bounds = store.log_bounds(TENANT).await.expect("bounds");
         MessageStore::close(&mut store).await;
-        // Drop the old handle before reopening (issue #255).
+        // Drop the old handle before reopening.
         drop(store);
 
         let mut reopened = SqliteStore::new(&path, publisher);

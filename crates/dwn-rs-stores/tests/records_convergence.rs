@@ -90,7 +90,7 @@ struct Nodes {
     // `Option` so a mid-sequence restart can drop the old node (releasing its
     // SQLite connections) *before* opening the fresh handle on the same file.
     // Holding two live connection sets on one file piles onto the
-    // process-global Unix VFS lock (issue #255).
+    // process-global Unix VFS lock.
     disk: Option<SqliteNativeDwn>,
     _db: TempDb,
 }
@@ -220,7 +220,7 @@ async fn run_order(
     for (applied, index) in order.iter().enumerate() {
         if restart_disk_after == Some(applied) {
             // Drop the old node (connections close) *before* reopening the same
-            // file, so the two connection sets never overlap (issue #255).
+            // file, so the two connection sets never overlap.
             let path = nodes._db.path().to_path_buf();
             drop(nodes.disk.take());
             nodes.disk = Some(
@@ -249,7 +249,7 @@ async fn states(nodes: &Nodes, record_id: &str) -> (VisibleState, VisibleState) 
 // it, and the stale loser is rejected without reviving the record.
 #[tokio::test]
 async fn delete_wins_in_both_arrival_orders() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let mut observed = Vec::new();
@@ -284,7 +284,7 @@ async fn delete_wins_in_both_arrival_orders() {
 // (DWN-REC-003 idempotence of logical state, not of status codes).
 #[tokio::test]
 async fn newest_write_wins_and_identical_replay_rejected() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let ops = vec![
@@ -304,7 +304,7 @@ async fn newest_write_wins_and_identical_replay_rejected() {
 
 #[tokio::test]
 async fn stale_write_rejected_identically() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     // Initial, update, then the stale initial again: rejected, state newest.
@@ -324,7 +324,7 @@ async fn stale_write_rejected_identically() {
 
 #[tokio::test]
 async fn duplicate_replay_converges() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let ops = vec![scenario.ops[0].clone(), scenario.ops[0].clone()];
@@ -338,7 +338,7 @@ async fn duplicate_replay_converges() {
 
 #[tokio::test]
 async fn restart_mid_sequence_converges_with_uninterrupted_run() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let scenario = scenario().await;
     let order = vec![0, 1, 2];

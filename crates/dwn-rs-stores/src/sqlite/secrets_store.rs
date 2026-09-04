@@ -128,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_get_delete_roundtrip_persists_across_reopen() {
-        // Serialize file-backed tests process-wide (issue #255).
+        // Serialize file-backed tests process-wide.
         let _disk = disk_test_guard().await;
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("vault.sqlite");
@@ -159,7 +159,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_identity_persists_portable_did_across_reopen() {
-        // Serialize file-backed tests process-wide (issue #255).
+        // Serialize file-backed tests process-wide.
         let _disk = disk_test_guard().await;
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("agent.sqlite");

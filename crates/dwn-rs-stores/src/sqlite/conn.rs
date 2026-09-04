@@ -363,8 +363,8 @@ where
 /// Take the slotted connection, reopening fresh if a cancelled predecessor's
 /// worker still owns it.
 ///
-/// Never runs caller code against a closed set (issue #255): the closed flag
-/// is checked before taking and again before reopening, so a call racing
+/// Never runs caller code against a closed set: the closed flag is checked
+/// before taking and again before reopening, so a call racing
 /// `close()`+`drain()` fails explicitly instead of executing on a fresh
 /// handle of a dead set. A close landing mid-call is benign: the call
 /// linearizes before it and its connection is dropped at restore.
@@ -394,7 +394,7 @@ fn take_or_reopen(slot: &Arc<Slot>, which: &'static str) -> Result<Connection, S
 /// A non-empty slot means a cancelled predecessor's slot was reused and
 /// reopened meanwhile — closing the stray keeps handle accounting exact. A
 /// set closed mid-call drops instead of restoring, so no live handle survives
-/// `drain()` (issue #255).
+/// `drain()`.
 fn restore(slot: &Arc<Slot>, conn: Connection) {
     if slot.closed.load(Ordering::SeqCst) {
         drop(conn);

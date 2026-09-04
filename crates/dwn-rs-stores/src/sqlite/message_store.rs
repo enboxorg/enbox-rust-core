@@ -33,7 +33,7 @@ impl MessageStore for SqliteStore {
     async fn close(&mut self) {
         // Checkpoint + close only if already open; never `connection()` here,
         // which would lazily open eleven connections just to close them
-        // again (issue #255).
+        // again.
         self.close_inner().await;
     }
 

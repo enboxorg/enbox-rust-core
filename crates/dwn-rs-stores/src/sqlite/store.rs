@@ -8,7 +8,7 @@ use crate::{
     SqliteConnection,
 };
 
-/// Lifecycle of the shared connection set (issue #255).
+/// Lifecycle of the shared connection set.
 ///
 /// The state lives behind one lock shared by every clone of the store, so a
 /// `close()` observed through one handle is observed through all of them and
@@ -25,7 +25,7 @@ pub struct SqliteStore {
     pub(crate) conn: Arc<Mutex<ConnState>>,
     path: Arc<Path>,
     pub(crate) waker_publisher: WakePublishHandler,
-    /// Serializes first opens (issue #255).
+    /// Serializes first opens.
     ///
     /// Without single-flight, racing tasks each build a full eleven-handle
     /// set and the losers close theirs inline on the executor. The mutex is
@@ -57,7 +57,7 @@ impl SqliteStore {
     ///
     /// Operations on a closed store fail explicitly with a "closed" error —
     /// checked *before* opening, so closed handles never pay an
-    /// open-then-discard cycle just to report failure (issue #255). Only
+    /// open-then-discard cycle just to report failure. Only
     /// [`SqliteStore::open_inner`] transitions out of `Closed`.
     pub(crate) async fn connection(&self) -> Result<SqliteConnection, StoreError> {
         if let Some(conn) = self.open_conn() {
@@ -98,7 +98,7 @@ impl SqliteStore {
     }
 
     /// Open the store, reviving it if a previous `close()` drained its
-    /// handles (issue #255).
+    /// handles.
     ///
     /// Without the reset, `open()` after `close()` would report `Ok(())`
     /// while every later operation fails on the drained connection set. The
@@ -114,7 +114,7 @@ impl SqliteStore {
         self.connection().await.map(|_| ())
     }
 
-    /// Checkpoint, synchronously close, and mark closed (issue #255).
+    /// Checkpoint, synchronously close, and mark closed.
     ///
     /// The `Closed` marker is shared, so operations through every clone fail
     /// explicitly until `open_inner` revives the store.
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn on_disk_reopen_preserves_epoch() {
-        // Serialize file-backed tests process-wide (issue #255). Plain
+        // Serialize file-backed tests process-wide. Plain
         // `#[test]`: no runtime is running, so blocking acquisition is safe.
         let _disk = crate::sqlite::conn::disk_test_guard_blocking();
         let temporary = tempfile::tempdir().unwrap();
@@ -393,7 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn ops_on_closed_store_fail_explicitly() {
-        // Issue #255: operations after close() must fail fast with context,
+        // Operations after close() must fail fast with context,
         // never hang or use a drained handle — including through clones,
         // which share the lifecycle state.
         let mut store = SqliteStore::in_memory(None);
@@ -412,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_then_open_file_store_preserves_data() {
-        // Issue #255: open() after close() yields a usable store instead of
+        // open() after close() yields a usable store instead of
         // Ok(()) over a dead connection set — through every clone, which
         // share one lifecycle state. File-backed, so committed rows must
         // survive the cycle (a scratch table keeps this unit test free of
@@ -460,7 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_then_open_memory_store_starts_blank() {
-        // Issue #255, SQLite semantics: a shared-cache in-memory database is
+        // SQLite semantics: a shared-cache in-memory database is
         // destroyed when its last connection closes, so revive yields a
         // fresh, usable — but empty — database. This pins that contract
         // instead of letting a vacuous assertion pass on re-migrated schema.
@@ -520,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_first_opens_all_succeed() {
-        // Issue #255: racing first opens single-flight instead of each
+        // Racing first opens single-flight instead of each
         // building (and discarding) a full handle set. All racers must
         // succeed; a broken single-flight would deadlock here.
         let store = SqliteStore::in_memory(None);
@@ -548,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn panicking_op_neither_poisons_nor_leaks_its_slot() {
-        // Issue #255: a panic inside `with_*` must surface to the caller and
+        // A panic inside `with_*` must surface to the caller and
         // leave the slot usable; the connection is restored before
         // propagation, so nothing leaks.
         let mut store = SqliteStore::in_memory(None);

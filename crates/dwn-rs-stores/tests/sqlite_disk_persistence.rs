@@ -38,7 +38,7 @@ const PROTOCOL_TASKS: &str = "https://example.com/protocol/tasks";
 
 #[tokio::test]
 async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("message-feed-multi-tenant");
     let alice = [
@@ -147,7 +147,7 @@ async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
 
 #[tokio::test]
 async fn delete_holes_survive_fresh_reopen() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("delete-holes");
     let messages = [
@@ -200,7 +200,7 @@ async fn delete_holes_survive_fresh_reopen() {
 
 #[tokio::test]
 async fn sync_ledger_checkpoints_survive_true_db_reopen() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("sync-ledger-true-reopen");
     let cursor = {
@@ -260,7 +260,7 @@ async fn sync_ledger_checkpoints_survive_true_db_reopen() {
 
 #[tokio::test]
 async fn native_node_open_at_resumes_from_disk() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let dir = tempfile::tempdir().expect("battery tempdir");
     let path = dir.path().join("node.sqlite");
@@ -302,7 +302,7 @@ async fn native_node_open_at_resumes_from_disk() {
 
 #[tokio::test]
 async fn legacy_v1_database_migrates_forward_on_open() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("legacy-v1-migrate");
     {
@@ -337,7 +337,7 @@ struct SampleTask {
 
 #[tokio::test]
 async fn aux_stores_multi_row_state_survives_fresh_reopen() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("aux-multi-row");
     let task_a = SampleTask {

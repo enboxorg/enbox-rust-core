@@ -28,7 +28,7 @@ async fn sqlite_mem_conforms_to_concurrency_contract() {
 
 #[tokio::test]
 async fn sqlite_disk_conforms_to_concurrency_contract() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let dir = tempfile::tempdir().expect("battery tempdir");
     let seq = std::sync::atomic::AtomicU64::new(0);
@@ -55,7 +55,7 @@ fn messages(n: usize) -> Vec<Message<Descriptor>> {
 
 #[tokio::test]
 async fn wal_deleted_after_unclean_drop_still_reopens() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let db = TempDb::new("wal-deleted");
     {

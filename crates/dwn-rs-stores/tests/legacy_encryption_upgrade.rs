@@ -29,7 +29,7 @@ const LEGACY_ENCRYPTION: &str = r#"{"protected":"eyJhbGciOiJFQ0RILUVTK0EyNTZLVyI
 
 #[tokio::test]
 async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_message_json() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let ciphertext = base64::prelude::BASE64_URL_SAFE_NO_PAD
         .decode(CIPHERTEXT)

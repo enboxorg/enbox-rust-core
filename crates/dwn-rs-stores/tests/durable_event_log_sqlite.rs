@@ -95,7 +95,7 @@ async fn sqlite_mem_conforms_to_live_durable_event_log_contract() {
 
 #[tokio::test]
 async fn sqlite_disk_conforms_to_live_durable_event_log_contract() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let _guard = tempfile::tempdir().expect("battery tempdir");
     let seq = AtomicU64::new(0);
@@ -221,7 +221,7 @@ async fn a_resumed_subscription_replays_then_follows_the_feed() {
 
 #[tokio::test]
 async fn replay_positions_epoch_and_bounds_survive_a_restart() {
-    // Serialize file-backed tests process-wide (issue #255).
+    // Serialize file-backed tests process-wide.
     let _disk = common::disk_test_guard().await;
     let bus = InProcessWakeBus::new();
     let db = TempDb::new("dwn-feed-restart");
