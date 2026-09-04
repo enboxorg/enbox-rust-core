@@ -1,17 +1,28 @@
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, sync::Mutex};
 
 use dwn_rs_core::{errors::StoreError, stores::wake::WakePublishHandler};
 use rusqlite::{Connection, Transaction};
-use tokio::sync::OnceCell;
 
 use crate::{
     sqlite::data_migrations::{run_data_migrations, DATA_MIGRATIONS},
     SqliteConnection,
 };
 
+/// Lifecycle of the shared connection set (issue #255).
+///
+/// The state lives behind one lock shared by every clone of the store, so a
+/// `close()` observed through one handle is observed through all of them and
+/// a later `open()` revives every handle at once. Operations on a `Closed`
+/// store fail explicitly; only `open()` transitions out of `Closed`.
+pub(crate) enum ConnState {
+    Unopened,
+    Open(SqliteConnection),
+    Closed,
+}
+
 #[derive(Clone)]
 pub struct SqliteStore {
-    pub(crate) conn: Arc<OnceCell<SqliteConnection>>,
+    pub(crate) conn: Arc<Mutex<ConnState>>,
     path: Arc<Path>,
     pub(crate) waker_publisher: WakePublishHandler,
 }
@@ -28,24 +39,72 @@ impl SqliteStore {
     pub fn new(path: impl AsRef<Path>, waker_publisher: WakePublishHandler) -> Self {
         Self {
             path: Arc::from(path.as_ref()),
-            conn: Arc::new(OnceCell::new()),
+            conn: Arc::new(Mutex::new(ConnState::Unopened)),
             waker_publisher,
         }
     }
 
-    pub(crate) async fn connection(&self) -> Result<&SqliteConnection, StoreError> {
-        self.conn
-            .get_or_try_init(|| SqliteConnection::open(self.path.clone(), migrate))
-            .await
+    /// Handle to the open connection set, opening it on first use.
+    ///
+    /// Operations on a closed store fail explicitly with a "closed" error;
+    /// only [`SqliteStore::open_inner`] transitions out of `Closed`.
+    pub(crate) async fn connection(&self) -> Result<SqliteConnection, StoreError> {
+        if let Some(conn) = self.open_conn() {
+            return Ok(conn);
+        }
+        let fresh = SqliteConnection::open(self.path.clone(), migrate).await?;
+        let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        match &*state {
+            ConnState::Open(conn) if !conn.is_closed() => Ok(conn.clone()),
+            // A concurrent open won, or the store was closed while we opened:
+            // prefer the shared state over our redundant fresh handle, which
+            // closes inline on drop.
+            ConnState::Open(_) => Err(closed_error()),
+            ConnState::Unopened => {
+                *state = ConnState::Open(fresh.clone());
+                Ok(fresh)
+            }
+            ConnState::Closed => Err(closed_error()),
+        }
     }
 
-    /// Handle to the connections if this store was opened, without opening it.
+    /// Open the store, reviving it if a previous `close()` drained its
+    /// handles (issue #255).
     ///
-    /// Close paths must use this: `connection()` would lazily *create* eleven
-    /// SQLite connections (and their VFS state) just to immediately close
-    /// them again (issue #255).
-    pub(crate) fn connection_if_open(&self) -> Option<&SqliteConnection> {
-        self.conn.get()
+    /// Without the reset, `open()` after `close()` would report `Ok(())`
+    /// while every later operation fails on the drained connection set. The
+    /// reset goes through the shared state, so every clone of the store
+    /// observes the revival at once.
+    pub(crate) async fn open_inner(&mut self) -> Result<(), StoreError> {
+        {
+            let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            if matches!(*state, ConnState::Closed) {
+                *state = ConnState::Unopened;
+            }
+        }
+        self.connection().await.map(|_| ())
+    }
+
+    /// Checkpoint, synchronously close, and mark closed (issue #255).
+    ///
+    /// The `Closed` marker is shared, so operations through every clone fail
+    /// explicitly until `open_inner` revives the store.
+    pub(crate) async fn close_inner(&mut self) {
+        let prev = {
+            let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::replace(&mut *state, ConnState::Closed)
+        };
+        if let ConnState::Open(conn) = prev {
+            conn.checkpoint_and_close().await;
+        }
+    }
+
+    /// Cloned open handle, if any. Never opens.
+    fn open_conn(&self) -> Option<SqliteConnection> {
+        match &*self.conn.lock().unwrap_or_else(|e| e.into_inner()) {
+            ConnState::Open(conn) if !conn.is_closed() => Some(conn.clone()),
+            _ => None,
+        }
     }
 
     pub(crate) fn epoch_tx(tx: &Transaction<'_>) -> Result<String, StoreError> {
@@ -57,6 +116,12 @@ impl SqliteStore {
 }
 pub(crate) fn sqlite_store_error(error: rusqlite::Error) -> StoreError {
     StoreError::InternalException(error.to_string())
+}
+
+fn closed_error() -> StoreError {
+    StoreError::InternalException(
+        "sqlite: connection set closed; call open() to revive it".to_string(),
+    )
 }
 
 mod embedded {
@@ -293,5 +358,88 @@ mod tests {
         assert!(tables.contains("messages"));
         assert!(tables.contains("data_blocks"));
         assert!(tables.contains("data_refs"));
+    }
+
+    #[tokio::test]
+    async fn ops_on_closed_store_fail_explicitly() {
+        // Issue #255: operations after close() must fail fast with context,
+        // never hang or use a drained handle — including through clones,
+        // which share the lifecycle state.
+        let mut store = SqliteStore::in_memory(None);
+        MessageStore::open(&mut store).await.unwrap();
+        let clone = store.clone();
+        MessageStore::close(&mut store).await;
+
+        for handle in [&store, &clone] {
+            let error = handle
+                .connection()
+                .await
+                .expect_err("op on closed store must fail");
+            assert!(error.to_string().contains("closed"), "{error:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn close_then_open_revives_store() {
+        // Issue #255: open() after close() yields a usable store instead of
+        // Ok(()) over a dead connection set — through every clone, which
+        // share one lifecycle state.
+        let mut store = SqliteStore::in_memory(None);
+        MessageStore::open(&mut store).await.unwrap();
+        let clone = store.clone();
+        MessageStore::close(&mut store).await;
+        MessageStore::open(&mut store).await.unwrap();
+
+        for handle in [&store, &clone] {
+            let epoch: String = handle
+                .connection()
+                .await
+                .unwrap()
+                .with_reader(|connection| {
+                    connection
+                        .query_row("SELECT epoch FROM feed_metadata WHERE id = 1", [], |row| {
+                            row.get::<_, String>(0)
+                        })
+                        .map_err(sqlite_store_error)
+                })
+                .await
+                .unwrap();
+            assert!(!epoch.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn panicking_op_neither_poisons_nor_leaks_its_slot() {
+        // Issue #255: a panic inside `with_*` must surface to the caller and
+        // leave the slot usable; the connection is restored before
+        // propagation, so nothing leaks.
+        let mut store = SqliteStore::in_memory(None);
+        MessageStore::open(&mut store).await.unwrap();
+        let conn = store.connection().await.unwrap();
+
+        let panicked = tokio::spawn(async move {
+            conn.with_reader(|_| -> Result<(), StoreError> { panic!("injected op panic") })
+                .await
+        })
+        .await;
+        assert!(
+            panicked.is_err() && panicked.unwrap_err().is_panic(),
+            "panic must propagate to the caller"
+        );
+
+        let epoch: String = store
+            .connection()
+            .await
+            .unwrap()
+            .with_reader(|connection| {
+                connection
+                    .query_row("SELECT epoch FROM feed_metadata WHERE id = 1", [], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(sqlite_store_error)
+            })
+            .await
+            .unwrap();
+        assert!(!epoch.is_empty());
     }
 }
