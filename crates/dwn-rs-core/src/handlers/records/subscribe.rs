@@ -11,13 +11,10 @@ use crate::dwn::{Handler, HandlerContext};
 use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
-    attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
-    event_log_error_reply, filter_includes_published_records, non_owner_records_event_filters,
-    non_owner_records_filters, owner_records_event_filter, owner_records_filter,
-    published_records_event_filter, published_records_filter, records_subscribe_descriptor,
-    records_subscribe_reply, should_protocol_authorize, store_error_reply,
-    QueryAuthorizationResult,
+    attach_initial_writes, date_sort_to_message_sort, event_log_error_reply,
+    records_subscribe_descriptor, records_subscribe_reply, store_error_reply,
 };
+use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Subscribe;
 use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
@@ -97,60 +94,26 @@ where
                     "RecordsSubscribeNestedProtocolPathContextIdInvalid: {reason}"
                 ));
             }
-            let filters = if filter_includes_published_records(&descriptor.filter)
-                && signature.is_none()
+            let auth = match authorize_collection(
+                tenant,
+                &message,
+                &descriptor.filter,
+                signature.as_ref(),
+                self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
+                RecordsAuthorizationKind::Subscribe,
+            )
+            .await
             {
-                Filters::from(published_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                ))
-            } else {
-                let Some(signature) = signature.as_ref() else {
-                    return Response::unauthorized(
-                        "AuthenticateJwsMissing: authorization signature is required".to_string(),
-                    );
-                };
-                let grant_authorized =
-                    match permissions::authorize_records_query_or_subscribe_with_grant(
-                        tenant,
-                        &message,
-                        &descriptor.filter,
-                        signature,
-                        self.message_store.as_ref(),
-                    )
-                    .await
-                    {
-                        Ok(grant_authorized) => grant_authorized,
-                        Err(detail) => return Response::unauthorized(detail.to_string()),
-                    };
-                if should_protocol_authorize(signature) {
-                    if let Err(detail) = authorize_protocol_query_or_subscribe(
-                        tenant,
-                        &descriptor.filter,
-                        signature,
-                        self.message_store.as_ref(),
-                        &canonical_rfc3339(descriptor.message_timestamp),
-                        RecordsAuthorizationKind::Subscribe,
-                    )
-                    .await
-                    {
-                        return Response::unauthorized(detail);
-                    }
-                }
-                if signature.author == tenant {
-                    Filters::from(owner_records_filter(
-                        &descriptor.filter,
-                        descriptor.date_sort.as_ref(),
-                    ))
-                } else {
-                    Filters::from(non_owner_records_filters(
-                        &descriptor.filter,
-                        descriptor.date_sort.as_ref(),
-                        &signature.author,
-                        should_protocol_authorize(signature) || grant_authorized,
-                    ))
-                }
+                Ok(auth) => auth,
+                Err(detail) => return Response::unauthorized(detail),
             };
+            let filters = collection_filters(
+                &auth,
+                &descriptor.filter,
+                descriptor.date_sort.as_ref(),
+                PlanMode::Snapshot,
+            );
             let result = match self
                 .message_store
                 .query(
@@ -280,9 +243,7 @@ where
             .await
         {
             Ok(filters) => filters,
-            Err(QueryAuthorizationResult::Unauthorized(detail)) => {
-                return records_subscribe_reply(Response::unauthorized(detail), None)
-            }
+            Err(reply) => return records_subscribe_reply(reply, None),
         };
 
         let subscription_id = match generate_cid_from_json(raw_message) {
@@ -376,69 +337,30 @@ where
         message: &Message<Descriptor>,
         descriptor: &SubscribeDescriptor,
         signature: Option<&AuthorizationContext>,
-    ) -> Result<(Filters, Filters, Option<String>), QueryAuthorizationResult> {
-        if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
-            return Ok((
-                Filters::from(published_records_event_filter(&descriptor.filter)),
-                Filters::from(published_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                None,
-            ));
-        }
-
-        let Some(signature) = signature else {
-            return Err(QueryAuthorizationResult::Unauthorized(
-                "AuthenticateJwsMissing: authorization signature is required".to_string(),
-            ));
-        };
-        let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
+    ) -> Result<(Filters, Filters, Option<String>), Response<Subscribe>> {
+        // One authorization serves both projections: the event set for live
+        // delivery and the snapshot set for the initial page.
+        let auth = authorize_collection(
             tenant,
             message,
             &descriptor.filter,
             signature,
             self.message_store.as_ref(),
+            &canonical_rfc3339(descriptor.message_timestamp),
+            RecordsAuthorizationKind::Subscribe,
         )
         .await
-        .map_err(|err| QueryAuthorizationResult::Unauthorized(err.to_string()))?;
-        if should_protocol_authorize(signature) {
-            authorize_protocol_query_or_subscribe(
-                tenant,
+        .map_err(Response::unauthorized)?;
+        let author = auth.author.clone();
+        Ok((
+            collection_filters(&auth, &descriptor.filter, None, PlanMode::Event),
+            collection_filters(
+                &auth,
                 &descriptor.filter,
-                signature,
-                self.message_store.as_ref(),
-                &canonical_rfc3339(descriptor.message_timestamp),
-                RecordsAuthorizationKind::Subscribe,
-            )
-            .await
-            .map_err(QueryAuthorizationResult::Unauthorized)?;
-        }
-        if signature.author == tenant {
-            Ok((
-                Filters::from(owner_records_event_filter(&descriptor.filter)),
-                Filters::from(owner_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                Some(signature.author.clone()),
-            ))
-        } else {
-            let protocol_authorized = should_protocol_authorize(signature) || grant_authorized;
-            Ok((
-                Filters::from(non_owner_records_event_filters(
-                    &descriptor.filter,
-                    &signature.author,
-                    protocol_authorized,
-                )),
-                Filters::from(non_owner_records_filters(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                    &signature.author,
-                    protocol_authorized,
-                )),
-                Some(signature.author.clone()),
-            ))
-        }
+                descriptor.date_sort.as_ref(),
+                PlanMode::Snapshot,
+            ),
+            author,
+        ))
     }
 }

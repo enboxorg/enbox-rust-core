@@ -10,11 +10,9 @@ use crate::dwn::{Handler, HandlerContext};
 use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
-    attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
-    filter_includes_published_records, non_owner_records_filters, owner_records_filter,
-    published_records_filter, should_protocol_authorize, store_error_reply,
-    QueryAuthorizationResult,
+    attach_initial_writes, date_sort_to_message_sort, store_error_reply, QueryAuthorizationResult,
 };
+use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Query;
 use crate::stores::write_resolver::InitialWriteResolver;
@@ -141,58 +139,26 @@ where
         descriptor: &RecordsQueryDescriptor,
         signature: Option<&AuthorizationContext>,
     ) -> Result<(Filters, Option<String>), QueryAuthorizationResult> {
-        if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
-            return Ok((
-                Filters::from(published_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                None,
-            ));
-        }
-        let signature = signature.ok_or_else(|| {
-            QueryAuthorizationResult::Unauthorized(
-                "AuthenticateJwsMissing: authorization signature is required".to_string(),
-            )
-        })?;
-        let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
+        let auth = authorize_collection(
             tenant,
             message,
             &descriptor.filter,
             signature,
             self.message_store.as_ref(),
+            &canonical_rfc3339(descriptor.message_timestamp),
+            RecordsAuthorizationKind::Query,
         )
         .await
-        .map_err(|error| QueryAuthorizationResult::Unauthorized(error.to_string()))?;
-        if should_protocol_authorize(signature) {
-            authorize_protocol_query_or_subscribe(
-                tenant,
-                &descriptor.filter,
-                signature,
-                self.message_store.as_ref(),
-                &canonical_rfc3339(descriptor.message_timestamp),
-                RecordsAuthorizationKind::Query,
-            )
-            .await
-            .map_err(QueryAuthorizationResult::Unauthorized)?;
-        }
-        if signature.author == tenant {
-            return Ok((
-                Filters::from(owner_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                Some(signature.author.clone()),
-            ));
-        }
+        .map_err(QueryAuthorizationResult::Unauthorized)?;
+        let author = auth.author.clone();
         Ok((
-            Filters::from(non_owner_records_filters(
+            collection_filters(
+                &auth,
                 &descriptor.filter,
                 descriptor.date_sort.as_ref(),
-                &signature.author,
-                should_protocol_authorize(signature) || grant_authorized,
-            )),
-            Some(signature.author.clone()),
+                PlanMode::Snapshot,
+            ),
+            author,
         ))
     }
 }
