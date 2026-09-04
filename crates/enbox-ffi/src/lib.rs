@@ -1499,6 +1499,10 @@ mod tests {
 
     #[test]
     fn open_persists_at_filesystem_path() {
+        // Serialize file-backed tests process-wide.
+        // Plain `#[test]`: no runtime is running on this thread yet, so
+        // blocking acquisition is safe.
+        let _disk = dwn_rs_stores::sqlite::conn::disk_test_guard_blocking();
         let temp = tempfile::tempdir().expect("tempdir");
         let db_path = temp.path().join("enbox.sqlite");
         let path = db_path.to_string_lossy().into_owned();
@@ -1967,6 +1971,10 @@ mod tests {
 
     #[test]
     fn initialize_agent_identity_is_deterministic_for_a_given_phrase() {
+        // Serialize file-backed tests process-wide.
+        // Plain `#[test]`: no runtime is running on this thread yet, so
+        // blocking acquisition is safe.
+        let _disk = dwn_rs_stores::sqlite::conn::disk_test_guard_blocking();
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp
             .path()

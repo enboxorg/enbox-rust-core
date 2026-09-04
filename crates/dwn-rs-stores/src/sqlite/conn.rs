@@ -14,8 +14,7 @@ use tokio::sync::Semaphore;
 const BUSY_TIMEOUT_MS: isize = 5000;
 const READER_POOL_SIZE: usize = 10;
 
-/// Bound for acquiring a connection and for awaiting each database operation
-/// (issue #255).
+/// Bound for each database operation.
 ///
 /// Checkout and sqlite calls normally complete in microseconds/milliseconds.
 /// Without a bound, a wedged state stalls `with_reader`/`with_writer`
@@ -26,7 +25,7 @@ const READER_POOL_SIZE: usize = 10;
 /// just released with an error.
 const POOL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Process-wide serialization for file-backed SQLite tests (issue #255).
+/// Process-wide serialization for file-backed SQLite tests.
 ///
 /// File-backed connection sets churn real files through the process-global
 /// Unix VFS lock (open/shm/close); dozens of such sets racing across
@@ -43,7 +42,7 @@ const POOL_TIMEOUT: Duration = Duration::from_secs(30);
 #[doc(hidden)]
 pub static DISK_TEST_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Acquire the file-backed-test serialization guard (issue #255).
+/// Acquire the file-backed-test serialization guard.
 ///
 /// Test infrastructure; see [`DISK_TEST_SERIAL`].
 #[doc(hidden)]
@@ -51,7 +50,7 @@ pub async fn disk_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
     DISK_TEST_SERIAL.lock().await
 }
 
-/// Blocking acquire of the file-backed-test serialization guard (issue #255).
+/// Blocking acquire of the file-backed-test serialization guard.
 ///
 /// For plain `#[test]`s only: never call this from inside an async runtime.
 #[doc(hidden)]
@@ -74,7 +73,7 @@ fn store_err<E: Display>(ctx: &'static str) -> impl FnOnce(E) -> StoreError {
 /// cancelled predecessor's worker still owns its connection, in which case a
 /// fresh one is opened; on restore, a connection is stored only into an empty
 /// slot and any stray is closed inline. Every handle is therefore closed
-/// exactly once, with no leaks and no overwrites (issue #255).
+/// exactly once, with no leaks and no overwrites.
 struct Slot {
     conn: Mutex<Option<Connection>>,
     path: PathBuf,
@@ -103,7 +102,7 @@ struct Inner {
 /// that is awaited inline, and [`SqliteConnection::checkpoint_and_close`]
 /// takes and closes every handle before returning. Nothing sqlite-related is
 /// ever left running in the background, so `#[tokio::test]` teardown
-/// (`BlockingPool::shutdown`) has no stragglers to join (issue #255).
+/// (`BlockingPool::shutdown`) has no stragglers to join.
 ///
 /// Requires a Tokio runtime with the time driver enabled: `#[tokio::test]`
 /// and `enable_all()` runtimes qualify (these cover every in-repo caller,
