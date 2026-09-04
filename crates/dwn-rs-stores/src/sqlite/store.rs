@@ -82,19 +82,45 @@ impl SqliteStore {
             return Err(closed_error());
         }
         let fresh = SqliteConnection::open(self.path.clone(), migrate).await?;
-        let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        match &*state {
-            ConnState::Open(conn) if !conn.is_closed() => Ok(conn.clone()),
-            // A concurrent open won, or the store was closed while we opened:
-            // prefer the shared state over our redundant fresh handle, which
-            // closes inline on drop.
-            ConnState::Open(_) => Err(closed_error()),
-            ConnState::Unopened => {
-                *state = ConnState::Open(fresh.clone());
-                Ok(fresh)
-            }
-            ConnState::Closed => Err(closed_error()),
+        // Publish under the state lock with no awaits inside, then act
+        // outside it: the redundant set (close racing our open, or a
+        // concurrent winner) closes on one worker, awaited — never eleven
+        // inline closes on the executor, never in the background.
+        enum Publish {
+            UseShared(SqliteConnection),
+            UseFresh,
+            Stale,
         }
+        let outcome = {
+            let mut state = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            match &*state {
+                ConnState::Open(conn) if !conn.is_closed() => Publish::UseShared(conn.clone()),
+                ConnState::Unopened => {
+                    *state = ConnState::Open(fresh.clone());
+                    Publish::UseFresh
+                }
+                _ => Publish::Stale,
+            }
+        };
+        match outcome {
+            Publish::UseFresh => Ok(fresh),
+            Publish::UseShared(conn) => {
+                Self::drop_set(fresh).await;
+                Ok(conn)
+            }
+            Publish::Stale => {
+                Self::drop_set(fresh).await;
+                Err(closed_error())
+            }
+        }
+    }
+
+    /// Close a redundant connection set off the executor.
+    ///
+    /// Eleven sequential `sqlite3_close`s on one worker, awaited: no executor
+    /// blocking, no background stragglers, no concurrent closes.
+    async fn drop_set(conn: SqliteConnection) {
+        let _ = tokio::task::spawn_blocking(move || drop(conn)).await;
     }
 
     /// Open the store, reviving it if a previous `close()` drained its

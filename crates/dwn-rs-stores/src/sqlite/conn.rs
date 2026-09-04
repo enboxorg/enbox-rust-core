@@ -9,20 +9,22 @@ use std::time::Duration;
 
 use dwn_rs_core::errors::StoreError;
 use rusqlite::Connection;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock, Semaphore};
 
 const BUSY_TIMEOUT_MS: isize = 5000;
 const READER_POOL_SIZE: usize = 10;
 
 /// Bound for each database operation.
 ///
-/// Checkout and sqlite calls normally complete in microseconds/milliseconds.
-/// Without a bound, a wedged state stalls `with_reader`/`with_writer`
-/// forever: no assertion fails, the test binary just hangs. A generous bound
-/// keeps production behaviour intact while turning a silent stall into a
-/// contextual `StoreError`. Note the bound applies to the *wait*: a native
-/// SQLite call already running on a worker is not preempted, the waiter is
-/// just released with an error.
+/// Gate acquisition, checkout and sqlite calls normally complete in
+/// microseconds/milliseconds. Without a bound, a wedged state stalls
+/// `with_reader`/`with_writer` forever: no assertion fails, the test binary
+/// just hangs. A generous bound keeps production behaviour intact while
+/// turning a silent stall into a contextual `StoreError`. The bound applies
+/// to the *wait*: a native SQLite call already running on a worker is not
+/// preempted, the waiter is just released with an error — so a timed-out
+/// write may still commit. Callers that need exactly-once reporting must not
+/// rely on the error alone.
 const POOL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Process-wide serialization for file-backed SQLite tests.
@@ -84,14 +86,23 @@ struct Slot {
 struct Inner {
     path: PathBuf,
     writer: Arc<Slot>,
-    writer_permits: Semaphore,
     readers: Vec<Arc<Slot>>,
     /// Idle reader slots. Popping is exclusive: unlike round-robin, a permit
-    /// can never admit a reader onto a slot another reader is still using
-    /// (issue #255). Guarded by a plain mutex whose critical sections are
-    /// allocation-free queue ops — never held across an await.
+    /// can never admit a reader onto a slot another reader is still using.
+    /// Guarded by a plain mutex whose critical sections are allocation-free
+    /// queue ops — never held across an await.
     checkout_queue: Mutex<VecDeque<Arc<Slot>>>,
     reader_permits: Semaphore,
+    /// Serializes teardown against calls and writers against everything.
+    ///
+    /// Every database call holds this across its whole worker cycle (shared
+    /// for readers, exclusive for writers), and `drain()` takes it
+    /// exclusively. That rules out two deadly interleavings at once: a second
+    /// writer running while a timed-out writer's worker still owns the
+    /// connection, and an in-flight call closing its handle concurrently with
+    /// the drain's sequential closes. Readers still run concurrently with
+    /// each other, which WAL supports.
+    drain_gate: Arc<RwLock<()>>,
     closed: Arc<AtomicBool>,
 }
 
@@ -121,6 +132,18 @@ impl std::fmt::Debug for SqliteConnection {
     }
 }
 
+/// Read or write hold on [`Inner::drain_gate`], carried into the worker so it
+/// is held across the whole take/run/restore cycle — including after the
+/// awaiting caller has timed out and moved on.
+///
+/// The guards are never inspected, only held: their `Drop` is the release.
+/// That read never happens is intentional, not dead code.
+#[allow(dead_code)]
+enum Gate {
+    Read(OwnedRwLockReadGuard<()>),
+    Write(OwnedRwLockWriteGuard<()>),
+}
+
 impl SqliteConnection {
     pub async fn open(
         path: impl AsRef<Path>,
@@ -131,8 +154,16 @@ impl SqliteConnection {
 
         // Writer first: the migration runs on it before any reader opens the
         // file, and every open below is awaited before the handle escapes.
+        // The gate is a throwaway: nothing can contend with it yet, since the
+        // handle has no aliases and no drain can reach it.
+        let gate = Arc::new(RwLock::new(()));
         let writer = Arc::new(Slot::open(&path, false, &closed).await?);
-        run_cycle(&writer, "writer", migrate).await?;
+        tokio::time::timeout(
+            POOL_TIMEOUT,
+            run_cycle(&writer, &gate, true, "writer", migrate),
+        )
+        .await
+        .map_err(|_| StoreError::InternalException("sqlite: migrate: timed out".to_string()))??;
 
         let mut readers = Vec::with_capacity(READER_POOL_SIZE);
         let mut checkout_queue = VecDeque::with_capacity(READER_POOL_SIZE);
@@ -146,10 +177,10 @@ impl SqliteConnection {
             inner: Arc::new(Inner {
                 path,
                 writer,
-                writer_permits: Semaphore::new(1),
                 readers,
                 checkout_queue: Mutex::new(checkout_queue),
                 reader_permits: Semaphore::new(READER_POOL_SIZE),
+                drain_gate: Arc::new(RwLock::new(())),
                 closed,
             }),
         })
@@ -160,15 +191,30 @@ impl SqliteConnection {
         F: FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
         T: Send + 'static,
     {
-        let _permit = permit(&self.inner.reader_permits, &self.inner.closed, "reader").await?;
-        let slot = pop_slot(&self.inner)?;
-        // Pushed back by `ReturnGuard` on every exit path, including
-        // cancellation and panic, so the queue never loses a slot.
-        let _return = ReturnGuard::new(&self.inner.checkout_queue, Arc::clone(&slot));
-        if self.inner.closed.load(Ordering::SeqCst) {
-            return Err(closed_set_error("reader"));
-        }
-        run_cycle(&slot, "reader", move |c: &mut Connection| f(c)).await
+        tokio::time::timeout(POOL_TIMEOUT, async {
+            let _permit = permit(&self.inner.reader_permits, &self.inner.closed, "reader").await?;
+            let slot = pop_slot(&self.inner)?;
+            // Pushed back by `ReturnGuard` on every exit path, including
+            // cancellation and panic, so the queue never loses a slot.
+            let _return = ReturnGuard::new(&self.inner.checkout_queue, Arc::clone(&slot));
+            if self.inner.closed.load(Ordering::SeqCst) {
+                return Err(closed_set_error("reader"));
+            }
+            run_cycle(
+                &slot,
+                &self.inner.drain_gate,
+                false,
+                "reader",
+                move |c: &mut Connection| f(c),
+            )
+            .await
+        })
+        .await
+        .map_err(|_| {
+            StoreError::InternalException(
+                "sqlite: reader: timed out waiting for the database".to_string(),
+            )
+        })?
     }
 
     pub async fn with_writer<T, F>(&self, f: F) -> Result<T, StoreError>
@@ -176,12 +222,25 @@ impl SqliteConnection {
         F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
         T: Send + 'static,
     {
-        let _permit = permit(&self.inner.writer_permits, &self.inner.closed, "writer").await?;
-        let slot = Arc::clone(&self.inner.writer);
-        if self.inner.closed.load(Ordering::SeqCst) {
-            return Err(closed_set_error("writer"));
-        }
-        run_cycle(&slot, "writer", f).await
+        tokio::time::timeout(POOL_TIMEOUT, async {
+            if self.inner.closed.load(Ordering::SeqCst) {
+                return Err(closed_set_error("writer"));
+            }
+            run_cycle(
+                &Arc::clone(&self.inner.writer),
+                &self.inner.drain_gate,
+                true,
+                "writer",
+                f,
+            )
+            .await
+        })
+        .await
+        .map_err(|_| {
+            StoreError::InternalException(
+                "sqlite: writer: timed out waiting for the database".to_string(),
+            )
+        })?
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -195,7 +254,7 @@ impl SqliteConnection {
         self.inner.closed.store(true, Ordering::SeqCst);
     }
 
-    /// Checkpoint the WAL and synchronously close every handle (issue #255).
+    /// Checkpoint the WAL and synchronously close every handle.
     ///
     /// Folding `-wal`/`-shm` back into the main database before releasing the
     /// handles shrinks the window where a fresh handle on the same file
@@ -221,16 +280,25 @@ impl SqliteConnection {
 
     /// Take every connection and close it, awaited.
     ///
-    /// Strictly sequential on ONE blocking thread (issue #255): concurrent
-    /// `sqlite3_close`s on handles to the same WAL database wedge the
-    /// process-global Unix VFS lock permanently (no holder, 0% CPU, never
-    /// recovers), hanging `#[tokio::test]` teardown forever with no failing
-    /// assertion. Opens are sequential for the same reason.
+    /// Strictly sequential on ONE blocking thread: concurrent `sqlite3_close`s
+    /// on handles to the same WAL database wedge the process-global Unix VFS
+    /// lock permanently (no holder, 0% CPU, never recovers), hanging
+    /// `#[tokio::test]` teardown forever with no failing assertion. Opens are
+    /// sequential for the same reason.
     ///
-    /// Skipped (still checked-out) slots are safe to skip: each in-flight
-    /// call owns its connection outright and restore-or-drops it on
-    /// completion, so nothing is left unclosed.
+    /// The exclusive gate is taken first, so no in-flight call can close its
+    /// handle concurrently on its own worker. Skipped (still checked-out)
+    /// slots are safe to skip: each in-flight call owns its connection
+    /// outright and restore-or-drops it on completion, so nothing is left
+    /// unclosed. The gate wait is bounded; on timeout the drain falls through
+    /// to best-effort takes rather than hanging teardown.
     async fn drain(&self) {
+        let _exclusive = tokio::time::timeout(
+            POOL_TIMEOUT,
+            Arc::clone(&self.inner.drain_gate).write_owned(),
+        )
+        .await
+        .ok();
         let mut slots = Vec::with_capacity(READER_POOL_SIZE + 1);
         slots.push(Arc::clone(&self.inner.writer));
         slots.extend(self.inner.readers.iter().cloned());
@@ -291,66 +359,73 @@ impl Drop for ReturnGuard<'_> {
     }
 }
 
-/// Acquire a checkout permit, failing fast on close or after [`POOL_TIMEOUT`].
+/// Acquire a checkout permit, failing fast on close.
+///
+/// Bounded by the caller's timeout in `with_reader`; the acquire itself does
+/// not time out so there is exactly one deadline per operation.
 async fn permit<'a>(
     semaphore: &'a Semaphore,
     closed: &AtomicBool,
     which: &'static str,
 ) -> Result<tokio::sync::SemaphorePermit<'a>, StoreError> {
     if closed.load(Ordering::SeqCst) {
-        return Err(StoreError::InternalException(format!(
-            "sqlite: {which}: connection set closed"
-        )));
+        return Err(closed_set_error(which));
     }
-    tokio::time::timeout(POOL_TIMEOUT, semaphore.acquire())
+    let permit = semaphore
+        .acquire()
         .await
-        .map_err(|_| {
-            StoreError::InternalException(format!(
-                "sqlite: {which}: timed out waiting for a connection (see #255)"
-            ))
-        })?
-        .map_err(|_| {
-            StoreError::InternalException(format!("sqlite: {which}: connection set closed"))
-        })
+        .map_err(|_| closed_set_error(which))?;
+    if closed.load(Ordering::SeqCst) {
+        return Err(closed_set_error(which));
+    }
+    Ok(permit)
 }
 
 /// Take the slotted connection, run `f` against it on a blocking thread, and
 /// restore-or-drop it — all inside one worker task, awaited.
 ///
-/// The whole take/run/restore cycle is atomic with respect to cancellation:
-/// a timed-out waiter abandons only its *wait*, never a half-moved
-/// connection. A slot left empty by a cancelled predecessor is reopened
-/// fresh; a restore landing on an occupied slot closes the stray instead of
-/// overwriting the live connection. A panic in `f` is resumed on the caller
-/// (never converted into an error, never poisoning the slot): the connection
-/// is still restored first, so panics cost nothing but the panic itself.
-async fn run_cycle<T, F>(slot: &Arc<Slot>, which: &'static str, f: F) -> Result<T, StoreError>
+/// The gate is acquired before spawning and moved into the worker, so it is
+/// held across the whole cycle even if the awaiting caller times out and
+/// moves on: a timed-out writer keeps its exclusivity until its worker
+/// finishes, and `drain()` waits out in-flight calls instead of racing their
+/// closes. The whole take/run/restore cycle is atomic with respect to
+/// cancellation: a timed-out waiter abandons only its *wait*, never a
+/// half-moved connection. A slot left empty by a cancelled predecessor is
+/// reopened fresh; a restore landing on an occupied slot closes the stray
+/// instead of overwriting the live connection. A panic in `f` is resumed on
+/// the caller (never converted into an error, never poisoning the slot): the
+/// connection is still restored first, so panics cost nothing but the panic
+/// itself.
+async fn run_cycle<T, F>(
+    slot: &Arc<Slot>,
+    gate: &Arc<RwLock<()>>,
+    write: bool,
+    which: &'static str,
+    f: F,
+) -> Result<T, StoreError>
 where
     F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
     T: Send + 'static,
 {
+    let gate = if write {
+        Gate::Write(Arc::clone(gate).write_owned().await)
+    } else {
+        Gate::Read(Arc::clone(gate).read_owned().await)
+    };
     let slot = Arc::clone(slot);
-    let outcome = tokio::time::timeout(
-        POOL_TIMEOUT,
-        tokio::task::spawn_blocking(
-            move || -> Result<Result<T, StoreError>, Box<dyn std::any::Any + Send>> {
-                let mut conn = match take_or_reopen(&slot, which) {
-                    Ok(conn) => conn,
-                    Err(error) => return Ok(Err(error)),
-                };
-                let outcome =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut conn)));
-                restore(&slot, conn);
-                outcome
-            },
-        ),
+    let outcome = tokio::task::spawn_blocking(
+        move || -> Result<Result<T, StoreError>, Box<dyn std::any::Any + Send>> {
+            let _gate = gate;
+            let mut conn = match take_or_reopen(&slot, which) {
+                Ok(conn) => conn,
+                Err(error) => return Ok(Err(error)),
+            };
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut conn)));
+            restore(&slot, conn);
+            outcome
+        },
     )
     .await
-    .map_err(|_| {
-        StoreError::InternalException(format!(
-            "sqlite: {which}: timed out waiting for the database (see #255)"
-        ))
-    })?
     .map_err(store_err(which))?;
 
     match outcome {
