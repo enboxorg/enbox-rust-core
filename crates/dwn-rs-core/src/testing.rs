@@ -331,7 +331,8 @@ where
 /// scenarios: at most 2 records at the root `post` path and at most 1 record
 /// per direct parent at the nested `thread/message` path. Actions are empty
 /// exactly like the notes protocol, so owner writes and published reads
-/// behave identically; only occupancy differs.
+/// behave identically; only occupancy differs. The root path additionally
+/// allows squash writes so squash/occupancy interaction stays testable.
 pub async fn put_limited_threads_protocol<M>(tenant: &str, message_store: &M)
 where
     M: MessageStore,
@@ -359,7 +360,13 @@ where
             ("message".to_string(), text_type()),
         ]),
         structure: BTreeMap::from([
-            ("post".to_string(), limited(2)),
+            (
+                "post".to_string(),
+                RuleSet {
+                    squash: Some(true),
+                    ..limited(2)
+                },
+            ),
             (
                 "thread".to_string(),
                 RuleSet {

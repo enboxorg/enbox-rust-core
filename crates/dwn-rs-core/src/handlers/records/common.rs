@@ -2712,6 +2712,76 @@ mod tests {
         assert_eq!(root.context_id, None);
     }
 
+    async fn put_limit_history_configure(store: &MemoryMessageStore, timestamp: &str, max: u64) {
+        let message: Message<Descriptor> = serde_json::from_value(json!({
+            "descriptor": {
+                "interface": "Protocols",
+                "method": "Configure",
+                "messageTimestamp": timestamp,
+                "definition": {
+                    "protocol": LIMITED_PROTOCOL,
+                    "published": false,
+                    "types": {},
+                    "structure": {
+                        "post": { "$recordLimit": { "max": max, "strategy": "reject" } }
+                    }
+                }
+            }
+        }))
+        .expect("limit configure must deserialize");
+        let indexes = BTreeMap::from([
+            (
+                "interface".to_string(),
+                Value::String("Protocols".to_string()),
+            ),
+            ("method".to_string(), Value::String("Configure".to_string())),
+            (
+                "messageTimestamp".to_string(),
+                Value::String(timestamp.to_string()),
+            ),
+            (
+                "protocol".to_string(),
+                Value::String(LIMITED_PROTOCOL.to_string()),
+            ),
+            ("published".to_string(), Value::Bool(false)),
+            ("isLatestBaseState".to_string(), Value::Bool(true)),
+        ]);
+        store
+            .put(ROLE_TEST_TENANT, message, indexes)
+            .await
+            .expect("limit configure must store");
+    }
+
+    // Covers: DWN-PROTO-004
+    #[tokio::test]
+    async fn record_limit_policy_follows_protocol_history() {
+        let store = MemoryMessageStore::default();
+        put_limit_history_configure(&store, HISTORY_T1, 2).await;
+        put_limit_history_configure(&store, HISTORY_T2, 5).await;
+
+        let mid = resolve_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_filter(Some("post"), None, None),
+            &store,
+            HISTORY_MID,
+        )
+        .await
+        .expect("mid policy must resolve")
+        .expect("post path has a limit");
+        assert_eq!(mid.max, 2, "request between configures sees v1");
+
+        let late = resolve_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_filter(Some("post"), None, None),
+            &store,
+            HISTORY_LATE,
+        )
+        .await
+        .expect("late policy must resolve")
+        .expect("post path has a limit");
+        assert_eq!(late.max, 5, "request after reconfigure sees v2");
+    }
+
     // Covers: DWN-AUTH-005
     #[tokio::test]
     async fn subscribe_delivery_role_removed_is_terminal() {

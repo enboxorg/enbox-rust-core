@@ -546,3 +546,55 @@ async fn published_false_with_published_sort_is_rejected() {
         assert_eq!(status, 400);
     }
 }
+
+/// A squash purges older siblings: occupancy recomputes from the accepted
+/// state transition and no purged record leaks back into the population.
+#[tokio::test]
+async fn record_limit_squash_recomputes_from_current_state() {
+    let nodes = fresh_nodes().await;
+    for node in [&nodes.mem, &nodes.disk] {
+        put_limited_threads_protocol(TENANT, node.store()).await;
+        for day in ["01", "02"] {
+            let (spec, data) = limited_post(day);
+            let (code, _) = write(node, spec, data).await;
+            assert_eq!(code, 202);
+        }
+
+        let squash_data = payload("post-squash");
+        let (code, squash_id) = write(
+            node,
+            WriteSpec {
+                protocol: LIMITED_PROTOCOL.to_string(),
+                protocol_path: "post".to_string(),
+                data_cid: generate_dag_pb_cid_from_bytes(&squash_data).to_string(),
+                data_size: squash_data.len() as u64,
+                published: Some(true),
+                timestamp: "2025-01-04T00:00:00.000000Z".to_string(),
+                date_created: "2025-01-04T00:00:00.000000Z".to_string(),
+                squash: Some(true),
+                ..WriteSpec::new("2025-01-04T00:00:00.000000Z")
+            },
+            squash_data,
+        )
+        .await;
+        assert_eq!(code, 202, "squash write must admit");
+
+        let scope = || limited_filter(json!({ "protocolPath": "post" }));
+        let (status, entries) = query_entries(node, scope()).await;
+        assert_eq!(status, 200);
+        let visible: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| entry["recordId"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(visible, vec![squash_id]);
+
+        let (count_status, count) = count(node, scope()).await;
+        assert_eq!(count_status, 200);
+        assert_eq!(count, 1);
+    }
+
+    let scope = || limited_filter(json!({ "protocolPath": "post" }));
+    let (_, mem_entries) = query_entries(&nodes.mem, scope()).await;
+    let (_, disk_entries) = query_entries(&nodes.disk, scope()).await;
+    assert_eq!(mem_entries, disk_entries);
+}

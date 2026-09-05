@@ -461,6 +461,11 @@ async fn memory_message_store_conforms_to_record_limit() {
     run_record_limit_stores(|| async { super::memory::MemoryMessageStore::default() }).await;
 }
 
+#[tokio::test]
+async fn memory_message_store_orders_ties_by_cid() {
+    run_sort_tie_break_stores(|| async { super::memory::MemoryMessageStore::default() }).await;
+}
+
 // ---- record-limit occupancy battery ----
 //
 // Same assertions on every backend: deterministic winners independent of
@@ -662,6 +667,18 @@ where
     occupancy_applies_before_caller_filters(&factory).await;
     invalid_max_and_corrupt_candidates_fail(&factory).await;
     absent_policy_returns_unprojected(&factory).await;
+}
+
+/// Runs the sort tie-break battery: equal primary keys order by CID in the
+/// requested direction on every backend, with cursors chaining without
+/// duplicates or skips.
+pub async fn run_sort_tie_break_stores<S, F, Fut>(factory: F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    equal_timestamps_order_by_cid(&factory).await;
 }
 
 // Covers: DWN-REC-004
@@ -1066,4 +1083,86 @@ where
             .unwrap(),
         3
     );
+}
+
+// Covers: DWN-REC-004
+async fn equal_timestamps_order_by_cid<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    // Two seed orders: a backend returning insertion order instead of CID
+    // order can match at most one of them, so agreement on both proves the
+    // tie-break rather than coinciding with it.
+    for seed_order in [["tie-a", "tie-b", "tie-c"], ["tie-c", "tie-b", "tie-a"]] {
+        let rows: Vec<LimitRow> = seed_order
+            .into_iter()
+            .map(|record_id| limit_row(record_id, None, None, 1, LIMIT_ROOT_PATH))
+            .collect();
+        let store = seed_limit_store(factory, &rows).await;
+
+        let mut expected: Vec<(String, String)> = rows
+            .iter()
+            .map(|row| {
+                let message = limit_message(row);
+                let cid = message
+                    .cid()
+                    .expect("seed message must have a CID")
+                    .to_string();
+                (cid, row.record_id.clone())
+            })
+            .collect();
+        expected.sort();
+
+        for direction in [SortDirection::Ascending, SortDirection::Descending] {
+            let sort = Some(MessageSort::DateCreated(direction));
+            let mut ordered = expected.clone();
+            if direction == SortDirection::Descending {
+                ordered.reverse();
+            }
+            let found = store
+                .query(TENANT, latest_writes_filter(), sort, None, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                write_record_ids(&found.messages),
+                ordered
+                    .iter()
+                    .map(|(_, record_id)| record_id.clone())
+                    .collect::<Vec<_>>(),
+                "equal timestamps order by CID in {direction:?} on every backend"
+            );
+
+            // Page size 1 across the tie: every page chains, nothing duplicates
+            // or skips, and the concatenated pages equal the full order.
+            let mut cursor = None;
+            let mut paged = Vec::new();
+            loop {
+                let page = store
+                    .query(
+                        TENANT,
+                        latest_writes_filter(),
+                        sort,
+                        Some(Pagination::new(cursor, Some(1))),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                paged.extend(write_record_ids(&page.messages));
+                cursor = page.cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            assert_eq!(
+                paged,
+                ordered
+                    .iter()
+                    .map(|(_, record_id)| record_id.clone())
+                    .collect::<Vec<_>>(),
+                "paged traversal matches full order in {direction:?}"
+            );
+        }
+    }
 }
