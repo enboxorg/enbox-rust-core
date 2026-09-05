@@ -193,15 +193,16 @@ fn build_validators() -> Result<HashMap<String, Validator>, DwnError> {
         .map(|(id, source)| {
             let schema: Value = serde_json::from_str(source)
                 .map_err(|err| schema_error(format!("invalid embedded schema {id}: {err}")))?;
-            let resource = Resource::from_contents(schema)
-                .map_err(|err| schema_error(format!("invalid embedded resource {id}: {err}")))?;
+            let resource = Resource::from_contents(schema);
             Ok(((*id).to_string(), resource))
         })
         .collect::<Result<Vec<_>, DwnError>>()?;
-    let registry = Registry::options()
+    let registry = Registry::new()
         .draft(Draft::Draft202012)
-        .build(resources)
-        .map_err(|err| schema_error(format!("schema registry must compile: {err}")))?;
+        .extend(resources)
+        .map_err(|err| schema_error((format!("schema registry must compile: {err}"))))?
+        .prepare()
+        .map_err(|err| schema_error((format!("schema registration err: {err}"))))?;
     SCHEMA_SOURCES
         .iter()
         .map(|(id, source)| {
@@ -209,7 +210,7 @@ fn build_validators() -> Result<HashMap<String, Validator>, DwnError> {
                 .map_err(|err| schema_error(format!("invalid embedded schema {id}: {err}")))?;
             let validator = jsonschema::options()
                 .with_draft(Draft::Draft202012)
-                .with_registry(registry.clone())
+                .with_registry(&registry)
                 .build(&schema)
                 .map_err(|err| schema_error(format!("validator for {id} must compile: {err}")))?;
             Ok((id.to_string(), validator))
