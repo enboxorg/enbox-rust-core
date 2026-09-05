@@ -11,16 +11,17 @@ use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
     event_log_error_reply, filter_includes_published_records, non_owner_records_event_filters,
-    non_owner_records_filters, owner_records_event_filter, owner_records_filter, parse_message,
+    non_owner_records_filters, owner_records_event_filter, owner_records_filter,
     published_records_event_filter, published_records_filter, records_subscribe_descriptor,
     records_subscribe_reply, should_protocol_authorize, store_error_reply,
+    QueryAuthorizationResult,
 };
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Subscribe;
 use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
 use crate::stores::EventSubscription;
 use crate::stores::{EventLogSubscribeOptions, SubscriptionListener};
-use crate::validation::validate_message;
+use crate::validation::{ingest_message, ingress_rejection};
 use crate::Message;
 use crate::Response;
 
@@ -221,17 +222,11 @@ where
         raw_message: &JsonValue,
         listener: SubscriptionListener,
     ) -> RecordsSubscribeReply {
-        if validate_message(raw_message).is_err() {
-            return records_subscribe_reply(
-                Response::bad_request(
-                    "RecordsSubscribeValidationFailed: invalid message".to_string(),
-                ),
-                None,
-            );
-        }
-        let message = match parse_message(raw_message) {
-            Ok(message) => message,
-            Err(detail) => return records_subscribe_reply(Response::bad_request(detail), None),
+        // The WebSocket/native subscribe entry point admits messages through the same ingress
+        // as `Dwn::process_message`, not a private fork of it.
+        let message = match ingest_message(raw_message) {
+            Ok((_, message)) => message,
+            Err(error) => return records_subscribe_reply(ingress_rejection(error), None),
         };
         let descriptor = match records_subscribe_descriptor(&message) {
             Ok(descriptor) => descriptor.clone(),
@@ -262,7 +257,9 @@ where
             .await
         {
             Ok(filters) => filters,
-            Err(reply) => return records_subscribe_reply(reply, None),
+            Err(QueryAuthorizationResult::Unauthorized(detail)) => {
+                return records_subscribe_reply(Response::unauthorized(detail), None)
+            }
         };
 
         let subscription_id = match generate_cid_from_json(raw_message) {
@@ -353,7 +350,7 @@ where
         message: &Message<Descriptor>,
         descriptor: &SubscribeDescriptor,
         signature: Option<&AuthorizationContext>,
-    ) -> Result<(Filters, Filters, Option<String>), Response<Subscribe>> {
+    ) -> Result<(Filters, Filters, Option<String>), QueryAuthorizationResult> {
         if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
             return Ok((
                 Filters::from(published_records_event_filter(&descriptor.filter)),
@@ -366,7 +363,7 @@ where
         }
 
         let Some(signature) = signature else {
-            return Err(Response::unauthorized(
+            return Err(QueryAuthorizationResult::Unauthorized(
                 "AuthenticateJwsMissing: authorization signature is required".to_string(),
             ));
         };
@@ -378,7 +375,7 @@ where
             self.message_store.as_ref(),
         )
         .await
-        .map_err(|err| Response::unauthorized(err.to_string()))?;
+        .map_err(|err| QueryAuthorizationResult::Unauthorized(err.to_string()))?;
         if should_protocol_authorize(signature) {
             authorize_protocol_query_or_subscribe(
                 tenant,
@@ -388,7 +385,7 @@ where
                 RecordsAuthorizationKind::Subscribe,
             )
             .await
-            .map_err(Response::unauthorized)?;
+            .map_err(QueryAuthorizationResult::Unauthorized)?;
         }
         if signature.author == tenant {
             Ok((

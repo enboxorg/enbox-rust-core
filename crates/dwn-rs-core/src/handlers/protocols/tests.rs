@@ -281,8 +281,6 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
 /// `authorization` probe. A present-but-empty `authorization` object is the only input where
 /// the two predicates could disagree, and it never reaches the handler: `Authorization`
 /// requires a signature, so `{}` matches no `Fields` variant and ingress rejects the message.
-///
-/// Covers: DWN-AUTH-001
 #[tokio::test]
 async fn protocols_query_with_empty_authorization_is_rejected_at_ingress() {
     let mut message_store = TestMessageStore::default();

@@ -11,11 +11,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use crate::descriptors::MessageKind;
+use crate::errors::{DwnError, DwnErrorCode};
 use crate::interfaces::messages::descriptors::{
     ConcreteDescriptor, FromDescriptor, InterfaceUnion, Messages, Protocols, Records,
 };
 use crate::interfaces::replies::Status;
-use crate::validation::validate_message;
+use crate::validation::{admit_message, ingress_rejection, parse_message};
 use crate::{Descriptor, Message, Reply, Response};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +61,11 @@ impl TenantGate for AllowAllTenantGate {
 }
 
 impl MessageKind {
-    pub fn from_message(message: &Value) -> Result<Self, DwnValidationError> {
+    /// Recognize the `interface`/`method` pair, the first stage of admission.
+    ///
+    /// `detail` is the reply detail verbatim: upstream `validateMessageIntegrity` reports
+    /// this stage without an error-code prefix.
+    pub fn from_message(message: &Value) -> Result<Self, DwnError> {
         let descriptor = message.get("descriptor").and_then(Value::as_object);
         let interface = descriptor
             .and_then(|descriptor| descriptor.get("interface"))
@@ -71,22 +76,24 @@ impl MessageKind {
 
         match (interface, method) {
             (Some(interface), Some(method)) => MessageKind::from_parts(interface, method)
-                .ok_or_else(|| DwnValidationError::UnknownInterfaceMethod {
-                    interface: interface.to_string(),
-                    method: method.to_string(),
+                .ok_or_else(|| {
+                    DwnError::new(
+                        DwnErrorCode::MessageUnknownInterfaceOrMethod,
+                        format!(
+                            "Unknown interface/method combination, interface: {interface}, method: {method}"
+                        ),
+                    )
                 }),
-            _ => Err(DwnValidationError::MissingInterfaceMethod {
-                interface: interface.unwrap_or("undefined").to_string(),
-                method: method.unwrap_or("undefined").to_string(),
-            }),
+            _ => Err(DwnError::new(
+                DwnErrorCode::MessageInterfaceOrMethodUndefined,
+                format!(
+                    "Both interface and method must be present, interface: {}, method: {}",
+                    interface.unwrap_or("undefined"),
+                    method.unwrap_or("undefined"),
+                ),
+            )),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DwnValidationError {
-    MissingInterfaceMethod { interface: String, method: String },
-    UnknownInterfaceMethod { interface: String, method: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -155,25 +162,16 @@ pub trait Handler: Send + Sync {
 
     /// Run this typed handler from an untyped dispatch request.
     ///
-    /// This supports direct tests as well as [`HandlerAdapter`]. Callers using
-    /// [`Dwn::process_message`] also get its earlier tenant and dispatch checks;
-    /// direct callers get the parsing and schema checks performed here.
+    /// Post-admission: dispatch already ran `admit_message`, so this parses and downcasts.
     fn run(
         &self,
         request: MethodHandlerRequest<'_>,
     ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
-            let message: Message<Descriptor> = match serde_json::from_value(request.message.clone())
-            {
+            let message = match parse_message(request.message) {
                 Ok(message) => message,
-                Err(error) => {
-                    return Response::bad_request(format!("Failed to parse message: {error}"));
-                }
+                Err(error) => return ingress_rejection(error),
             };
-
-            if validate_message(request.message).is_err() {
-                return Response::bad_request("Message validation failed".to_string());
-            }
 
             let descriptor = match Self::Descriptor::from_descriptor(&message.descriptor) {
                 Ok(descriptor) => descriptor.clone(),
@@ -184,7 +182,6 @@ pub trait Handler: Send + Sync {
 
             self.handle(HandlerContext {
                 tenant: request.tenant,
-                raw_message: request.message,
                 message,
                 descriptor,
                 data: request.data,
@@ -201,23 +198,14 @@ pub trait Handler: Send + Sync {
 /// while preserving the typed API inside the handler.
 pub struct HandlerAdapter<H: Handler>(pub H);
 
-/// The validated, method-specific input passed to [`Handler::handle`].
+/// The admitted, method-specific input passed to [`Handler::handle`].
 ///
-/// `tenant`, `raw_message`, and `data` borrow the request. `message` and
-/// `descriptor` are owned: handlers may mutate the generic message while retaining
-/// an independently typed descriptor for the method being handled.
+/// No raw wire JSON: transports that must re-emit a message byte-for-byte (peer forwarding,
+/// `$delivery` fan-out) keep their own copy.
 pub struct HandlerContext<'a, D> {
-    /// The DWN tenant on whose behalf this method is executing.
     pub tenant: &'a str,
-    /// Original JSON supplied by the caller, retained for exact wire data needs.
-    pub raw_message: &'a Value,
-    /// The parsed, untyped message — handlers still pass this to the permissions/store layer,
-    /// which is `Message<Descriptor>`-based. Owned so handlers (e.g. records/write) can mutate it.
     pub message: Message<Descriptor>,
-    /// The concrete descriptor, downcast from `message.descriptor`. Owned (cloned in `run`) so it
-    /// doesn't borrow `message` — `message` then moves into the context alongside it.
     pub descriptor: D,
-    /// Optional binary payload accompanying the DWN message, notably record data.
     pub data: Option<bytes::Bytes>,
 }
 
@@ -425,23 +413,12 @@ where
             return reply;
         }
 
-        let kind = match MessageKind::from_message(&raw_message) {
+        // Before lookup, so raw `MethodHandler` implementations get the same gate typed
+        // `Handler`s do.
+        let kind = match admit_message(&raw_message) {
             Ok(kind) => kind,
-            Err(DwnValidationError::MissingInterfaceMethod { interface, method }) => {
-                return Response::bad_request(format!(
-                    "Both interface and method must be present, interface: {interface}, method: {method}"
-                ));
-            }
-            Err(DwnValidationError::UnknownInterfaceMethod { interface, method }) => {
-                return Response::bad_request(format!(
-                    "Unknown interface/method combination, interface: {interface}, method: {method}"
-                ));
-            }
+            Err(error) => return ingress_rejection(error),
         };
-
-        if let Err(error) = validation::validate_message(&raw_message) {
-            return Response::bad_request(error.to_string());
-        }
 
         let Some(handler) = self.config.handlers.get(&kind) else {
             return Response::not_implemented(format!(

@@ -1954,6 +1954,64 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
     }
 }
 
+/// The native/WebSocket subscribe entry point admits messages through the shared ingress
+/// rather than a private fork of it, so it rejects exactly what `Dwn::process_message` rejects,
+/// with the same reply, and admits exactly what it admits.
+#[tokio::test]
+async fn records_event_log_subscribe_rejects_through_the_shared_ingress() {
+    const TENANT: &str = "did:example:alice";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    message_store.open().await.unwrap();
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
+    let handler = RecordsEventLogSubscribeHandler::new(
+        message_store,
+        event_log,
+        Some(Arc::new(test_resolver())),
+    );
+    let dwn = crate::Dwn::default();
+
+    for raw in [
+        serde_json::json!({ "descriptor": { "interface": "Records" } }),
+        serde_json::json!({ "descriptor": { "interface": "Records", "method": "Bogus" } }),
+        serde_json::json!({ "descriptor": { "interface": "Records", "method": "Subscribe" } }),
+    ] {
+        let subscribed = handler
+            .handle_subscribe(TENANT, &raw, Box::new(|_| {}))
+            .await;
+        let dispatched = dwn.process_message(TENANT, raw.clone()).await;
+
+        assert_eq!(
+            subscribed.reply.status, dispatched.status,
+            "subscribe vs dispatch for {raw}"
+        );
+    }
+
+    // And the accepted side: a message both entry points admit is admitted by both. Dispatch's
+    // reply is its stub handler's 501, so the comparable fact is the ingress verdict, not the
+    // status — subscribe gets past ingress and reaches authorization.
+    let admitted = signed_records_subscribe_message(
+        RecordsFilter {
+            protocol: Some("http://example.com/notes".to_string()),
+            ..Default::default()
+        },
+        None,
+        "2025-01-01T00:10:00.000000Z",
+    )
+    .await;
+
+    assert!(crate::validation::admit_message(&admitted).is_ok());
+    let subscribed = handler
+        .handle_subscribe(TENANT, &admitted, Box::new(|_| {}))
+        .await;
+    assert_ne!(
+        subscribed.reply.status.code, 400,
+        "shared ingress rejected a message it admits: {}",
+        subscribed.reply.status.detail
+    );
+}
+
 #[tokio::test]
 async fn records_event_log_subscribe_maps_progress_gap_to_410() {
     const TENANT: &str = "did:example:alice";
