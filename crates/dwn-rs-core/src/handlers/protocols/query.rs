@@ -42,13 +42,15 @@ where
         async move {
             let HandlerContext {
                 tenant,
-                raw_message,
                 message,
                 descriptor,
                 ..
             } = ctx;
 
-            let include_private = if raw_message.get("authorization").is_some() {
+            // An unsigned query sees published protocols only. An empty `authorization`
+            // object reaches the same place: `validate_authorization_signature` returns
+            // `Ok(None)` for it when a signature is not required.
+            let include_private = if !message.fields.authorization().is_empty() {
                 match permissions::validate_authorization_signature(
                     &message,
                     self.did_resolver.as_deref(),

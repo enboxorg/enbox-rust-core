@@ -34,7 +34,6 @@ use crate::descriptors::{
     ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
     Records, RecordsWriteDescriptor, QUERY,
 };
-use crate::fields::Fields;
 use crate::filters::{
     message_filters::Messages as MessagesFilter, message_filters::Records as RecordsFilter,
 };
@@ -686,11 +685,7 @@ async fn validate_authorization_signature_inner(
     required: bool,
     validate_delegated_grant: bool,
 ) -> Result<Option<AuthorizationContext>, GrantError> {
-    let authorization = match &message.fields {
-        Fields::Write(fields) => &fields.authorization,
-        Fields::InitialWriteField(fields) => &fields.write_fields.authorization,
-        Fields::Authorization(auth) => auth,
-    };
+    let authorization = message.fields.authorization();
 
     if authorization.is_empty() && required {
         return Err(AuthorizationValidationError::BadRequest(
@@ -1866,6 +1861,7 @@ mod tests {
     use crate::auth::Authorization;
     use crate::descriptors::{Messages, MessagesSubscribeDescriptor};
     use crate::errors::MessageStoreError;
+    use crate::fields::Fields;
     use crate::filters::message_filters::Messages as MessagesFilter;
     use crate::stores::{MessageQueryResult, MessageStore};
 

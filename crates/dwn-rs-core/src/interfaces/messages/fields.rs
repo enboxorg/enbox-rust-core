@@ -57,6 +57,21 @@ impl Default for Fields {
     }
 }
 
+impl Fields {
+    /// The [`Authorization`] carried by whichever variant this is.
+    ///
+    /// Every variant owns one, so this is infallible. An unsigned message
+    /// deserializes to a default `Authorization`, which reports
+    /// [`Authorization::is_empty`].
+    pub fn authorization(&self) -> &Authorization {
+        match self {
+            Fields::Write(fields) => &fields.authorization,
+            Fields::InitialWriteField(fields) => &fields.write_fields.authorization,
+            Fields::Authorization(authorization) => authorization,
+        }
+    }
+}
+
 impl MessageFields for Fields {
     fn encoded_data(&mut self) -> Option<Value> {
         match self {

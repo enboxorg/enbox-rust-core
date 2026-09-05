@@ -277,6 +277,37 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
     );
 }
 
+/// `include_private` is decided from the parsed message's authorization, not from a raw-JSON
+/// `authorization` probe. A present-but-empty `authorization` object is the only input where
+/// the two predicates could disagree, and it never reaches the handler: `Authorization`
+/// requires a signature, so `{}` matches no `Fields` variant and ingress rejects the message.
+///
+/// Covers: DWN-AUTH-001
+#[tokio::test]
+async fn protocols_query_with_empty_authorization_is_rejected_at_ingress() {
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+    let query_handler = ProtocolsQueryHandler::new(message_store.clone(), None);
+
+    let mut message = unsigned_query_message(None);
+    message["authorization"] = serde_json::json!({});
+
+    let reply = query_handler
+        .run(MethodHandlerRequest::new(
+            "did:example:alice",
+            &message,
+            None,
+        ))
+        .await;
+
+    assert_eq!(reply.status.code, 400);
+    assert!(
+        reply.status.detail.starts_with("Failed to parse message: "),
+        "unexpected detail: {}",
+        reply.status.detail
+    );
+}
+
 #[tokio::test]
 async fn protocols_query_unsigned_returns_only_published_latest_configures() {
     let mut message_store = TestMessageStore::default();
