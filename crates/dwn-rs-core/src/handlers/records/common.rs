@@ -38,10 +38,6 @@ pub(crate) enum QueryAuthorizationResult {
     Unauthorized(String),
 }
 
-pub(crate) fn parse_message(raw_message: &JsonValue) -> Result<Message<Descriptor>, String> {
-    serde_json::from_value(raw_message.clone()).map_err(|err| format!("MessageParseFailed: {err}"))
-}
-
 pub(crate) fn records_delete_descriptor(
     message: &Message<Descriptor>,
 ) -> Result<&DeleteDescriptor, String> {

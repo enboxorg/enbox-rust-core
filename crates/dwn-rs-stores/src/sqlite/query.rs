@@ -253,6 +253,14 @@ where
                 (expr, asc)
             })
             .collect();
+        // Canonical tie-break: equal sort keys order by message CID in the
+        // primary direction, matching the memory backend and the upstream
+        // sort-plus-CID contract the cursor keyset already assumes.
+        if !self.order.is_empty() && !self.order.iter().any(|(expr, _)| expr == self.id_col) {
+            let primary_ascending = self.order.first().is_none_or(|(_, asc)| *asc);
+            self.order
+                .push((self.id_col.to_string(), primary_ascending));
+        }
 
         self
     }
