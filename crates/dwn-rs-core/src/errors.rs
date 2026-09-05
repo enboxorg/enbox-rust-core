@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, collections::TryReserveError, convert::Infallible};
 
 use thiserror::Error;
-use ulid::MonotonicError;
+use ulid::Overflow;
 
 use crate::{stores::ProgressGapInfo, FilterError, QueryError};
 
@@ -346,9 +346,6 @@ pub enum EventLogError {
     #[error("unable to perform query: {0}")]
     QueryError(#[from] QueryError),
 
-    #[error("unable to generate watermark: {0}")]
-    WatermarkError(#[from] MonotonicError),
-
     #[error("unsupported event log read option: {0}")]
     UnsupportedReadOption(String),
 
@@ -363,9 +360,6 @@ pub enum ResumableTaskStoreError {
 
     #[error("unable to perform query: {0}")]
     QueryError(#[from] QueryError),
-
-    #[error("unable to generate task id: {0}")]
-    IdGenerationError(#[from] MonotonicError),
 
     #[error("unable to create filters: {0}")]
     FilterError(#[from] FilterError),

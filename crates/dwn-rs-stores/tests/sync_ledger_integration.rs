@@ -92,7 +92,7 @@ async fn sync_engine_resumes_checkpoints_from_sqlite_ledger() {
     // Serialize file-backed tests process-wide.
     let path = std::env::temp_dir().join(format!(
         "enbox-sync-engine-ledger-{}.sqlite",
-        ulid::Ulid::new()
+        ulid::Ulid::generate()
     ));
     let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);

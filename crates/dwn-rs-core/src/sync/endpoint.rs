@@ -288,7 +288,7 @@ where
     {
         let request = json!({
             "jsonrpc": "2.0",
-            "id": ulid::Ulid::new().to_string(),
+            "id": ulid::Ulid::generate().to_string(),
             "method": PROCESS_MESSAGE_METHOD,
             "params": {
                 "target": tenant,

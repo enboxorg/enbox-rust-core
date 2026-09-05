@@ -428,7 +428,7 @@ where
     ) -> DesktopResult<DesktopDeliveryReceipt> {
         self.ensure_running()?;
         let delivery = DesktopQueuedDelivery {
-            id: ulid::Ulid::new().to_string(),
+            id: ulid::Ulid::generate().to_string(),
             request,
         };
         self.delivery_queue.enqueue(delivery).await

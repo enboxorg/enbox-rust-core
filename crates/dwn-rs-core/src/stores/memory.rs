@@ -69,7 +69,7 @@ struct MemoryMessageState {
 
 impl MemoryMessageState {
     fn clear(&mut self) {
-        self.epoch = ulid::Ulid::new().to_string();
+        self.epoch = ulid::Ulid::generate().to_string();
         self.messages.clear();
         self.heads.clear();
         self.entries.clear();
@@ -240,7 +240,7 @@ impl MessageStore for MemoryMessageStore {
             .map_err(message_lock_error)
             .map(|mut state| {
                 state.epoch.is_empty().then(|| {
-                    state.epoch = ulid::Ulid::new().to_string();
+                    state.epoch = ulid::Ulid::generate().to_string();
                 });
             })
             .map_err(message_lock_error)?;
@@ -733,7 +733,7 @@ impl Default for MemoryEventLog {
     fn default() -> Self {
         Self {
             inner: Arc::new(RwLock::new(EventLogInner::default())),
-            epoch: ulid::Ulid::new().to_string(),
+            epoch: ulid::Ulid::generate().to_string(),
             max_events_per_tenant: DEFAULT_MAX_EVENTS_PER_TENANT,
         }
     }
