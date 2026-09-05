@@ -11,36 +11,29 @@ use serde_json::Value;
 
 use crate::descriptors::MESSAGES_QUERY_SCHEMA;
 use crate::dwn::MessageKind;
+use crate::errors::{DwnError, DwnErrorCode};
 use crate::interfaces::messages::descriptors::{
     MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA,
     PROTOCOLS_CONFIGURE_SCHEMA, PROTOCOLS_QUERY_SCHEMA, RECORDS_COUNT_SCHEMA,
     RECORDS_DELETE_SCHEMA, RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA,
     RECORDS_WRITE_SCHEMA,
 };
+use crate::{Descriptor, Message, Response};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MessageValidationError {
-    pub detail: String,
+// Test-only tally of `validate_message` calls on the current thread, so "schema validation
+// runs once per admitted message" is provable rather than asserted. A `#[tokio::test]` drives
+// a current-thread runtime, so one message's whole pipeline lands on the counting thread.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static VALIDATE_MESSAGE_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
-impl MessageValidationError {
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
+fn schema_error(detail: impl Into<String>) -> DwnError {
+    DwnError::new(DwnErrorCode::SchemaValidatorFailure, detail)
 }
 
-impl std::fmt::Display for MessageValidationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", self.detail)
-    }
-}
-
-impl std::error::Error for MessageValidationError {}
-
-static VALIDATORS: OnceLock<Result<HashMap<String, Validator>, MessageValidationError>> =
-    OnceLock::new();
+static VALIDATORS: OnceLock<Result<HashMap<String, Validator>, DwnError>> = OnceLock::new();
 
 const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
@@ -193,44 +186,37 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
     ),
 ];
 
-fn build_validators() -> Result<HashMap<String, Validator>, MessageValidationError> {
+fn build_validators() -> Result<HashMap<String, Validator>, DwnError> {
     let resources = SCHEMA_SOURCES
         .iter()
         .map(|(id, source)| {
-            let schema: Value = serde_json::from_str(source).map_err(|err| {
-                MessageValidationError::new(format!("invalid embedded schema {id}: {err}"))
-            })?;
-            let resource = Resource::from_contents(schema).map_err(|err| {
-                MessageValidationError::new(format!("invalid embedded resource {id}: {err}"))
-            })?;
+            let schema: Value = serde_json::from_str(source)
+                .map_err(|err| schema_error(format!("invalid embedded schema {id}: {err}")))?;
+            let resource = Resource::from_contents(schema)
+                .map_err(|err| schema_error(format!("invalid embedded resource {id}: {err}")))?;
             Ok(((*id).to_string(), resource))
         })
-        .collect::<Result<Vec<_>, MessageValidationError>>()?;
+        .collect::<Result<Vec<_>, DwnError>>()?;
     let registry = Registry::options()
         .draft(Draft::Draft202012)
         .build(resources)
-        .map_err(|err| {
-            MessageValidationError::new(format!("schema registry must compile: {err}"))
-        })?;
+        .map_err(|err| schema_error(format!("schema registry must compile: {err}")))?;
     SCHEMA_SOURCES
         .iter()
         .map(|(id, source)| {
-            let schema: Value = serde_json::from_str(source).map_err(|err| {
-                MessageValidationError::new(format!("invalid embedded schema {id}: {err}"))
-            })?;
+            let schema: Value = serde_json::from_str(source)
+                .map_err(|err| schema_error(format!("invalid embedded schema {id}: {err}")))?;
             let validator = jsonschema::options()
                 .with_draft(Draft::Draft202012)
                 .with_registry(registry.clone())
                 .build(&schema)
-                .map_err(|err| {
-                    MessageValidationError::new(format!("validator for {id} must compile: {err}"))
-                })?;
+                .map_err(|err| schema_error(format!("validator for {id} must compile: {err}")))?;
             Ok((id.to_string(), validator))
         })
         .collect()
 }
 
-fn validators() -> Result<&'static HashMap<String, Validator>, MessageValidationError> {
+fn validators() -> Result<&'static HashMap<String, Validator>, DwnError> {
     VALIDATORS
         .get_or_init(build_validators)
         .as_ref()

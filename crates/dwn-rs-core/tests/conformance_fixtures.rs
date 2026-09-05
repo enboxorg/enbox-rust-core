@@ -894,7 +894,10 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         .await
         .unwrap_or_else(|err| panic!("{} failed to open SqliteNativeDwn: {err}", case.id));
 
-    if let Err(schema_error) = message_validation::validate_message(&raw_message) {
+    // Expectations come from the same admission boundary the node uses, rendered the same
+    // way, so a fixture that is rejected at ingress pins the exact reply the node produces.
+    if let Err(error) = message_validation::ingest_message(&raw_message) {
+        let expected: Response<Reply> = message_validation::ingress_rejection(error);
         let reply = node
             .dwn()
             .process_message(&process.tenant, raw_message)
@@ -905,9 +908,13 @@ async fn assert_message_process_reply(case: &FixtureCase) {
             case.id
         );
         assert_eq!(
-            reply.status.detail,
-            schema_error.to_string(),
+            reply.status.detail, expected.status.detail,
             "{} schema validation detail",
+            case.id
+        );
+        assert_eq!(
+            reply.status.error_code, expected.status.error_code,
+            "{} schema validation error code",
             case.id
         );
         return;

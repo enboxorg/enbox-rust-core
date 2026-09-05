@@ -30,6 +30,12 @@ pub enum DwnErrorCode {
     RecordsWriteImmutablePropertyChanged,
     ProtocolAuthorizationImmutableRecord,
     ProtocolAuthorizationSquashBackstop,
+    // Message ingress (admission) stage; see `dwn::validation::ingest_message`.
+    MessageInterfaceOrMethodUndefined,
+    MessageUnknownInterfaceOrMethod,
+    SchemaValidatorFailure,
+    SchemaValidatorSchemaNotFound,
+    MessageParseFailed,
 }
 
 impl DwnErrorCode {
@@ -75,6 +81,11 @@ impl DwnErrorCode {
             Self::RecordsWriteImmutablePropertyChanged => "RecordsWriteImmutablePropertyChanged",
             Self::ProtocolAuthorizationImmutableRecord => "ProtocolAuthorizationImmutableRecord",
             Self::ProtocolAuthorizationSquashBackstop => "ProtocolAuthorizationSquashBackstop",
+            Self::MessageInterfaceOrMethodUndefined => "MessageInterfaceOrMethodUndefined",
+            Self::MessageUnknownInterfaceOrMethod => "MessageUnknownInterfaceOrMethod",
+            Self::SchemaValidatorFailure => "SchemaValidatorFailure",
+            Self::SchemaValidatorSchemaNotFound => "SchemaValidatorSchemaNotFound",
+            Self::MessageParseFailed => "MessageParseFailed",
         }
     }
 
@@ -155,6 +166,11 @@ impl TryFrom<&str> for DwnErrorCode {
                 Ok(Self::ProtocolAuthorizationImmutableRecord)
             }
             "ProtocolAuthorizationSquashBackstop" => Ok(Self::ProtocolAuthorizationSquashBackstop),
+            "MessageInterfaceOrMethodUndefined" => Ok(Self::MessageInterfaceOrMethodUndefined),
+            "MessageUnknownInterfaceOrMethod" => Ok(Self::MessageUnknownInterfaceOrMethod),
+            "SchemaValidatorFailure" => Ok(Self::SchemaValidatorFailure),
+            "SchemaValidatorSchemaNotFound" => Ok(Self::SchemaValidatorSchemaNotFound),
+            "MessageParseFailed" => Ok(Self::MessageParseFailed),
             _ => Err(()),
         }
     }
