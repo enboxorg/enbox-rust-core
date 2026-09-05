@@ -2523,3 +2523,265 @@ fn value_string(value: Option<&Value>) -> String {
 fn test_store_error(error: String) -> MessageStoreError {
     MessageStoreError::StoreError(StoreError::InternalException(error))
 }
+
+// Covers: DWN-AUTH-005
+#[tokio::test]
+async fn subscribe_delivery_grant_revoked_is_terminal() {
+    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
+    use crate::stores::SubscriptionErrorCode;
+
+    const TENANT: &str = "did:example:alice";
+    const BOB: &str = "did:example:bob";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    // Records.Read grant to bob with far-future expiry: open validates at
+    // request time while delivery validates at now, so the grant must cover
+    // both for the baseline to establish.
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2030-01-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
+    let grant = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        recipient: Some(BOB.to_string()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String("http://example.com/notes".to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+        data_size: grant_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let grant_id = grant["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(TENANT, &grant, Some(grant_data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let filter = RecordsFilter {
+        protocol: Some("http://example.com/notes".to_string()),
+        protocol_path: Some("note".to_string()),
+        ..Default::default()
+    };
+    let request =
+        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
+    let message: Message<Descriptor> =
+        serde_json::from_value(request).expect("subscribe request must deserialize");
+    let auth_ctx = crate::permissions::AuthorizationContext {
+        signer: BOB.to_string(),
+        author: BOB.to_string(),
+        payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
+            crate::auth::jws::AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: Some(grant_id.clone()),
+                permission_grant_ids: None,
+                protocol_role: None,
+            },
+        ),
+        permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::Single(
+            grant_id.clone(),
+        ),
+        author_delegated_grant: None,
+    };
+    let auth = DeliveryAuthorization {
+        message,
+        filter,
+        auth_ctx,
+        grant_valid_at_open: true,
+        role_invoked: false,
+        request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+    };
+
+    authorize_records_delivery(TENANT, &auth, &message_store)
+        .await
+        .expect("live grant must authorize delivery");
+
+    let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
+    let revocation = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        parent_id: Some(grant_id.clone()),
+        parent_context_id: Some(grant_id.clone()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String("http://example.com/notes".to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
+        data_size: revoke_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:04:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                TENANT,
+                &revocation,
+                Some(revoke_data)
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let error = authorize_records_delivery(TENANT, &auth, &message_store)
+        .await
+        .expect_err("revoked grant must fail delivery");
+    assert_eq!(
+        error.code,
+        SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
+    );
+}
+
+// Covers: DWN-AUTH-005, DWN-REC-004
+#[tokio::test]
+async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
+    use super::subscribe::RecordsEventLogSubscribeHandler;
+
+    const TENANT: &str = "did:example:alice";
+    const LIMITED: &str = "http://example.com/limited";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    message_store.open().await.unwrap();
+    let mut data_store = TestDataStore::default();
+    data_store.open().await.unwrap();
+    crate::testing::put_limited_threads_protocol(TENANT, &message_store).await;
+
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    async fn write_post(
+        handler: &RecordsWriteHandler<MemoryMessageStore, TestDataStore>,
+        day: &str,
+    ) -> String {
+        let timestamp = format!("2025-01-{day}T00:00:00.000000Z");
+        let data = Bytes::from(format!("limited-post-{day}").into_bytes());
+        let message = signed_write_message(WriteSpec {
+            protocol: "http://example.com/limited".to_string(),
+            protocol_path: "post".to_string(),
+            data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_size: data.len() as u64,
+            published: Some(true),
+            timestamp: timestamp.clone(),
+            date_created: timestamp.clone(),
+            ..WriteSpec::new(&timestamp)
+        })
+        .await;
+        let record_id = message["recordId"].as_str().unwrap().to_string();
+        assert_eq!(
+            handler
+                .run(MethodHandlerRequest::new(TENANT, &message, Some(data)))
+                .await
+                .status
+                .code,
+            202
+        );
+        record_id
+    }
+
+    let first = write_post(&write_handler, "01").await;
+    write_post(&write_handler, "02").await;
+    write_post(&write_handler, "03").await;
+
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
+    let delivered = Arc::new(RwLock::new(Vec::new()));
+    let delivered_for_listener = delivered.clone();
+    let handler = RecordsEventLogSubscribeHandler::new(
+        message_store.clone(),
+        event_log,
+        Some(Arc::new(test_resolver())),
+    );
+    let request = signed_records_subscribe_message(
+        RecordsFilter {
+            protocol: Some(LIMITED.to_string()),
+            protocol_path: Some("post".to_string()),
+            ..Default::default()
+        },
+        None,
+        "2025-01-01T00:10:00.000000Z",
+    )
+    .await;
+    let result = handler
+        .handle_subscribe(
+            TENANT,
+            &request,
+            Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
+        )
+        .await;
+    assert_eq!(result.reply.status.code, 200);
+    assert_eq!(result.reply.reply.entries.as_ref().unwrap().len(), 2);
+
+    // A live non-occupant must be suppressed without closing the stream.
+    let fourth_data = Bytes::from_static(b"limited-post-04");
+    let fourth = signed_write_message(WriteSpec {
+        protocol: LIMITED.to_string(),
+        protocol_path: "post".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&fourth_data).to_string(),
+        data_size: fourth_data.len() as u64,
+        published: Some(true),
+        timestamp: "2025-01-04T00:00:00.000000Z".to_string(),
+        date_created: "2025-01-04T00:00:00.000000Z".to_string(),
+        ..WriteSpec::new("2025-01-04T00:00:00.000000Z")
+    })
+    .await;
+    let fourth_message: Message<Descriptor> =
+        serde_json::from_value(fourth).expect("live write must deserialize");
+    let fourth_indexes =
+        records_write_indexes(&fourth_message, TENANT, true).expect("live indexes must build");
+    message_store
+        .put(TENANT, fourth_message, fourth_indexes)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        delivered.read().unwrap().is_empty(),
+        "non-occupant live write must be suppressed"
+    );
+
+    // Deleting the oldest occupant changes nothing about suppression, but the
+    // tombstone event itself must still be delivered: the stream is alive.
+    let delete = signed_delete_message(&first, false, "2025-01-05T00:00:00.000000Z").await;
+    assert_eq!(
+        delete_handler
+            .run(MethodHandlerRequest::new(TENANT, &delete, None))
+            .await
+            .status
+            .code,
+        202
+    );
+    for _ in 0..500 {
+        if !delivered.read().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let delivered = delivered.read().unwrap();
+    assert_eq!(delivered.len(), 1, "tombstone event must be delivered");
+    assert!(matches!(delivered[0], SubscriptionMessage::Event { .. }));
+}

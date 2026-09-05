@@ -51,6 +51,9 @@ pub(crate) struct CollectionAuthorization {
     pub visibility: VisibilityClass,
     pub author: Option<String>,
     pub protocol_authorized: bool,
+    /// Whether an invoked grant covered the request at open. Retained for
+    /// delivery-time revalidation of mutable grant state.
+    pub grant_authorized: bool,
 }
 
 /// Resolves the visibility plan for one collection request: anonymous
@@ -74,6 +77,7 @@ where
             visibility: VisibilityClass::Published,
             author: None,
             protocol_authorized: false,
+            grant_authorized: false,
         });
     }
     let signature = signature
@@ -104,12 +108,14 @@ where
             visibility: VisibilityClass::Owner,
             author: Some(signature.author.clone()),
             protocol_authorized,
+            grant_authorized,
         })
     } else {
         Ok(CollectionAuthorization {
             visibility: VisibilityClass::NonOwner,
             author: Some(signature.author.clone()),
             protocol_authorized,
+            grant_authorized,
         })
     }
 }
@@ -243,6 +249,7 @@ mod tests {
             visibility: VisibilityClass::Owner,
             author: Some(PLAN_TENANT.to_string()),
             protocol_authorized: false,
+            grant_authorized: false,
         };
         let owner_sets = collection_filters(&owner, &filter, None, PlanMode::Snapshot).set;
         assert_eq!(owner_sets.len(), 1, "owner sees one un-narrowed set");
@@ -259,6 +266,7 @@ mod tests {
             visibility: VisibilityClass::Published,
             author: None,
             protocol_authorized: false,
+            grant_authorized: false,
         };
         let published_sets = collection_filters(&published, &filter, None, PlanMode::Snapshot).set;
         assert_eq!(published_sets.len(), 1);
@@ -272,6 +280,7 @@ mod tests {
             visibility: VisibilityClass::NonOwner,
             author: Some(PLAN_AUTHOR.to_string()),
             protocol_authorized: false,
+            grant_authorized: false,
         };
         let non_owner_sets = collection_filters(&non_owner, &filter, None, PlanMode::Snapshot).set;
         assert_eq!(
@@ -295,6 +304,7 @@ mod tests {
             visibility: VisibilityClass::Owner,
             author: Some(PLAN_TENANT.to_string()),
             protocol_authorized: false,
+            grant_authorized: false,
         };
         let filter = RecordsFilter::default();
         let snapshot = collection_filters(&owner, &filter, None, PlanMode::Snapshot).set;

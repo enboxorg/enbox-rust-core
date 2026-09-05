@@ -1850,7 +1850,7 @@ mod tests {
         protocol_path: &str,
         context_id: &str,
         record_id: &str,
-    ) {
+    ) -> String {
         let message: Message<Descriptor> = serde_json::from_value(json!({
             "descriptor": {
                 "interface": "Records",
@@ -1899,9 +1899,10 @@ mod tests {
         ]);
 
         store
-            .put(ROLE_TEST_TENANT, message, indexes)
+            .put(ROLE_TEST_TENANT, message.clone(), indexes)
             .await
             .expect("role record must be stored");
+        message_cid(&message).expect("role record must have a CID")
     }
 
     #[tokio::test]
@@ -2709,5 +2710,66 @@ mod tests {
         .expect("root message policy must resolve")
         .expect("root path has a limit");
         assert_eq!(root.context_id, None);
+    }
+
+    // Covers: DWN-AUTH-005
+    #[tokio::test]
+    async fn subscribe_delivery_role_removed_is_terminal() {
+        use super::super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
+        use crate::stores::SubscriptionErrorCode;
+
+        let store = MemoryMessageStore::default();
+        put_history_configure(&store, HISTORY_T1, true).await;
+        let role_cid = put_role_record(
+            &store,
+            ROLE_TEST_PROTOCOL,
+            "thread/participant",
+            "thread-1",
+            "role-record-1",
+        )
+        .await;
+
+        let request = crate::testing::signed_records_subscribe_message(
+            RecordsFilter {
+                protocol: Some(ROLE_TEST_PROTOCOL.to_string()),
+                protocol_path: Some("thread/participant".to_string()),
+                context_id: Some("thread-1/message-1".to_string()),
+                ..Default::default()
+            },
+            None,
+            HISTORY_MID,
+        )
+        .await;
+        let message: Message<Descriptor> =
+            serde_json::from_value(request).expect("subscribe request must deserialize");
+        let auth = DeliveryAuthorization {
+            message,
+            filter: RecordsFilter {
+                protocol: Some(ROLE_TEST_PROTOCOL.to_string()),
+                protocol_path: Some("thread/participant".to_string()),
+                context_id: Some("thread-1/message-1".to_string()),
+                ..Default::default()
+            },
+            auth_ctx: role_query_auth_ctx(),
+            grant_valid_at_open: false,
+            role_invoked: true,
+            request_timestamp: HISTORY_MID.to_string(),
+        };
+
+        authorize_records_delivery(ROLE_TEST_TENANT, &auth, &store)
+            .await
+            .expect("active role must authorize delivery");
+
+        store
+            .delete(ROLE_TEST_TENANT, &role_cid)
+            .await
+            .expect("role record must delete");
+        let error = authorize_records_delivery(ROLE_TEST_TENANT, &auth, &store)
+            .await
+            .expect_err("removed role must fail delivery");
+        assert_eq!(
+            error.code,
+            SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
+        );
     }
 }

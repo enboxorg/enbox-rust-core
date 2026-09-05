@@ -214,6 +214,12 @@ pub enum SubscriptionErrorCode {
     DeliveryAuthorizationFailed,
     #[serde(rename = "MessagesSubscribeDeliveryFailed")]
     DeliveryFailed,
+    #[serde(rename = "RecordsSubscribeDeliveryAuthorizationFailed")]
+    RecordsDeliveryAuthorizationFailed,
+    #[serde(rename = "RecordsSubscribeDeliveryFailed")]
+    RecordsDeliveryFailed,
+    #[serde(rename = "RecordsSubscribeProjectionFailed")]
+    RecordsProjectionFailed,
 }
 
 impl std::fmt::Display for SubscriptionErrorCode {
@@ -222,6 +228,11 @@ impl std::fmt::Display for SubscriptionErrorCode {
             Self::ProgressGap => "ProgressGap",
             Self::DeliveryAuthorizationFailed => "MessagesSubscribeDeliveryAuthorizationFailed",
             Self::DeliveryFailed => "MessagesSubscribeDeliveryFailed",
+            Self::RecordsDeliveryAuthorizationFailed => {
+                "RecordsSubscribeDeliveryAuthorizationFailed"
+            }
+            Self::RecordsDeliveryFailed => "RecordsSubscribeDeliveryFailed",
+            Self::RecordsProjectionFailed => "RecordsSubscribeProjectionFailed",
         })
     }
 }

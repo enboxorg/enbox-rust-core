@@ -32,7 +32,7 @@ use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields},
     ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
-    Records, RecordsWriteDescriptor, QUERY,
+    Records, RecordsWriteDescriptor, COUNT, QUERY,
 };
 use crate::filters::{
     message_filters::Messages as MessagesFilter, message_filters::Records as RecordsFilter,
@@ -1539,13 +1539,23 @@ where
             .into());
         }
     } else if method != permission_grant.scope.method() {
-        return Err(AuthorizationValidationError::BadRequest(
-            AuthorizationRequestError::GrantScopeMismatch(
-                method.to_string(),
-                permission_grant.id.clone(),
-            ),
-        )
-        .into());
+        // Records.Read is the only valid read-like scope and covers Read,
+        // Query, Subscribe, and Count operations. Reject malformed
+        // Query/Subscribe/Count scopes instead of treating them as
+        // compatible with the canonical Read scope.
+        let read_like = matches!(
+            method.as_str(),
+            m if m == READ_METHOD || m == QUERY || m == SUBSCRIBE_METHOD || m == COUNT
+        );
+        if !(read_like && permission_grant.scope.method() == READ_METHOD) {
+            return Err(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::GrantScopeMismatch(
+                    method.to_string(),
+                    permission_grant.id.clone(),
+                ),
+            )
+            .into());
+        }
     }
     Ok(())
 }
