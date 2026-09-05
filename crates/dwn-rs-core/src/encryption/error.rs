@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// Errors from DWN record encryption (A256CTR + X25519-HKDF-SHA256+A256KW).
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum EncryptionError {
     #[error("unsupported content encryption algorithm '{0}'")]
     UnsupportedContentEncryptionAlgorithm(String),
@@ -50,6 +50,9 @@ pub enum EncryptionError {
 
     #[error("AES key wrap: {0}")]
     AesKeyWrap(String),
+
+    #[error("invalid block")]
+    InvalidBlock(#[from] std::array::TryFromSliceError),
 
     #[error("diffie-hellman weak secret")]
     WeakSecret,
