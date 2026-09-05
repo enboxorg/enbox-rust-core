@@ -10,7 +10,8 @@ use crate::dwn::{Handler, HandlerContext};
 use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
-    attach_initial_writes, date_sort_to_message_sort, store_error_reply, QueryAuthorizationResult,
+    attach_initial_writes, date_sort_to_message_sort, published_sort_name,
+    resolve_record_limit_policy, store_error_reply, QueryAuthorizationResult,
 };
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
@@ -46,6 +47,14 @@ where
                 ..
             } = ctx;
 
+            if descriptor.filter.published == Some(false) {
+                if let Some(sort_name) = published_sort_name(&descriptor.date_sort) {
+                    return Response::bad_request(format!(
+                        "RecordsQueryParseFilterPublishedSortInvalid: queries must not filter for `published:false` and sort by {sort_name}"
+                    ));
+                }
+            }
+
             if let Err(reason) = validate_nested_protocol_path_scope(&descriptor.filter, false) {
                 return Response::bad_request(format!(
                     "RecordsQueryNestedProtocolPathContextIdInvalid: {reason}"
@@ -78,6 +87,17 @@ where
                     return Response::unauthorized(detail)
                 }
             };
+            let record_limit = match resolve_record_limit_policy(
+                tenant,
+                &descriptor.filter,
+                self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
+            )
+            .await
+            {
+                Ok(policy) => policy,
+                Err(detail) => return store_error_reply(detail),
+            };
             let result = match self
                 .message_store
                 .query(
@@ -88,7 +108,7 @@ where
                         false,
                     )),
                     descriptor.pagination.clone(),
-                    None,
+                    record_limit,
                 )
                 .await
             {

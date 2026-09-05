@@ -6,7 +6,7 @@ use crate::canonical_rfc3339;
 use crate::descriptors::RecordsCountDescriptor;
 use crate::dwn::{Handler, HandlerContext};
 use crate::filters::context::validate_nested_protocol_path_scope;
-use crate::handlers::records::common::store_error_reply;
+use crate::handlers::records::common::{resolve_record_limit_policy, store_error_reply};
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self};
 use crate::replies::records::Count;
@@ -77,8 +77,23 @@ where
                 Err(detail) => return Response::unauthorized(detail),
             };
             let filters = collection_filters(&auth, &descriptor.filter, None, PlanMode::Snapshot);
+            let record_limit = match resolve_record_limit_policy(
+                tenant,
+                &descriptor.filter,
+                &self.message_store,
+                &canonical_rfc3339(descriptor.message_timestamp),
+            )
+            .await
+            {
+                Ok(policy) => policy,
+                Err(detail) => return store_error_reply(detail),
+            };
 
-            match self.message_store.count(tenant, filters, None, None).await {
+            match self
+                .message_store
+                .count(tenant, filters, None, record_limit)
+                .await
+            {
                 Ok(count) => Response::ok().with_reply(Count { count: Some(count) }),
                 Err(err) => store_error_reply(err.to_string()),
             }

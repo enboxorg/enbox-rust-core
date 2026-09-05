@@ -15,15 +15,16 @@ use crate::dwn::{Handler, HandlerContext};
 use crate::filters::{FilterKey, Filters};
 use crate::handlers::records::common::{
     authorize_records_read, bool_filter, date_sort_to_message_sort, extract_author,
-    fetch_initial_write_message, fetch_newest_write, message_record_id, records_delete_descriptor,
+    fetch_initial_write_message, fetch_newest_write, filter_map, message_record_id,
+    message_record_limit_policy, published_sort_name, records_delete_descriptor,
     records_filter_to_filter_map, set_encoded_data, store_error_reply, string_filter,
 };
 use crate::permissions::{self};
 use crate::replies::records::{Read, ReadEntry};
 use crate::Response;
-use crate::{replies, Pagination};
+use crate::{canonical_rfc3339, replies, Pagination};
 
-use super::RECORDS_INTERFACE;
+use super::{RECORDS_INTERFACE, WRITE_METHOD};
 
 #[derive(Clone)]
 pub struct RecordsReadHandler<MessageStore, DataStore> {
@@ -51,6 +52,14 @@ where
                 descriptor,
                 ..
             } = ctx;
+
+            if descriptor.filter.published == Some(false) {
+                if let Some(sort_name) = published_sort_name(&descriptor.date_sort) {
+                    return Response::bad_request(format!(
+                        "RecordsReadParseFilterPublishedSortInvalid: reads must not filter for `published:false` and sort by {sort_name}"
+                    ));
+                }
+            }
 
             let signature = match permissions::validate_authorization_signature(
                 &message,
@@ -141,6 +150,48 @@ where
                 );
             }
 
+            // A non-occupant latest write is invisible to Read, exactly as to
+            // Query: bare 404. Checked before authorization, mirroring
+            // upstream ordering where a hidden record is indistinguishable
+            // from a missing one.
+            let occupant = match message_record_limit_policy(
+                tenant,
+                &matched_message,
+                &self.message_store,
+                &canonical_rfc3339(descriptor.message_timestamp),
+            )
+            .await
+            {
+                Ok(None) => true,
+                Ok(Some(policy)) => {
+                    let Some(matched_record_id) = record_id(&matched_message) else {
+                        return Response::bad_request(
+                            "RecordsReadMissingRecordId: recordId is required".to_string(),
+                        );
+                    };
+                    let occupant_filter = filter_map([
+                        ("interface", string_filter(RECORDS_INTERFACE)),
+                        ("method", string_filter(WRITE_METHOD)),
+                        ("isLatestBaseState", bool_filter(true)),
+                        ("protocol", string_filter(&policy.protocol)),
+                        ("protocolPath", string_filter(&policy.protocol_path)),
+                        ("recordId", string_filter(&matched_record_id)),
+                    ]);
+                    match self
+                        .message_store
+                        .count(tenant, Filters::from(occupant_filter), None, Some(policy))
+                        .await
+                    {
+                        Ok(count) => count > 0,
+                        Err(err) => return store_error_reply(err.to_string()),
+                    }
+                }
+                Err(detail) => return store_error_reply(detail),
+            };
+            if !occupant {
+                return Response::not_found();
+            }
+
             if let Err(detail) = authorize_records_read(
                 tenant,
                 &message,
@@ -209,10 +260,19 @@ where
             .unwrap_or(false)
             {
                 if let Some(record_id) = record_id(&matched_message) {
-                    if let Ok(Some(initial_write)) =
-                        fetch_initial_write_message(tenant, &record_id, &self.message_store).await
+                    match fetch_initial_write_message(tenant, &record_id, &self.message_store).await
                     {
-                        entry.initial_write = Some(initial_write.clone());
+                        Ok(Some(initial_write)) => {
+                            entry.initial_write = Some(initial_write.clone());
+                        }
+                        Ok(None) => {
+                            return Response::internal_error(
+                                format!(
+                                    "RecordsWriteGetInitialWriteNotFound: initial write not found for record {record_id}"
+                                ),
+                            );
+                        }
+                        Err(detail) => return store_error_reply(detail),
                     }
                 }
             }

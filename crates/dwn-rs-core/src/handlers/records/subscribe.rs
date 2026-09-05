@@ -12,7 +12,8 @@ use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, date_sort_to_message_sort, event_log_error_reply,
-    records_subscribe_descriptor, records_subscribe_reply, store_error_reply,
+    records_subscribe_descriptor, records_subscribe_reply, resolve_record_limit_policy,
+    store_error_reply,
 };
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
@@ -114,6 +115,17 @@ where
                 descriptor.date_sort.as_ref(),
                 PlanMode::Snapshot,
             );
+            let record_limit = match resolve_record_limit_policy(
+                tenant,
+                &descriptor.filter,
+                self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
+            )
+            .await
+            {
+                Ok(policy) => policy,
+                Err(detail) => return store_error_reply(detail),
+            };
             let result = match self
                 .message_store
                 .query(
@@ -124,7 +136,7 @@ where
                         false,
                     )),
                     descriptor.pagination.clone(),
-                    None,
+                    record_limit,
                 )
                 .await
             {
@@ -239,6 +251,30 @@ where
             }
         };
 
+        // Same nested-scope contract as the snapshot handler: bounded
+        // path-wide subscriptions may omit scope when the initial page is
+        // explicitly capped and no slash-role is invoked.
+        let allow_bounded_path_wide = descriptor.cursor.is_none()
+            && descriptor
+                .pagination
+                .as_ref()
+                .and_then(|pagination| pagination.limit)
+                .is_some_and(|limit| limit > 0)
+            && signature
+                .as_ref()
+                .and_then(|signature| signature.protocol_role())
+                .is_none_or(|role| !role.contains('/'));
+        if let Err(reason) =
+            validate_nested_protocol_path_scope(&descriptor.filter, allow_bounded_path_wide)
+        {
+            return records_subscribe_reply(
+                Response::bad_request(format!(
+                    "RecordsSubscribeNestedProtocolPathContextIdInvalid: {reason}"
+                )),
+                None,
+            );
+        }
+
         let (event_filters, query_filters, _) = match self
             .records_subscribe_filters(tenant, &message, &descriptor, signature.as_ref())
             .await
@@ -284,6 +320,20 @@ where
             return records_subscribe_reply(reply, Some(subscription));
         }
 
+        let record_limit = match resolve_record_limit_policy(
+            tenant,
+            &descriptor.filter,
+            self.message_store.as_ref(),
+            &canonical_rfc3339(descriptor.message_timestamp),
+        )
+        .await
+        {
+            Ok(policy) => policy,
+            Err(detail) => {
+                let _ = (subscription.close)().await;
+                return records_subscribe_reply(store_error_reply(detail), None);
+            }
+        };
         let result = match self
             .message_store
             .query(
@@ -294,7 +344,7 @@ where
                     false,
                 )),
                 descriptor.pagination.clone(),
-                None,
+                record_limit,
             )
             .await
         {

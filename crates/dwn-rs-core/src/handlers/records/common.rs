@@ -19,6 +19,7 @@ use crate::errors::{DwnError, DwnErrorCode, EventLogError};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::handlers::configure::fetch_protocol_definition;
+use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
 use crate::handlers::records::subscribe::RecordsSubscribeReply;
 use crate::interfaces::messages::protocols::{
     self as protocol_types, Action, Can, Definition, RuleSet, Who,
@@ -28,7 +29,7 @@ use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::{QueryEntry, Subscribe};
 use crate::replies::HasProgressGapInfo;
 use crate::stores::write_resolver::InitialWriteResolver;
-use crate::stores::{EventSubscription, KeyValues};
+use crate::stores::{EventSubscription, KeyValues, RecordLimitOccupancy};
 use crate::SubtreeFilter;
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, Response, SortDirection, Value};
 
@@ -707,6 +708,150 @@ pub(crate) fn should_build_recipient_filter(filter: &RecordsFilter, recipient: &
 
 pub(crate) fn should_protocol_authorize(ctx: &AuthorizationContext) -> bool {
     ctx.payload.protocol_role().is_some()
+}
+
+/// Names the published sort when one is requested, for the parse-time rule
+/// rejecting `published:false` combined with a published sort. The wire code
+/// stays with each calling handler.
+pub(crate) fn published_sort_name(
+    date_sort: &Option<crate::descriptors::records::DateSort>,
+) -> Option<&'static str> {
+    match date_sort {
+        Some(crate::descriptors::records::DateSort::PublishedAscending) => {
+            Some("PublishedAscending")
+        }
+        Some(crate::descriptors::records::DateSort::PublishedDescending) => {
+            Some("PublishedDescending")
+        }
+        _ => None,
+    }
+}
+
+/// Reads the `$recordLimit` max governing a protocol path at the request
+/// timestamp. A missing protocol or absent rule means no restriction; any
+/// other failure is an error, never unrestricted visibility.
+async fn record_limit_max<MessageStore>(
+    tenant: &str,
+    protocol: &str,
+    protocol_path: &str,
+    message_store: &MessageStore,
+    request_timestamp: &str,
+) -> Result<Option<u64>, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let definition =
+        match fetch_protocol_definition(tenant, protocol, message_store, Some(request_timestamp))
+            .await
+        {
+            Ok(definition) => definition,
+            Err(ProtocolDefinitionLookupError::NotFound(_)) => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+    let rule_set = match protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
+    {
+        Some(rule_set) => rule_set,
+        None => return Ok(None),
+    };
+    Ok(rule_set.record_limit.as_ref().map(|rule| rule.max))
+}
+
+/// Derives the read-time occupancy policy for a collection filter, mirroring
+/// the upstream scope selection: root paths carry no scope, `parentId`
+/// passes through, and a `contextId` at target depth contributes its direct
+/// parent while deeper selections scope the subtree itself.
+pub(crate) async fn resolve_record_limit_policy<MessageStore>(
+    tenant: &str,
+    filter: &RecordsFilter,
+    message_store: &MessageStore,
+    request_timestamp: &str,
+) -> Result<Option<RecordLimitOccupancy>, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let (Some(protocol), Some(protocol_path)) =
+        (filter.protocol.as_deref(), filter.protocol_path.as_deref())
+    else {
+        return Ok(None);
+    };
+    let Some(max) = record_limit_max(
+        tenant,
+        protocol,
+        protocol_path,
+        message_store,
+        request_timestamp,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let mut policy = RecordLimitOccupancy {
+        protocol: protocol.to_string(),
+        protocol_path: protocol_path.to_string(),
+        context_id: None,
+        parent_id: None,
+        max,
+    };
+    if !protocol_path.contains('/') {
+        return Ok(Some(policy));
+    }
+    if let Some(parent_id) = filter.parent_id.as_deref() {
+        policy.parent_id = Some(vec![parent_id.to_string()]);
+    }
+    let Some(context_id) = filter.context_id.as_deref() else {
+        return Ok(Some(policy));
+    };
+    // A context at target depth selects its direct parent (which still has at
+    // least one segment on a nested path); deeper selections scope the
+    // subtree itself.
+    let context_depth = context_id.split('/').count();
+    let path_depth = protocol_path.split('/').count();
+    policy.context_id = Some(if context_depth == path_depth {
+        parent_context_id(context_id).unwrap_or_default()
+    } else {
+        context_id.to_string()
+    });
+    Ok(Some(policy))
+}
+
+/// Derives the occupancy policy for one matched write, as the read
+/// top-1 membership check requires. Root records carry no scope; nested
+/// records contribute their direct-parent context so siblings consume slots.
+pub(crate) async fn message_record_limit_policy<MessageStore>(
+    tenant: &str,
+    message: &Message<Descriptor>,
+    message_store: &MessageStore,
+    request_timestamp: &str,
+) -> Result<Option<RecordLimitOccupancy>, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let descriptor = records_write_descriptor(message).map_err(|detail| detail.to_string())?;
+    let Some(max) = record_limit_max(
+        tenant,
+        &descriptor.protocol,
+        &descriptor.protocol_path,
+        message_store,
+        request_timestamp,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let mut policy = RecordLimitOccupancy {
+        protocol: descriptor.protocol.clone(),
+        protocol_path: descriptor.protocol_path.clone(),
+        context_id: None,
+        parent_id: None,
+        max,
+    };
+    if let Some(context_id) = context_id(message) {
+        let parent = parent_context_id(&context_id).unwrap_or_default();
+        if !parent.is_empty() {
+            policy.context_id = Some(parent);
+        }
+    }
+    Ok(Some(policy))
 }
 
 pub(crate) fn date_sort_to_message_sort(
@@ -2360,5 +2505,209 @@ mod tests {
             .is_err(),
             "role removed by v2 must not authorize at LATE"
         );
+    }
+
+    const LIMITED_PROTOCOL: &str = "http://example.com/limited";
+    const POLICY_T1: &str = "2025-01-01T00:00:00.000000Z";
+
+    fn limit_filter(
+        protocol_path: Option<&str>,
+        parent_id: Option<&str>,
+        context_id: Option<&str>,
+    ) -> RecordsFilter {
+        RecordsFilter {
+            protocol: Some(LIMITED_PROTOCOL.to_string()),
+            protocol_path: protocol_path.map(str::to_string),
+            parent_id: parent_id.map(str::to_string),
+            context_id: context_id.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn limit_write_message(protocol_path: &str, context_id: Option<&str>) -> Message<Descriptor> {
+        serde_json::from_value(json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Write",
+                "messageTimestamp": POLICY_T1,
+                "dateCreated": POLICY_T1,
+                "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
+                "dataSize": 0,
+                "dataFormat": "application/json",
+                "protocol": LIMITED_PROTOCOL,
+                "protocolPath": protocol_path,
+                "recipient": ROLE_TEST_AUTHOR
+            },
+            "recordId": "limit-record-1",
+            "contextId": context_id
+        }))
+        .expect("limit write must deserialize")
+    }
+
+    // Covers: DWN-PROTO-004
+    #[tokio::test]
+    async fn record_limit_policy_root_path_has_no_scope() {
+        let store = MemoryMessageStore::default();
+        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+        let policy = resolve_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_filter(Some("post"), None, None),
+            &store,
+            POLICY_T1,
+        )
+        .await
+        .expect("root policy must resolve")
+        .expect("root path has a limit");
+        assert_eq!(policy.max, 2);
+        assert_eq!(policy.protocol, LIMITED_PROTOCOL);
+        assert_eq!(policy.protocol_path, "post");
+        assert_eq!(policy.context_id, None);
+        assert_eq!(policy.parent_id, None);
+    }
+
+    // Covers: DWN-PROTO-004
+    #[tokio::test]
+    async fn record_limit_policy_nested_scope_selection() {
+        let store = MemoryMessageStore::default();
+        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+
+        let parent = resolve_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_filter(Some("thread/message"), Some("thread-1"), None),
+            &store,
+            POLICY_T1,
+        )
+        .await
+        .expect("parent policy must resolve")
+        .expect("nested path has a limit");
+        assert_eq!(parent.max, 1);
+        assert_eq!(parent.parent_id, Some(vec!["thread-1".to_string()]));
+        assert_eq!(parent.context_id, None);
+
+        let exact = resolve_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_filter(Some("thread/message"), None, Some("ctx-a/ctx-b")),
+            &store,
+            POLICY_T1,
+        )
+        .await
+        .expect("exact policy must resolve")
+        .expect("nested path has a limit");
+        assert_eq!(exact.context_id, Some("ctx-a".to_string()));
+        assert_eq!(exact.parent_id, None);
+
+        let deeper = resolve_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_filter(Some("thread/message"), None, Some("ctx-a/ctx-b/ctx-c")),
+            &store,
+            POLICY_T1,
+        )
+        .await
+        .expect("deep policy must resolve")
+        .expect("nested path has a limit");
+        assert_eq!(deeper.context_id, Some("ctx-a/ctx-b/ctx-c".to_string()));
+
+        let unscoped = resolve_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_filter(Some("thread/message"), None, None),
+            &store,
+            POLICY_T1,
+        )
+        .await
+        .expect("unscoped policy must resolve")
+        .expect("nested path has a limit");
+        assert_eq!(unscoped.context_id, None);
+        assert_eq!(unscoped.parent_id, None);
+    }
+
+    // Covers: DWN-PROTO-001
+    #[tokio::test]
+    async fn record_limit_policy_absent_means_unlimited() {
+        let store = MemoryMessageStore::default();
+        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+
+        assert_eq!(
+            resolve_record_limit_policy(
+                ROLE_TEST_TENANT,
+                &limit_filter(None, None, None),
+                &store,
+                POLICY_T1,
+            )
+            .await
+            .expect("missing protocol must not fail"),
+            None,
+            "filter without protocol selects no policy"
+        );
+        assert_eq!(
+            resolve_record_limit_policy(
+                "did:example:bob",
+                &limit_filter(Some("post"), None, None),
+                &store,
+                POLICY_T1,
+            )
+            .await
+            .expect("unconfigured tenant must not fail"),
+            None,
+            "unknown tenant selects no policy"
+        );
+        assert_eq!(
+            resolve_record_limit_policy(
+                ROLE_TEST_TENANT,
+                &limit_filter(Some("thread"), None, None),
+                &store,
+                POLICY_T1,
+            )
+            .await
+            .expect("rule-less path must not fail"),
+            None,
+            "path without a rule selects no policy"
+        );
+    }
+
+    // Covers: DWN-PROTO-001
+    #[tokio::test]
+    async fn record_limit_policy_store_failure_errors() {
+        let failing = FailingMessageStore;
+        assert!(
+            resolve_record_limit_policy(
+                ROLE_TEST_TENANT,
+                &limit_filter(Some("post"), None, None),
+                &failing,
+                POLICY_T1,
+            )
+            .await
+            .is_err(),
+            "definition lookup failure must error, never widen"
+        );
+    }
+
+    // Covers: DWN-PROTO-004
+    #[tokio::test]
+    async fn message_record_limit_policy_uses_direct_parent() {
+        let store = MemoryMessageStore::default();
+        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+
+        let nested = message_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_write_message("thread/message", Some("thread-1/message-1")),
+            &store,
+            POLICY_T1,
+        )
+        .await
+        .expect("message policy must resolve")
+        .expect("nested path has a limit");
+        assert_eq!(nested.max, 1);
+        assert_eq!(nested.context_id, Some("thread-1".to_string()));
+
+        let root = message_record_limit_policy(
+            ROLE_TEST_TENANT,
+            &limit_write_message("post", None),
+            &store,
+            POLICY_T1,
+        )
+        .await
+        .expect("root message policy must resolve")
+        .expect("root path has a limit");
+        assert_eq!(root.context_id, None);
     }
 }

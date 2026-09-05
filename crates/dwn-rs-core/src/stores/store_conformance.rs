@@ -593,7 +593,8 @@ pub fn write_record_ids(messages: &[Message<Descriptor>]) -> Vec<String> {
         .collect()
 }
 
-fn limit_policy(
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub fn limit_policy(
     protocol_path: &str,
     max: u64,
     context_id: Option<&str>,

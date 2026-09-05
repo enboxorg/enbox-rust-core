@@ -6,25 +6,18 @@
 //! Covers: DWN-REC-004, DWN-REC-005
 
 use dwn_rs_core::stores::store_conformance::{
-    latest_writes_filter, limit_indexes, limit_message, limit_row, write_record_ids,
+    latest_writes_filter, limit_indexes, limit_message, limit_policy, limit_row, write_record_ids,
 };
-use dwn_rs_core::stores::{MessageStore, RecordLimitOccupancy};
+use dwn_rs_core::stores::MessageStore;
 
 use dwn_rs_stores::SqliteStore;
 
 mod common;
 
 const TENANT: &str = "did:example:alice";
-const PROTOCOL: &str = "https://example.com/protocol/threads";
 
-fn record_limit() -> RecordLimitOccupancy {
-    RecordLimitOccupancy {
-        protocol: PROTOCOL.to_string(),
-        protocol_path: "thread".to_string(),
-        context_id: None,
-        parent_id: None,
-        max: 2,
-    }
+fn record_limit() -> dwn_rs_core::stores::RecordLimitOccupancy {
+    limit_policy("thread", 2, None, None)
 }
 
 async fn query_occupants(store: &SqliteStore) -> (Vec<String>, u64) {

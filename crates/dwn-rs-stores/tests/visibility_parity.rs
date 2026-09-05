@@ -6,19 +6,19 @@
 //! Subscribe snapshots equal Query results, tombstones route correctly, and
 //! every non-initial entry carries `initialWrite`.
 //!
-//! This pins backend parity (memory of the contract), not the #190
-//! remainder: read-time record limits and boundary-aware subtree filtering
-//! are asserted as currently implemented, identically on both backends.
+//! Read-time record limits run through the same battery: over-limit writes
+//! admit but stay invisible to Query, Count, snapshot, and Read alike.
 //!
-//! Covers: DWN-REC-005, DWN-AUTH-006.
+//! Covers: DWN-REC-005, DWN-AUTH-006, DWN-REC-004.
 
 mod common;
 
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::testing::{
-    put_notes_protocol_without_actions, signed_delete_message, signed_write_message, test_resolver,
-    unsigned_count_message, unsigned_query_message, unsigned_read_message, WriteSpec,
+    put_limited_threads_protocol, put_notes_protocol_without_actions, signed_delete_message,
+    signed_write_message, test_resolver, unsigned_count_message, unsigned_query_message,
+    unsigned_read_message, WriteSpec,
 };
 use dwn_rs_core::Reply;
 use serde_json::{json, Value as JsonValue};
@@ -350,4 +350,199 @@ async fn unpublished_writes_stay_invisible_to_anonymous_query() {
     let (_, disk_entries) = query_entries(&nodes.disk, published_filter()).await;
     assert_eq!(mem_entries, disk_entries);
     assert!(mem_entries.is_empty());
+}
+
+const LIMITED_PROTOCOL: &str = "http://example.com/limited";
+
+fn limited_filter(extra: JsonValue) -> JsonValue {
+    let mut filter = json!({ "protocol": LIMITED_PROTOCOL, "published": true });
+    for (key, value) in extra.as_object().expect("extra filter must be an object") {
+        filter[key] = value.clone();
+    }
+    filter
+}
+
+fn limited_post(day: &str) -> (WriteSpec, Bytes) {
+    let timestamp = format!("2025-01-{day}T00:00:00.000000Z");
+    let data = payload(&format!("post-{day}"));
+    (
+        WriteSpec {
+            protocol: LIMITED_PROTOCOL.to_string(),
+            protocol_path: "post".to_string(),
+            data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_size: data.len() as u64,
+            published: Some(true),
+            timestamp: timestamp.clone(),
+            date_created: timestamp.clone(),
+            ..WriteSpec::new(&timestamp)
+        },
+        data,
+    )
+}
+
+/// Three root posts under a max-2 limit: Query, Count, snapshot, and Read
+/// agree that only the two oldest are visible, identically on both backends.
+#[tokio::test]
+async fn record_limit_root_bounds_all_read_surfaces() {
+    let nodes = fresh_nodes().await;
+    let mut posts = Vec::new();
+    for node in [&nodes.mem, &nodes.disk] {
+        put_limited_threads_protocol(TENANT, node.store()).await;
+        let mut ids = Vec::new();
+        for day in ["01", "02", "03"] {
+            let (spec, data) = limited_post(day);
+            let (code, record_id) = write(node, spec, data).await;
+            assert_eq!(code, 202, "over-limit writes still admit");
+            ids.push(record_id);
+        }
+        posts.push(ids);
+    }
+
+    let scope = || limited_filter(json!({ "protocolPath": "post" }));
+    for (node, ids) in [&nodes.mem, &nodes.disk].into_iter().zip(posts) {
+        let (status, entries) = query_entries(node, scope()).await;
+        assert_eq!(status, 200);
+        let mut visible: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| entry["recordId"].as_str().map(str::to_string))
+            .collect();
+        visible.sort();
+        let mut expected = vec![ids[0].clone(), ids[1].clone()];
+        expected.sort();
+        assert_eq!(visible, expected);
+
+        let (count_status, count) = count(node, scope()).await;
+        assert_eq!(count_status, 200);
+        assert_eq!(count, 2);
+
+        let subscribe = json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Subscribe",
+                "messageTimestamp": T4,
+                "filter": limited_filter(json!({ "protocolPath": "post" })),
+            },
+        });
+        let reply = node.dwn().process_message(TENANT, subscribe).await;
+        assert_eq!(reply.status.code, 200, "{reply:?}");
+        let Reply::RecordsSubscribe(sub) = reply.reply else {
+            panic!("expected RecordsSubscribe reply");
+        };
+        let snapshot: Vec<JsonValue> = sub
+            .entries
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| serde_json::to_value(entry).unwrap())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(snapshot, entries, "snapshot must equal query under policy");
+
+        let (hidden_status, _) =
+            read(node, unsigned_read_message(json!({ "recordId": ids[2] }))).await;
+        assert_eq!(hidden_status, 404, "non-occupant read is a bare 404");
+        let (read_status, _) =
+            read(node, unsigned_read_message(json!({ "recordId": ids[0] }))).await;
+        assert_eq!(read_status, 200, "occupant read succeeds");
+    }
+
+    let (_, mem_entries) = query_entries(&nodes.mem, scope()).await;
+    let (_, disk_entries) = query_entries(&nodes.disk, scope()).await;
+    assert_eq!(mem_entries, disk_entries);
+}
+
+/// One message per direct parent under a max-1 nested limit.
+#[tokio::test]
+async fn record_limit_nested_groups_bound_query_and_count() {
+    let nodes = fresh_nodes().await;
+    for node in [&nodes.mem, &nodes.disk] {
+        put_limited_threads_protocol(TENANT, node.store()).await;
+
+        let thread_data = payload("thread");
+        let (code, thread_id) = write(
+            node,
+            WriteSpec {
+                protocol: LIMITED_PROTOCOL.to_string(),
+                protocol_path: "thread".to_string(),
+                data_cid: generate_dag_pb_cid_from_bytes(&thread_data).to_string(),
+                data_size: thread_data.len() as u64,
+                published: Some(true),
+                timestamp: T1.to_string(),
+                date_created: T1.to_string(),
+                ..WriteSpec::new(T1)
+            },
+            thread_data,
+        )
+        .await;
+        assert_eq!(code, 202);
+
+        for day in ["02", "03"] {
+            let timestamp = format!("2025-01-{day}T00:00:00.000000Z");
+            let data = payload(&format!("message-{day}"));
+            let (code, _) = write(
+                node,
+                WriteSpec {
+                    protocol: LIMITED_PROTOCOL.to_string(),
+                    protocol_path: "thread/message".to_string(),
+                    parent_id: Some(thread_id.clone()),
+                    // Root records carry their record ID as context.
+                    parent_context_id: Some(thread_id.clone()),
+                    data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+                    data_size: data.len() as u64,
+                    published: Some(true),
+                    timestamp: timestamp.clone(),
+                    date_created: timestamp.clone(),
+                    ..WriteSpec::new(&timestamp)
+                },
+                data,
+            )
+            .await;
+            assert_eq!(code, 202, "over-limit nested writes still admit");
+        }
+
+        let filter = limited_filter(json!({
+            "protocolPath": "thread/message",
+            "parentId": thread_id,
+        }));
+        let (status, entries) = query_entries(node, filter.clone()).await;
+        assert_eq!(status, 200);
+        assert_eq!(entries.len(), 1, "one occupant per direct parent");
+        let (count_status, count) = count(node, filter).await;
+        assert_eq!(count_status, 200);
+        assert_eq!(count, 1);
+    }
+}
+
+/// `published:false` with a published sort is a 400 on Query and Read.
+#[tokio::test]
+async fn published_false_with_published_sort_is_rejected() {
+    let nodes = fresh_nodes().await;
+    for node in [&nodes.mem, &nodes.disk] {
+        populate(node).await;
+
+        let query = json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Query",
+                "messageTimestamp": T4,
+                "filter": { "published": false },
+                "dateSort": "publishedAscending",
+            },
+        });
+        let reply = node.dwn().process_message(TENANT, query).await;
+        assert_eq!(reply.status.code, 400);
+
+        let read_message = json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Read",
+                "messageTimestamp": T4,
+                "filter": { "published": false },
+                "dateSort": "publishedAscending",
+            },
+        });
+        let (status, _) = read(node, read_message).await;
+        assert_eq!(status, 400);
+    }
 }
