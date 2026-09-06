@@ -170,17 +170,14 @@ where
                 Ok(result) => result,
                 Err(err) => return store_error_reply(err.to_string()),
             };
-            let messages = match IdentityProjector
-                .project_writes(result.messages)
-                .await
-            {
+            let messages = match IdentityProjector.project_writes(result.messages).await {
                 Ok(messages) => messages,
-                Err(detail) => return store_error_reply(format!("failed to project records: {detail}")),
+                Err(detail) => {
+                    return store_error_reply(format!("failed to project records: {detail}"))
+                }
             };
             let entries =
-                match attach_initial_writes(tenant, messages, self.write_resolver.as_ref())
-                    .await
-                {
+                match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
                     Ok(entries) => entries,
                     Err(err) => {
                         return store_error_reply(format!(
@@ -408,12 +405,13 @@ where
 
             if let Descriptor::Records(records) = &event.message.descriptor {
                 if matches!(records.as_ref(), Records::Write(_)) {
-                    let projected =
-                        match IdentityProjector.project_writes(vec![event.message.clone()]).await
-                        {
-                            Ok(projected) => projected,
-                            Err(_) => return DeliveryDecision::Suppress,
-                        };
+                    let projected = match IdentityProjector
+                        .project_writes(vec![event.message.clone()])
+                        .await
+                    {
+                        Ok(projected) => projected,
+                        Err(_) => return DeliveryDecision::Suppress,
+                    };
                     let Some(write) = projected.into_iter().next() else {
                         return DeliveryDecision::Suppress;
                     };
@@ -595,10 +593,7 @@ where
                 return records_subscribe_reply(store_error_reply(err.to_string()), None);
             }
         };
-        let messages = match IdentityProjector
-            .project_writes(result.messages)
-            .await
-        {
+        let messages = match IdentityProjector.project_writes(result.messages).await {
             Ok(messages) => messages,
             Err(detail) => {
                 let _ = (subscription.close)().await;
@@ -608,22 +603,17 @@ where
                 );
             }
         };
-        let entries = match attach_initial_writes(
-            tenant,
-            messages,
-            self.write_resolver.as_ref(),
-        )
-        .await
-        {
-            Ok(entries) => entries,
-            Err(err) => {
-                let _ = (subscription.close)().await;
-                return records_subscribe_reply(
-                    store_error_reply(format!("failed to attach initial writes: {err}")),
-                    None,
-                );
-            }
-        };
+        let entries =
+            match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
+                Ok(entries) => entries,
+                Err(err) => {
+                    let _ = (subscription.close)().await;
+                    return records_subscribe_reply(
+                        store_error_reply(format!("failed to attach initial writes: {err}")),
+                        None,
+                    );
+                }
+            };
         let reply = Response::ok().with_reply(Subscribe {
             subscription_id: Some(subscription.id.clone()),
             entries: Some(entries.clone()),

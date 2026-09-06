@@ -117,27 +117,19 @@ where
                 Err(err) => return store_error_reply(err.to_string()),
             };
 
-            let messages = match IdentityProjector
-                .project_writes(result.messages)
-                .await
-            {
+            let messages = match IdentityProjector.project_writes(result.messages).await {
                 Ok(messages) => messages,
                 Err(detail) => {
                     return store_error_reply(format!("failed to project records: {detail}"))
                 }
             };
-            let entries = match attach_initial_writes(
-                tenant,
-                messages,
-                self.write_resolver.as_ref(),
-            )
-            .await
-            {
-                Ok(entries) => entries,
-                Err(err) => {
-                    return store_error_reply(format!("failed to attach initial writes: {err}"))
-                }
-            };
+            let entries =
+                match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        return store_error_reply(format!("failed to attach initial writes: {err}"))
+                    }
+                };
 
             Response::ok().with_reply(Query {
                 entries: Some(entries),

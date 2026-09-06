@@ -3216,13 +3216,11 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
         date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
         date_expires: parse_time("2025-06-01T00:00:00.000000Z"),
         delegated: Some(true),
-        scope: crate::permissions::PermissionScope::Records(
-            crate::permissions::RecordsScope {
-                method: crate::permissions::RecordsMethod::Read,
-                protocol: "http://example.com/notes".to_string(),
-                selector: None,
-            },
-        ),
+        scope: crate::permissions::PermissionScope::Records(crate::permissions::RecordsScope {
+            method: crate::permissions::RecordsMethod::Read,
+            protocol: "http://example.com/notes".to_string(),
+            selector: None,
+        }),
         conditions: None,
         connect_session: None,
     };
@@ -3231,12 +3229,8 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
         protocol_path: Some("note".to_string()),
         ..Default::default()
     };
-    let request = signed_records_subscribe_message(
-        filter.clone(),
-        None,
-        "2025-01-01T00:10:00.000000Z",
-    )
-    .await;
+    let request =
+        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
     let message: Message<Descriptor> =
         serde_json::from_value(request).expect("subscribe request must deserialize");
     let auth = DeliveryAuthorization {
