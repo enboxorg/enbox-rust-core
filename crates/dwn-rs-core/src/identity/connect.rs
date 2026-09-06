@@ -148,7 +148,7 @@ pub fn create_permission_request(
     description: Option<String>,
 ) -> PermissionRequestRecord {
     PermissionRequestRecord {
-        id: Ulid::new().to_string(),
+        id: Ulid::generate().to_string(),
         requester: requester.into(),
         delegated,
         scope,
@@ -164,7 +164,7 @@ pub fn create_delegate_grant(
     description: Option<String>,
 ) -> DelegateGrant {
     DelegateGrant {
-        id: Ulid::new().to_string(),
+        id: Ulid::generate().to_string(),
         grantor: grantor.into(),
         grantee: grantee.into(),
         date_granted: Utc::now(),
@@ -325,7 +325,7 @@ where
     S: KeyDeliveryStore,
 {
     let record = ContextKeyDeliveryRecord {
-        id: Ulid::new().to_string(),
+        id: Ulid::generate().to_string(),
         tenant_did: tenant_did.into(),
         recipient_did: recipient_did.into(),
         source_protocol: source_protocol.into(),

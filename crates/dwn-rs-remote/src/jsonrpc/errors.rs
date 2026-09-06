@@ -43,8 +43,8 @@ impl From<serde_json::Error> for JSONRpcError {
     }
 }
 
-impl From<ulid::MonotonicError> for JSONRpcError {
-    fn from(err: ulid::MonotonicError) -> Self {
+impl From<ulid::Overflow<'_>> for JSONRpcError {
+    fn from(err: ulid::Overflow<'_>) -> Self {
         JSONRpcError {
             code: JSONRpcErrorCodes::InternalError,
             message: err.to_string(),

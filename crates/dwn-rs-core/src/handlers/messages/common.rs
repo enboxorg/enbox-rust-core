@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use k256::sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256};
 
 use crate::descriptors::{
     Descriptor, Messages, MessagesSubscribeDescriptor, MessagesSyncDescriptor, Records,

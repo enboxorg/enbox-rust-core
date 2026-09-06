@@ -434,9 +434,11 @@ mod tests {
 
     // -- StubMessageStore ---------------------------------------------------
 
+    type StubRows = Arc<Mutex<BTreeMap<(String, String), Message<Descriptor>>>>;
+
     #[derive(Clone, Default)]
     struct StubMessageStore {
-        rows: Arc<Mutex<BTreeMap<(String, String), Message<Descriptor>>>>,
+        rows: StubRows,
     }
 
     impl StubMessageStore {
@@ -1355,7 +1357,7 @@ mod tests {
             let error = reply.reply.error.expect("expected error in reply");
             assert_eq!(error.code, ProgressGapCode::ProgressGap);
 
-            let reason_json = serde_json::to_value(&error.reason).unwrap();
+            let reason_json = serde_json::to_value(error.reason).unwrap();
             assert_eq!(reason_json.as_str().unwrap(), expected_reason_str);
 
             assert_eq!(error.requested, requested);

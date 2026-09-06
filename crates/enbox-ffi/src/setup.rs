@@ -298,7 +298,7 @@ impl HttpDwnProtocolEndpoint {
     async fn process(&self, tenant: &str, message: JsonValue) -> AgentIdentityResult<JsonValue> {
         let envelope = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": ulid::Ulid::new().to_string(),
+            "id": ulid::Ulid::generate().to_string(),
             "method": "dwn.processMessage",
             "params": { "target": tenant, "message": message }
         });

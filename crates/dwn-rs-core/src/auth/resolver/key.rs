@@ -91,7 +91,7 @@ fn resolve_document(did: &DID) -> Result<Resolution, ResolverError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use k256::elliptic_curve::sec1::ToSec1Point;
     use ssi_jwk::{Algorithm, Params};
 
     const ED25519_IDENTIFIER: &str = "z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
@@ -129,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn resolves_secp256k1() {
         let secret_key = k256::SecretKey::from_slice(&[1; 32]).unwrap();
-        let public_key = secret_key.public_key().to_encoded_point(true);
+        let public_key = secret_key.public_key().to_sec1_point(true);
         let mut bytes = SECP256K1_MULTICODEC.to_vec();
         bytes.extend_from_slice(public_key.as_bytes());
         let identifier = multibase::encode(multibase::Base::Base58Btc, bytes);

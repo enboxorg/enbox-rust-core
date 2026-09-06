@@ -153,7 +153,7 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
         );
     }
 
-    let intofrom = format!("{}", &item_ser_ident);
+    let intofrom = format!("{}", item_ser_ident);
 
     let output = quote_spanned! { ast.span() =>
         #[derive(serde::Serialize, serde::Deserialize, Default, Debug, PartialEq, Clone)]

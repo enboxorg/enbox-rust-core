@@ -344,6 +344,9 @@ where
         records_subscribe_reply(reply, Some(subscription))
     }
 
+    // The error path returns the DWN reply itself; boxing it would only move the
+    // allocation to every caller.
+    #[allow(clippy::result_large_err)]
     async fn records_subscribe_filters(
         &self,
         tenant: &str,

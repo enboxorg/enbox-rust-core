@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use k256::sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256};
 
 use crate::errors::{lock_error, StoreError};
 use crate::stores::{KeyValues, StateHash, StateIndex};

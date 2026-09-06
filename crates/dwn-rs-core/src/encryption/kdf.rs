@@ -2,7 +2,7 @@ use super::error::EncryptionError;
 use super::DerivationScheme;
 
 use hkdf::Hkdf;
-use k256::sha2::Sha256;
+use sha2::Sha256;
 
 use super::KEY_AGREEMENT_ALGORITHM;
 

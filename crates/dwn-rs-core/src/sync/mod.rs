@@ -1436,7 +1436,7 @@ where
     ) {
         let message_cid = entry.as_ref().map(|entry| entry.message_cid.clone());
         let dead_letter = DeadLetterEntry {
-            id: Ulid::new().to_string(),
+            id: Ulid::generate().to_string(),
             tenant: tenant.to_string(),
             remote: remote.to_string(),
             scope_id: scope.id(),
@@ -1691,7 +1691,6 @@ mod tests {
     use std::sync::{Arc, RwLock};
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine as _;
     use serde_json::json;
 
     use crate::descriptors::RecordsWriteDescriptor;
