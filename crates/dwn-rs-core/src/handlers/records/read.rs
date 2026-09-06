@@ -88,134 +88,155 @@ where
                 FilterKey::Index("isLatestBaseState".to_string()),
                 bool_filter(true),
             );
-            let result = match self
-                .message_store
-                .query(
-                    tenant,
-                    Filters::from(filter),
-                    Some(date_sort_to_message_sort(
-                        descriptor.date_sort.as_ref(),
-                        true,
-                    )),
-                    Some(Pagination::with_limit(1)),
-                    None,
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(err) => return store_error_reply(err.to_string()),
-            };
-            let Some(matched_message) = result.messages.into_iter().next() else {
-                return Response::not_found();
-            };
+            let filters = Filters::from(filter);
+            let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), true);
+            let point_read = descriptor.filter.record_id.is_some();
+            let mut cursor = None;
+            // A broad Read is a top-1 query over the readable population. Walk
+            // the ordered candidates one row at a time so a hidden record
+            // cannot shadow the first visible one without materializing an
+            // unbounded result set. Exact-ID reads retain their 401/404 shape.
+            let mut matched_message = loop {
+                let result = match self
+                    .message_store
+                    .query(
+                        tenant,
+                        filters.clone(),
+                        Some(sort),
+                        Some(Pagination::new(cursor, Some(1))),
+                        None,
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(err) => return store_error_reply(err.to_string()),
+                };
+                let Some(candidate) = result.messages.into_iter().next() else {
+                    return Response::not_found();
+                };
+                cursor = result.cursor;
 
-            if records_delete_descriptor(&matched_message).is_ok() {
-                let record_id = message_record_id(&matched_message).unwrap_or_default();
-                let initial_write = match fetch_initial_write_message(
+                if records_delete_descriptor(&candidate).is_ok() {
+                    let record_id = message_record_id(&candidate).unwrap_or_default();
+                    let initial_write = match fetch_initial_write_message(
+                        tenant,
+                        &record_id,
+                        &self.message_store,
+                    )
+                    .await
+                    {
+                        Ok(Some(message)) => message,
+                        Ok(None) => return Response::bad_request(
+                            "RecordsReadInitialWriteNotFound: initial write for deleted record not found".to_string(),
+                        ),
+                        Err(detail) => return store_error_reply(detail),
+                    };
+                    let newest_write = fetch_newest_write(tenant, &record_id, &self.message_store)
+                        .await
+                        .unwrap_or_else(|_| initial_write.clone());
+                    if let Err(detail) = authorize_records_read(
+                        tenant,
+                        &message,
+                        signature.as_ref(),
+                        &newest_write,
+                        &self.message_store,
+                    )
+                    .await
+                    {
+                        if point_read {
+                            return Response::unauthorized(detail);
+                        }
+                        if cursor.is_some() {
+                            continue;
+                        }
+                        return Response::not_found();
+                    }
+                    return Response::new(
+                        replies::Status::new(404, "Not Found"),
+                        Read {
+                            entry: Some(ReadEntry {
+                                records_delete: Some(candidate),
+                                initial_write: Some(initial_write),
+                                records_write: None,
+                                encoded_data: None,
+                            }),
+                        },
+                    );
+                }
+
+                let mut projected = match IdentityProjector.project_writes(vec![candidate]).await {
+                    Ok(projected) => projected,
+                    Err(detail) => {
+                        return store_error_reply(format!("failed to project records: {detail}"))
+                    }
+                };
+                let Some(candidate) = projected.pop() else {
+                    if cursor.is_some() {
+                        continue;
+                    }
+                    return Response::not_found();
+                };
+
+                let occupant = match message_record_limit_policy(
                     tenant,
-                    &record_id,
+                    &candidate,
                     &self.message_store,
+                    &canonical_rfc3339(descriptor.message_timestamp),
                 )
                 .await
                 {
-                    Ok(Some(message)) => message,
-                    Ok(None) => return Response::bad_request(
-                        "RecordsReadInitialWriteNotFound: initial write for deleted record not found".to_string(),
-                    ),
+                    Ok(None) => true,
+                    Ok(Some(policy)) => {
+                        let Some(candidate_record_id) = record_id(&candidate) else {
+                            return Response::bad_request(
+                                "RecordsReadMissingRecordId: recordId is required".to_string(),
+                            );
+                        };
+                        let occupant_filter = filter_map([
+                            ("interface", string_filter(RECORDS_INTERFACE)),
+                            ("method", string_filter(WRITE_METHOD)),
+                            ("isLatestBaseState", bool_filter(true)),
+                            ("protocol", string_filter(&policy.protocol)),
+                            ("protocolPath", string_filter(&policy.protocol_path)),
+                            ("recordId", string_filter(&candidate_record_id)),
+                        ]);
+                        match self
+                            .message_store
+                            .count(tenant, Filters::from(occupant_filter), None, Some(policy))
+                            .await
+                        {
+                            Ok(count) => count > 0,
+                            Err(err) => return store_error_reply(err.to_string()),
+                        }
+                    }
                     Err(detail) => return store_error_reply(detail),
                 };
-                let newest_write = fetch_newest_write(tenant, &record_id, &self.message_store)
-                    .await
-                    .unwrap_or_else(|_| initial_write.clone());
+                if !occupant {
+                    if cursor.is_some() {
+                        continue;
+                    }
+                    return Response::not_found();
+                }
+
                 if let Err(detail) = authorize_records_read(
                     tenant,
                     &message,
                     signature.as_ref(),
-                    &newest_write,
+                    &candidate,
                     &self.message_store,
                 )
                 .await
                 {
-                    return Response::unauthorized(detail);
-                }
-                return Response::new(
-                    replies::Status::new(404, "Not Found"),
-                    Read {
-                        entry: Some(ReadEntry {
-                            records_delete: Some(matched_message.clone()),
-                            initial_write: Some(initial_write),
-                            records_write: None,
-                            encoded_data: None,
-                        }),
-                    },
-                );
-            }
-
-            // A non-occupant latest write is invisible to Read, exactly as to
-            // Query: bare 404. Checked before authorization, mirroring
-            // upstream ordering where a hidden record is indistinguishable
-            // from a missing one.
-            let mut matched_message = match IdentityProjector
-                .project_writes(vec![matched_message])
-                .await
-            {
-                Ok(mut projected) => match projected.pop() {
-                    Some(matched) => matched,
-                    None => return Response::not_found(),
-                },
-                Err(detail) => {
-                    return store_error_reply(format!("failed to project records: {detail}"))
-                }
-            };
-            let occupant = match message_record_limit_policy(
-                tenant,
-                &matched_message,
-                &self.message_store,
-                &canonical_rfc3339(descriptor.message_timestamp),
-            )
-            .await
-            {
-                Ok(None) => true,
-                Ok(Some(policy)) => {
-                    let Some(matched_record_id) = record_id(&matched_message) else {
-                        return Response::bad_request(
-                            "RecordsReadMissingRecordId: recordId is required".to_string(),
-                        );
-                    };
-                    let occupant_filter = filter_map([
-                        ("interface", string_filter(RECORDS_INTERFACE)),
-                        ("method", string_filter(WRITE_METHOD)),
-                        ("isLatestBaseState", bool_filter(true)),
-                        ("protocol", string_filter(&policy.protocol)),
-                        ("protocolPath", string_filter(&policy.protocol_path)),
-                        ("recordId", string_filter(&matched_record_id)),
-                    ]);
-                    match self
-                        .message_store
-                        .count(tenant, Filters::from(occupant_filter), None, Some(policy))
-                        .await
-                    {
-                        Ok(count) => count > 0,
-                        Err(err) => return store_error_reply(err.to_string()),
+                    if point_read {
+                        return Response::unauthorized(detail);
                     }
+                    if cursor.is_some() {
+                        continue;
+                    }
+                    return Response::not_found();
                 }
-                Err(detail) => return store_error_reply(detail),
+                break candidate;
             };
-            if !occupant {
-                return Response::not_found();
-            }
-
-            if let Err(detail) = authorize_records_read(
-                tenant,
-                &message,
-                signature.as_ref(),
-                &matched_message,
-                &self.message_store,
-            )
-            .await
-            {
-                return Response::unauthorized(detail);
-            }
 
             let mut entry = ReadEntry::default();
             if let Some(encoded_data) = write_fields(&matched_message)
