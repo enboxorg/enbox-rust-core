@@ -205,6 +205,40 @@ async fn read_resolves_through_the_same_plan_as_query() {
     );
 }
 
+// Covers: DWN-REC-001, DWN-AUTH-001
+#[tokio::test]
+async fn broad_read_skips_an_unpublished_top_candidate() {
+    let nodes = fresh_nodes().await;
+    for node in [&nodes.mem, &nodes.disk] {
+        let published_data = payload("published");
+        let (published_status, published_id) =
+            write(node, spec(T1, &published_data, None), published_data).await;
+        assert_eq!(published_status, 202);
+
+        let private_data = payload("private");
+        let mut private = spec(T2, &private_data, None);
+        private.published = None;
+        let (private_status, _) = write(node, private, private_data).await;
+        assert_eq!(private_status, 202);
+
+        let broad_read = json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Read",
+                "messageTimestamp": T4,
+                "filter": {
+                    "protocol": "http://example.com/notes",
+                    "protocolPath": "note"
+                },
+                "dateSort": "createdDescending"
+            }
+        });
+        let (status, entry) = read(node, broad_read).await;
+        assert_eq!(status, 200, "private record must not shadow a public match");
+        assert_eq!(entry["recordsWrite"]["recordId"], published_id);
+    }
+}
+
 #[tokio::test]
 async fn subscribe_snapshot_equals_query_at_the_same_head() {
     // Serialize file-backed tests process-wide.
@@ -599,17 +633,20 @@ async fn record_limit_squash_recomputes_from_current_state() {
     assert_eq!(mem_entries, disk_entries);
 }
 
-/// A broad anonymous read whose top-1 is a non-occupant returns 404: checks
-/// apply to the top-1 selection, matching upstream check-after-top-1 order.
+/// A broad anonymous read skips a non-occupant raw top-1 and returns the
+/// highest-ranked occupant.
+// Covers: DWN-REC-001, DWN-REC-004, DWN-REC-005
 #[tokio::test]
-async fn broad_read_with_non_occupant_top1_returns_404() {
+async fn broad_read_skips_non_occupant_top1() {
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
         put_limited_threads_protocol(TENANT, node.store()).await;
+        let mut ids = Vec::new();
         for day in ["01", "02", "03"] {
             let (spec, data) = limited_post(day);
-            let (code, _) = write(node, spec, data).await;
+            let (code, record_id) = write(node, spec, data).await;
             assert_eq!(code, 202);
+            ids.push(record_id);
         }
 
         let read_message = json!({
@@ -621,14 +658,16 @@ async fn broad_read_with_non_occupant_top1_returns_404() {
                 "dateSort": "updatedDescending",
             },
         });
-        let (status, _) = read(node, read_message).await;
-        assert_eq!(status, 404, "non-occupant top-1 is invisible");
+        let (status, entry) = read(node, read_message).await;
+        assert_eq!(status, 200, "non-occupant must not shadow top-1");
+        assert_eq!(entry["recordsWrite"]["recordId"], ids[1]);
     }
 }
 
-/// A broad signed read whose top-1 the requester cannot see returns 401.
+/// A broad signed read skips a raw top-1 the requester cannot see.
+// Covers: DWN-REC-001, DWN-AUTH-001, DWN-AUTH-002
 #[tokio::test]
-async fn broad_read_with_unauthorized_top1_returns_401() {
+async fn broad_read_skips_unauthorized_top1() {
     use dwn_rs_core::cid::generate_cid_from_json;
 
     let nodes = fresh_nodes().await;
@@ -649,7 +688,7 @@ async fn broad_read_with_unauthorized_top1_returns_401() {
         .await;
         assert_eq!(code, 202);
         let visible_data = payload("visible-older");
-        let (code, _) = write(
+        let (code, visible_id) = write(
             node,
             WriteSpec {
                 data_cid: generate_dag_pb_cid_from_bytes(&visible_data).to_string(),
@@ -682,7 +721,8 @@ async fn broad_read_with_unauthorized_top1_returns_401() {
             "descriptor": descriptor,
             "authorization": { "signature": signature },
         });
-        let (status, _) = read(node, request).await;
-        assert_eq!(status, 401, "unauthorized top-1 is rejected");
+        let (status, entry) = read(node, request).await;
+        assert_eq!(status, 200, "unauthorized record must not shadow top-1");
+        assert_eq!(entry["recordsWrite"]["recordId"], visible_id);
     }
 }
