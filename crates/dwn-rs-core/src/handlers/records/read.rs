@@ -27,6 +27,8 @@ use crate::{canonical_rfc3339, replies, Pagination};
 
 use super::{RECORDS_INTERFACE, WRITE_METHOD};
 
+const CANDIDATE_PAGE_SIZE: u64 = 25;
+
 #[derive(Clone)]
 pub struct RecordsReadHandler<MessageStore, DataStore> {
     message_store: MessageStore,
@@ -92,18 +94,18 @@ where
             let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), true);
             let point_read = descriptor.filter.record_id.is_some();
             let mut cursor = None;
-            // A broad Read is a top-1 query over the readable population. Walk
-            // the ordered candidates one row at a time so a hidden record
-            // cannot shadow the first visible one without materializing an
-            // unbounded result set. Exact-ID reads retain their 401/404 shape.
-            let mut matched_message = loop {
+            // A broad Read is a top-1 query over the readable population. Scan
+            // bounded pages so hidden records cannot shadow the first visible
+            // one without materializing an unbounded result set. Exact-ID
+            // reads retain their 401/404 shape.
+            let mut matched_message = 'pages: loop {
                 let result = match self
                     .message_store
                     .query(
                         tenant,
                         filters.clone(),
                         Some(sort),
-                        Some(Pagination::new(cursor, Some(1))),
+                        Some(Pagination::new(cursor, Some(CANDIDATE_PAGE_SIZE))),
                         None,
                     )
                     .await
@@ -111,34 +113,114 @@ where
                     Ok(result) => result,
                     Err(err) => return store_error_reply(err.to_string()),
                 };
-                let Some(candidate) = result.messages.into_iter().next() else {
+                if result.messages.is_empty() {
                     return Response::not_found();
-                };
+                }
                 cursor = result.cursor;
 
-                if records_delete_descriptor(&candidate).is_ok() {
-                    let record_id = message_record_id(&candidate).unwrap_or_default();
-                    let initial_write = match fetch_initial_write_message(
+                for candidate in result.messages {
+                    if records_delete_descriptor(&candidate).is_ok() {
+                        let record_id = message_record_id(&candidate).unwrap_or_default();
+                        let initial_write = match fetch_initial_write_message(
+                            tenant,
+                            &record_id,
+                            &self.message_store,
+                        )
+                        .await
+                        {
+                            Ok(Some(message)) => message,
+                            Ok(None) => return Response::bad_request(
+                                "RecordsReadInitialWriteNotFound: initial write for deleted record not found".to_string(),
+                            ),
+                            Err(detail) => return store_error_reply(detail),
+                        };
+                        let newest_write =
+                            fetch_newest_write(tenant, &record_id, &self.message_store)
+                                .await
+                                .unwrap_or_else(|_| initial_write.clone());
+                        if let Err(detail) = authorize_records_read(
+                            tenant,
+                            &message,
+                            signature.as_ref(),
+                            &newest_write,
+                            &self.message_store,
+                        )
+                        .await
+                        {
+                            if point_read {
+                                return Response::unauthorized(detail);
+                            }
+                            continue;
+                        }
+                        return Response::new(
+                            replies::Status::new(404, "Not Found"),
+                            Read {
+                                entry: Some(ReadEntry {
+                                    records_delete: Some(candidate),
+                                    initial_write: Some(initial_write),
+                                    records_write: None,
+                                    encoded_data: None,
+                                }),
+                            },
+                        );
+                    }
+
+                    let mut projected =
+                        match IdentityProjector.project_writes(vec![candidate]).await {
+                            Ok(projected) => projected,
+                            Err(detail) => {
+                                return store_error_reply(format!(
+                                    "failed to project records: {detail}"
+                                ))
+                            }
+                        };
+                    let Some(candidate) = projected.pop() else {
+                        continue;
+                    };
+
+                    let occupant = match message_record_limit_policy(
                         tenant,
-                        &record_id,
+                        &candidate,
                         &self.message_store,
+                        &canonical_rfc3339(descriptor.message_timestamp),
                     )
                     .await
                     {
-                        Ok(Some(message)) => message,
-                        Ok(None) => return Response::bad_request(
-                            "RecordsReadInitialWriteNotFound: initial write for deleted record not found".to_string(),
-                        ),
+                        Ok(None) => true,
+                        Ok(Some(policy)) => {
+                            let Some(candidate_record_id) = record_id(&candidate) else {
+                                return Response::bad_request(
+                                    "RecordsReadMissingRecordId: recordId is required".to_string(),
+                                );
+                            };
+                            let occupant_filter = filter_map([
+                                ("interface", string_filter(RECORDS_INTERFACE)),
+                                ("method", string_filter(WRITE_METHOD)),
+                                ("isLatestBaseState", bool_filter(true)),
+                                ("protocol", string_filter(&policy.protocol)),
+                                ("protocolPath", string_filter(&policy.protocol_path)),
+                                ("recordId", string_filter(&candidate_record_id)),
+                            ]);
+                            match self
+                                .message_store
+                                .count(tenant, Filters::from(occupant_filter), None, Some(policy))
+                                .await
+                            {
+                                Ok(count) => count > 0,
+                                Err(err) => return store_error_reply(err.to_string()),
+                            }
+                        }
                         Err(detail) => return store_error_reply(detail),
                     };
-                    let newest_write = fetch_newest_write(tenant, &record_id, &self.message_store)
-                        .await
-                        .unwrap_or_else(|_| initial_write.clone());
+                    if !occupant {
+                        continue;
+                    }
+
                     if let Err(detail) = authorize_records_read(
                         tenant,
                         &message,
                         signature.as_ref(),
-                        &newest_write,
+                        &candidate,
                         &self.message_store,
                     )
                     .await
@@ -146,96 +228,13 @@ where
                         if point_read {
                             return Response::unauthorized(detail);
                         }
-                        if cursor.is_some() {
-                            continue;
-                        }
-                        return Response::not_found();
-                    }
-                    return Response::new(
-                        replies::Status::new(404, "Not Found"),
-                        Read {
-                            entry: Some(ReadEntry {
-                                records_delete: Some(candidate),
-                                initial_write: Some(initial_write),
-                                records_write: None,
-                                encoded_data: None,
-                            }),
-                        },
-                    );
-                }
-
-                let mut projected = match IdentityProjector.project_writes(vec![candidate]).await {
-                    Ok(projected) => projected,
-                    Err(detail) => {
-                        return store_error_reply(format!("failed to project records: {detail}"))
-                    }
-                };
-                let Some(candidate) = projected.pop() else {
-                    if cursor.is_some() {
                         continue;
                     }
-                    return Response::not_found();
-                };
-
-                let occupant = match message_record_limit_policy(
-                    tenant,
-                    &candidate,
-                    &self.message_store,
-                    &canonical_rfc3339(descriptor.message_timestamp),
-                )
-                .await
-                {
-                    Ok(None) => true,
-                    Ok(Some(policy)) => {
-                        let Some(candidate_record_id) = record_id(&candidate) else {
-                            return Response::bad_request(
-                                "RecordsReadMissingRecordId: recordId is required".to_string(),
-                            );
-                        };
-                        let occupant_filter = filter_map([
-                            ("interface", string_filter(RECORDS_INTERFACE)),
-                            ("method", string_filter(WRITE_METHOD)),
-                            ("isLatestBaseState", bool_filter(true)),
-                            ("protocol", string_filter(&policy.protocol)),
-                            ("protocolPath", string_filter(&policy.protocol_path)),
-                            ("recordId", string_filter(&candidate_record_id)),
-                        ]);
-                        match self
-                            .message_store
-                            .count(tenant, Filters::from(occupant_filter), None, Some(policy))
-                            .await
-                        {
-                            Ok(count) => count > 0,
-                            Err(err) => return store_error_reply(err.to_string()),
-                        }
-                    }
-                    Err(detail) => return store_error_reply(detail),
-                };
-                if !occupant {
-                    if cursor.is_some() {
-                        continue;
-                    }
+                    break 'pages candidate;
+                }
+                if cursor.is_none() {
                     return Response::not_found();
                 }
-
-                if let Err(detail) = authorize_records_read(
-                    tenant,
-                    &message,
-                    signature.as_ref(),
-                    &candidate,
-                    &self.message_store,
-                )
-                .await
-                {
-                    if point_read {
-                        return Response::unauthorized(detail);
-                    }
-                    if cursor.is_some() {
-                        continue;
-                    }
-                    return Response::not_found();
-                }
-                break candidate;
             };
 
             let mut entry = ReadEntry::default();

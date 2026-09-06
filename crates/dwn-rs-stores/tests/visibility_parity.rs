@@ -215,11 +215,14 @@ async fn broad_read_skips_an_unpublished_top_candidate() {
             write(node, spec(T1, &published_data, None), published_data).await;
         assert_eq!(published_status, 202);
 
-        let private_data = payload("private");
-        let mut private = spec(T2, &private_data, None);
-        private.published = None;
-        let (private_status, _) = write(node, private, private_data).await;
-        assert_eq!(private_status, 202);
+        for index in 0..26 {
+            let private_data = payload(&format!("private-{index}"));
+            let timestamp = format!("2025-01-01T00:00:02.{index:06}Z");
+            let mut private = spec(&timestamp, &private_data, None);
+            private.published = None;
+            let (private_status, _) = write(node, private, private_data).await;
+            assert_eq!(private_status, 202);
+        }
 
         let broad_read = json!({
             "descriptor": {
@@ -234,7 +237,10 @@ async fn broad_read_skips_an_unpublished_top_candidate() {
             }
         });
         let (status, entry) = read(node, broad_read).await;
-        assert_eq!(status, 200, "private record must not shadow a public match");
+        assert_eq!(
+            status, 200,
+            "a page of private records must not shadow a public match"
+        );
         assert_eq!(entry["recordsWrite"]["recordId"], published_id);
     }
 }
