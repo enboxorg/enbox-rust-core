@@ -2166,7 +2166,7 @@ mod tests {
         assert_eq!(
             authorize_delegated_messages_subscribe_and_query(
                 &message,
-                &[filter.clone()],
+                std::slice::from_ref(&filter),
                 &delegated_auth(None),
                 &NoopMessageStore,
             )
@@ -2177,7 +2177,7 @@ mod tests {
 
         let full = authorize_delegated_messages_subscribe_and_query(
             &message,
-            &[filter.clone()],
+            std::slice::from_ref(&filter),
             &delegated_auth(Some(messages_grant("full", None, None))),
             &NoopMessageStore,
         )
@@ -2226,7 +2226,7 @@ mod tests {
         wrong_grantee.grantee = "did:example:carol".to_string();
         assert!(authorize_delegated_messages_subscribe_and_query(
             &message,
-            &[filter.clone()],
+            std::slice::from_ref(&filter),
             &delegated_auth(Some(wrong_grantee)),
             &NoopMessageStore,
         )
@@ -2237,7 +2237,7 @@ mod tests {
         wrong_grantor.grantor = "did:example:carol".to_string();
         assert!(authorize_delegated_messages_subscribe_and_query(
             &message,
-            &[filter.clone()],
+            std::slice::from_ref(&filter),
             &delegated_auth(Some(wrong_grantor)),
             &NoopMessageStore,
         )

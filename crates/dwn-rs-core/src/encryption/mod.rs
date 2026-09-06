@@ -357,7 +357,7 @@ impl EncryptionEnvelope {
             let algorithm = key_input.algorithm();
             validate_key_agreement_algorithm(algorithm)?;
 
-            let ephemeral_secret = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
+            let ephemeral_secret = x25519_dalek::StaticSecret::random();
             let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral_secret);
             let wrapped_key = x25519_hkdf_a256kw_wrap(
                 &ephemeral_secret.to_bytes(),
@@ -538,7 +538,7 @@ pub fn seal_wrap(
     input: &SealKeyWrapInput<'_>,
     private_key_bytes: &[u8],
 ) -> Result<SealKeyWrap, EncryptionError> {
-    let ephemeral_secret = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
+    let ephemeral_secret = x25519_dalek::StaticSecret::random();
     let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral_secret);
     let shared_secret = x25519::shared_secret(
         &ephemeral_secret.to_bytes(),

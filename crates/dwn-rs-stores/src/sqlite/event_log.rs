@@ -44,7 +44,7 @@ impl SqliteEventLog {
                     })
                     .optional()
                     .map_err(sqlite_store_error)?;
-                Ok(epoch.unwrap_or_else(|| ulid::Ulid::new().to_string()))
+                Ok(epoch.unwrap_or_else(|| ulid::Ulid::generate().to_string()))
             })
             .await
     }

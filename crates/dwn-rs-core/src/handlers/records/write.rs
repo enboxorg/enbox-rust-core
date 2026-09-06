@@ -388,6 +388,9 @@ where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
 {
+    // The error path returns the DWN reply itself; boxing it would only move the
+    // allocation to every caller.
+    #[allow(clippy::result_large_err)]
     async fn existing_record_messages(
         &self,
         tenant: &str,
@@ -528,7 +531,7 @@ where
                 .ok_or_else(|| {
                     format!(
                         "ProtocolAuthorizationInvalidProtocol: {} is not defined",
-                        &descriptor.protocol
+                        descriptor.protocol
                     )
                 })?
         } else {
@@ -722,7 +725,7 @@ where
                     "incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
                     canonical_rfc3339(descriptor.message_timestamp),
                     squash_floor_timestamp,
-                    &descriptor.protocol_path
+                    descriptor.protocol_path
                 ),
             )
             .with_info(BTreeMap::from([(

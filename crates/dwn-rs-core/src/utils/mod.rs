@@ -1,8 +1,9 @@
 pub mod cid;
 
+use k256::elliptic_curve::Generate;
 use k256::{PublicKey, SecretKey};
 use partially::Partial;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::distr::{Alphanumeric, SampleString};
 use ssi_dids_core::DIDBuf;
 use std::str::FromStr;
 use thiserror::Error;
@@ -65,8 +66,7 @@ impl Persona {
         });
 
         let keypair = keypair.unwrap_or_else(|| {
-            let rng = &mut rand::thread_rng();
-            let secp = SecretKey::random(rng);
+            let secp = SecretKey::generate_from_rng(&mut rand::rng());
 
             (secp.clone(), secp.public_key())
         });
@@ -89,9 +89,5 @@ impl Persona {
 }
 
 pub fn generate_random_string(len: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(len)
-        .map(char::from)
-        .collect()
+    Alphanumeric.sample_string(&mut rand::rng(), len)
 }

@@ -2940,7 +2940,9 @@ fn decode_hex(value: &str, case_id: &str) -> Vec<u8> {
 
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| (hex_digit(chunk[0], case_id) << 4) | hex_digit(chunk[1], case_id))
         .collect()
 }

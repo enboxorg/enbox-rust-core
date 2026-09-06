@@ -208,6 +208,8 @@ impl SqliteNativeDwn {
     }
 
     /// Run a closure against a freshly built HTTP [`NativeSyncEngine`] for this node.
+    // `SyncOnceResult` is a report the caller returns as-is, not a small error code.
+    #[allow(clippy::result_large_err)]
     pub async fn run_with_http_sync_engine<A, F, Fut, R>(
         &self,
         remote_url: impl AsRef<str>,
@@ -257,6 +259,8 @@ impl SqliteNativeDwn {
         engine.sync_once(request).await
     }
 
+    // `SyncOnceResult` is a report the caller returns as-is, not a small error code.
+    #[allow(clippy::result_large_err)]
     async fn build_http_sync_engine<A>(
         &self,
         remote_url: impl AsRef<str>,
@@ -288,6 +292,8 @@ impl SqliteNativeDwn {
         Ok(engine)
     }
 
+    // `SyncOnceResult` is a report the caller returns as-is, not a small error code.
+    #[allow(clippy::result_large_err)]
     async fn register_sync_identities_on_engine<Local, Remote>(
         &self,
         engine: &NativeSyncEngine<Local, Remote, SqliteSyncLedger>,

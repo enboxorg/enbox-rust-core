@@ -9,7 +9,7 @@ description = "Remote SDK components for dwn-rs"
 crate-type = ["rlib"]
 
 [dependencies]
-reqwest = { version = "0.12.8", features = [
+reqwest = { version = "0.13.4", features = [
     "stream",
     "json",
     "gzip",
@@ -27,7 +27,7 @@ http = "1.1.0"
 http-body = "1.0.1"
 bytes = "1.7.2"
 dwn-rs-core = { path = "../dwn-rs-core", default-features = false }
-ulid = { version = "1.1.3", features = ["serde"] }
+ulid = { version = "3.0.0", features = ["serde"] }
 futures-util = "0.3.30"
 tokio-util = { version = "0.7.12", features = ["io", "rt"] }
 tracing = { version = "0.1.40", features = ["log-always"] }

@@ -17,14 +17,7 @@ pub(crate) fn wrap(kek: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, EncryptionEr
         .map_err(|err| EncryptionError::AesKeyWrap(format!("invalid KEK: {err}")))?;
     let n = plaintext.len() / 8;
     let mut a = [0xa6; 8];
-    let mut r = plaintext
-        .chunks_exact(8)
-        .map(|chunk| {
-            let mut block = [0u8; 8];
-            block.copy_from_slice(chunk);
-            block
-        })
-        .collect::<Vec<_>>();
+    let mut r = plaintext.as_chunks::<8>().0.to_vec();
 
     for j in 0..6 {
         for (i, block) in r.iter_mut().enumerate() {
@@ -62,14 +55,7 @@ pub(crate) fn unwrap(kek: &[u8], wrapped_key: &[u8]) -> Result<Vec<u8>, Encrypti
     let n = wrapped_key.len() / 8 - 1;
     let mut a = [0u8; 8];
     a.copy_from_slice(&wrapped_key[..8]);
-    let mut r = wrapped_key[8..]
-        .chunks_exact(8)
-        .map(|chunk| {
-            let mut block = [0u8; 8];
-            block.copy_from_slice(chunk);
-            block
-        })
-        .collect::<Vec<_>>();
+    let mut r = wrapped_key[8..].as_chunks::<8>().0.to_vec();
 
     for j in (0..6).rev() {
         for i in (0..n).rev() {

@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, collections::TryReserveError, convert::Infallible};
 
 use thiserror::Error;
-use ulid::Overflow;
 
 use crate::{stores::ProgressGapInfo, FilterError, QueryError};
 

@@ -623,10 +623,7 @@ fn normalize_es256_signature(signature: &[u8]) -> Vec<u8> {
         Err(_) => return signature.to_vec(),
     };
 
-    match parsed.normalize_s() {
-        Some(normalized) => normalized.to_bytes().to_vec(),
-        None => signature.to_vec(),
-    }
+    parsed.normalize_s().to_bytes().to_vec()
 }
 
 fn decode_protected_header(protected: &str) -> Result<VerificationProtectedHeader, JwsError> {
@@ -1104,10 +1101,9 @@ mod tests {
 
     fn is_es256_low_s(signature_bytes: &[u8]) -> bool {
         use p256::ecdsa::Signature;
-        Signature::from_slice(signature_bytes)
-            .expect("valid 64-byte P-256 signature")
-            .normalize_s()
-            .is_none()
+        let signature =
+            Signature::from_slice(signature_bytes).expect("valid 64-byte P-256 signature");
+        signature.normalize_s() == signature
     }
 
     #[tokio::test]

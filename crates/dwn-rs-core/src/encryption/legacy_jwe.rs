@@ -6,7 +6,7 @@
 //! historical stored records.
 
 use aes_gcm::{
-    aead::{AeadInPlace, KeyInit},
+    aead::{AeadInOut, KeyInit},
     Aes256Gcm, Nonce as AesGcmNonce, Tag as AesGcmTag,
 };
 use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD as base64url};
@@ -145,11 +145,11 @@ fn decrypt_aead(
             validate_len(iv, 12, "A256GCM IV")?;
             Aes256Gcm::new_from_slice(key)
                 .map_err(legacy_error)?
-                .decrypt_in_place_detached(
-                    AesGcmNonce::from_slice(iv),
+                .decrypt_inout_detached(
+                    <&AesGcmNonce<_>>::try_from(iv).map_err(legacy_error)?,
                     b"",
-                    &mut plaintext,
-                    AesGcmTag::from_slice(tag),
+                    plaintext.as_mut_slice().into(),
+                    <&AesGcmTag>::try_from(tag).map_err(legacy_error)?,
                 )
                 .map_err(legacy_error)?;
         }
@@ -157,11 +157,11 @@ fn decrypt_aead(
             validate_len(iv, 24, "XC20P IV")?;
             XChaCha20Poly1305::new_from_slice(key)
                 .map_err(legacy_error)?
-                .decrypt_in_place_detached(
-                    XNonce::from_slice(iv),
+                .decrypt_inout_detached(
+                    <&XNonce>::try_from(iv).map_err(legacy_error)?,
                     b"",
-                    &mut plaintext,
-                    XChaCha20Poly1305Tag::from_slice(tag),
+                    plaintext.as_mut_slice().into(),
+                    <&XChaCha20Poly1305Tag>::try_from(tag).map_err(legacy_error)?,
                 )
                 .map_err(legacy_error)?;
         }
@@ -235,12 +235,20 @@ mod tests {
         let tag = match algorithm {
             LegacyContentEncryptionAlgorithm::A256Gcm => Aes256Gcm::new_from_slice(&cek)
                 .unwrap()
-                .encrypt_in_place_detached(AesGcmNonce::from_slice(&iv), b"", &mut ciphertext)
+                .encrypt_inout_detached(
+                    <&AesGcmNonce<_>>::try_from(iv.as_slice()).unwrap(),
+                    b"",
+                    ciphertext.as_mut_slice().into(),
+                )
                 .unwrap()
                 .to_vec(),
             LegacyContentEncryptionAlgorithm::Xc20p => XChaCha20Poly1305::new_from_slice(&cek)
                 .unwrap()
-                .encrypt_in_place_detached(XNonce::from_slice(&iv), b"", &mut ciphertext)
+                .encrypt_inout_detached(
+                    <&XNonce>::try_from(iv.as_slice()).unwrap(),
+                    b"",
+                    ciphertext.as_mut_slice().into(),
+                )
                 .unwrap()
                 .to_vec(),
         };

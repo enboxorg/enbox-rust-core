@@ -187,7 +187,7 @@ async fn sync_engine_persists_eose_pull_cursor_to_sqlite_ledger() {
     // Serialize file-backed tests process-wide.
     let path = std::env::temp_dir().join(format!(
         "enbox-sync-eose-ledger-{}.sqlite",
-        ulid::Ulid::new()
+        ulid::Ulid::generate()
     ));
     let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
@@ -218,7 +218,7 @@ async fn sync_engine_persists_progress_gap_as_repairing_in_sqlite_ledger() {
     // Serialize file-backed tests process-wide.
     let path = std::env::temp_dir().join(format!(
         "enbox-sync-gap-ledger-{}.sqlite",
-        ulid::Ulid::new()
+        ulid::Ulid::generate()
     ));
     let store = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     let ledger = SqliteSyncLedger::new(&store);
