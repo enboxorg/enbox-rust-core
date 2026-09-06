@@ -4,9 +4,9 @@
 
 ## Build Targets
 
-Android targets can be added with `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android` and built with `cargo +1.89.0 build-android-arm64`.
+Android targets can be added with `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android` and built with `cargo +1.98.1 build-android-arm64`.
 
-iOS targets can be added with `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios` and built with `cargo +1.89.0 build-ios-arm64`.
+iOS targets can be added with `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios` and built with `cargo +1.98.1 build-ios-arm64`.
 
 Bindings should wrap `MobileCore` or an FFI handle that owns the same components:
 

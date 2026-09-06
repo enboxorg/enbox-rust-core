@@ -70,7 +70,7 @@ The first rename/move change should be limited to crate identity and import path
 - Rename `dwn-rs-message-derive` only if the macro remains in use.
 - Update workspace members, path dependencies, package names, and imports.
 - Do not move behavior between modules in the same commit.
-- Run `cargo +1.89.0 fmt --all -- --check`, `cargo +1.89.0 clippy --workspace --all-targets`, and `cargo +1.89.0 test --workspace` before follow-up semantic changes.
+- Run `cargo +1.98.1 fmt --all -- --check`, `cargo +1.98.1 clippy --workspace --all-targets`, and `cargo +1.98.1 test --workspace` before follow-up semantic changes.
 
 ## Follow-Up Issue Map
 

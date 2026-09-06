@@ -8,6 +8,9 @@ members = [
     "crates/enbox-ffi",
 ]
 
+[workspace.package]
+rust-version = "1.98.1"
+
 [profile.release]
 lto = "fat"
 opt-level = 3

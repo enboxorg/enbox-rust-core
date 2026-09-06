@@ -100,10 +100,10 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the supported Rust toolchain, local
 The supported Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Run these checks before pushing changes:
 
 ```bash
-cargo +1.89.0 fmt --all -- --check
-cargo +1.89.0 clippy --workspace --all-targets
-cargo +1.89.0 test --workspace
-cargo +1.89.0 run -p dwn-rs-stores --example in_memory_dwn
+cargo +1.98.1 fmt --all -- --check
+cargo +1.98.1 clippy --workspace --all-targets
+cargo +1.98.1 test --workspace
+cargo +1.98.1 run -p dwn-rs-stores --example in_memory_dwn
 ```
 
 Optional interop (requires sibling Enbox checkout):

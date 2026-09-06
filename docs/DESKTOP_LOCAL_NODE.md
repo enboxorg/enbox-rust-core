@@ -35,4 +35,4 @@ Delivery work is queued separately from `process_message`, so a local desktop no
 
 ## Smoke Tests
 
-Run `cargo +1.89.0 test-desktop` to validate the desktop integration skeleton.
+Run `cargo +1.98.1 test-desktop` to validate the desktop integration skeleton.
