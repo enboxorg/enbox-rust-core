@@ -2,11 +2,23 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     schedule:
       interval: "weekly"
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
-      - dependency-name: "surrealdb"
       - dependency-name: "ssi-*"
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    open-pull-requests-limit: 5
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
