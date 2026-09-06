@@ -11,7 +11,8 @@ use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, date_sort_to_message_sort, published_sort_name,
-    resolve_record_limit_policy, store_error_reply, QueryAuthorizationResult,
+    resolve_record_limit_policy, store_error_reply, IdentityProjector, QueryAuthorizationResult,
+    RecordsProjector,
 };
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
@@ -116,15 +117,27 @@ where
                 Err(err) => return store_error_reply(err.to_string()),
             };
 
-            let entries =
-                match attach_initial_writes(tenant, result.messages, self.write_resolver.as_ref())
-                    .await
-                {
-                    Ok(entries) => entries,
-                    Err(err) => {
-                        return store_error_reply(format!("failed to attach initial writes: {err}"))
-                    }
-                };
+            let messages = match IdentityProjector
+                .project_writes(result.messages)
+                .await
+            {
+                Ok(messages) => messages,
+                Err(detail) => {
+                    return store_error_reply(format!("failed to project records: {detail}"))
+                }
+            };
+            let entries = match attach_initial_writes(
+                tenant,
+                messages,
+                self.write_resolver.as_ref(),
+            )
+            .await
+            {
+                Ok(entries) => entries,
+                Err(err) => {
+                    return store_error_reply(format!("failed to attach initial writes: {err}"))
+                }
+            };
 
             Response::ok().with_reply(Query {
                 entries: Some(entries),

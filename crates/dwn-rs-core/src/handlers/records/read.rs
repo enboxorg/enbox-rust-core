@@ -18,6 +18,7 @@ use crate::handlers::records::common::{
     fetch_initial_write_message, fetch_newest_write, filter_map, message_record_id,
     message_record_limit_policy, published_sort_name, records_delete_descriptor,
     records_filter_to_filter_map, set_encoded_data, store_error_reply, string_filter,
+    IdentityProjector, RecordsProjector,
 };
 use crate::permissions::{self};
 use crate::replies::records::{Read, ReadEntry};
@@ -104,7 +105,7 @@ where
                 Ok(result) => result,
                 Err(err) => return store_error_reply(err.to_string()),
             };
-            let Some(mut matched_message) = result.messages.into_iter().next() else {
+            let Some(matched_message) = result.messages.into_iter().next() else {
                 return Response::not_found();
             };
 
@@ -154,6 +155,18 @@ where
             // Query: bare 404. Checked before authorization, mirroring
             // upstream ordering where a hidden record is indistinguishable
             // from a missing one.
+            let mut matched_message = match IdentityProjector
+                .project_writes(vec![matched_message])
+                .await
+            {
+                Ok(mut projected) => match projected.pop() {
+                    Some(matched) => matched,
+                    None => return Response::not_found(),
+                },
+                Err(detail) => {
+                    return store_error_reply(format!("failed to project records: {detail}"))
+                }
+            };
             let occupant = match message_record_limit_policy(
                 tenant,
                 &matched_message,

@@ -20,6 +20,7 @@ use crate::handlers::records::common::{
     date_sort_to_message_sort, event_log_error_reply, filter_map, message_record_id,
     message_record_limit_policy, records_subscribe_descriptor, records_subscribe_reply,
     resolve_record_limit_policy, should_protocol_authorize, store_error_reply, string_filter,
+    IdentityProjector, RecordsProjector,
 };
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{
@@ -169,8 +170,15 @@ where
                 Ok(result) => result,
                 Err(err) => return store_error_reply(err.to_string()),
             };
+            let messages = match IdentityProjector
+                .project_writes(result.messages)
+                .await
+            {
+                Ok(messages) => messages,
+                Err(detail) => return store_error_reply(format!("failed to project records: {detail}")),
+            };
             let entries =
-                match attach_initial_writes(tenant, result.messages, self.write_resolver.as_ref())
+                match attach_initial_writes(tenant, messages, self.write_resolver.as_ref())
                     .await
                 {
                     Ok(entries) => entries,
@@ -236,7 +244,16 @@ where
     }
 }
 
-/// Re stamps a retained subscribe request with the delivery timestamp so
+/// Whether a subscription's authority can mutate after open and therefore
+/// needs delivery-time revalidation: invoked grants, invoked roles, and
+/// embedded author-delegated grants. Everything else is immutable.
+fn needs_delivery_reauth(signature: &AuthorizationContext) -> bool {
+    signature.permission_grant_id().is_some()
+        || should_protocol_authorize(signature)
+        || signature.author_delegated_grant.is_some()
+}
+
+/// Restamps a retained subscribe request with the delivery timestamp so
 /// grant time-window checks run at now rather than at open.
 fn delivery_message_at_now(message: &Message<Descriptor>) -> Result<Message<Descriptor>, String> {
     let mut message = message.clone();
@@ -391,9 +408,18 @@ where
 
             if let Descriptor::Records(records) = &event.message.descriptor {
                 if matches!(records.as_ref(), Records::Write(_)) {
+                    let projected =
+                        match IdentityProjector.project_writes(vec![event.message.clone()]).await
+                        {
+                            Ok(projected) => projected,
+                            Err(_) => return DeliveryDecision::Suppress,
+                        };
+                    let Some(write) = projected.into_iter().next() else {
+                        return DeliveryDecision::Suppress;
+                    };
                     match project_write_occupancy(
                         &tenant,
-                        &event.message,
+                        &write,
                         &request_timestamp,
                         message_store.as_ref(),
                     )
@@ -569,9 +595,22 @@ where
                 return records_subscribe_reply(store_error_reply(err.to_string()), None);
             }
         };
+        let messages = match IdentityProjector
+            .project_writes(result.messages)
+            .await
+        {
+            Ok(messages) => messages,
+            Err(detail) => {
+                let _ = (subscription.close)().await;
+                return records_subscribe_reply(
+                    store_error_reply(format!("failed to project records: {detail}")),
+                    None,
+                );
+            }
+        };
         let entries = match attach_initial_writes(
             tenant,
-            result.messages,
+            messages,
             self.write_resolver.as_ref(),
         )
         .await
@@ -630,21 +669,17 @@ where
         let author = auth.author.clone();
         // Retain mutable authority for delivery-time revalidation. Paths
         // authorized immutably (owner, published, author, recipient) need
-        // no recheck.
+        // no recheck. Invoked grants, invoked roles, and embedded
+        // author-delegated grants can all mutate after open.
         let delivery_auth = match signature {
-            Some(signature)
-                if signature.permission_grant_id().is_some()
-                    || should_protocol_authorize(signature) =>
-            {
-                Some(DeliveryAuthorization {
-                    message: message.clone(),
-                    filter: descriptor.filter.clone(),
-                    auth_ctx: signature.clone(),
-                    grant_valid_at_open: auth.grant_authorized,
-                    role_invoked: should_protocol_authorize(signature),
-                    request_timestamp,
-                })
-            }
+            Some(signature) if needs_delivery_reauth(signature) => Some(DeliveryAuthorization {
+                message: message.clone(),
+                filter: descriptor.filter.clone(),
+                auth_ctx: signature.clone(),
+                grant_valid_at_open: auth.grant_authorized,
+                role_invoked: should_protocol_authorize(signature),
+                request_timestamp,
+            }),
             _ => None,
         };
         Ok((
@@ -658,5 +693,75 @@ where
             author,
             delivery_auth,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
+    use crate::permissions::{
+        PermissionGrant, PermissionScope, RecordsMethod, RecordsScope, VerifiedAuthorizationPayload,
+    };
+
+    fn auth_ctx(
+        permission_grant_id: Option<String>,
+        protocol_role: Option<String>,
+        delegated_grant: Option<PermissionGrant>,
+    ) -> AuthorizationContext {
+        AuthorizationContext {
+            signer: "did:example:bob".to_string(),
+            author: "did:example:alice".to_string(),
+            payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: permission_grant_id.clone(),
+                permission_grant_ids: None,
+                protocol_role,
+            }),
+            permission_grant_invocation: permission_grant_id
+                .map(PermissionGrantInvocation::Single)
+                .unwrap_or(PermissionGrantInvocation::None),
+            author_delegated_grant: delegated_grant,
+        }
+    }
+
+    fn delegated_grant() -> PermissionGrant {
+        PermissionGrant {
+            id: "delegated-grant-1".to_string(),
+            grantor: "did:example:alice".to_string(),
+            grantee: "did:example:bob".to_string(),
+            date_granted: crate::testing::parse_time("2025-01-01T00:00:00.000000Z"),
+            date_expires: crate::testing::parse_time("2030-01-01T00:00:00.000000Z"),
+            delegated: Some(true),
+            scope: PermissionScope::Records(RecordsScope {
+                method: RecordsMethod::Read,
+                protocol: "http://example.com/notes".to_string(),
+                selector: None,
+            }),
+            conditions: None,
+            connect_session: None,
+        }
+    }
+
+    // Covers: DWN-AUTH-005
+    #[test]
+    fn delivery_reauth_retained_for_mutable_authority_only() {
+        assert!(!needs_delivery_reauth(&auth_ctx(None, None, None)));
+        assert!(needs_delivery_reauth(&auth_ctx(
+            Some("grant-1".to_string()),
+            None,
+            None
+        )));
+        assert!(needs_delivery_reauth(&auth_ctx(
+            None,
+            Some("thread/participant".to_string()),
+            None
+        )));
+        assert!(needs_delivery_reauth(&auth_ctx(
+            None,
+            None,
+            Some(delegated_grant())
+        )));
     }
 }

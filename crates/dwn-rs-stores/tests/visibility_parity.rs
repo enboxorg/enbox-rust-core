@@ -16,9 +16,9 @@ mod common;
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::testing::{
-    put_limited_threads_protocol, put_notes_protocol_without_actions, signed_delete_message,
-    signed_write_message, test_resolver, unsigned_count_message, unsigned_query_message,
-    unsigned_read_message, WriteSpec,
+    bob_signer, put_limited_threads_protocol, put_notes_protocol_without_actions,
+    signature_for_descriptor, signed_delete_message, signed_write_message, test_resolver,
+    unsigned_count_message, unsigned_query_message, unsigned_read_message, WriteSpec,
 };
 use dwn_rs_core::Reply;
 use serde_json::{json, Value as JsonValue};
@@ -597,4 +597,92 @@ async fn record_limit_squash_recomputes_from_current_state() {
     let (_, mem_entries) = query_entries(&nodes.mem, scope()).await;
     let (_, disk_entries) = query_entries(&nodes.disk, scope()).await;
     assert_eq!(mem_entries, disk_entries);
+}
+
+/// A broad anonymous read whose top-1 is a non-occupant returns 404: checks
+/// apply to the top-1 selection, matching upstream check-after-top-1 order.
+#[tokio::test]
+async fn broad_read_with_non_occupant_top1_returns_404() {
+    let nodes = fresh_nodes().await;
+    for node in [&nodes.mem, &nodes.disk] {
+        put_limited_threads_protocol(TENANT, node.store()).await;
+        for day in ["01", "02", "03"] {
+            let (spec, data) = limited_post(day);
+            let (code, _) = write(node, spec, data).await;
+            assert_eq!(code, 202);
+        }
+
+        let read_message = json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Read",
+                "messageTimestamp": T4,
+                "filter": limited_filter(json!({ "protocolPath": "post" })),
+                "dateSort": "updatedDescending",
+            },
+        });
+        let (status, _) = read(node, read_message).await;
+        assert_eq!(status, 404, "non-occupant top-1 is invisible");
+    }
+}
+
+/// A broad signed read whose top-1 the requester cannot see returns 401.
+#[tokio::test]
+async fn broad_read_with_unauthorized_top1_returns_401() {
+    use dwn_rs_core::cid::generate_cid_from_json;
+
+    let nodes = fresh_nodes().await;
+    for node in [&nodes.mem, &nodes.disk] {
+        let hidden_data = payload("hidden-newest");
+        let (code, _) = write(
+            node,
+            WriteSpec {
+                data_cid: generate_dag_pb_cid_from_bytes(&hidden_data).to_string(),
+                data_size: hidden_data.len() as u64,
+                published: None,
+                timestamp: T3.to_string(),
+                date_created: T3.to_string(),
+                ..WriteSpec::new(T3)
+            },
+            hidden_data,
+        )
+        .await;
+        assert_eq!(code, 202);
+        let visible_data = payload("visible-older");
+        let (code, _) = write(
+            node,
+            WriteSpec {
+                data_cid: generate_dag_pb_cid_from_bytes(&visible_data).to_string(),
+                data_size: visible_data.len() as u64,
+                published: Some(true),
+                timestamp: T1.to_string(),
+                date_created: T1.to_string(),
+                ..WriteSpec::new(T1)
+            },
+            visible_data,
+        )
+        .await;
+        assert_eq!(code, 202);
+
+        let descriptor = json!({
+            "interface": "Records",
+            "method": "Read",
+            "messageTimestamp": T4,
+            "filter": { "dataFormat": "text/plain" },
+            "dateSort": "updatedDescending",
+        });
+        let descriptor_cid = generate_cid_from_json(&descriptor).expect("descriptor CID");
+        let signature = signature_for_descriptor(
+            &descriptor,
+            json!({ "descriptorCid": descriptor_cid.to_string() }),
+            bob_signer(),
+        )
+        .await;
+        let request = json!({
+            "descriptor": descriptor,
+            "authorization": { "signature": signature },
+        });
+        let (status, _) = read(node, request).await;
+        assert_eq!(status, 401, "unauthorized top-1 is rejected");
+    }
 }

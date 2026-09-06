@@ -3193,3 +3193,80 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
         "write landing mid-setup must appear in the snapshot (duplicates allowed, misses forbidden): {ids:?}"
     );
 }
+
+// Covers: DWN-AUTH-002, DWN-AUTH-005
+#[tokio::test]
+async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
+    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
+    use crate::stores::SubscriptionErrorCode;
+
+    const TENANT: &str = "did:example:alice";
+    const BOB: &str = "did:example:bob";
+
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+
+    // Delegated grant covering notes reads, expired after the request but
+    // before delivery: valid at open (request time), terminal at now.
+    // Fixed past dates keep this deterministic.
+    let grant = crate::permissions::PermissionGrant {
+        id: "delegated-grant-1".to_string(),
+        grantor: TENANT.to_string(),
+        grantee: BOB.to_string(),
+        date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
+        date_expires: parse_time("2025-06-01T00:00:00.000000Z"),
+        delegated: Some(true),
+        scope: crate::permissions::PermissionScope::Records(
+            crate::permissions::RecordsScope {
+                method: crate::permissions::RecordsMethod::Read,
+                protocol: "http://example.com/notes".to_string(),
+                selector: None,
+            },
+        ),
+        conditions: None,
+        connect_session: None,
+    };
+    let filter = RecordsFilter {
+        protocol: Some("http://example.com/notes".to_string()),
+        protocol_path: Some("note".to_string()),
+        ..Default::default()
+    };
+    let request = signed_records_subscribe_message(
+        filter.clone(),
+        None,
+        "2025-01-01T00:10:00.000000Z",
+    )
+    .await;
+    let message: Message<Descriptor> =
+        serde_json::from_value(request).expect("subscribe request must deserialize");
+    let auth = DeliveryAuthorization {
+        message,
+        filter,
+        auth_ctx: crate::permissions::AuthorizationContext {
+            signer: BOB.to_string(),
+            author: TENANT.to_string(),
+            payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
+                crate::auth::jws::AuthorizationPayloadData {
+                    descriptor_cid: String::new(),
+                    delegated_grant_id: Some("delegated-grant-1".to_string()),
+                    permission_grant_id: None,
+                    permission_grant_ids: None,
+                    protocol_role: None,
+                },
+            ),
+            permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
+            author_delegated_grant: Some(grant),
+        },
+        grant_valid_at_open: true,
+        role_invoked: false,
+        request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+    };
+
+    let error = authorize_records_delivery(TENANT, &auth, &message_store)
+        .await
+        .expect_err("expired delegated grant must fail delivery");
+    assert_eq!(
+        error.code,
+        SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
+    );
+}
