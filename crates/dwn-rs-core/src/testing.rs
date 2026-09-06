@@ -24,7 +24,7 @@ use crate::handlers::records::common::message_cid;
 use crate::interfaces::messages::protocols::{ActionWho, RecordLimit, Type};
 use crate::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::stores::MessageStore;
-use crate::{Descriptor, Fields, MapValue, Message, ProgressToken, Value};
+use crate::{Descriptor, Fields, MapValue, Message, Pagination, ProgressToken, Value};
 
 #[derive(Clone)]
 pub struct WriteSpec {
@@ -174,11 +174,22 @@ pub async fn signed_records_subscribe_message(
     cursor: Option<ProgressToken>,
     timestamp: &str,
 ) -> serde_json::Value {
+    signed_records_subscribe_with_pagination(filter, cursor, None, timestamp).await
+}
+
+/// Owner-signed subscribe with an explicit pagination envelope, for bounded
+/// initial-page scenarios.
+pub async fn signed_records_subscribe_with_pagination(
+    filter: RecordsFilter,
+    cursor: Option<ProgressToken>,
+    pagination: Option<Pagination>,
+    timestamp: &str,
+) -> serde_json::Value {
     let descriptor = SubscribeDescriptor {
         message_timestamp: parse_time(timestamp),
         filter,
         date_sort: None,
-        pagination: None,
+        pagination,
         cursor,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();

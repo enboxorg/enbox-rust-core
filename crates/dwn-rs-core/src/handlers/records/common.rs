@@ -1495,6 +1495,10 @@ pub(crate) async fn attach_initial_writes(
 ) -> Result<Vec<QueryEntry>, EventLogError>
 where
 {
+    // NOTE: this is the single per-entry projection point for query,
+    // subscribe snapshot, and read replies. Current-audience and control
+    // visibility projection for encrypted records plugs in here, alongside
+    // the delivery-side projection in the subscribe guard.
     let mut entries = Vec::new();
 
     for message in messages {

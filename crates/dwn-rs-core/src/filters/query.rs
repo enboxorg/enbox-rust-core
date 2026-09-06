@@ -10,7 +10,9 @@ use crate::filters::{errors, Filters};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct Pagination {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<Cursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
 }
 

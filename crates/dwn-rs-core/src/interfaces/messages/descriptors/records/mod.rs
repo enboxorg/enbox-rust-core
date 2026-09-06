@@ -178,8 +178,9 @@ mod inner {
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
         pub filter: RecordsFilter,
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub pagination: Option<Pagination>,
-        #[serde(rename = "dateSort")]
+        #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
         pub date_sort: Option<DateSort>,
     }
 
