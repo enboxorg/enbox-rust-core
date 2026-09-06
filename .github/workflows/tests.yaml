@@ -215,6 +215,9 @@ jobs:
           bun run build --filter=@enbox/dwn-sdk-js
           bun run build --filter=@enbox/dwn-clients
 
+      - name: Build Rust interop server
+        run: cargo build -p dwn-rs-stores --examples
+
       - name: Run loopback interop tests
         env:
           ENBOX_TS_ROOT: ${{ github.workspace }}/enbox
@@ -262,6 +265,9 @@ jobs:
           bun run build --filter=@enbox/crypto
           bun run build --filter=@enbox/dids
           bun run build --filter=@enbox/dwn-sdk-js
+
+      - name: Build Rust interop server
+        run: cargo build -p dwn-rs-stores --examples
 
       - name: Run message-store specs against Rust SQLite with JUnit report
         # Expected failures (see the allowlist) exit nonzero; the gate step
