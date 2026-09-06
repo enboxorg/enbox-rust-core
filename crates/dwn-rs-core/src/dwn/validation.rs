@@ -200,9 +200,9 @@ fn build_validators() -> Result<HashMap<String, Validator>, DwnError> {
     let registry = Registry::new()
         .draft(Draft::Draft202012)
         .extend(resources)
-        .map_err(|err| schema_error((format!("schema registry must compile: {err}"))))?
+        .map_err(|err| schema_error(format!("schema registry must compile: {err}")))?
         .prepare()
-        .map_err(|err| schema_error((format!("schema registration err: {err}"))))?;
+        .map_err(|err| schema_error(format!("schema registration err: {err}")))?;
     SCHEMA_SOURCES
         .iter()
         .map(|(id, source)| {
