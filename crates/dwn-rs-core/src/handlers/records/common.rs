@@ -1500,8 +1500,11 @@ pub(crate) trait RecordsProjector: Send + Sync {
     fn project_writes<'a>(
         &'a self,
         messages: Vec<Message<Descriptor>>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Message<Descriptor>>, String>> + Send + 'a>>;
+    ) -> ProjectedWritesFuture<'a>;
 }
+
+pub(crate) type ProjectedWritesFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<Message<Descriptor>>, String>> + Send + 'a>>;
 
 /// Identity projection: every matched write stays visible. All read surfaces
 /// use this until the encryption-control projection lands.
@@ -1511,7 +1514,7 @@ impl RecordsProjector for IdentityProjector {
     fn project_writes<'a>(
         &'a self,
         messages: Vec<Message<Descriptor>>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Message<Descriptor>>, String>> + Send + 'a>> {
+    ) -> ProjectedWritesFuture<'a> {
         Box::pin(async move { Ok(messages) })
     }
 }
