@@ -476,7 +476,11 @@ mod tests {
             filters: crate::filters::Filters,
             _sort: Option<crate::MessageSort>,
             _pagination: Option<crate::Pagination>,
+            record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<crate::stores::MessageQueryResult, MessageStoreError> {
+            // This double resolves entries by key without indexes, so it
+            // cannot project occupancy. Fail closed on policy.
+            crate::testing::reject_record_limit(record_limit.as_ref())?;
             // Support fetching initial write by entryId (recordId).
             let entry_id = filters.into_iter().find_map(|filter| {
                 filter
@@ -507,7 +511,9 @@ mod tests {
             _tenant: &str,
             _filters: crate::filters::Filters,
             _sort: Option<crate::MessageSort>,
+            record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<u64, MessageStoreError> {
+            crate::testing::reject_record_limit(record_limit.as_ref())?;
             Ok(0)
         }
         async fn delete(&self, _tenant: &str, _cid: &str) -> Result<(), MessageStoreError> {
@@ -549,6 +555,7 @@ mod tests {
             _: crate::filters::Filters,
             _: Option<crate::MessageSort>,
             _: Option<crate::Pagination>,
+            _: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<crate::stores::MessageQueryResult, MessageStoreError> {
             Err(MessageStoreError::StoreError(
                 StoreError::InternalException("store exploded".to_string()),
@@ -559,7 +566,9 @@ mod tests {
             _: &str,
             _: crate::filters::Filters,
             _: Option<crate::MessageSort>,
+            record_limit: Option<crate::stores::RecordLimitOccupancy>,
         ) -> Result<u64, MessageStoreError> {
+            crate::testing::reject_record_limit(record_limit.as_ref())?;
             Ok(0)
         }
         async fn delete(&self, _: &str, _: &str) -> Result<(), MessageStoreError> {

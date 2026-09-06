@@ -22,9 +22,10 @@ use crate::interfaces::messages::protocols::{
 };
 use crate::protocols::RuleSet;
 use crate::stores::memory::MemoryMessageStore;
+use crate::stores::occupancy::{is_occupant, occupant_ids_for_rows};
 use crate::stores::{
     KeyValues, LatestStateMutation, LatestStateTransition, LatestStateTransitionResult,
-    MessageQueryResult, MessageStore, ReplicationFeedReader,
+    MessageQueryResult, MessageStore, RecordLimitOccupancy, ReplicationFeedReader,
 };
 use crate::{
     permissions, Fields, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
@@ -81,6 +82,7 @@ async fn protocols_configure_stores_latest_base_state() {
         .query(
             "did:example:alice",
             protocol_configure_filters("http://example.com/protocol", true),
+            None,
             None,
             None,
         )
@@ -188,6 +190,7 @@ async fn protocols_configure_arrival_orders_converge_and_retain_history() {
                 protocol_configure_filters("http://example.com/convergent", false),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -197,6 +200,7 @@ async fn protocols_configure_arrival_orders_converge_and_retain_history() {
             .query(
                 "did:example:alice",
                 protocol_configure_filters("http://example.com/convergent", true),
+                None,
                 None,
                 None,
             )
@@ -251,6 +255,7 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
             protocol_configure_filters("http://example.com/rollback", true),
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -268,6 +273,7 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
                 protocol_configure_filters("http://example.com/rollback", false),
                 None,
                 None,
+                None
             )
             .await
             .unwrap()
@@ -811,11 +817,32 @@ impl MessageStore for TestMessageStore {
         filters: Filters,
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> impl Future<Output = Result<MessageQueryResult, crate::errors::MessageStoreError>> + Send
     {
         let rows = self.rows.clone();
         let tenant = tenant.to_string();
         async move {
+            let occupants = match record_limit {
+                None => None,
+                Some(policy) => match occupant_ids_for_rows(
+                    rows.read()
+                        .unwrap()
+                        .iter()
+                        .map(|row| (row.tenant.as_str(), &row.indexes)),
+                    &tenant,
+                    &policy,
+                ) {
+                    Ok(Some(ids)) => Some(ids),
+                    Ok(None) => {
+                        return Ok(MessageQueryResult {
+                            messages: Vec::new(),
+                            cursor: None,
+                        });
+                    }
+                    Err(detail) => return Err(test_store_error(detail)),
+                },
+            };
             let mut rows = rows
                 .read()
                 .unwrap()
@@ -825,6 +852,9 @@ impl MessageStore for TestMessageStore {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
+            if let Some(occupant_ids) = occupants.as_ref() {
+                rows.retain(|row| is_occupant(&row.indexes, occupant_ids));
+            }
             if let Some(sort) = sort {
                 let (property, direction) = match sort {
                     MessageSort::DateCreated(direction) => ("dateCreated", direction),
@@ -855,9 +885,10 @@ impl MessageStore for TestMessageStore {
         tenant: &str,
         filters: Filters,
         sort: Option<MessageSort>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> Result<u64, crate::errors::MessageStoreError> {
         Ok(self
-            .query(tenant, filters, sort, None)
+            .query(tenant, filters, sort, None, record_limit)
             .await?
             .messages
             .len() as u64)

@@ -238,7 +238,7 @@ async fn fetch_protocol_definition_after_default_test_protocol_configure() {
     )])]);
     let stored = node
         .store()
-        .query(TENANT, protocol_only, None, None)
+        .query(TENANT, protocol_only, None, None, None)
         .await
         .expect("query stored configure messages");
     assert!(

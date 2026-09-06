@@ -3,6 +3,7 @@
 pub mod concurrent_conformance;
 pub mod durable_event_log;
 pub mod memory;
+pub mod occupancy;
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub mod replication_feed_conformance;
@@ -32,6 +33,7 @@ use crate::{
     Cursor,
 };
 use crate::{Descriptor, MapValue, Message, MessageSort, Pagination, ProgressToken};
+pub use occupancy::RecordLimitOccupancy;
 pub use replication_feed_reader::ReplicationFeedReader;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -212,6 +214,12 @@ pub enum SubscriptionErrorCode {
     DeliveryAuthorizationFailed,
     #[serde(rename = "MessagesSubscribeDeliveryFailed")]
     DeliveryFailed,
+    #[serde(rename = "RecordsSubscribeDeliveryAuthorizationFailed")]
+    RecordsDeliveryAuthorizationFailed,
+    #[serde(rename = "RecordsSubscribeDeliveryFailed")]
+    RecordsDeliveryFailed,
+    #[serde(rename = "RecordsSubscribeProjectionFailed")]
+    RecordsProjectionFailed,
 }
 
 impl std::fmt::Display for SubscriptionErrorCode {
@@ -220,6 +228,11 @@ impl std::fmt::Display for SubscriptionErrorCode {
             Self::ProgressGap => "ProgressGap",
             Self::DeliveryAuthorizationFailed => "MessagesSubscribeDeliveryAuthorizationFailed",
             Self::DeliveryFailed => "MessagesSubscribeDeliveryFailed",
+            Self::RecordsDeliveryAuthorizationFailed => {
+                "RecordsSubscribeDeliveryAuthorizationFailed"
+            }
+            Self::RecordsDeliveryFailed => "RecordsSubscribeDeliveryFailed",
+            Self::RecordsProjectionFailed => "RecordsSubscribeProjectionFailed",
         })
     }
 }
@@ -317,12 +330,19 @@ pub trait MessageStore {
     ) -> impl Future<Output = Result<Option<Message<Descriptor>>, MessageStoreError>> + Send;
 
     /// Applies OR semantics across filter sets and AND semantics within a set.
+    ///
+    /// When `record_limit` is present, pagination and counting run over the
+    /// deterministic occupant population: each direct-parent group keeps its
+    /// oldest `max` records by (`dateCreated`, `recordId`) before the
+    /// caller's filters, sort, and pagination apply. `None` preserves the
+    /// unprojected population exactly.
     fn query(
         &self,
         tenant: &str,
         filters: Filters,
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> impl Future<Output = Result<MessageQueryResult, MessageStoreError>> + Send;
 
     fn count(
@@ -330,6 +350,7 @@ pub trait MessageStore {
         tenant: &str,
         filters: Filters,
         sort: Option<MessageSort>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> impl Future<Output = Result<u64, MessageStoreError>> + Send;
 
     fn delete(

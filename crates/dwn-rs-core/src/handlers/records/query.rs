@@ -3,16 +3,18 @@ use std::sync::Arc;
 
 use super::RecordsAuthorizationKind;
 use crate::auth::resolver::DidResolver;
+use crate::canonical_rfc3339;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsQueryDescriptor;
 use crate::dwn::{Handler, HandlerContext};
+use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
-    attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
-    filter_includes_published_records, non_owner_records_filters, owner_records_filter,
-    published_records_filter, should_protocol_authorize, store_error_reply,
-    QueryAuthorizationResult,
+    attach_initial_writes, date_sort_to_message_sort, published_sort_name,
+    resolve_record_limit_policy, store_error_reply, IdentityProjector, QueryAuthorizationResult,
+    RecordsProjector,
 };
+use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Query;
 use crate::stores::write_resolver::InitialWriteResolver;
@@ -46,6 +48,20 @@ where
                 ..
             } = ctx;
 
+            if descriptor.filter.published == Some(false) {
+                if let Some(sort_name) = published_sort_name(&descriptor.date_sort) {
+                    return Response::bad_request(format!(
+                        "RecordsQueryParseFilterPublishedSortInvalid: queries must not filter for `published:false` and sort by {sort_name}"
+                    ));
+                }
+            }
+
+            if let Err(reason) = validate_nested_protocol_path_scope(&descriptor.filter, false) {
+                return Response::bad_request(format!(
+                    "RecordsQueryNestedProtocolPathContextIdInvalid: {reason}"
+                ));
+            }
+
             let signature = match permissions::validate_authorization_signature(
                 &message,
                 self.did_resolver.as_deref(),
@@ -72,6 +88,17 @@ where
                     return Response::unauthorized(detail)
                 }
             };
+            let record_limit = match resolve_record_limit_policy(
+                tenant,
+                &descriptor.filter,
+                self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
+            )
+            .await
+            {
+                Ok(policy) => policy,
+                Err(detail) => return store_error_reply(detail),
+            };
             let result = match self
                 .message_store
                 .query(
@@ -82,6 +109,7 @@ where
                         false,
                     )),
                     descriptor.pagination.clone(),
+                    record_limit,
                 )
                 .await
             {
@@ -89,10 +117,14 @@ where
                 Err(err) => return store_error_reply(err.to_string()),
             };
 
+            let messages = match IdentityProjector.project_writes(result.messages).await {
+                Ok(messages) => messages,
+                Err(detail) => {
+                    return store_error_reply(format!("failed to project records: {detail}"))
+                }
+            };
             let entries =
-                match attach_initial_writes(tenant, result.messages, self.write_resolver.as_ref())
-                    .await
-                {
+                match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
                     Ok(entries) => entries,
                     Err(err) => {
                         return store_error_reply(format!("failed to attach initial writes: {err}"))
@@ -133,57 +165,26 @@ where
         descriptor: &RecordsQueryDescriptor,
         signature: Option<&AuthorizationContext>,
     ) -> Result<(Filters, Option<String>), QueryAuthorizationResult> {
-        if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
-            return Ok((
-                Filters::from(published_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                None,
-            ));
-        }
-        let signature = signature.ok_or_else(|| {
-            QueryAuthorizationResult::Unauthorized(
-                "AuthenticateJwsMissing: authorization signature is required".to_string(),
-            )
-        })?;
-        let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
+        let auth = authorize_collection(
             tenant,
             message,
             &descriptor.filter,
             signature,
             self.message_store.as_ref(),
+            &canonical_rfc3339(descriptor.message_timestamp),
+            RecordsAuthorizationKind::Query,
         )
         .await
-        .map_err(|error| QueryAuthorizationResult::Unauthorized(error.to_string()))?;
-        if should_protocol_authorize(signature) {
-            authorize_protocol_query_or_subscribe(
-                tenant,
-                &descriptor.filter,
-                signature,
-                self.message_store.as_ref(),
-                RecordsAuthorizationKind::Query,
-            )
-            .await
-            .map_err(QueryAuthorizationResult::Unauthorized)?;
-        }
-        if signature.author == tenant {
-            return Ok((
-                Filters::from(owner_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                Some(signature.author.clone()),
-            ));
-        }
+        .map_err(QueryAuthorizationResult::Unauthorized)?;
+        let author = auth.author.clone();
         Ok((
-            Filters::from(non_owner_records_filters(
+            collection_filters(
+                &auth,
                 &descriptor.filter,
                 descriptor.date_sort.as_ref(),
-                &signature.author,
-                should_protocol_authorize(signature) || grant_authorized,
-            )),
-            Some(signature.author.clone()),
+                PlanMode::Snapshot,
+            ),
+            author,
         ))
     }
 }

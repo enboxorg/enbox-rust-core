@@ -1,31 +1,58 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use chrono::Utc;
 use serde_json::Value as JsonValue;
 
 use crate::auth::resolver::DidResolver;
+use crate::canonical_rfc3339;
 use crate::cid::generate_cid_from_json;
-use crate::descriptors::{Descriptor, SubscribeDescriptor};
+use crate::descriptors::{Descriptor, Records, SubscribeDescriptor};
 use crate::dwn::{Handler, HandlerContext};
+use crate::filters::context::validate_nested_protocol_path_scope;
+use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::Filters;
-use crate::handlers::records::common::{
-    attach_initial_writes, authorize_protocol_query_or_subscribe, date_sort_to_message_sort,
-    event_log_error_reply, filter_includes_published_records, non_owner_records_event_filters,
-    non_owner_records_filters, owner_records_event_filter, owner_records_filter,
-    published_records_event_filter, published_records_filter, records_subscribe_descriptor,
-    records_subscribe_reply, should_protocol_authorize, store_error_reply,
-    QueryAuthorizationResult,
+use crate::handlers::guarded_subscription::{
+    create_guarded_subscription, DeliveryDecision, GuardedSubscription,
 };
-use crate::permissions::{self, AuthorizationContext};
+use crate::handlers::records::common::{
+    attach_initial_writes, authorize_protocol_query_or_subscribe, bool_filter,
+    date_sort_to_message_sort, event_log_error_reply, filter_map, message_record_id,
+    message_record_limit_policy, records_subscribe_descriptor, records_subscribe_reply,
+    resolve_record_limit_policy, should_protocol_authorize, store_error_reply, string_filter,
+    IdentityProjector, RecordsProjector,
+};
+use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
+use crate::permissions::{
+    self,
+    errors::{GrantError, PermissionError},
+    AuthorizationContext,
+};
 use crate::replies::records::Subscribe;
 use crate::stores::write_resolver::{InitialWriteResolver, MessageStoreInitialWriteResolver};
 use crate::stores::EventSubscription;
-use crate::stores::{EventLogSubscribeOptions, SubscriptionListener};
+use crate::stores::{
+    EventLogSubscribeOptions, SubscriptionError, SubscriptionErrorCode, SubscriptionListener,
+    SubscriptionMessage,
+};
 use crate::validation::{ingest_message, ingress_rejection};
 use crate::Message;
 use crate::Response;
 
-use super::RecordsAuthorizationKind;
+use super::{RecordsAuthorizationKind, RECORDS_INTERFACE, WRITE_METHOD};
+
+/// Mutable authority retained from subscription open for delivery-time
+/// revalidation. Open-time policy stays pinned to the signed request
+/// timestamp; grant validity and role membership are rechecked at now.
+#[derive(Clone)]
+pub(crate) struct DeliveryAuthorization {
+    pub(crate) message: Message<Descriptor>,
+    pub(crate) filter: RecordsFilter,
+    pub(crate) auth_ctx: AuthorizationContext,
+    pub(crate) grant_valid_at_open: bool,
+    pub(crate) role_invoked: bool,
+    pub(crate) request_timestamp: String,
+}
 
 #[derive(Clone)]
 pub struct RecordsSubscribeHandler<MessageStore> {
@@ -75,58 +102,56 @@ where
                 }
                 Err(error) => return Response::bad_request(error.to_string()),
             };
-            let filters = if filter_includes_published_records(&descriptor.filter)
-                && signature.is_none()
+            // Bounded path-wide Subscribe may omit nested scope when the initial
+            // page is explicitly capped and no slash-role is invoked; mirrors
+            // `RecordsSubscribe.parse` at the parity baseline.
+            let allow_bounded_path_wide = descriptor.cursor.is_none()
+                && descriptor
+                    .pagination
+                    .as_ref()
+                    .and_then(|pagination| pagination.limit)
+                    .is_some_and(|limit| limit > 0)
+                && signature
+                    .as_ref()
+                    .and_then(|signature| signature.protocol_role())
+                    .is_none_or(|role| !role.contains('/'));
+            if let Err(reason) =
+                validate_nested_protocol_path_scope(&descriptor.filter, allow_bounded_path_wide)
             {
-                Filters::from(published_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                ))
-            } else {
-                let Some(signature) = signature.as_ref() else {
-                    return Response::unauthorized(
-                        "AuthenticateJwsMissing: authorization signature is required".to_string(),
-                    );
-                };
-                let grant_authorized =
-                    match permissions::authorize_records_query_or_subscribe_with_grant(
-                        tenant,
-                        &message,
-                        &descriptor.filter,
-                        signature,
-                        self.message_store.as_ref(),
-                    )
-                    .await
-                    {
-                        Ok(grant_authorized) => grant_authorized,
-                        Err(detail) => return Response::unauthorized(detail.to_string()),
-                    };
-                if should_protocol_authorize(signature) {
-                    if let Err(detail) = authorize_protocol_query_or_subscribe(
-                        tenant,
-                        &descriptor.filter,
-                        signature,
-                        self.message_store.as_ref(),
-                        RecordsAuthorizationKind::Subscribe,
-                    )
-                    .await
-                    {
-                        return Response::unauthorized(detail);
-                    }
-                }
-                if signature.author == tenant {
-                    Filters::from(owner_records_filter(
-                        &descriptor.filter,
-                        descriptor.date_sort.as_ref(),
-                    ))
-                } else {
-                    Filters::from(non_owner_records_filters(
-                        &descriptor.filter,
-                        descriptor.date_sort.as_ref(),
-                        &signature.author,
-                        should_protocol_authorize(signature) || grant_authorized,
-                    ))
-                }
+                return Response::bad_request(format!(
+                    "RecordsSubscribeNestedProtocolPathContextIdInvalid: {reason}"
+                ));
+            }
+            let auth = match authorize_collection(
+                tenant,
+                &message,
+                &descriptor.filter,
+                signature.as_ref(),
+                self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
+                RecordsAuthorizationKind::Subscribe,
+            )
+            .await
+            {
+                Ok(auth) => auth,
+                Err(detail) => return Response::unauthorized(detail),
+            };
+            let filters = collection_filters(
+                &auth,
+                &descriptor.filter,
+                descriptor.date_sort.as_ref(),
+                PlanMode::Snapshot,
+            );
+            let record_limit = match resolve_record_limit_policy(
+                tenant,
+                &descriptor.filter,
+                self.message_store.as_ref(),
+                &canonical_rfc3339(descriptor.message_timestamp),
+            )
+            .await
+            {
+                Ok(policy) => policy,
+                Err(detail) => return store_error_reply(detail),
             };
             let result = match self
                 .message_store
@@ -138,16 +163,21 @@ where
                         false,
                     )),
                     descriptor.pagination.clone(),
+                    record_limit,
                 )
                 .await
             {
                 Ok(result) => result,
                 Err(err) => return store_error_reply(err.to_string()),
             };
+            let messages = match IdentityProjector.project_writes(result.messages).await {
+                Ok(messages) => messages,
+                Err(detail) => {
+                    return store_error_reply(format!("failed to project records: {detail}"))
+                }
+            };
             let entries =
-                match attach_initial_writes(tenant, result.messages, self.write_resolver.as_ref())
-                    .await
-                {
+                match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
                     Ok(entries) => entries,
                     Err(err) => {
                         return store_error_reply(format!(
@@ -211,6 +241,200 @@ where
     }
 }
 
+/// Whether a subscription's authority can mutate after open and therefore
+/// needs delivery-time revalidation: invoked grants, invoked roles, and
+/// embedded author-delegated grants. Everything else is immutable.
+fn needs_delivery_reauth(signature: &AuthorizationContext) -> bool {
+    signature.permission_grant_id().is_some()
+        || should_protocol_authorize(signature)
+        || signature.author_delegated_grant.is_some()
+}
+
+/// Restamps a retained subscribe request with the delivery timestamp so
+/// grant time-window checks run at now rather than at open.
+fn delivery_message_at_now(message: &Message<Descriptor>) -> Result<Message<Descriptor>, String> {
+    let mut message = message.clone();
+    let Descriptor::Records(records) = &mut message.descriptor else {
+        return Err("RecordsSubscribe descriptor expected during delivery".to_string());
+    };
+    let Records::Subscribe(descriptor) = records.as_mut() else {
+        return Err("RecordsSubscribe descriptor expected during delivery".to_string());
+    };
+    descriptor.message_timestamp = Utc::now();
+    Ok(message)
+}
+
+/// Revalidates mutable subscription authority at delivery time. Grant
+/// validity is checked at now (expiry and revocation included); role
+/// membership is re-resolved against the definition pinned to the signed
+/// request timestamp, never newest. Immutable paths need no recheck.
+pub(crate) async fn authorize_records_delivery<MessageStore>(
+    tenant: &str,
+    auth: &DeliveryAuthorization,
+    message_store: &MessageStore,
+) -> Result<(), SubscriptionError>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let authorize_failed = |detail: &str| SubscriptionError {
+        code: SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed,
+        detail: detail.to_string(),
+    };
+    let delivery_message =
+        delivery_message_at_now(&auth.message).map_err(|detail| SubscriptionError {
+            code: SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed,
+            detail,
+        })?;
+    match permissions::authorize_records_query_or_subscribe_with_grant(
+        tenant,
+        &delivery_message,
+        &auth.filter,
+        &auth.auth_ctx,
+        message_store,
+    )
+    .await
+    {
+        // A grant that activates after open is retryable; every other
+        // delivery authorization failure is terminal. Activation after open
+        // requires a future-dated request, so this branch is nearly dead.
+        Err(PermissionError::InvalidGrant(GrantError::NotActive)) => {
+            return Err(SubscriptionError {
+                code: SubscriptionErrorCode::RecordsDeliveryFailed,
+                detail: "subscription delivery authorization check failed".to_string(),
+            });
+        }
+        Err(_) => {
+            return Err(authorize_failed(
+                "subscription authorization failed during delivery",
+            ));
+        }
+        Ok(valid) => {
+            if auth.grant_valid_at_open && !valid {
+                return Err(authorize_failed(
+                    "subscription authorization failed during delivery",
+                ));
+            }
+        }
+    }
+    if auth.role_invoked {
+        authorize_protocol_query_or_subscribe(
+            tenant,
+            &auth.filter,
+            &auth.auth_ctx,
+            message_store,
+            &auth.request_timestamp,
+            RecordsAuthorizationKind::Subscribe,
+        )
+        .await
+        .map_err(|_| authorize_failed("subscription authorization failed during delivery"))?;
+    }
+    Ok(())
+}
+
+/// Checks one live write event against its current occupant population.
+/// Deletes and non-write events skip occupancy. Projection failures are
+/// terminal; non-occupants are silently suppressed.
+async fn project_write_occupancy<MessageStore>(
+    tenant: &str,
+    write: &Message<Descriptor>,
+    request_timestamp: &str,
+    message_store: &MessageStore,
+) -> Result<bool, SubscriptionError>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let projection_failed = || SubscriptionError {
+        code: SubscriptionErrorCode::RecordsProjectionFailed,
+        detail: "record-limit occupancy projection failed during delivery".to_string(),
+    };
+    let policy = message_record_limit_policy(tenant, write, message_store, request_timestamp)
+        .await
+        .map_err(|_| projection_failed())?;
+    let Some(policy) = policy else {
+        return Ok(true);
+    };
+    let Some(record_id) = message_record_id(write) else {
+        return Err(projection_failed());
+    };
+    let occupant_filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("method", string_filter(WRITE_METHOD)),
+        ("isLatestBaseState", bool_filter(true)),
+        ("protocol", string_filter(&policy.protocol)),
+        ("protocolPath", string_filter(&policy.protocol_path)),
+        ("recordId", string_filter(&record_id)),
+    ]);
+    let count = message_store
+        .count(tenant, Filters::from(occupant_filter), None, Some(policy))
+        .await
+        .map_err(|_| projection_failed())?;
+    Ok(count > 0)
+}
+
+/// Wraps a raw event-log listener with serialized delivery projection:
+/// mutable reauthorization, then per-write occupancy, in feed order.
+#[allow(clippy::too_many_arguments)]
+fn create_records_delivery_guard<MessageStore>(
+    listener: SubscriptionListener,
+    tenant: String,
+    request_timestamp: String,
+    delivery_auth: Option<DeliveryAuthorization>,
+    message_store: Arc<MessageStore>,
+) -> (SubscriptionListener, GuardedSubscription)
+where
+    MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
+{
+    create_guarded_subscription(listener, move |message| {
+        let tenant = tenant.clone();
+        let request_timestamp = request_timestamp.clone();
+        let delivery_auth = delivery_auth.clone();
+        let message_store = message_store.clone();
+        async move {
+            let SubscriptionMessage::Event { cursor, event, .. } = &message else {
+                return DeliveryDecision::Forward(message);
+            };
+            let cursor = cursor.clone();
+
+            if let Some(auth) = delivery_auth.as_ref() {
+                if let Err(error) =
+                    authorize_records_delivery(&tenant, auth, message_store.as_ref()).await
+                {
+                    return DeliveryDecision::Fail { cursor, error };
+                }
+            }
+
+            if let Descriptor::Records(records) = &event.message.descriptor {
+                if matches!(records.as_ref(), Records::Write(_)) {
+                    let projected = match IdentityProjector
+                        .project_writes(vec![event.message.clone()])
+                        .await
+                    {
+                        Ok(projected) => projected,
+                        Err(_) => return DeliveryDecision::Suppress,
+                    };
+                    let Some(write) = projected.into_iter().next() else {
+                        return DeliveryDecision::Suppress;
+                    };
+                    match project_write_occupancy(
+                        &tenant,
+                        &write,
+                        &request_timestamp,
+                        message_store.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => return DeliveryDecision::Suppress,
+                        Err(error) => return DeliveryDecision::Fail { cursor, error },
+                    }
+                }
+            }
+
+            DeliveryDecision::Forward(message)
+        }
+    })
+}
+
 impl<MessageStore, EventLog> RecordsEventLogSubscribeHandler<MessageStore, EventLog>
 where
     MessageStore: crate::stores::MessageStore + Send + Sync + 'static,
@@ -252,14 +476,36 @@ where
             }
         };
 
-        let (event_filters, query_filters, _) = match self
+        // Same nested-scope contract as the snapshot handler: bounded
+        // path-wide subscriptions may omit scope when the initial page is
+        // explicitly capped and no slash-role is invoked.
+        let allow_bounded_path_wide = descriptor.cursor.is_none()
+            && descriptor
+                .pagination
+                .as_ref()
+                .and_then(|pagination| pagination.limit)
+                .is_some_and(|limit| limit > 0)
+            && signature
+                .as_ref()
+                .and_then(|signature| signature.protocol_role())
+                .is_none_or(|role| !role.contains('/'));
+        if let Err(reason) =
+            validate_nested_protocol_path_scope(&descriptor.filter, allow_bounded_path_wide)
+        {
+            return records_subscribe_reply(
+                Response::bad_request(format!(
+                    "RecordsSubscribeNestedProtocolPathContextIdInvalid: {reason}"
+                )),
+                None,
+            );
+        }
+
+        let (event_filters, query_filters, _, delivery_auth) = match self
             .records_subscribe_filters(tenant, &message, &descriptor, signature.as_ref())
             .await
         {
             Ok(filters) => filters,
-            Err(QueryAuthorizationResult::Unauthorized(detail)) => {
-                return records_subscribe_reply(Response::unauthorized(detail), None)
-            }
+            Err(reply) => return records_subscribe_reply(reply, None),
         };
 
         let subscription_id = match generate_cid_from_json(raw_message) {
@@ -272,12 +518,22 @@ where
             }
         };
 
+        // Guard live delivery with mutable reauthorization and occupancy
+        // projection before the event log sees the listener, so no event can
+        // slip through unprojected.
+        let (guarded_listener, guard) = create_records_delivery_guard(
+            listener,
+            tenant.to_string(),
+            canonical_rfc3339(descriptor.message_timestamp),
+            delivery_auth,
+            self.message_store.clone(),
+        );
         let subscription = match self
             .event_log
             .subscribe(
                 tenant,
                 &subscription_id,
-                listener,
+                guarded_listener,
                 Some(EventLogSubscribeOptions {
                     cursor: descriptor.cursor.clone(),
                     filters: Some(event_filters),
@@ -288,6 +544,10 @@ where
             Ok(subscription) => subscription,
             Err(err) => return records_subscribe_reply(event_log_error_reply(err), None),
         };
+        guard.install_close(subscription.close.clone()).await;
+        // Drain events enqueued during subscribe before the snapshot query,
+        // so already-committed events are projected before initial results.
+        guard.flush().await;
 
         if descriptor.cursor.is_some() {
             let reply = Response::ok().with_reply(Subscribe {
@@ -299,6 +559,20 @@ where
             return records_subscribe_reply(reply, Some(subscription));
         }
 
+        let record_limit = match resolve_record_limit_policy(
+            tenant,
+            &descriptor.filter,
+            self.message_store.as_ref(),
+            &canonical_rfc3339(descriptor.message_timestamp),
+        )
+        .await
+        {
+            Ok(policy) => policy,
+            Err(detail) => {
+                let _ = (subscription.close)().await;
+                return records_subscribe_reply(store_error_reply(detail), None);
+            }
+        };
         let result = match self
             .message_store
             .query(
@@ -309,6 +583,7 @@ where
                     false,
                 )),
                 descriptor.pagination.clone(),
+                record_limit,
             )
             .await
         {
@@ -318,22 +593,27 @@ where
                 return records_subscribe_reply(store_error_reply(err.to_string()), None);
             }
         };
-        let entries = match attach_initial_writes(
-            tenant,
-            result.messages,
-            self.write_resolver.as_ref(),
-        )
-        .await
-        {
-            Ok(entries) => entries,
-            Err(err) => {
+        let messages = match IdentityProjector.project_writes(result.messages).await {
+            Ok(messages) => messages,
+            Err(detail) => {
                 let _ = (subscription.close)().await;
                 return records_subscribe_reply(
-                    store_error_reply(format!("failed to attach initial writes: {err}")),
+                    store_error_reply(format!("failed to project records: {detail}")),
                     None,
                 );
             }
         };
+        let entries =
+            match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
+                Ok(entries) => entries,
+                Err(err) => {
+                    let _ = (subscription.close)().await;
+                    return records_subscribe_reply(
+                        store_error_reply(format!("failed to attach initial writes: {err}")),
+                        None,
+                    );
+                }
+            };
         let reply = Response::ok().with_reply(Subscribe {
             subscription_id: Some(subscription.id.clone()),
             entries: Some(entries.clone()),
@@ -353,68 +633,125 @@ where
         message: &Message<Descriptor>,
         descriptor: &SubscribeDescriptor,
         signature: Option<&AuthorizationContext>,
-    ) -> Result<(Filters, Filters, Option<String>), QueryAuthorizationResult> {
-        if filter_includes_published_records(&descriptor.filter) && signature.is_none() {
-            return Ok((
-                Filters::from(published_records_event_filter(&descriptor.filter)),
-                Filters::from(published_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                None,
-            ));
-        }
-
-        let Some(signature) = signature else {
-            return Err(QueryAuthorizationResult::Unauthorized(
-                "AuthenticateJwsMissing: authorization signature is required".to_string(),
-            ));
-        };
-        let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
+    ) -> Result<
+        (
+            Filters,
+            Filters,
+            Option<String>,
+            Option<DeliveryAuthorization>,
+        ),
+        Response<Subscribe>,
+    > {
+        // One authorization serves both projections: the event set for live
+        // delivery and the snapshot set for the initial page.
+        let request_timestamp = canonical_rfc3339(descriptor.message_timestamp);
+        let auth = authorize_collection(
             tenant,
             message,
             &descriptor.filter,
             signature,
             self.message_store.as_ref(),
+            &request_timestamp,
+            RecordsAuthorizationKind::Subscribe,
         )
         .await
-        .map_err(|err| QueryAuthorizationResult::Unauthorized(err.to_string()))?;
-        if should_protocol_authorize(signature) {
-            authorize_protocol_query_or_subscribe(
-                tenant,
+        .map_err(Response::unauthorized)?;
+        let author = auth.author.clone();
+        // Retain mutable authority for delivery-time revalidation. Paths
+        // authorized immutably (owner, published, author, recipient) need
+        // no recheck. Invoked grants, invoked roles, and embedded
+        // author-delegated grants can all mutate after open.
+        let delivery_auth = match signature {
+            Some(signature) if needs_delivery_reauth(signature) => Some(DeliveryAuthorization {
+                message: message.clone(),
+                filter: descriptor.filter.clone(),
+                auth_ctx: signature.clone(),
+                grant_valid_at_open: auth.grant_authorized,
+                role_invoked: should_protocol_authorize(signature),
+                request_timestamp,
+            }),
+            _ => None,
+        };
+        Ok((
+            collection_filters(&auth, &descriptor.filter, None, PlanMode::Event),
+            collection_filters(
+                &auth,
                 &descriptor.filter,
-                signature,
-                self.message_store.as_ref(),
-                RecordsAuthorizationKind::Subscribe,
-            )
-            .await
-            .map_err(QueryAuthorizationResult::Unauthorized)?;
+                descriptor.date_sort.as_ref(),
+                PlanMode::Snapshot,
+            ),
+            author,
+            delivery_auth,
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
+    use crate::permissions::{
+        PermissionGrant, PermissionScope, RecordsMethod, RecordsScope, VerifiedAuthorizationPayload,
+    };
+
+    fn auth_ctx(
+        permission_grant_id: Option<String>,
+        protocol_role: Option<String>,
+        delegated_grant: Option<PermissionGrant>,
+    ) -> AuthorizationContext {
+        AuthorizationContext {
+            signer: "did:example:bob".to_string(),
+            author: "did:example:alice".to_string(),
+            payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: permission_grant_id.clone(),
+                permission_grant_ids: None,
+                protocol_role,
+            }),
+            permission_grant_invocation: permission_grant_id
+                .map(PermissionGrantInvocation::Single)
+                .unwrap_or(PermissionGrantInvocation::None),
+            author_delegated_grant: delegated_grant,
         }
-        if signature.author == tenant {
-            Ok((
-                Filters::from(owner_records_event_filter(&descriptor.filter)),
-                Filters::from(owner_records_filter(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                )),
-                Some(signature.author.clone()),
-            ))
-        } else {
-            let protocol_authorized = should_protocol_authorize(signature) || grant_authorized;
-            Ok((
-                Filters::from(non_owner_records_event_filters(
-                    &descriptor.filter,
-                    &signature.author,
-                    protocol_authorized,
-                )),
-                Filters::from(non_owner_records_filters(
-                    &descriptor.filter,
-                    descriptor.date_sort.as_ref(),
-                    &signature.author,
-                    protocol_authorized,
-                )),
-                Some(signature.author.clone()),
-            ))
+    }
+
+    fn delegated_grant() -> PermissionGrant {
+        PermissionGrant {
+            id: "delegated-grant-1".to_string(),
+            grantor: "did:example:alice".to_string(),
+            grantee: "did:example:bob".to_string(),
+            date_granted: crate::testing::parse_time("2025-01-01T00:00:00.000000Z"),
+            date_expires: crate::testing::parse_time("2030-01-01T00:00:00.000000Z"),
+            delegated: Some(true),
+            scope: PermissionScope::Records(RecordsScope {
+                method: RecordsMethod::Read,
+                protocol: "http://example.com/notes".to_string(),
+                selector: None,
+            }),
+            conditions: None,
+            connect_session: None,
         }
+    }
+
+    // Covers: DWN-AUTH-005
+    #[test]
+    fn delivery_reauth_retained_for_mutable_authority_only() {
+        assert!(!needs_delivery_reauth(&auth_ctx(None, None, None)));
+        assert!(needs_delivery_reauth(&auth_ctx(
+            Some("grant-1".to_string()),
+            None,
+            None
+        )));
+        assert!(needs_delivery_reauth(&auth_ctx(
+            None,
+            Some("thread/participant".to_string()),
+            None
+        )));
+        assert!(needs_delivery_reauth(&auth_ctx(
+            None,
+            None,
+            Some(delegated_grant())
+        )));
     }
 }

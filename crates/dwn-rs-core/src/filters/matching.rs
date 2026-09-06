@@ -421,6 +421,53 @@ mod tests {
         assert!(!matches_filters(&idx, Some(&filters)));
     }
 
+    // Covers: DWN-PROTO-001, DWN-PROTO-002
+    #[test]
+    fn subtree_boundary_matrix_for_records_contexts() {
+        let scope = "a/b";
+        let cases = vec![
+            ("a/b", true),
+            ("a/b/c", true),
+            ("a/b/c/d", true),
+            ("a/bc", false),
+            ("a/bc/d", false),
+            ("a/b-sibling", false),
+            ("a/b-sibling/c", false),
+            ("a", false),
+            ("a/bc-sibling/d", false),
+        ];
+        for (candidate, expected) in cases {
+            let idx = indexes(&[("contextId", Value::String(candidate.into()))]);
+            let filters: Filters = vec![filter_set(vec![(
+                "contextId",
+                Filter::Subtree(SubtreeFilter {
+                    subtree: scope.into(),
+                }),
+            )])]
+            .into();
+            assert_eq!(
+                matches_filters(&idx, Some(&filters)),
+                expected,
+                "candidate {candidate:?} against scope {scope:?}"
+            );
+        }
+    }
+
+    // Covers: DWN-PROTO-001, DWN-PROTO-002
+    #[test]
+    fn subtree_malformed_scope_never_over_matches() {
+        // A trailing-separator scope must not select the un-suffixed parent.
+        let idx = indexes(&[("contextId", Value::String("a/b".into()))]);
+        let filters: Filters = vec![filter_set(vec![(
+            "contextId",
+            Filter::Subtree(SubtreeFilter {
+                subtree: "a/b/".into(),
+            }),
+        )])]
+        .into();
+        assert!(!matches_filters(&idx, Some(&filters)));
+    }
+
     #[test]
     fn subtree_does_not_match_non_string() {
         let idx = indexes(&[("contextId", Value::Number(42))]);

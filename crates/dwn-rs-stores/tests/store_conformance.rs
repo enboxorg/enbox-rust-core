@@ -5,7 +5,9 @@
 
 mod common;
 
-use dwn_rs_core::stores::store_conformance::{run_data_stores, run_message_stores};
+use dwn_rs_core::stores::store_conformance::{
+    run_data_stores, run_message_stores, run_record_limit_stores, run_sort_tie_break_stores,
+};
 use dwn_rs_stores::SqliteStore;
 
 #[tokio::test]
@@ -31,6 +33,44 @@ async fn sqlite_disk_conforms_to_message_store_contract() {
 #[tokio::test]
 async fn sqlite_mem_conforms_to_data_store_contract() {
     run_data_stores(|| async { SqliteStore::in_memory(None) }).await;
+}
+
+#[tokio::test]
+async fn sqlite_mem_conforms_to_record_limit() {
+    run_record_limit_stores(|| async { SqliteStore::in_memory(None) }).await;
+}
+
+#[tokio::test]
+async fn sqlite_mem_orders_ties_by_cid() {
+    run_sort_tie_break_stores(|| async { SqliteStore::in_memory(None) }).await;
+}
+
+#[tokio::test]
+async fn sqlite_disk_orders_ties_by_cid() {
+    let dir = tempfile::tempdir().expect("battery tempdir");
+    let seq = std::sync::atomic::AtomicU64::new(0);
+    run_sort_tie_break_stores(|| async {
+        let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SqliteStore::new(
+            dir.path().join(format!("tie-break-{n}.sqlite")),
+            common::noop_waker(),
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sqlite_disk_conforms_to_record_limit() {
+    let dir = tempfile::tempdir().expect("battery tempdir");
+    let seq = std::sync::atomic::AtomicU64::new(0);
+    run_record_limit_stores(|| async {
+        let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SqliteStore::new(
+            dir.path().join(format!("record-limit-{n}.sqlite")),
+            common::noop_waker(),
+        )
+    })
+    .await;
 }
 
 #[tokio::test]

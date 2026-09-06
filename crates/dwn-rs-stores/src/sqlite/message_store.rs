@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dwn_rs_core::descriptors::records::write_tag_protocol;
 use dwn_rs_core::descriptors::MessageDescriptor;
+use dwn_rs_core::stores::occupancy::{occupancy_candidate_filters, select_occupants};
 use dwn_rs_core::stores::replication_feed_reader::{
     build_token, fingerprint_scopes, fold_cid_into_domain, is_feed_message, scopes_unchanged,
     Fingerprint,
@@ -13,7 +14,7 @@ use dwn_rs_core::errors::{MessageReplicationError, MessageStoreError, StoreError
 use dwn_rs_core::filters::Filters;
 use dwn_rs_core::stores::{
     KeyValues, LatestStateMutation, LatestStateTransition, LatestStateTransitionResult,
-    MessageQueryResult, MessageStore,
+    MessageQueryResult, MessageStore, RecordLimitOccupancy,
 };
 use dwn_rs_core::{Descriptor, Message, MessageSort, Pagination, Query};
 use serde::Serialize;
@@ -21,7 +22,7 @@ use serde_rusqlite::from_row;
 use uuid::Uuid;
 
 use crate::replication_feed_reader::FeedEntry;
-use crate::sqlite::query::SqliteQuery;
+use crate::sqlite::query::{SqliteQuery, SqliteValue};
 use crate::store::sqlite_store_error;
 use crate::SqliteStore;
 
@@ -155,7 +156,14 @@ impl MessageStore for SqliteStore {
         filters: Filters,
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> Result<MessageQueryResult, MessageStoreError> {
+        if matches!(pagination.as_ref().and_then(|p| p.limit), Some(0)) {
+            return Ok(MessageQueryResult {
+                messages: Vec::new(),
+                cursor: None,
+            });
+        }
         let conn = self.connection().await?;
 
         let mut q = SqliteQuery::<Message<Descriptor>, MessageSort>::new(
@@ -165,6 +173,15 @@ impl MessageStore for SqliteStore {
             "message_json",
             "indexes_json",
         );
+
+        if let Some(policy) = record_limit.as_ref() {
+            if !self.apply_record_limit(&mut q, tenant, policy).await? {
+                return Ok(MessageQueryResult {
+                    messages: Vec::new(),
+                    cursor: None,
+                });
+            }
+        }
 
         q.from("messages")
             .filter(&filters)?
@@ -181,6 +198,7 @@ impl MessageStore for SqliteStore {
         tenant: &str,
         filters: Filters,
         sort: Option<MessageSort>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> Result<u64, MessageStoreError> {
         let conn = self.connection().await?;
 
@@ -191,6 +209,12 @@ impl MessageStore for SqliteStore {
             "message_json",
             "indexes_json",
         );
+
+        if let Some(policy) = record_limit.as_ref() {
+            if !self.apply_record_limit(&mut q, tenant, policy).await? {
+                return Ok(0);
+            }
+        }
 
         q.from("messages").filter(&filters)?.sort(sort);
 
@@ -247,6 +271,124 @@ impl MessageStore for SqliteStore {
 impl SqliteStore {
     fn index_update_error(code: &str, detail: String) -> MessageStoreError {
         MessageStoreError::from(StoreError::InternalException(format!("{code}: {detail}")))
+    }
+
+    /// Enforces a record-limit policy on a query builder. Returns false when
+    /// nothing occupies a slot so callers short-circuit with empty results.
+    async fn apply_record_limit(
+        &self,
+        query: &mut SqliteQuery<Message<Descriptor>, MessageSort>,
+        tenant: &str,
+        policy: &RecordLimitOccupancy,
+    ) -> Result<bool, MessageStoreError> {
+        match self.resolve_occupancy(tenant, policy).await? {
+            Some(cutoffs) => {
+                query.occupancy_cutoffs(&cutoffs);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Resolves the admitted occupant population for a record-limit policy.
+    /// Returns `None` when nothing occupies a slot so callers short-circuit.
+    /// The candidate scan is a bounded column projection over latest live
+    /// writes, never message payloads; ranking runs through the shared rule
+    /// and pagination stays in-engine downstream.
+    async fn resolve_occupancy(
+        &self,
+        tenant: &str,
+        policy: &RecordLimitOccupancy,
+    ) -> Result<Option<BTreeMap<Option<String>, String>>, MessageStoreError> {
+        let wrap = |detail: String| MessageStoreError::from(StoreError::InternalException(detail));
+        let candidate_filters = occupancy_candidate_filters(policy);
+        let (predicates, mut params) =
+            SqliteQuery::<Message<Descriptor>, MessageSort>::render_filters(
+                "indexes_json",
+                &candidate_filters,
+            )?;
+        let mut sql = String::from(
+            "SELECT json_extract(indexes_json, '$.recordId'), \
+             json_extract(indexes_json, '$.parentId'), \
+             json_extract(indexes_json, '$.dateCreated') \
+             FROM messages WHERE tenant = ?",
+        );
+        params.insert(0, SqliteValue::from(tenant.to_string()));
+        if !predicates.is_empty() {
+            sql.push_str(&format!(" AND ({})", predicates.join(" OR ")));
+        }
+
+        let rows: Vec<(
+            rusqlite::types::Value,
+            rusqlite::types::Value,
+            rusqlite::types::Value,
+        )> = self
+            .connection()
+            .await?
+            .clone()
+            .with_reader(move |connection| {
+                let mut stmt = connection.prepare(&sql).map_err(sqlite_store_error)?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })
+                    .map_err(sqlite_store_error)?
+                    .collect::<Result<Vec<_>, rusqlite::Error>>()
+                    .map_err(sqlite_store_error)?;
+                Ok(rows)
+            })
+            .await
+            .map_err(MessageStoreError::from)?;
+
+        let mut owned: Vec<(String, Option<String>, String)> = Vec::with_capacity(rows.len());
+        for (record_id, parent_id, date_created) in rows {
+            let record_id = Self::occupancy_column(record_id, "recordId")?.ok_or_else(|| {
+                wrap("MessageStoreRecordLimitInvalidCandidate: record-limit candidates require string recordId indexes".to_string())
+            })?;
+            let date_created = Self::occupancy_column(date_created, "dateCreated")?.ok_or_else(|| {
+                wrap("MessageStoreRecordLimitInvalidCandidate: record-limit candidates require string dateCreated indexes".to_string())
+            })?;
+            owned.push((
+                record_id,
+                Self::occupancy_column(parent_id, "parentId")?,
+                date_created,
+            ));
+        }
+        let candidates = owned
+            .iter()
+            .map(|(record_id, parent_id, date_created)| {
+                dwn_rs_core::stores::occupancy::OccupancyCandidate {
+                    record_id,
+                    parent_id: parent_id.as_deref(),
+                    date_created,
+                }
+            })
+            .collect::<Vec<_>>();
+        let parent_ids = policy
+            .parent_id
+            .as_ref()
+            .map(|ids| ids.iter().cloned().collect::<BTreeSet<_>>());
+        let selection =
+            select_occupants(&candidates, policy.max, parent_ids.as_ref()).map_err(wrap)?;
+        if selection.cutoffs.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(selection.cutoffs))
+    }
+
+    fn occupancy_column(
+        value: rusqlite::types::Value,
+        column: &str,
+    ) -> Result<Option<String>, MessageStoreError> {
+        match value {
+            rusqlite::types::Value::Null => Ok(None),
+            rusqlite::types::Value::Text(text) => Ok(Some(text)),
+            _ => Err(MessageStoreError::from(StoreError::InternalException(
+                format!(
+                    "MessageStoreRecordLimitInvalidCandidate: record-limit candidate {column} must be a string"
+                ),
+            ))),
+        }
     }
 
     /// Replaces a message's indexes wholesale (TS `updateIndexes`).

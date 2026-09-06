@@ -87,7 +87,7 @@ async fn sqlite_upgrade_reads_and_decrypts_legacy_records_without_rewriting_mess
         .await
         .unwrap()
         .expect("legacy record through get");
-    let by_query = MessageStore::query(&upgraded, TENANT, Filters::default(), None, None)
+    let by_query = MessageStore::query(&upgraded, TENANT, Filters::default(), None, None, None)
         .await
         .unwrap()
         .messages

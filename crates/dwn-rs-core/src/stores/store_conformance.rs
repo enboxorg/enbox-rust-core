@@ -191,7 +191,13 @@ where
     }
 
     let filters = protocol_filter("https://example.com/protocol/notes");
-    assert_eq!(store.count(TENANT, filters.clone(), None).await.unwrap(), 2);
+    assert_eq!(
+        store
+            .count(TENANT, filters.clone(), None, None)
+            .await
+            .unwrap(),
+        2
+    );
 
     let page1 = store
         .query(
@@ -199,6 +205,7 @@ where
             filters.clone(),
             Some(MessageSort::Timestamp(SortDirection::Descending)),
             Some(Pagination::with_limit(1)),
+            None,
         )
         .await
         .unwrap();
@@ -211,6 +218,7 @@ where
             filters,
             Some(MessageSort::Timestamp(SortDirection::Descending)),
             Some(Pagination::new(page1.cursor, Some(1))),
+            None,
         )
         .await
         .unwrap();
@@ -223,6 +231,7 @@ where
             TENANT,
             protocol_filter("https://example.com/protocol/notes"),
             Some(MessageSort::Timestamp(SortDirection::Ascending)),
+            None,
             None,
         )
         .await
@@ -252,7 +261,8 @@ where
             .count(
                 TENANT,
                 protocol_filter("https://example.com/protocol/notes"),
-                None
+                None,
+                None,
             )
             .await
             .unwrap(),
@@ -290,8 +300,17 @@ where
         .unwrap();
 
     let filters = protocol_filter("https://example.com/protocol/notes");
-    assert_eq!(store.count(TENANT, filters.clone(), None).await.unwrap(), 1);
-    let result = store.query(TENANT, filters, None, None).await.unwrap();
+    assert_eq!(
+        store
+            .count(TENANT, filters.clone(), None, None)
+            .await
+            .unwrap(),
+        1
+    );
+    let result = store
+        .query(TENANT, filters, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(result.messages.len(), 1);
     assert_eq!(store.get(TENANT, &cid).await.unwrap(), Some(msg));
 }
@@ -311,8 +330,17 @@ where
     store.clear().await.unwrap();
 
     let filters = protocol_filter("https://example.com/protocol/notes");
-    assert_eq!(store.count(TENANT, filters.clone(), None).await.unwrap(), 0);
-    let result = store.query(TENANT, filters, None, None).await.unwrap();
+    assert_eq!(
+        store
+            .count(TENANT, filters.clone(), None, None)
+            .await
+            .unwrap(),
+        0
+    );
+    let result = store
+        .query(TENANT, filters, None, None, None)
+        .await
+        .unwrap();
     assert!(result.messages.is_empty());
 }
 
@@ -426,4 +454,715 @@ where
 #[tokio::test]
 async fn memory_message_store_conforms_to_store_contract() {
     run_message_stores(|| async { super::memory::MemoryMessageStore::default() }).await;
+}
+
+#[tokio::test]
+async fn memory_message_store_conforms_to_record_limit() {
+    run_record_limit_stores(|| async { super::memory::MemoryMessageStore::default() }).await;
+}
+
+#[tokio::test]
+async fn memory_message_store_orders_ties_by_cid() {
+    run_sort_tie_break_stores(|| async { super::memory::MemoryMessageStore::default() }).await;
+}
+
+// ---- record-limit occupancy battery ----
+//
+// Same assertions on every backend: deterministic winners independent of
+// insertion order, per-group partitioning, pagination and counting over the
+// admitted set, and fail-closed reads. SQLite runs in `dwn-rs-stores`.
+
+const LIMIT_PROTOCOL: &str = "https://example.com/protocol/threads";
+const LIMIT_ROOT_PATH: &str = "thread";
+const LIMIT_NESTED_PATH: &str = "thread/message";
+
+fn limit_day(day: u32) -> String {
+    format!("2025-01-{day:02}T00:00:00.000000Z")
+}
+
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub struct LimitRow {
+    record_id: String,
+    parent_id: Option<String>,
+    context_id: Option<String>,
+    date_created: String,
+    protocol_path: String,
+    latest: bool,
+    tombstone: bool,
+}
+
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub fn limit_row(
+    record_id: &str,
+    parent_id: Option<&str>,
+    context_id: Option<&str>,
+    day: u32,
+    protocol_path: &str,
+) -> LimitRow {
+    LimitRow {
+        record_id: record_id.to_string(),
+        parent_id: parent_id.map(str::to_string),
+        context_id: context_id.map(str::to_string),
+        date_created: limit_day(day),
+        protocol_path: protocol_path.to_string(),
+        latest: true,
+        tombstone: false,
+    }
+}
+
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub fn limit_message(row: &LimitRow) -> Message<Descriptor> {
+    let timestamp = chrono::DateTime::parse_from_rfc3339(&row.date_created)
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let descriptor =
+        Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
+            protocol: LIMIT_PROTOCOL.to_string(),
+            protocol_path: row.protocol_path.clone(),
+            recipient: None,
+            schema: None,
+            tags: None,
+            parent_id: row.parent_id.clone(),
+            data_cid: "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e".to_string(),
+            data_size: 11,
+            date_created: timestamp,
+            message_timestamp: timestamp,
+            published: None,
+            date_published: None,
+            data_format: "text/plain".to_string(),
+            permission_grant_id: None,
+            squash: None,
+        }))));
+    let fields = Fields::Write(WriteFields {
+        record_id: Some(row.record_id.clone()),
+        context_id: row.context_id.clone(),
+        ..Default::default()
+    });
+
+    Message { descriptor, fields }
+}
+
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub fn limit_indexes(row: &LimitRow) -> KeyValues {
+    let mut indexes = BTreeMap::from([
+        (
+            "interface".to_string(),
+            Value::String("Records".to_string()),
+        ),
+        (
+            "method".to_string(),
+            Value::String(if row.tombstone { "Delete" } else { "Write" }.to_string()),
+        ),
+        ("isLatestBaseState".to_string(), Value::Bool(row.latest)),
+        (
+            "protocol".to_string(),
+            Value::String(LIMIT_PROTOCOL.to_string()),
+        ),
+        (
+            "protocolPath".to_string(),
+            Value::String(row.protocol_path.clone()),
+        ),
+        ("recordId".to_string(), Value::String(row.record_id.clone())),
+        (
+            "dateCreated".to_string(),
+            Value::String(row.date_created.clone()),
+        ),
+        (
+            "messageTimestamp".to_string(),
+            Value::String(row.date_created.clone()),
+        ),
+    ]);
+    if let Some(parent_id) = row.parent_id.as_deref() {
+        indexes.insert("parentId".to_string(), Value::String(parent_id.to_string()));
+    }
+    if let Some(context_id) = row.context_id.as_deref() {
+        indexes.insert(
+            "contextId".to_string(),
+            Value::String(context_id.to_string()),
+        );
+    }
+    indexes
+}
+
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub fn write_record_ids(messages: &[Message<Descriptor>]) -> Vec<String> {
+    messages
+        .iter()
+        .map(|message| match &message.fields {
+            Fields::Write(fields) => fields
+                .record_id
+                .clone()
+                .expect("seed rows carry record IDs"),
+            _ => panic!("seed rows are records writes"),
+        })
+        .collect()
+}
+
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub fn limit_policy(
+    protocol_path: &str,
+    max: u64,
+    context_id: Option<&str>,
+    parent_id: Option<Vec<String>>,
+) -> super::RecordLimitOccupancy {
+    super::RecordLimitOccupancy {
+        protocol: LIMIT_PROTOCOL.to_string(),
+        protocol_path: protocol_path.to_string(),
+        context_id: context_id.map(str::to_string),
+        parent_id,
+        max,
+    }
+}
+
+/// Shared with the record-limit reopen test in `dwn-rs-stores`.
+pub fn latest_writes_filter() -> Filters {
+    Filters::from(BTreeMap::from([
+        (
+            FilterKey::Index("interface".to_string()),
+            Filter::Equal(Value::String("Records".to_string())),
+        ),
+        (
+            FilterKey::Index("method".to_string()),
+            Filter::Equal(Value::String("Write".to_string())),
+        ),
+        (
+            FilterKey::Index("isLatestBaseState".to_string()),
+            Filter::Equal(Value::Bool(true)),
+        ),
+    ]))
+}
+
+fn created_sort() -> Option<MessageSort> {
+    Some(MessageSort::DateCreated(SortDirection::Ascending))
+}
+
+async fn seed_limit_store<S, F, Fut>(factory: &F, rows: &[LimitRow]) -> S
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let store = new_message_store(factory).await;
+    for row in rows {
+        store
+            .put(TENANT, limit_message(row), limit_indexes(row))
+            .await
+            .unwrap();
+    }
+    store
+}
+
+/// Runs the record-limit battery against stores returned by `factory`.
+pub async fn run_record_limit_stores<S, F, Fut>(factory: F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    root_admits_oldest_max(&factory).await;
+    ties_break_by_record_id(&factory).await;
+    nested_groups_partition(&factory).await;
+    subtree_policy_fences_candidates(&factory).await;
+    non_live_state_excluded(&factory).await;
+    occupancy_applies_before_caller_filters(&factory).await;
+    invalid_max_and_corrupt_candidates_fail(&factory).await;
+    absent_policy_returns_unprojected(&factory).await;
+}
+
+/// Runs the sort tie-break battery: equal primary keys order by CID in the
+/// requested direction on every backend, with cursors chaining without
+/// duplicates or skips.
+pub async fn run_sort_tie_break_stores<S, F, Fut>(factory: F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    equal_timestamps_order_by_cid(&factory).await;
+}
+
+// Covers: DWN-REC-004
+async fn root_admits_oldest_max<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let policy = limit_policy(LIMIT_ROOT_PATH, 2, None, None);
+    for order in [[1, 2, 3, 4], [4, 3, 2, 1], [3, 1, 4, 2]] {
+        let rows: Vec<LimitRow> = order
+            .into_iter()
+            .map(|day| limit_row(&format!("root-{day}"), None, None, day, LIMIT_ROOT_PATH))
+            .collect();
+        let store = seed_limit_store(factory, &rows).await;
+        let found = store
+            .query(
+                TENANT,
+                latest_writes_filter(),
+                created_sort(),
+                None,
+                Some(policy.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            write_record_ids(&found.messages),
+            vec!["root-1".to_string(), "root-2".to_string()],
+            "insertion order {order:?} must not change the winners"
+        );
+        assert_eq!(
+            store
+                .count(
+                    TENANT,
+                    latest_writes_filter(),
+                    created_sort(),
+                    Some(policy.clone())
+                )
+                .await
+                .unwrap(),
+            2,
+            "count must equal the admitted population"
+        );
+    }
+}
+
+// Covers: DWN-REC-004
+async fn ties_break_by_record_id<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let policy = limit_policy(LIMIT_ROOT_PATH, 2, None, None);
+    for order in [["tie-a", "tie-b", "tie-c"], ["tie-c", "tie-b", "tie-a"]] {
+        let rows: Vec<LimitRow> = order
+            .into_iter()
+            .map(|record_id| limit_row(record_id, None, None, 1, LIMIT_ROOT_PATH))
+            .collect();
+        let store = seed_limit_store(factory, &rows).await;
+        let found = store
+            .query(
+                TENANT,
+                latest_writes_filter(),
+                created_sort(),
+                None,
+                Some(policy.clone()),
+            )
+            .await
+            .unwrap();
+        let mut winners = write_record_ids(&found.messages);
+        winners.sort();
+        assert_eq!(
+            winners,
+            vec!["tie-a".to_string(), "tie-b".to_string()],
+            "equal creation times rank by record ID in insertion order {order:?}"
+        );
+    }
+}
+
+// Covers: DWN-REC-004
+async fn nested_groups_partition<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let rows: Vec<LimitRow> = ["pa", "pb"]
+        .into_iter()
+        .flat_map(|parent| {
+            [1, 2, 3].map(|day| {
+                limit_row(
+                    &format!("{parent}-{day}"),
+                    Some(parent),
+                    None,
+                    day,
+                    LIMIT_NESTED_PATH,
+                )
+            })
+        })
+        .collect();
+    let store = seed_limit_store(factory, &rows).await;
+
+    let wide = limit_policy(LIMIT_NESTED_PATH, 2, None, None);
+    let found = store
+        .query(
+            TENANT,
+            latest_writes_filter(),
+            created_sort(),
+            None,
+            Some(wide.clone()),
+        )
+        .await
+        .unwrap();
+    let mut winners = write_record_ids(&found.messages);
+    winners.sort();
+    assert_eq!(
+        winners,
+        vec![
+            "pa-1".to_string(),
+            "pa-2".to_string(),
+            "pb-1".to_string(),
+            "pb-2".to_string()
+        ],
+        "each direct-parent group keeps its own max"
+    );
+    assert_eq!(
+        store
+            .count(TENANT, latest_writes_filter(), created_sort(), Some(wide))
+            .await
+            .unwrap(),
+        4
+    );
+
+    let scoped = limit_policy(LIMIT_NESTED_PATH, 2, None, Some(vec!["pa".to_string()]));
+    let found = store
+        .query(
+            TENANT,
+            latest_writes_filter(),
+            created_sort(),
+            None,
+            Some(scoped.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        write_record_ids(&found.messages),
+        vec!["pa-1".to_string(), "pa-2".to_string()]
+    );
+    assert_eq!(
+        store
+            .count(TENANT, latest_writes_filter(), created_sort(), Some(scoped))
+            .await
+            .unwrap(),
+        2
+    );
+
+    let empty = limit_policy(LIMIT_NESTED_PATH, 2, None, Some(Vec::new()));
+    let found = store
+        .query(
+            TENANT,
+            latest_writes_filter(),
+            created_sort(),
+            None,
+            Some(empty.clone()),
+        )
+        .await
+        .unwrap();
+    assert!(found.messages.is_empty());
+    assert_eq!(
+        store
+            .count(TENANT, latest_writes_filter(), created_sort(), Some(empty))
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+// Covers: DWN-REC-004
+async fn subtree_policy_fences_candidates<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let rows = [
+        limit_row("in-a1", None, Some("ctx-a/1"), 1, LIMIT_ROOT_PATH),
+        limit_row("in-a2", None, Some("ctx-a/2"), 2, LIMIT_ROOT_PATH),
+        limit_row("out-b1", None, Some("ctx-b/1"), 1, LIMIT_ROOT_PATH),
+    ];
+    let store = seed_limit_store(factory, &rows).await;
+    let policy = limit_policy(LIMIT_ROOT_PATH, 1, Some("ctx-a"), None);
+    let found = store
+        .query(
+            TENANT,
+            latest_writes_filter(),
+            created_sort(),
+            None,
+            Some(policy.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        write_record_ids(&found.messages),
+        vec!["in-a1".to_string()],
+        "candidates outside the policy subtree consume no slots"
+    );
+    assert_eq!(
+        store
+            .count(TENANT, latest_writes_filter(), created_sort(), Some(policy))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+// Covers: DWN-REC-005
+async fn non_live_state_excluded<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let mut rows: Vec<LimitRow> = [1, 2, 3]
+        .into_iter()
+        .map(|day| limit_row(&format!("live-{day}"), None, None, day, LIMIT_ROOT_PATH))
+        .collect();
+    let mut stale = limit_row("stale-0", None, None, 1, LIMIT_ROOT_PATH);
+    stale.date_created = "2024-12-01T00:00:00.000000Z".to_string();
+    stale.latest = false;
+    rows.push(stale);
+    let mut tombstone = limit_row("gone-9", None, None, 1, LIMIT_ROOT_PATH);
+    tombstone.date_created = "2024-01-01T00:00:00.000000Z".to_string();
+    tombstone.tombstone = true;
+    rows.push(tombstone);
+
+    let store = seed_limit_store(factory, &rows).await;
+    let policy = limit_policy(LIMIT_ROOT_PATH, 2, None, None);
+    let found = store
+        .query(
+            TENANT,
+            latest_writes_filter(),
+            created_sort(),
+            None,
+            Some(policy.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        write_record_ids(&found.messages),
+        vec!["live-1".to_string(), "live-2".to_string()],
+        "superseded writes and tombstones never occupy slots"
+    );
+    assert_eq!(
+        store
+            .count(TENANT, latest_writes_filter(), created_sort(), Some(policy))
+            .await
+            .unwrap(),
+        2
+    );
+}
+
+// Covers: DWN-REC-004, DWN-REC-005
+async fn occupancy_applies_before_caller_filters<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let rows: Vec<LimitRow> = [1, 2, 3, 4, 5]
+        .into_iter()
+        .map(|day| limit_row(&format!("w{day}"), None, None, day, LIMIT_ROOT_PATH))
+        .collect();
+    let store = seed_limit_store(factory, &rows).await;
+    let policy = limit_policy(LIMIT_ROOT_PATH, 3, None, None);
+    // w4 and w5 match the caller filter but lost their slots: occupancy wins.
+    let mut caller = latest_writes_filter();
+    for set in caller.set.iter_mut() {
+        set.insert(
+            FilterKey::Index("recordId".to_string()),
+            Filter::OneOf(
+                ["w2", "w3", "w4", "w5"]
+                    .into_iter()
+                    .map(|record_id| Value::String(record_id.to_string()))
+                    .collect(),
+            ),
+        );
+    }
+
+    let count = store
+        .count(TENANT, caller.clone(), created_sort(), Some(policy.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 2,
+        "non-occupants matching the filter are not counted"
+    );
+
+    let mut cursor = None;
+    let mut pages = Vec::new();
+    loop {
+        let page = store
+            .query(
+                TENANT,
+                caller.clone(),
+                created_sort(),
+                Some(Pagination::new(cursor, Some(1))),
+                Some(policy.clone()),
+            )
+            .await
+            .unwrap();
+        pages.extend(write_record_ids(&page.messages));
+        cursor = page.cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(pages, vec!["w2".to_string(), "w3".to_string()]);
+}
+
+// Covers: DWN-REC-004
+async fn invalid_max_and_corrupt_candidates_fail<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let rows: Vec<LimitRow> = [1, 2]
+        .into_iter()
+        .map(|day| limit_row(&format!("r{day}"), None, None, day, LIMIT_ROOT_PATH))
+        .collect();
+    let store = seed_limit_store(factory, &rows).await;
+
+    let zero_max = limit_policy(LIMIT_ROOT_PATH, 0, None, None);
+    assert!(
+        store
+            .query(
+                TENANT,
+                latest_writes_filter(),
+                created_sort(),
+                None,
+                Some(zero_max.clone())
+            )
+            .await
+            .is_err(),
+        "max == 0 must fail rather than widen"
+    );
+    assert!(store
+        .count(
+            TENANT,
+            latest_writes_filter(),
+            created_sort(),
+            Some(zero_max)
+        )
+        .await
+        .is_err());
+
+    let forged_message = limit_message(&limit_row("r9", None, None, 1, LIMIT_ROOT_PATH));
+    let mut forged_indexes = limit_indexes(&limit_row("r9", None, None, 1, LIMIT_ROOT_PATH));
+    forged_indexes.insert("dateCreated".to_string(), Value::Number(42));
+    let forged = new_message_store(factory).await;
+    forged
+        .put(TENANT, forged_message, forged_indexes)
+        .await
+        .unwrap();
+    assert!(
+        forged
+            .query(
+                TENANT,
+                latest_writes_filter(),
+                created_sort(),
+                None,
+                Some(limit_policy(LIMIT_ROOT_PATH, 2, None, None)),
+            )
+            .await
+            .is_err(),
+        "corrupt rank components must fail rather than widen"
+    );
+}
+
+async fn absent_policy_returns_unprojected<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let rows: Vec<LimitRow> = [1, 2, 3]
+        .into_iter()
+        .map(|day| limit_row(&format!("r{day}"), None, None, day, LIMIT_ROOT_PATH))
+        .collect();
+    let store = seed_limit_store(factory, &rows).await;
+    let found = store
+        .query(TENANT, latest_writes_filter(), created_sort(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(found.messages.len(), 3);
+    assert_eq!(
+        store
+            .count(TENANT, latest_writes_filter(), created_sort(), None)
+            .await
+            .unwrap(),
+        3
+    );
+}
+
+// Covers: DWN-REC-004
+async fn equal_timestamps_order_by_cid<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    // Two seed orders: a backend returning insertion order instead of CID
+    // order can match at most one of them, so agreement on both proves the
+    // tie-break rather than coinciding with it.
+    for seed_order in [["tie-a", "tie-b", "tie-c"], ["tie-c", "tie-b", "tie-a"]] {
+        let rows: Vec<LimitRow> = seed_order
+            .into_iter()
+            .map(|record_id| limit_row(record_id, None, None, 1, LIMIT_ROOT_PATH))
+            .collect();
+        let store = seed_limit_store(factory, &rows).await;
+
+        let mut expected: Vec<(String, String)> = rows
+            .iter()
+            .map(|row| {
+                let message = limit_message(row);
+                let cid = message
+                    .cid()
+                    .expect("seed message must have a CID")
+                    .to_string();
+                (cid, row.record_id.clone())
+            })
+            .collect();
+        expected.sort();
+
+        for direction in [SortDirection::Ascending, SortDirection::Descending] {
+            let sort = Some(MessageSort::DateCreated(direction));
+            let mut ordered = expected.clone();
+            if direction == SortDirection::Descending {
+                ordered.reverse();
+            }
+            let found = store
+                .query(TENANT, latest_writes_filter(), sort, None, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                write_record_ids(&found.messages),
+                ordered
+                    .iter()
+                    .map(|(_, record_id)| record_id.clone())
+                    .collect::<Vec<_>>(),
+                "equal timestamps order by CID in {direction:?} on every backend"
+            );
+
+            // Page size 1 across the tie: every page chains, nothing duplicates
+            // or skips, and the concatenated pages equal the full order.
+            let mut cursor = None;
+            let mut paged = Vec::new();
+            loop {
+                let page = store
+                    .query(
+                        TENANT,
+                        latest_writes_filter(),
+                        sort,
+                        Some(Pagination::new(cursor, Some(1))),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                paged.extend(write_record_ids(&page.messages));
+                cursor = page.cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            assert_eq!(
+                paged,
+                ordered
+                    .iter()
+                    .map(|(_, record_id)| record_id.clone())
+                    .collect::<Vec<_>>(),
+                "paged traversal matches full order in {direction:?}"
+            );
+        }
+    }
 }

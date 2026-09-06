@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::{
+    canonical_rfc3339,
     descriptors::RECORDS,
     handlers::records::{
         common::{authorize_protocol_query_or_subscribe, ResolvedProtocolRole},
@@ -226,6 +227,21 @@ where
 
     let mut resolved: Option<ResolvedProtocolRole> = None;
 
+    // The records role check resolves the protocol definition governing the
+    // signed Messages request time, exactly as the Records handlers do.
+    let request_timestamp = match &message.descriptor {
+        Descriptor::Messages(messages) => match messages.as_ref() {
+            crate::descriptors::Messages::Query(descriptor) => {
+                canonical_rfc3339(descriptor.message_timestamp)
+            }
+            crate::descriptors::Messages::Subscribe(descriptor) => {
+                canonical_rfc3339(descriptor.message_timestamp)
+            }
+            _ => return Err(MessageAuthorizationError::ExpectedMessage),
+        },
+        _ => return Err(MessageAuthorizationError::ExpectedMessage),
+    };
+
     for filter in exact_filters {
         let record_filter = message_filters::Records {
             protocol: Some(filter.protocol.to_string()),
@@ -239,6 +255,7 @@ where
             &record_filter,
             auth,
             messages_store,
+            &request_timestamp,
             records_kind,
         )
         .await
@@ -471,7 +488,26 @@ pub(crate) mod tests {
             )
             .await
             .expect("role record must be stored");
-        (store, protocol)
+        (store, messages_request(MessageAuthorizationKind::Query))
+    }
+
+    /// Production-shaped Messages request carrying the signed request time.
+    /// Role authorization resolves policy at this timestamp, so tests must
+    /// pass the real request shape rather than a protocol message stand-in.
+    fn messages_request(kind: MessageAuthorizationKind) -> Message<Descriptor> {
+        let method = match kind {
+            MessageAuthorizationKind::Query => "Query",
+            MessageAuthorizationKind::Subscribe => "Subscribe",
+        };
+        serde_json::from_value(serde_json::json!({
+            "descriptor": {
+                "interface": "Messages",
+                "method": method,
+                "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                "filters": []
+            }
+        }))
+        .expect("messages request must deserialize")
     }
 
     #[test]
@@ -551,13 +587,14 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn role_adapter_authorizes_query_and_subscribe_with_consistent_role_state() {
-        let (store, message) = role_store().await;
+        let (store, _) = role_store().await;
         let filters = [exact_filter("thread/message"), exact_filter("thread/image")];
 
         for kind in [
             MessageAuthorizationKind::Query,
             MessageAuthorizationKind::Subscribe,
         ] {
+            let message = messages_request(kind);
             let authorization = authorize_role(
                 TENANT,
                 &message,

@@ -21,10 +21,10 @@ use crate::descriptors::{
 use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::handlers::records::common::message_cid;
-use crate::interfaces::messages::protocols::{ActionWho, Type};
+use crate::interfaces::messages::protocols::{ActionWho, RecordLimit, Type};
 use crate::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::stores::MessageStore;
-use crate::{Descriptor, Fields, MapValue, Message, ProgressToken, Value};
+use crate::{Descriptor, Fields, MapValue, Message, Pagination, ProgressToken, Value};
 
 #[derive(Clone)]
 pub struct WriteSpec {
@@ -174,11 +174,22 @@ pub async fn signed_records_subscribe_message(
     cursor: Option<ProgressToken>,
     timestamp: &str,
 ) -> serde_json::Value {
+    signed_records_subscribe_with_pagination(filter, cursor, None, timestamp).await
+}
+
+/// Owner-signed subscribe with an explicit pagination envelope, for bounded
+/// initial-page scenarios.
+pub async fn signed_records_subscribe_with_pagination(
+    filter: RecordsFilter,
+    cursor: Option<ProgressToken>,
+    pagination: Option<Pagination>,
+    timestamp: &str,
+) -> serde_json::Value {
     let descriptor = SubscribeDescriptor {
         message_timestamp: parse_time(timestamp),
         filter,
         date_sort: None,
-        pagination: None,
+        pagination,
         cursor,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
@@ -327,6 +338,81 @@ where
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
+/// Installs a protocol with `$recordLimit` rules for record-limit parity
+/// scenarios: at most 2 records at the root `post` path and at most 1 record
+/// per direct parent at the nested `thread/message` path. Actions are empty
+/// exactly like the notes protocol, so owner writes and published reads
+/// behave identically; only occupancy differs. The root path additionally
+/// allows squash writes so squash/occupancy interaction stays testable.
+pub async fn put_limited_threads_protocol<M>(tenant: &str, message_store: &M)
+where
+    M: MessageStore,
+{
+    const PROTOCOL: &str = "http://example.com/limited";
+    let limited = |max: u64| RuleSet {
+        record_limit: Some(RecordLimit {
+            max,
+            strategy: "reject".to_string(),
+        }),
+        ..Default::default()
+    };
+    let text_type = || Type {
+        schema: None,
+        data_formats: Some(vec!["text/plain".to_string()]),
+        encryption_required: None,
+    };
+    let definition = Definition {
+        protocol: PROTOCOL.to_string(),
+        published: false,
+        uses: None,
+        types: BTreeMap::from([
+            ("post".to_string(), text_type()),
+            ("thread".to_string(), text_type()),
+            ("message".to_string(), text_type()),
+        ]),
+        structure: BTreeMap::from([
+            (
+                "post".to_string(),
+                RuleSet {
+                    squash: Some(true),
+                    ..limited(2)
+                },
+            ),
+            (
+                "thread".to_string(),
+                RuleSet {
+                    rules: BTreeMap::from([("message".to_string(), limited(1))]),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    };
+    let descriptor = ConfigureDescriptor {
+        message_timestamp: parse_time("2024-12-31T00:00:00.000000Z"),
+        definition,
+        permission_grant_id: None,
+    };
+    let message = Message {
+        descriptor: Descriptor::Protocols(Box::new(ProtocolsDescriptor::Configure(descriptor))),
+        fields: Fields::Write(WriteFields::default()),
+    };
+    let indexes = BTreeMap::from([
+        (
+            "interface".to_string(),
+            Value::String("Protocols".to_string()),
+        ),
+        ("method".to_string(), Value::String("Configure".to_string())),
+        ("protocol".to_string(), Value::String(PROTOCOL.to_string())),
+        ("published".to_string(), Value::Bool(false)),
+        ("isLatestBaseState".to_string(), Value::Bool(true)),
+        (
+            "messageTimestamp".to_string(),
+            Value::String("2024-12-31T00:00:00.000000Z".to_string()),
+        ),
+    ]);
+    message_store.put(tenant, message, indexes).await.unwrap();
+}
+
 pub async fn signature_for_descriptor(
     descriptor: &serde_json::Value,
     extra_payload: serde_json::Value,
@@ -419,4 +505,19 @@ pub fn test_public_jwk(key_id: &str) -> JWK {
         Some(key_id),
     )
     .unwrap()
+}
+
+/// Fail-closed guard for narrow test doubles that resolve entries by key
+/// without indexes and therefore cannot project occupancy.
+pub fn reject_record_limit(
+    record_limit: Option<&crate::stores::RecordLimitOccupancy>,
+) -> Result<(), crate::errors::MessageStoreError> {
+    if record_limit.is_some() {
+        return Err(crate::errors::MessageStoreError::StoreError(
+            crate::errors::StoreError::InternalException(
+                "test store does not support record-limit policies".to_string(),
+            ),
+        ));
+    }
+    Ok(())
 }

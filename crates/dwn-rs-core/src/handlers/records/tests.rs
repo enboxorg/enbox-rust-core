@@ -17,12 +17,13 @@ use crate::errors::{DataStoreError, MessageStoreError, StoreError};
 use crate::filters::Records as RecordsFilter;
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;
+use crate::stores::occupancy::{is_occupant, occupant_ids_for_rows};
 use crate::stores::replication_feed_reader::build_token;
 use crate::stores::wake::{InProcessWakeBus, Wake, WakeError, WakePublisher};
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
     LatestStateTransition, LatestStateTransitionResult, MessageQueryResult, MessageStore,
-    ReplicationFeedReader, SubscriptionMessage,
+    RecordLimitOccupancy, ReplicationFeedReader, SubscriptionMessage,
 };
 use crate::{
     permissions, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
@@ -2259,10 +2260,31 @@ impl MessageStore for TestMessageStore {
         filters: Filters,
         sort: Option<MessageSort>,
         pagination: Option<Pagination>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> impl Future<Output = Result<MessageQueryResult, MessageStoreError>> + Send {
         let rows = self.rows.clone();
         let tenant = tenant.to_string();
         async move {
+            let occupants = match record_limit {
+                None => None,
+                Some(policy) => match occupant_ids_for_rows(
+                    rows.read()
+                        .unwrap()
+                        .iter()
+                        .map(|row| (row.tenant.as_str(), &row.indexes)),
+                    &tenant,
+                    &policy,
+                ) {
+                    Ok(Some(ids)) => Some(ids),
+                    Ok(None) => {
+                        return Ok(MessageQueryResult {
+                            messages: Vec::new(),
+                            cursor: None,
+                        });
+                    }
+                    Err(detail) => return Err(test_store_error(detail)),
+                },
+            };
             let mut rows = rows
                 .read()
                 .unwrap()
@@ -2272,6 +2294,9 @@ impl MessageStore for TestMessageStore {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
+            if let Some(occupant_ids) = occupants.as_ref() {
+                rows.retain(|row| is_occupant(&row.indexes, occupant_ids));
+            }
             if let Some(sort) = sort {
                 let (property, direction) = match sort {
                     MessageSort::DateCreated(direction) => ("dateCreated", direction),
@@ -2303,9 +2328,10 @@ impl MessageStore for TestMessageStore {
         tenant: &str,
         filters: Filters,
         sort: Option<MessageSort>,
+        record_limit: Option<RecordLimitOccupancy>,
     ) -> Result<u64, MessageStoreError> {
         Ok(self
-            .query(tenant, filters, sort, None)
+            .query(tenant, filters, sort, None, record_limit)
             .await?
             .messages
             .len() as u64)
@@ -2496,4 +2522,745 @@ fn value_string(value: Option<&Value>) -> String {
 
 fn test_store_error(error: String) -> MessageStoreError {
     MessageStoreError::StoreError(StoreError::InternalException(error))
+}
+
+// Covers: DWN-AUTH-005
+#[tokio::test]
+async fn subscribe_delivery_grant_revoked_is_terminal() {
+    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
+    use crate::stores::SubscriptionErrorCode;
+
+    const TENANT: &str = "did:example:alice";
+    const BOB: &str = "did:example:bob";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    // Records.Read grant to bob with far-future expiry: open validates at
+    // request time while delivery validates at now, so the grant must cover
+    // both for the baseline to establish.
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2030-01-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
+    let grant = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        recipient: Some(BOB.to_string()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String("http://example.com/notes".to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+        data_size: grant_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let grant_id = grant["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(TENANT, &grant, Some(grant_data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let filter = RecordsFilter {
+        protocol: Some("http://example.com/notes".to_string()),
+        protocol_path: Some("note".to_string()),
+        ..Default::default()
+    };
+    let request =
+        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
+    let message: Message<Descriptor> =
+        serde_json::from_value(request).expect("subscribe request must deserialize");
+    let auth_ctx = crate::permissions::AuthorizationContext {
+        signer: BOB.to_string(),
+        author: BOB.to_string(),
+        payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
+            crate::auth::jws::AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: Some(grant_id.clone()),
+                permission_grant_ids: None,
+                protocol_role: None,
+            },
+        ),
+        permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::Single(
+            grant_id.clone(),
+        ),
+        author_delegated_grant: None,
+    };
+    let auth = DeliveryAuthorization {
+        message,
+        filter,
+        auth_ctx,
+        grant_valid_at_open: true,
+        role_invoked: false,
+        request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+    };
+
+    authorize_records_delivery(TENANT, &auth, &message_store)
+        .await
+        .expect("live grant must authorize delivery");
+
+    let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
+    let revocation = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        parent_id: Some(grant_id.clone()),
+        parent_context_id: Some(grant_id.clone()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String("http://example.com/notes".to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
+        data_size: revoke_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:04:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(
+                TENANT,
+                &revocation,
+                Some(revoke_data)
+            ))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let error = authorize_records_delivery(TENANT, &auth, &message_store)
+        .await
+        .expect_err("revoked grant must fail delivery");
+    assert_eq!(
+        error.code,
+        SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
+    );
+}
+
+// Covers: DWN-AUTH-005
+#[tokio::test]
+async fn subscribe_delivery_expired_grant_is_terminal() {
+    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
+    use crate::stores::SubscriptionErrorCode;
+
+    const TENANT: &str = "did:example:alice";
+    const BOB: &str = "did:example:bob";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    // Expired after the request but before delivery: valid at open (request
+    // time), terminal at now. Fixed past dates keep this deterministic.
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-06-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
+    let grant = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        recipient: Some(BOB.to_string()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String("http://example.com/notes".to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
+        data_size: grant_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let grant_id = grant["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        handler
+            .run(MethodHandlerRequest::new(TENANT, &grant, Some(grant_data)))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let filter = RecordsFilter {
+        protocol: Some("http://example.com/notes".to_string()),
+        protocol_path: Some("note".to_string()),
+        ..Default::default()
+    };
+    let request =
+        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
+    let message: Message<Descriptor> =
+        serde_json::from_value(request).expect("subscribe request must deserialize");
+    let auth = DeliveryAuthorization {
+        message,
+        filter,
+        auth_ctx: crate::permissions::AuthorizationContext {
+            signer: BOB.to_string(),
+            author: BOB.to_string(),
+            payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
+                crate::auth::jws::AuthorizationPayloadData {
+                    descriptor_cid: String::new(),
+                    delegated_grant_id: None,
+                    permission_grant_id: Some(grant_id.clone()),
+                    permission_grant_ids: None,
+                    protocol_role: None,
+                },
+            ),
+            permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::Single(
+                grant_id,
+            ),
+            author_delegated_grant: None,
+        },
+        grant_valid_at_open: true,
+        role_invoked: false,
+        request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+    };
+
+    let error = authorize_records_delivery(TENANT, &auth, &message_store)
+        .await
+        .expect_err("expired grant must fail delivery");
+    assert_eq!(
+        error.code,
+        SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
+    );
+}
+
+// Covers: DWN-AUTH-005, DWN-REC-004
+#[tokio::test]
+async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
+    use super::subscribe::RecordsEventLogSubscribeHandler;
+
+    const TENANT: &str = "did:example:alice";
+    const LIMITED: &str = "http://example.com/limited";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    message_store.open().await.unwrap();
+    let mut data_store = TestDataStore::default();
+    data_store.open().await.unwrap();
+    crate::testing::put_limited_threads_protocol(TENANT, &message_store).await;
+
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    async fn write_post(
+        handler: &RecordsWriteHandler<MemoryMessageStore, TestDataStore>,
+        day: &str,
+    ) -> String {
+        let timestamp = format!("2025-01-{day}T00:00:00.000000Z");
+        let data = Bytes::from(format!("limited-post-{day}").into_bytes());
+        let message = signed_write_message(WriteSpec {
+            protocol: "http://example.com/limited".to_string(),
+            protocol_path: "post".to_string(),
+            data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_size: data.len() as u64,
+            published: Some(true),
+            timestamp: timestamp.clone(),
+            date_created: timestamp.clone(),
+            ..WriteSpec::new(&timestamp)
+        })
+        .await;
+        let record_id = message["recordId"].as_str().unwrap().to_string();
+        assert_eq!(
+            handler
+                .run(MethodHandlerRequest::new(TENANT, &message, Some(data)))
+                .await
+                .status
+                .code,
+            202
+        );
+        record_id
+    }
+
+    let first = write_post(&write_handler, "01").await;
+    write_post(&write_handler, "02").await;
+    write_post(&write_handler, "03").await;
+
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
+    let delivered = Arc::new(RwLock::new(Vec::new()));
+    let delivered_for_listener = delivered.clone();
+    let handler = RecordsEventLogSubscribeHandler::new(
+        message_store.clone(),
+        event_log,
+        Some(Arc::new(test_resolver())),
+    );
+    let request = signed_records_subscribe_message(
+        RecordsFilter {
+            protocol: Some(LIMITED.to_string()),
+            protocol_path: Some("post".to_string()),
+            ..Default::default()
+        },
+        None,
+        "2025-01-01T00:10:00.000000Z",
+    )
+    .await;
+    let result = handler
+        .handle_subscribe(
+            TENANT,
+            &request,
+            Box::new(move |message| delivered_for_listener.write().unwrap().push(message)),
+        )
+        .await;
+    assert_eq!(result.reply.status.code, 200);
+    assert_eq!(result.reply.reply.entries.as_ref().unwrap().len(), 2);
+
+    // A live non-occupant must be suppressed without closing the stream.
+    let fourth_data = Bytes::from_static(b"limited-post-04");
+    let fourth = signed_write_message(WriteSpec {
+        protocol: LIMITED.to_string(),
+        protocol_path: "post".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&fourth_data).to_string(),
+        data_size: fourth_data.len() as u64,
+        published: Some(true),
+        timestamp: "2025-01-04T00:00:00.000000Z".to_string(),
+        date_created: "2025-01-04T00:00:00.000000Z".to_string(),
+        ..WriteSpec::new("2025-01-04T00:00:00.000000Z")
+    })
+    .await;
+    let fourth_message: Message<Descriptor> =
+        serde_json::from_value(fourth).expect("live write must deserialize");
+    let fourth_indexes =
+        records_write_indexes(&fourth_message, TENANT, true).expect("live indexes must build");
+    message_store
+        .put(TENANT, fourth_message, fourth_indexes)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        delivered.read().unwrap().is_empty(),
+        "non-occupant live write must be suppressed"
+    );
+
+    // Deleting the oldest occupant changes nothing about suppression, but the
+    // tombstone event itself must still be delivered: the stream is alive.
+    let delete = signed_delete_message(&first, false, "2025-01-05T00:00:00.000000Z").await;
+    assert_eq!(
+        delete_handler
+            .run(MethodHandlerRequest::new(TENANT, &delete, None))
+            .await
+            .status
+            .code,
+        202
+    );
+    for _ in 0..500 {
+        if !delivered.read().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let delivered = delivered.read().unwrap();
+    assert_eq!(delivered.len(), 1, "tombstone event must be delivered");
+    assert!(matches!(delivered[0], SubscriptionMessage::Event { .. }));
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-002
+#[tokio::test]
+async fn subscribe_nested_without_scope_rejected_unless_bounded() {
+    use super::subscribe::RecordsSubscribeHandler;
+
+    const TENANT: &str = "did:example:alice";
+    const NESTED: &str = "thread/message";
+
+    async fn status(
+        handler: &RecordsSubscribeHandler<TestMessageStore>,
+        filter: RecordsFilter,
+        pagination: Option<Pagination>,
+    ) -> i32 {
+        let request = signed_records_subscribe_with_pagination(
+            filter,
+            None,
+            pagination,
+            "2025-01-01T00:10:00.000000Z",
+        )
+        .await;
+        handler
+            .run(MethodHandlerRequest::new(TENANT, &request, None))
+            .await
+            .status
+            .code
+    }
+
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+    let handler = RecordsSubscribeHandler::new(message_store, Some(Arc::new(test_resolver())));
+
+    let unscoped = RecordsFilter {
+        protocol: Some("https://example.com/protocol/chat".to_string()),
+        protocol_path: Some(NESTED.to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        status(&handler, unscoped.clone(), None).await,
+        400,
+        "unbounded nested subscribe without scope must fail"
+    );
+    assert_eq!(
+        status(&handler, unscoped, Some(Pagination::with_limit(2))).await,
+        200,
+        "bounded path-wide subscribe may omit scope"
+    );
+
+    let scoped = RecordsFilter {
+        protocol: Some("https://example.com/protocol/chat".to_string()),
+        protocol_path: Some(NESTED.to_string()),
+        parent_id: Some("thread-1".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        status(&handler, scoped, None).await,
+        200,
+        "parent-scoped nested subscribe needs no exception"
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-002
+#[tokio::test]
+async fn event_log_subscribe_nested_without_scope_rejected_unless_bounded() {
+    const TENANT: &str = "did:example:alice";
+
+    let wake_bus = InProcessWakeBus::new();
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    let event_log = DurableEventLog::new(message_store.clone(), wake_bus, None, None);
+    let handler = RecordsEventLogSubscribeHandler::new(
+        message_store,
+        event_log,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let unscoped = RecordsFilter {
+        protocol: Some("https://example.com/protocol/chat".to_string()),
+        protocol_path: Some("thread/message".to_string()),
+        ..Default::default()
+    };
+    let unbounded = signed_records_subscribe_with_pagination(
+        unscoped.clone(),
+        None,
+        None,
+        "2025-01-01T00:10:00.000000Z",
+    )
+    .await;
+    assert_eq!(
+        handler
+            .handle_subscribe(TENANT, &unbounded, Box::new(|_| {}))
+            .await
+            .reply
+            .status
+            .code,
+        400,
+        "unbounded nested subscribe without scope must fail"
+    );
+    let bounded = signed_records_subscribe_with_pagination(
+        unscoped,
+        None,
+        Some(Pagination::with_limit(2)),
+        "2025-01-01T00:10:00.000000Z",
+    )
+    .await;
+    assert_eq!(
+        handler
+            .handle_subscribe(TENANT, &bounded, Box::new(|_| {}))
+            .await
+            .reply
+            .status
+            .code,
+        200,
+        "bounded path-wide subscribe may omit scope"
+    );
+}
+
+// Covers: DWN-REC-005
+#[tokio::test]
+async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
+    const TENANT: &str = "did:example:alice";
+
+    /// Blocks snapshot queries behind a gate so a write can land
+    /// deterministically between subscription registration and the snapshot
+    /// read. Puts pass straight through.
+    #[derive(Clone)]
+    struct GatedMessageStore {
+        inner: MemoryMessageStore,
+        entered: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl MessageStore for GatedMessageStore {
+        async fn open(&mut self) -> Result<(), MessageStoreError> {
+            self.inner.open().await
+        }
+
+        async fn close(&mut self) {}
+
+        async fn put<D>(
+            &self,
+            tenant: &str,
+            message: Message<D>,
+            indexes: KeyValues,
+        ) -> Result<(), MessageStoreError>
+        where
+            D: crate::descriptors::MessageDescriptor + Send,
+            Message<Descriptor>: From<Message<D>>,
+        {
+            self.inner.put(tenant, message, indexes).await
+        }
+
+        async fn get(
+            &self,
+            tenant: &str,
+            cid: &str,
+        ) -> Result<Option<Message<Descriptor>>, MessageStoreError> {
+            self.inner.get(tenant, cid).await
+        }
+
+        async fn query(
+            &self,
+            tenant: &str,
+            filters: Filters,
+            sort: Option<MessageSort>,
+            pagination: Option<Pagination>,
+            record_limit: Option<RecordLimitOccupancy>,
+        ) -> Result<MessageQueryResult, MessageStoreError> {
+            self.entered.store(true, Ordering::SeqCst);
+            while !self.release.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            self.inner
+                .query(tenant, filters, sort, pagination, record_limit)
+                .await
+        }
+
+        async fn count(
+            &self,
+            tenant: &str,
+            filters: Filters,
+            sort: Option<MessageSort>,
+            record_limit: Option<RecordLimitOccupancy>,
+        ) -> Result<u64, MessageStoreError> {
+            self.inner.count(tenant, filters, sort, record_limit).await
+        }
+
+        async fn delete(&self, tenant: &str, cid: &str) -> Result<(), MessageStoreError> {
+            self.inner.delete(tenant, cid).await
+        }
+
+        async fn clear(&self) -> Result<(), MessageStoreError> {
+            self.inner.clear().await
+        }
+    }
+
+    impl crate::stores::ReplicationFeedReader for GatedMessageStore {
+        async fn log_read(
+            &self,
+            tenant: &str,
+            options: EventLogReadOptions,
+        ) -> Result<crate::stores::EventLogReadResult, crate::errors::EventLogError> {
+            self.inner.log_read(tenant, options).await
+        }
+
+        async fn log_bounds(
+            &self,
+            tenant: &str,
+        ) -> Result<
+            Option<crate::stores::replication_feed_reader::ReplicationBounds>,
+            crate::errors::EventLogError,
+        > {
+            self.inner.log_bounds(tenant).await
+        }
+
+        async fn fingerprint(
+            &self,
+            tenant: &str,
+            scopes: &[String],
+        ) -> Result<crate::stores::replication_feed_reader::Fingerprint, crate::errors::EventLogError>
+        {
+            self.inner.fingerprint(tenant, scopes).await
+        }
+
+        async fn epoch(&self) -> Result<String, crate::errors::EventLogError> {
+            self.inner.epoch().await
+        }
+    }
+
+    async fn put_note(store: &MemoryMessageStore, record_id: &str, timestamp: &str) {
+        let data = Bytes::from(format!("gated-{record_id}").into_bytes());
+        let message: Message<Descriptor> = serde_json::from_value(
+            signed_write_message(WriteSpec {
+                protocol: "http://example.com/notes".to_string(),
+                protocol_path: "note".to_string(),
+                record_id: Some(record_id.to_string()),
+                data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+                data_size: data.len() as u64,
+                published: Some(true),
+                timestamp: timestamp.to_string(),
+                date_created: timestamp.to_string(),
+                ..WriteSpec::new(timestamp)
+            })
+            .await,
+        )
+        .expect("seed note must deserialize");
+        let indexes = records_write_indexes(&message, TENANT, true).expect("indexes must build");
+        store.put(TENANT, message, indexes).await.unwrap();
+    }
+
+    let wake_bus = InProcessWakeBus::new();
+    let inner = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    let mut gated = GatedMessageStore {
+        inner,
+        entered: Arc::new(AtomicBool::new(false)),
+        release: Arc::new(AtomicBool::new(true)),
+    };
+    gated.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &gated).await;
+    put_note(&gated.inner, "gated-a", "2025-01-01T00:01:00.000000Z").await;
+
+    // Freeze snapshot queries, then open the subscription: its listener is
+    // registered before any snapshot can run.
+    gated.release.store(false, Ordering::SeqCst);
+    let event_log = DurableEventLog::new(gated.clone(), wake_bus, None, None);
+    let handler = RecordsEventLogSubscribeHandler::new(
+        gated.clone(),
+        event_log,
+        Some(Arc::new(test_resolver())),
+    );
+    let request = Arc::new(
+        signed_records_subscribe_message(
+            RecordsFilter {
+                protocol: Some("http://example.com/notes".to_string()),
+                ..Default::default()
+            },
+            None,
+            "2025-01-01T00:10:00.000000Z",
+        )
+        .await,
+    );
+    let task_request = request.clone();
+    let task = tokio::spawn(async move {
+        handler
+            .handle_subscribe(TENANT, &task_request, Box::new(|_| {}))
+            .await
+    });
+    for _ in 0..500 {
+        if gated.entered.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        gated.entered.load(Ordering::SeqCst),
+        "snapshot query must block on the gate"
+    );
+
+    // Land record B while the snapshot is frozen, then release it.
+    put_note(&gated.inner, "gated-b", "2025-01-01T00:02:00.000000Z").await;
+    gated.release.store(true, Ordering::SeqCst);
+    let result = task.await.expect("subscribe task must complete");
+    assert_eq!(result.reply.status.code, 200);
+    let entries = result.reply.reply.entries.expect("snapshot entries");
+    let ids: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| {
+            serde_json::to_value(entry).unwrap()["recordId"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        ids.contains(&"gated-b".to_string()),
+        "write landing mid-setup must appear in the snapshot (duplicates allowed, misses forbidden): {ids:?}"
+    );
+}
+
+// Covers: DWN-AUTH-002, DWN-AUTH-005
+#[tokio::test]
+async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
+    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
+    use crate::stores::SubscriptionErrorCode;
+
+    const TENANT: &str = "did:example:alice";
+    const BOB: &str = "did:example:bob";
+
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+
+    // Delegated grant covering notes reads, expired after the request but
+    // before delivery: valid at open (request time), terminal at now.
+    // Fixed past dates keep this deterministic.
+    let grant = crate::permissions::PermissionGrant {
+        id: "delegated-grant-1".to_string(),
+        grantor: TENANT.to_string(),
+        grantee: BOB.to_string(),
+        date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
+        date_expires: parse_time("2025-06-01T00:00:00.000000Z"),
+        delegated: Some(true),
+        scope: crate::permissions::PermissionScope::Records(crate::permissions::RecordsScope {
+            method: crate::permissions::RecordsMethod::Read,
+            protocol: "http://example.com/notes".to_string(),
+            selector: None,
+        }),
+        conditions: None,
+        connect_session: None,
+    };
+    let filter = RecordsFilter {
+        protocol: Some("http://example.com/notes".to_string()),
+        protocol_path: Some("note".to_string()),
+        ..Default::default()
+    };
+    let request =
+        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
+    let message: Message<Descriptor> =
+        serde_json::from_value(request).expect("subscribe request must deserialize");
+    let auth = DeliveryAuthorization {
+        message,
+        filter,
+        auth_ctx: crate::permissions::AuthorizationContext {
+            signer: BOB.to_string(),
+            author: TENANT.to_string(),
+            payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
+                crate::auth::jws::AuthorizationPayloadData {
+                    descriptor_cid: String::new(),
+                    delegated_grant_id: Some("delegated-grant-1".to_string()),
+                    permission_grant_id: None,
+                    permission_grant_ids: None,
+                    protocol_role: None,
+                },
+            ),
+            permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
+            author_delegated_grant: Some(grant),
+        },
+        grant_valid_at_open: true,
+        role_invoked: false,
+        request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+    };
+
+    let error = authorize_records_delivery(TENANT, &auth, &message_store)
+        .await
+        .expect_err("expired delegated grant must fail delivery");
+    assert_eq!(
+        error.code,
+        SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
+    );
 }

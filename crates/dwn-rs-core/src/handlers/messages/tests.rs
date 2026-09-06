@@ -979,7 +979,11 @@ impl MessageStore for TestMessageStore {
         filters: crate::filters::Filters,
         _sort: Option<crate::MessageSort>,
         _pagination: Option<crate::Pagination>,
+        record_limit: Option<crate::stores::RecordLimitOccupancy>,
     ) -> Result<MessageQueryResult, MessageStoreError> {
+        // This double resolves entries by key without indexes, so it cannot
+        // project occupancy. Fail closed rather than return unprojected rows.
+        crate::testing::reject_record_limit(record_limit.as_ref())?;
         let record_id = filters.into_iter().find_map(|filter| {
             filter
                 .get(&crate::filters::FilterKey::Index("recordId".to_string()))
@@ -1009,7 +1013,9 @@ impl MessageStore for TestMessageStore {
         _tenant: &str,
         _filters: crate::filters::Filters,
         _sort: Option<crate::MessageSort>,
+        record_limit: Option<crate::stores::RecordLimitOccupancy>,
     ) -> Result<u64, MessageStoreError> {
+        crate::testing::reject_record_limit(record_limit.as_ref())?;
         Ok(0)
     }
 
