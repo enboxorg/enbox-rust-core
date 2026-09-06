@@ -7,9 +7,9 @@ This repository is migrating the inherited `dwn-rs` codebase into the native Enb
 The supported Rust toolchain is pinned in `rust-toolchain.toml`:
 
 ```bash
-cargo +1.89.0 fmt --all -- --check
-cargo +1.89.0 clippy --workspace --all-targets
-cargo +1.89.0 test --workspace
+cargo +1.98.1 fmt --all -- --check
+cargo +1.98.1 clippy --workspace --all-targets
+cargo +1.98.1 test --workspace
 ```
 
 CI runs the same format, lint, and test checks as local development, including `cargo test --workspace`. Run the full test command locally when changing Rust behavior.
@@ -28,9 +28,9 @@ CI runs the same format, lint, and test checks as local development, including `
 Before pushing a change, run the checks that match the CI workflow:
 
 ```bash
-cargo +1.89.0 fmt --all -- --check
-cargo +1.89.0 clippy --workspace --all-targets
-cargo +1.89.0 test --workspace
+cargo +1.98.1 fmt --all -- --check
+cargo +1.98.1 clippy --workspace --all-targets
+cargo +1.98.1 test --workspace
 ```
 
 For conformance fixture changes, also run the relevant optional TypeScript runner when `ENBOX_TS_ROOT` is available:
