@@ -346,7 +346,7 @@ mod tests {
     use crate::descriptors::{
         DeleteDescriptor, MessagesQueryDescriptor, Records, RecordsWriteDescriptor,
     };
-    use crate::dwn::{Handler, MethodHandlerRequest};
+    use crate::dwn::Handler;
     use crate::errors::{EventLogError, MessageStoreError, StoreError};
     use crate::events::stream::MessageEvent;
     use crate::fields::WriteFields;
@@ -680,9 +680,7 @@ mod tests {
         cids_only: Option<bool>,
     ) -> Response<replies::messages::Query> {
         let msg = signed_query_message(filters, cursor, cids_only).await;
-        handler
-            .run(MethodHandlerRequest::new(TENANT, &msg, None))
-            .await
+        handler.run(TENANT, &msg, None).await
     }
 
     // -- Token / message builders -------------------------------------------
@@ -1535,9 +1533,7 @@ mod tests {
                 "messageTimestamp": "2025-06-01T00:00:00.000000Z",
             },
         });
-        let reply = handler
-            .run(MethodHandlerRequest::new(TENANT, &msg, None))
-            .await;
+        let reply = handler.run(TENANT, &msg, None).await;
         assert_eq!(reply.status.code, 400);
     }
 
@@ -1552,9 +1548,7 @@ mod tests {
             },
             "authorization": { "signature": { "payload": "bad", "signatures": [] } },
         });
-        let reply = handler
-            .run(MethodHandlerRequest::new(TENANT, &msg, None))
-            .await;
+        let reply = handler.run(TENANT, &msg, None).await;
         assert!(
             reply.status.code == 400 || reply.status.code == 401,
             "expected 400 or 401, got {}",
@@ -1567,13 +1561,7 @@ mod tests {
         // Use a different tenant so the owner check fails and no grant/role is present.
         let handler = handler_with_reader(MockReader::with_read(Ok(EventLogReadResult::default())));
         let msg = signed_query_message(vec![], None, None).await;
-        let reply = handler
-            .run(MethodHandlerRequest::new(
-                "did:example:other-tenant",
-                &msg,
-                None,
-            ))
-            .await;
+        let reply = handler.run("did:example:other-tenant", &msg, None).await;
         assert_eq!(reply.status.code, 401);
     }
 

@@ -160,15 +160,17 @@ pub trait Handler: Send + Sync {
         ctx: HandlerContext<'_, Self::Descriptor>,
     ) -> impl Future<Output = Response<Self::Reply>> + Send;
 
-    /// Run this typed handler from an untyped dispatch request.
+    /// Run this typed handler from wire JSON.
     ///
     /// Post-admission: dispatch already ran `admit_message`, so this parses and downcasts.
     fn run(
         &self,
-        request: MethodHandlerRequest<'_>,
+        tenant: &str,
+        message: &Value,
+        data: Option<bytes::Bytes>,
     ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
-            let message = match parse_message(request.message) {
+            let message = match parse_message(message) {
                 Ok(message) => message,
                 Err(error) => return ingress_rejection(error),
             };
@@ -181,10 +183,10 @@ pub trait Handler: Send + Sync {
             };
 
             self.handle(HandlerContext {
-                tenant: request.tenant,
+                tenant,
                 message,
                 descriptor,
-                data: request.data,
+                data,
             })
             .await
         }
@@ -217,7 +219,10 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
         // The dispatch registry is `Arc<dyn MethodHandler>`, so this is the single boundary where
         // the handler's `impl Future` is boxed into a `Send` trait object.
         Box::pin(async move {
-            let Response { status, reply } = self.0.run(request).await;
+            let Response { status, reply } = self
+                .0
+                .run(request.tenant, request.message, request.data)
+                .await;
 
             Response {
                 status,

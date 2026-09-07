@@ -13,7 +13,7 @@ use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
 };
-use crate::dwn::{Dwn, Handler, MethodHandlerRequest};
+use crate::dwn::{Dwn, Handler};
 use crate::fields::WriteFields;
 use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
 use crate::handlers::query::ProtocolsQueryHandler;
@@ -55,7 +55,7 @@ async fn protocols_configure_stores_latest_base_state() {
 
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new("did:example:alice", &older, None))
+            .run("did:example:alice", &older, None)
             .await
             .status
             .code,
@@ -63,7 +63,7 @@ async fn protocols_configure_stores_latest_base_state() {
     );
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new("did:example:alice", &newer, None))
+            .run("did:example:alice", &newer, None)
             .await
             .status
             .code,
@@ -71,7 +71,7 @@ async fn protocols_configure_stores_latest_base_state() {
     );
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new("did:example:alice", &newer, None))
+            .run("did:example:alice", &newer, None)
             .await
             .status
             .code,
@@ -112,11 +112,7 @@ async fn protocols_configure_duplicate_preserves_feed_identity() {
 
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &configure,
-                None
-            ))
+            .run("did:example:alice", &configure, None)
             .await
             .status
             .code,
@@ -127,11 +123,7 @@ async fn protocols_configure_duplicate_preserves_feed_identity() {
     // Covers: DWN-REC-003, DWN-PROTO-004
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &configure,
-                None
-            ))
+            .run("did:example:alice", &configure, None)
             .await
             .status
             .code,
@@ -172,11 +164,7 @@ async fn protocols_configure_arrival_orders_converge_and_retain_history() {
         for configure in order {
             assert_eq!(
                 handler
-                    .run(MethodHandlerRequest::new(
-                        "did:example:alice",
-                        &configure,
-                        None
-                    ))
+                    .run("did:example:alice", &configure, None)
                     .await
                     .status
                     .code,
@@ -231,7 +219,7 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
     .await;
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new("did:example:alice", &older, None))
+            .run("did:example:alice", &older, None)
             .await
             .status
             .code,
@@ -241,7 +229,7 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
     message_store.fail_next_transition();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new("did:example:alice", &newer, None))
+            .run("did:example:alice", &newer, None)
             .await
             .status
             .code,
@@ -296,13 +284,7 @@ async fn protocols_query_with_empty_authorization_is_rejected_at_ingress() {
     let mut message = unsigned_query_message(None);
     message["authorization"] = serde_json::json!({});
 
-    let reply = query_handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &message,
-            None,
-        ))
-        .await;
+    let reply = query_handler.run("did:example:alice", &message, None).await;
 
     assert_eq!(reply.status.code, 400);
     assert!(
@@ -321,7 +303,7 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
     let query_handler = ProtocolsQueryHandler::new(message_store.clone(), None);
 
     configure_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/public",
@@ -330,10 +312,10 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
             )
             .await,
             None,
-        ))
+        )
         .await;
     configure_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
@@ -342,15 +324,11 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
             )
             .await,
             None,
-        ))
+        )
         .await;
 
     let reply = query_handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &unsigned_query_message(None),
-            None,
-        ))
+        .run("did:example:alice", &unsigned_query_message(None), None)
         .await;
     assert_eq!(reply.status.code, 200);
     let body = serde_json::to_value(&reply.reply).unwrap();
@@ -372,7 +350,7 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
         ProtocolsQueryHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     configure_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
@@ -381,15 +359,15 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
             )
             .await,
             None,
-        ))
+        )
         .await;
 
     let reply = query_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_query_message(None, test_signer_with_key_id("did:example:alice#key1")).await,
             None,
-        ))
+        )
         .await;
     assert_eq!(reply.status.code, 200);
     let body = serde_json::to_value(&reply.reply).unwrap();
@@ -413,7 +391,7 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
     );
 
     configure_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/public",
@@ -422,10 +400,10 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
             )
             .await,
             None,
-        ))
+        )
         .await;
     configure_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
@@ -434,15 +412,15 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
             )
             .await,
             None,
-        ))
+        )
         .await;
 
     let reply = query_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_query_message(None, test_signer_with_key_id("did:example:bob#key1")).await,
             None,
-        ))
+        )
         .await;
     assert_eq!(reply.status.code, 200);
     let body = serde_json::to_value(&reply.reply).unwrap();
@@ -466,7 +444,7 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
     );
 
     configure_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/private",
@@ -475,7 +453,7 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
             )
             .await,
             None,
-        ))
+        )
         .await;
     put_protocols_query_grant(
         "did:example:alice",
@@ -486,7 +464,7 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
     .await;
 
     let reply = query_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_query_message_with_grant(
                 Some("http://example.com/private"),
@@ -495,7 +473,7 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
             )
             .await,
             None,
-        ))
+        )
         .await;
     assert_eq!(reply.status.code, 200);
     let body = serde_json::to_value(&reply.reply).unwrap();
@@ -521,13 +499,7 @@ async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
     message["descriptor"]["definition"]["protocol"] =
         serde_json::Value::String("http://example.com/tampered".to_string());
 
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &message,
-            None,
-        ))
-        .await;
+    let reply = handler.run("did:example:alice", &message, None).await;
     assert_eq!(reply.status.code, 400);
 }
 
@@ -539,7 +511,7 @@ async fn protocols_configure_rejects_non_tenant_signer() {
         ProtocolsConfigureHandler::new(message_store, Some(Arc::new(test_resolver_with_bob())));
 
     let reply = handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message_with_signer(
                 "http://example.com/protocol",
@@ -549,7 +521,7 @@ async fn protocols_configure_rejects_non_tenant_signer() {
             )
             .await,
             None,
-        ))
+        )
         .await;
     assert_eq!(reply.status.code, 401);
 }
@@ -562,7 +534,7 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
         ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/versioned",
@@ -571,10 +543,10 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
             )
             .await,
             None,
-        ))
+        )
         .await;
     handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &signed_configure_message(
                 "http://example.com/versioned",
@@ -583,7 +555,7 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
             )
             .await,
             None,
-        ))
+        )
         .await;
 
     let historical = fetch_protocol_definition(
@@ -620,11 +592,7 @@ async fn protocols_configure_validates_composition_dependencies() {
     .await;
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &missing_dependency,
-                None
-            ))
+            .run("did:example:alice", &missing_dependency, None)
             .await
             .status
             .code,
@@ -633,11 +601,11 @@ async fn protocols_configure_validates_composition_dependencies() {
 
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
+            .run(
                 "did:example:alice",
                 &signed_configure_descriptor(base_thread_descriptor()).await,
                 None,
-            ))
+            )
             .await
             .status
             .code,
@@ -645,7 +613,7 @@ async fn protocols_configure_validates_composition_dependencies() {
     );
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
+            .run(
                 "did:example:alice",
                 &signed_configure_descriptor(composed_descriptor(
                     "http://example.com/composed",
@@ -653,7 +621,7 @@ async fn protocols_configure_validates_composition_dependencies() {
                 ))
                 .await,
                 None,
-            ))
+            )
             .await
             .status
             .code,
@@ -661,7 +629,7 @@ async fn protocols_configure_validates_composition_dependencies() {
     );
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
+            .run(
                 "did:example:alice",
                 &signed_configure_descriptor(composed_descriptor(
                     "http://example.com/composed-invalid-role",
@@ -669,7 +637,7 @@ async fn protocols_configure_validates_composition_dependencies() {
                 ))
                 .await,
                 None,
-            ))
+            )
             .await
             .status
             .code,

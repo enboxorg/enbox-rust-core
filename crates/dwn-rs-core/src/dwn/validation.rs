@@ -373,7 +373,7 @@ mod ingress_tests {
 
     use super::*;
     use crate::descriptors::records::{QueryDescriptor, RecordsMethod};
-    use crate::dwn::{Dwn, Handler, HandlerContext, MethodHandlerRequest};
+    use crate::dwn::{Dwn, Handler, HandlerContext};
     use crate::fields::Fields;
     use crate::testing::{
         signed_write_message, unsigned_count_message, unsigned_query_message,
@@ -503,7 +503,7 @@ mod ingress_tests {
 
         VALIDATE_MESSAGE_CALLS.with(|calls| calls.set(0));
         let reply = AdmittedQueryHandler::default()
-            .run(MethodHandlerRequest::new(TENANT, &raw, None))
+            .run(TENANT, &raw, None)
             .await;
 
         assert_eq!(reply.status.code, 200);
