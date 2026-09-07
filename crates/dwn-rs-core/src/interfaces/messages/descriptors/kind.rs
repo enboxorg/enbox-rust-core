@@ -6,7 +6,8 @@
 use crate::descriptors::messages::MessagesMethod;
 use crate::descriptors::protocols::ProtocolsMethod;
 use crate::descriptors::records::RecordsMethod;
-use crate::descriptors::ConcreteDescriptor;
+use crate::descriptors::{ConcreteDescriptor, MessageDescriptor};
+use crate::Descriptor;
 
 pub const RECORDS: &str = "Records";
 pub const PROTOCOLS: &str = "Protocols";
@@ -116,6 +117,13 @@ impl MessageKind {
 
     pub fn of<D: ConcreteDescriptor>() -> Self {
         Self::from_parts(D::INTERFACE, D::METHOD)
+            .expect("Descriptor interface/method should be valid")
+    }
+}
+
+impl From<&Descriptor> for MessageKind {
+    fn from(d: &Descriptor) -> Self {
+        Self::from_parts(d.interface(), d.method())
             .expect("Descriptor interface/method should be valid")
     }
 }

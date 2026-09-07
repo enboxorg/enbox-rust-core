@@ -5,6 +5,7 @@ use crate::auth::jws::{
     permission_grant_invocation, AuthorizationPayloadData, PermissionGrantInvocation,
     RecordsWriteAuthorizationPayloadData,
 };
+use crate::descriptors::RECORDS;
 pub use crate::permissions::errors::AuthorizationValidationError;
 use crate::permissions::errors::{
     AuthorizationRequestError, GrantError, GrantMessageTypeError, PermissionError,
@@ -16,6 +17,7 @@ pub use crate::permissions::scopes::{
 };
 use crate::permissions::scopes::{OwnedProtocolScopeTarget, ProtocolScopeTarget};
 use crate::stores::MessageStore;
+use crate::MessageKind;
 
 use std::collections::BTreeMap;
 
@@ -32,7 +34,7 @@ use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields},
     ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
-    Records, RecordsWriteDescriptor, COUNT, QUERY,
+    Records, RecordsWriteDescriptor,
 };
 use crate::filters::{
     message_filters::Messages as MessagesFilter, message_filters::Records as RecordsFilter,
@@ -49,11 +51,6 @@ pub const PERMISSIONS_REQUEST_PATH: &str = "request";
 pub const PERMISSIONS_GRANT_PATH: &str = "grant";
 pub const PERMISSIONS_REVOCATION_PATH: &str = "grant/revocation";
 
-const RECORDS_INTERFACE: &str = "Records";
-const PROTOCOLS_INTERFACE: &str = "Protocols";
-const MESSAGES_INTERFACE: &str = "Messages";
-const READ_METHOD: &str = "Read";
-const SUBSCRIBE_METHOD: &str = "Subscribe";
 const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,13 +328,6 @@ pub enum RecordsGrantAuthorizationKind {
     Count,
     Delete,
     Subscribe,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessagesGrantAuthorizationKind {
-    Read,
-    Subscribe,
-    Sync,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1516,47 +1506,22 @@ where
         message_store,
     )
     .await?;
-    let (interface, method) = message_interface_and_method(incoming_message);
-    if interface != permission_grant.scope.interface() {
+
+    let message_kind: MessageKind = (&incoming_message.descriptor).into();
+    if message_kind.interface() != permission_grant.scope.interface() {
         return Err(GrantError::OutsideScope.into());
     }
-    if interface == MESSAGES_INTERFACE {
-        if permission_grant.scope.method() != READ_METHOD {
-            return Err(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::MismatchedGrant(
-                    permission_grant.scope.method().to_string(),
-                ),
-            )
-            .into());
-        }
-        if !matches!(method.as_str(), READ_METHOD | QUERY | SUBSCRIBE_METHOD) {
-            return Err(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::GrantScopeMismatch(
-                    method.to_string(),
-                    permission_grant.id.clone(),
-                ),
-            )
-            .into());
-        }
-    } else if method != permission_grant.scope.method() {
-        // Records.Read is the only valid read-like scope and covers Read,
-        // Query, Subscribe, and Count operations. Reject malformed
-        // Query/Subscribe/Count scopes instead of treating them as
-        // compatible with the canonical Read scope.
-        let read_like = matches!(
-            method.as_str(),
-            m if m == READ_METHOD || m == QUERY || m == SUBSCRIBE_METHOD || m == COUNT
-        );
-        if !(read_like && permission_grant.scope.method() == READ_METHOD) {
-            return Err(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::GrantScopeMismatch(
-                    method.to_string(),
-                    permission_grant.id.clone(),
-                ),
-            )
-            .into());
-        }
+
+    if !permission_grant.scope.covers(&message_kind) {
+        return Err(AuthorizationValidationError::BadRequest(
+            AuthorizationRequestError::GrantScopeMismatch(
+                message_kind.method().to_string(),
+                permission_grant.id.clone(),
+            ),
+        )
+        .into());
     }
+
     Ok(())
 }
 
@@ -1677,9 +1642,6 @@ fn validate_scope_and_tags(
     if let Some(protocol) = scope.protocol() {
         validate_permission_protocol_tag(descriptor, protocol)?;
     }
-    if scope.interface() == RECORDS_INTERFACE && scope.protocol().is_none() {
-        return Err(AuthorizationValidationError::RecordsGrantMissingProtocol);
-    }
     Ok(())
 }
 
@@ -1781,7 +1743,7 @@ where
         .query(
             tenant,
             Filters::from(filter_map([
-                ("interface", string_filter(RECORDS_INTERFACE)),
+                ("interface", string_filter(RECORDS)),
                 ("method", string_filter("Write")),
                 ("recordId", string_filter(record_id)),
             ])),
@@ -1818,23 +1780,6 @@ fn message_timestamp(message: &Message<Descriptor>) -> chrono::DateTime<chrono::
             crate::descriptors::Messages::Subscribe(descriptor) => descriptor.message_timestamp,
             crate::descriptors::Messages::Sync(descriptor) => descriptor.message_timestamp,
         },
-    }
-}
-
-fn message_interface_and_method(message: &Message<Descriptor>) -> (String, String) {
-    match &message.descriptor {
-        Descriptor::Records(records) => (
-            RECORDS_INTERFACE.to_string(),
-            MessageDescriptor::method(records.as_ref()).to_string(),
-        ),
-        Descriptor::Protocols(protocols) => (
-            PROTOCOLS_INTERFACE.to_string(),
-            MessageDescriptor::method(protocols.as_ref()).to_string(),
-        ),
-        Descriptor::Messages(messages) => (
-            MESSAGES_INTERFACE.to_string(),
-            MessageDescriptor::method(messages.as_ref()).to_string(),
-        ),
     }
 }
 
