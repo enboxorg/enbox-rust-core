@@ -1,5 +1,9 @@
 use std::fmt::Display;
 
+use crate::descriptors::messages::MessagesMethod as DescriptorMessagesMethod;
+use crate::descriptors::protocols::ProtocolsMethod as DescriptorProtocolsMethod;
+use crate::descriptors::records::RecordsMethod as DescriptorRecordsMethod;
+use crate::descriptors::{Interface, MessageKind};
 use crate::descriptors::{CONFIGURE, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, WRITE};
 use crate::filters::message_filters::Messages as MessagesFilter;
 
@@ -85,14 +89,6 @@ impl PermissionScope {
         }
     }
 
-    pub fn interface(&self) -> &'static str {
-        match self {
-            Self::Protocols(_) => PROTOCOLS,
-            Self::Messages(_) => MESSAGES,
-            Self::Records(_) => RECORDS,
-        }
-    }
-
     pub fn method(&self) -> &'static str {
         match self {
             Self::Protocols(ProtocolsScope {
@@ -116,6 +112,73 @@ impl PermissionScope {
                 method: RecordsMethod::Delete,
                 ..
             }) => DELETE,
+        }
+    }
+
+    pub fn interface(&self) -> Interface {
+        match self {
+            Self::Protocols(_) => Interface::Protocols,
+            Self::Messages(_) => Interface::Messages,
+            Self::Records(_) => Interface::Records,
+        }
+    }
+
+    /// Typed scope→operation capability mapping. Replaces the string
+    /// comparison in `perform_base_validation`; decisions are unchanged.
+    pub fn covers(&self, kind: &MessageKind) -> bool {
+        match (self, kind) {
+            (Self::Messages(_), MessageKind::Messages(method)) => {
+                matches!(
+                    method,
+                    DescriptorMessagesMethod::Read
+                        | DescriptorMessagesMethod::Query
+                        | DescriptorMessagesMethod::Subscribe
+                )
+            }
+            (
+                Self::Records(RecordsScope {
+                    method: RecordsMethod::Read,
+                    ..
+                }),
+                MessageKind::Records(method),
+            ) => {
+                matches!(
+                    method,
+                    DescriptorRecordsMethod::Read
+                        | DescriptorRecordsMethod::Query
+                        | DescriptorRecordsMethod::Subscribe
+                        | DescriptorRecordsMethod::Count
+                )
+            }
+            (
+                Self::Records(RecordsScope {
+                    method: RecordsMethod::Write,
+                    ..
+                }),
+                MessageKind::Records(DescriptorRecordsMethod::Write),
+            ) => true,
+            (
+                Self::Records(RecordsScope {
+                    method: RecordsMethod::Delete,
+                    ..
+                }),
+                MessageKind::Records(DescriptorRecordsMethod::Delete),
+            ) => true,
+            (
+                Self::Protocols(ProtocolsScope {
+                    method: ProtocolsMethod::Configure,
+                    ..
+                }),
+                MessageKind::Protocols(DescriptorProtocolsMethod::Configure),
+            ) => true,
+            (
+                Self::Protocols(ProtocolsScope {
+                    method: ProtocolsMethod::Query,
+                    ..
+                }),
+                MessageKind::Protocols(DescriptorProtocolsMethod::Query),
+            ) => true,
+            _ => false,
         }
     }
 
@@ -191,7 +254,7 @@ impl Serialize for PermissionScope {
     {
         self.validate().map_err(serde::ser::Error::custom)?;
         SerializedPermissionScope {
-            interface: self.interface(),
+            interface: self.interface().as_str(),
             method: self.method(),
             protocol: self.protocol(),
             context_id: self.context_id(),

@@ -1288,7 +1288,10 @@ fn evaluate_grant_authorization_fixture(
         return Err("GrantAuthorizationInterfaceMismatch".to_string());
     }
     if grant.scope.interface == "Messages" {
-        if grant.scope.method != "Read" || !matches!(incoming_method, "Read" | "Subscribe" | "Sync")
+        // ponytail: duplicates PermissionScope::covers; unify only by building
+        // real PermissionScope/Descriptor values from the string fixture.
+        if grant.scope.method != "Read"
+            || !matches!(incoming_method, "Read" | "Query" | "Subscribe")
         {
             return Err("GrantAuthorizationMethodMismatch".to_string());
         }

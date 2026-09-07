@@ -155,9 +155,6 @@ pub enum AuthorizationValidationError {
     #[error("grant is not authorized for tenant: given {0}, expected {1}")]
     UnexpectedGrantor(String, String),
 
-    #[error("permission grants for Records must have scope with `protocol`")]
-    RecordsGrantMissingProtocol,
-
     #[error(
         "permission grants must have a scope with a protocol that matches the tagged protocol"
     )]
@@ -198,9 +195,6 @@ pub enum AuthorizationRequestError {
 
     #[error("descriptor is required")]
     DescriptorRequired,
-
-    #[error("invalid message grant method: given {0}, expected Read")]
-    MismatchedGrant(String),
 
     #[error("incoming message has method outside the scope of the grant ID: {0} {1}")]
     GrantScopeMismatch(String, String),
