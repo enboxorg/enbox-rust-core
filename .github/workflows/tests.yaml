@@ -44,7 +44,7 @@ jobs:
         run: cargo clippy --workspace --all-targets
 
       - name: Run workspace tests
-        run: cargo test --workspace
+        run: cargo test --workspace --features dwn-rs-core/test-utils
 
   fixture-provenance:
     name: Fixture provenance

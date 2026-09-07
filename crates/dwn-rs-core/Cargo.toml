@@ -96,3 +96,7 @@ reqwest = { version = "0.13.4", default-features = false, features = [
     "rustls",
 ] }
 dwn-rs-stores = { path = "../dwn-rs-stores", features = ["sqlite"] }
+
+[[test]]
+name = "conformance_fixtures"
+required-features = ["test-utils"]

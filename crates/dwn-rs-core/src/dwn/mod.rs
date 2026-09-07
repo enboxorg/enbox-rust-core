@@ -135,16 +135,17 @@ impl DwnReply {
 
 /// A typed implementation of one DWN interface/method.
 ///
-/// `Handler` is the ergonomic, application-facing handler API. Its associated
-/// [`Descriptor`] determines which [`MessageKind`] it serves, and [`Dwn::register`]
-/// uses that fact to install it in the dispatch table. [`Handler::run`] deserializes
-/// the envelope, schema-validates the raw JSON, and converts the generic descriptor
-/// into `Self::Descriptor` before calling [`Handler::handle`]. Implementations thus
-/// receive a descriptor already typed for their method.
+/// `Handler` is the only public method-handler API. Its associated [`Descriptor`]
+/// determines which [`MessageKind`] it serves, and [`Dwn::register`] uses that fact
+/// to install it in the dispatch table. [`Handler::run`] parses the admitted envelope
+/// and converts the generic descriptor into `Self::Descriptor` before calling
+/// [`Handler::handle`]. Implementations thus receive a descriptor already typed for
+/// their method.
 ///
 /// The returned future is deliberately not boxed. This keeps concrete handlers
-/// lightweight; [`HandlerAdapter`] boxes it only when the handler is stored behind
-/// the object-safe [`MethodHandler`] dispatch interface.
+/// lightweight; the private erasure boundary (`HandlerAdapter` over the crate-internal
+/// `MethodHandler` dispatch interface) boxes it only when the handler is stored in
+/// the heterogeneous registry.
 pub trait Handler: Send + Sync {
     /// The descriptor accepted by this handler, such as `RecordsQueryDescriptor`.
     /// It supplies both the dispatch kind and conversion from the generic envelope.
@@ -160,15 +161,17 @@ pub trait Handler: Send + Sync {
         ctx: HandlerContext<'_, Self::Descriptor>,
     ) -> impl Future<Output = Response<Self::Reply>> + Send;
 
-    /// Run this typed handler from an untyped dispatch request.
+    /// Run this typed handler from wire JSON.
     ///
     /// Post-admission: dispatch already ran `admit_message`, so this parses and downcasts.
     fn run(
         &self,
-        request: MethodHandlerRequest<'_>,
+        tenant: &str,
+        message: &Value,
+        data: Option<bytes::Bytes>,
     ) -> impl Future<Output = Response<Self::Reply>> + Send {
         async move {
-            let message = match parse_message(request.message) {
+            let message = match parse_message(message) {
                 Ok(message) => message,
                 Err(error) => return ingress_rejection(error),
             };
@@ -181,10 +184,10 @@ pub trait Handler: Send + Sync {
             };
 
             self.handle(HandlerContext {
-                tenant: request.tenant,
+                tenant,
                 message,
                 descriptor,
-                data: request.data,
+                data,
             })
             .await
         }
@@ -194,9 +197,9 @@ pub trait Handler: Send + Sync {
 /// Adapts a typed [`Handler`] for storage in the heterogeneous dispatch map.
 ///
 /// Each typed handler has a different `HandlerContext` descriptor and opaque future
-/// type. This adapter erases those differences at the [`MethodHandler`] boundary
-/// while preserving the typed API inside the handler.
-pub struct HandlerAdapter<H: Handler>(pub H);
+/// type. This adapter erases those differences at the crate-internal `MethodHandler`
+/// boundary while preserving the typed API inside the handler.
+pub(crate) struct HandlerAdapter<H: Handler>(pub(crate) H);
 
 /// The admitted, method-specific input passed to [`Handler::handle`].
 ///
@@ -217,7 +220,10 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
         // The dispatch registry is `Arc<dyn MethodHandler>`, so this is the single boundary where
         // the handler's `impl Future` is boxed into a `Send` trait object.
         Box::pin(async move {
-            let Response { status, reply } = self.0.run(request).await;
+            let Response { status, reply } = self
+                .0
+                .run(request.tenant, request.message, request.data)
+                .await;
 
             Response {
                 status,
@@ -229,43 +235,22 @@ impl<H: Handler + 'static> MethodHandler for HandlerAdapter<H> {
 
 /// An untyped request at the dispatch boundary.
 ///
-/// This is the common input for every entry in [`MethodHandlerMap`]. `kind` is
-/// derived before lookup and is metadata for dispatch and diagnostics; it is not
-/// trusted or consulted by [`Handler::run`].
-#[derive(Clone)]
-pub struct MethodHandlerRequest<'a> {
+/// This is the common input for every entry in the crate-internal dispatch map: the
+/// tenant, the raw message JSON a typed adapter parses, and the accompanying data.
+pub(crate) struct MethodHandlerRequest<'a> {
     /// Tenant to which the message is addressed.
     pub tenant: &'a str,
     /// Raw message JSON; a typed adapter parses and validates it.
     pub message: &'a Value,
-    /// Interface/method selected by the dispatcher, when it could be derived.
-    pub kind: Option<MessageKind>,
     /// Optional binary payload accompanying the message.
     pub data: Option<bytes::Bytes>,
 }
 
-impl<'a> MethodHandlerRequest<'a> {
-    /// Build a request, deriving `kind` from the message. Convenient for driving a handler's
-    /// [`Handler::run`] directly (e.g. in tests); `kind` is informational for dispatch and is not
-    /// consulted by `run` itself, so a malformed message falls back to an empty kind.
-    pub fn new(tenant: &'a str, message: &'a Value, data: Option<bytes::Bytes>) -> Self {
-        let kind = MessageKind::from_message(message).ok();
-        Self {
-            tenant,
-            message,
-            kind,
-            data,
-        }
-    }
-}
-
 /// Object-safe handler interface used by the DWN dispatch registry.
 ///
-/// Implement this directly only when a handler must work with raw
-/// [`MethodHandlerRequest`] values. Most method implementations should implement
-/// [`Handler`] instead, which supplies descriptor typing and shared validation; use
-/// [`HandlerAdapter`] (or [`Dwn::register`]) to make one dispatchable.
-pub trait MethodHandler: Send + Sync {
+/// Crate-internal: method implementations implement [`Handler`] instead, which supplies
+/// descriptor typing and shared validation; [`Dwn::register`] adapts one for dispatch.
+pub(crate) trait MethodHandler: Send + Sync {
     fn handle<'a>(
         &'a self,
         request: MethodHandlerRequest<'a>,
@@ -276,7 +261,7 @@ pub trait MethodHandler: Send + Sync {
 ///
 /// Entries are shared trait objects so a [`Dwn`] can keep different concrete
 /// handler types in one map and serve concurrent immutable requests.
-pub type MethodHandlerMap = BTreeMap<MessageKind, Arc<dyn MethodHandler>>;
+pub(crate) type MethodHandlerMap = BTreeMap<MessageKind, Arc<dyn MethodHandler>>;
 
 pub struct DwnConfig<
     MessageStore = (),
@@ -296,7 +281,6 @@ pub struct DwnConfig<
     pub replication_feed_reader: Option<ReplicationFeedReader>,
     pub event_log: Option<EventLog>,
     pub resumable_task_store: Option<ResumableTaskStore>,
-    pub handlers: MethodHandlerMap,
 }
 
 impl Default for DwnConfig {
@@ -310,7 +294,6 @@ impl Default for DwnConfig {
             replication_feed_reader: None,
             event_log: None,
             resumable_task_store: None,
-            handlers: default_method_handlers(),
         }
     }
 }
@@ -335,6 +318,7 @@ pub struct Dwn<
         DidResolver,
         Gate,
     >,
+    handlers: MethodHandlerMap,
 }
 
 impl Default for Dwn {
@@ -378,11 +362,18 @@ where
             Gate,
         >,
     ) -> Self {
-        Self { config }
+        Self {
+            config,
+            handlers: MethodHandlerMap::new(),
+        }
     }
 
-    pub fn register_handler(&mut self, kind: MessageKind, handler: impl MethodHandler + 'static) {
-        self.config.handlers.insert(kind, Arc::new(handler));
+    pub(crate) fn register_handler(
+        &mut self,
+        kind: MessageKind,
+        handler: impl MethodHandler + 'static,
+    ) {
+        self.handlers.insert(kind, Arc::new(handler));
     }
 
     /// Register a [`Handler`], deriving its [`MessageKind`] from the descriptor it serves
@@ -394,8 +385,9 @@ where
         self.register_handler(MessageKind::of::<H::Descriptor>(), HandlerAdapter(handler));
     }
 
-    pub fn handlers(&self) -> &MethodHandlerMap {
-        &self.config.handlers
+    /// The dispatch kinds this node has a handler for.
+    pub fn registered_kinds(&self) -> Vec<MessageKind> {
+        self.handlers.keys().cloned().collect()
     }
 
     pub async fn process_message(&self, tenant: &str, raw_message: Value) -> Response<Reply> {
@@ -413,14 +405,14 @@ where
             return reply;
         }
 
-        // Before lookup, so raw `MethodHandler` implementations get the same gate typed
-        // `Handler`s do.
+        // Before lookup, so every registered handler — typed or crate-internal raw —
+        // passes the same admission typed `Handler`s do.
         let kind = match admit_message(&raw_message) {
             Ok(kind) => kind,
             Err(error) => return ingress_rejection(error),
         };
 
-        let Some(handler) = self.config.handlers.get(&kind) else {
+        let Some(handler) = self.handlers.get(&kind) else {
             return Response::not_implemented(format!(
                 "No handler registered for {}",
                 kind.as_str()
@@ -431,7 +423,6 @@ where
             .handle(MethodHandlerRequest {
                 tenant,
                 message: &raw_message,
-                kind: Some(kind),
                 data,
             })
             .await
@@ -449,18 +440,6 @@ where
     }
 }
 
-pub fn default_method_handlers() -> MethodHandlerMap {
-    current_handler_kinds()
-        .into_iter()
-        .map(|kind| {
-            (
-                kind,
-                Arc::new(NotImplementedHandler) as Arc<dyn MethodHandler>,
-            )
-        })
-        .collect()
-}
-
 /// The set of `(interface, method)` kinds this node dispatches handlers for.
 ///
 /// Derived from the descriptor declarations: each interface union (`Records`/`Protocols`/
@@ -476,27 +455,6 @@ pub fn current_handler_kinds() -> Vec<MessageKind> {
         .collect()
 }
 
-#[derive(Debug, Clone, Copy)]
-struct NotImplementedHandler;
-
-impl MethodHandler for NotImplementedHandler {
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
-        Box::pin(async move {
-            Response::not_implemented(format!(
-                "{} handler is not implemented",
-                request
-                    .kind
-                    .as_ref()
-                    .map(MessageKind::as_str)
-                    .unwrap_or_default()
-            ))
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -510,7 +468,6 @@ mod tests {
     async fn process_message_rejects_inactive_tenant_before_dispatch() {
         let mut dwn = Dwn::<(), (), (), (), (), (), (), StaticTenantGate>::new(DwnConfig {
             tenant_gate: StaticTenantGate(TenantGateResult::inactive("tenant disabled")),
-            handlers: MethodHandlerMap::new(),
             did_resolver: None,
             message_store: None,
             data_store: None,
@@ -595,9 +552,12 @@ mod tests {
     #[tokio::test]
     async fn process_message_dispatches_by_interface_and_method() {
         let mut dwn = Dwn::default();
-        let handler = RecordingHandler::default();
-        let calls = handler.calls.clone();
-        dwn.register_handler(MessageKind::Records(RecordsMethod::Query), handler);
+        let query_handler = RecordingHandler::default();
+        let query_calls = query_handler.calls.clone();
+        let write_handler = RecordingHandler::default();
+        let write_calls = write_handler.calls.clone();
+        dwn.register_handler(MessageKind::Records(RecordsMethod::Query), query_handler);
+        dwn.register_handler(MessageKind::Records(RecordsMethod::Write), write_handler);
 
         let reply = dwn
             .process_message(
@@ -617,25 +577,16 @@ mod tests {
 
         assert_eq!(reply.status.code, 200);
         assert_eq!(
-            calls.lock().unwrap().as_slice(),
-            &[(
-                "did:example:alice".to_string(),
-                MessageKind::Records(RecordsMethod::Query)
-            )]
+            query_calls.lock().unwrap().as_slice(),
+            &["did:example:alice".to_string()]
         );
+        assert!(write_calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn default_handler_set_matches_current_typescript_methods() {
+    async fn unregistered_handler_reports_no_handler_registered() {
         let dwn = Dwn::default();
-
-        for kind in current_handler_kinds() {
-            assert!(
-                dwn.handlers().contains_key(&kind),
-                "missing default handler for {}",
-                kind.as_str()
-            );
-        }
+        assert!(dwn.registered_kinds().is_empty());
 
         let reply = dwn
             .process_message(
@@ -655,7 +606,7 @@ mod tests {
         assert_eq!(reply.status.code, 501);
         assert_eq!(
             reply.status.detail,
-            "RecordsQuery handler is not implemented"
+            "No handler registered for RecordsQuery"
         );
     }
 
@@ -674,7 +625,7 @@ mod tests {
 
     #[derive(Default, Clone)]
     struct RecordingHandler {
-        calls: Arc<Mutex<Vec<(String, MessageKind)>>>,
+        calls: Arc<Mutex<Vec<String>>>,
     }
 
     impl MethodHandler for RecordingHandler {
@@ -684,13 +635,9 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
             let calls = self.calls.clone();
             let tenant = request.tenant.to_string();
-            let kind = request
-                .kind
-                .clone()
-                .expect("dispatched request has a known kind");
 
             Box::pin(async move {
-                calls.lock().unwrap().push((tenant, kind.clone()));
+                calls.lock().unwrap().push(tenant);
                 Response::ok()
             })
         }

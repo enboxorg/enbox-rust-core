@@ -15,7 +15,7 @@ use crate::cid::{
 use crate::descriptors::{
     MessagesSubscribeDescriptor, MessagesSyncDescriptor, RecordsWriteDescriptor,
 };
-use crate::dwn::{Handler, MethodHandlerRequest};
+use crate::dwn::Handler;
 use crate::errors::{DataStoreError, MessageStoreError};
 use crate::handlers::messages::subscribe::MessagesSubscribeHandler;
 use crate::handlers::messages::sync::MessagesSyncHandler;
@@ -73,13 +73,7 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
     })
     .await;
 
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &request,
-            None,
-        ))
-        .await;
+    let reply = handler.run("did:example:alice", &request, None).await;
     assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
     let only_remote = reply.reply.only_remote.as_ref().unwrap();
     assert_eq!(only_remote.len(), 1);
@@ -122,13 +116,7 @@ async fn messages_sync_is_not_authorized_by_messages_read_grant() {
     })
     .await;
 
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &request,
-            None,
-        ))
-        .await;
+    let reply = handler.run("did:example:alice", &request, None).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert!(reply
         .status
@@ -163,13 +151,7 @@ async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
     })
     .await;
 
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &request,
-            None,
-        ))
-        .await;
+    let reply = handler.run("did:example:alice", &request, None).await;
     assert_eq!(reply.status.code, 400);
     assert!(reply
         .status

@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::cid::generate_dag_pb_cid_from_bytes;
 use crate::descriptors::{records::write_fields, Records};
-use crate::dwn::{Handler, MethodHandlerRequest};
+use crate::dwn::Handler;
 use crate::errors::{DataStoreError, MessageStoreError, StoreError};
 use crate::filters::Records as RecordsFilter;
 use crate::stores::durable_event_log::DurableEventLog;
@@ -89,18 +89,12 @@ async fn records_write_read_query_and_count_published_inline_data() {
     let record_id = write["recordId"].as_str().unwrap().to_string();
 
     let reply = write_handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &write,
-            Some(data.clone()),
-        ))
+        .run("did:example:alice", &write, Some(data.clone()))
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let query = unsigned_query_message(json!({ "published": true }));
-    let reply = query_handler
-        .run(MethodHandlerRequest::new("did:example:alice", &query, None))
-        .await;
+    let reply = query_handler.run("did:example:alice", &query, None).await;
     assert_eq!(reply.status.code, 200);
     let entries = reply.reply.entries.as_ref().unwrap();
     assert_eq!(entries.len(), 1);
@@ -111,16 +105,12 @@ async fn records_write_read_query_and_count_published_inline_data() {
     );
 
     let count = unsigned_count_message(json!({ "published": true }));
-    let reply = count_handler
-        .run(MethodHandlerRequest::new("did:example:alice", &count, None))
-        .await;
+    let reply = count_handler.run("did:example:alice", &count, None).await;
     assert_eq!(reply.status.code, 200);
     assert_eq!(reply.reply.count, Some(1));
 
     let read = unsigned_read_message(json!({ "recordId": record_id }));
-    let reply = read_handler
-        .run(MethodHandlerRequest::new("did:example:alice", &read, None))
-        .await;
+    let reply = read_handler.run("did:example:alice", &read, None).await;
     assert_eq!(reply.status.code, 200);
     assert_eq!(
         reply.reply.entry.as_ref().unwrap().encoded_data.as_deref(),
@@ -154,11 +144,7 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     let context_id = initial["contextId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &initial,
-                Some(data.clone())
-            ))
+            .run("did:example:alice", &initial, Some(data.clone()))
             .await
             .status
             .code,
@@ -175,13 +161,7 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
     })
     .await;
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &update,
-            None,
-        ))
-        .await;
+    let reply = handler.run("did:example:alice", &update, None).await;
     assert_eq!(reply.status.code, 202);
 
     let stored = fetch_record_messages("did:example:alice", &record_id, &message_store)
@@ -223,13 +203,7 @@ async fn records_write_missing_initial_is_repairable_after_dependency_arrives() 
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
     })
     .await;
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &update,
-            None,
-        ))
-        .await;
+    let reply = handler.run("did:example:alice", &update, None).await;
 
     assert_eq!(reply.status.code, 400);
     assert_eq!(
@@ -238,19 +212,11 @@ async fn records_write_missing_initial_is_repairable_after_dependency_arrives() 
     );
 
     let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &initial,
-            Some(Bytes::new()),
-        ))
+        .run("did:example:alice", &initial, Some(Bytes::new()))
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
     let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &update,
-            Some(Bytes::new()),
-        ))
+        .run("did:example:alice", &update, Some(Bytes::new()))
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
     assert_eq!(
@@ -293,11 +259,7 @@ async fn records_write_preserves_structured_commit_validation_errors() {
     let record_id = initial["recordId"].as_str().unwrap().to_string();
     let context_id = initial["contextId"].as_str().unwrap().to_string();
     assert_eq!(
-        handler
-            .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
-            .await
-            .status
-            .code,
+        handler.run(TENANT, &initial, Some(data)).await.status.code,
         202
     );
 
@@ -340,9 +302,7 @@ async fn records_write_preserves_structured_commit_validation_errors() {
 
     for (spec, expected_code) in cases {
         let update = signed_write_message(spec).await;
-        let reply = handler
-            .run(MethodHandlerRequest::new(TENANT, &update, None))
-            .await;
+        let reply = handler.run(TENANT, &update, None).await;
         assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
         assert_eq!(reply.status.error_code.as_deref(), Some(expected_code));
     }
@@ -377,13 +337,7 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
     let initial_cid = message_cid(&initial_message).unwrap();
     let record_id = initial["recordId"].as_str().unwrap().to_string();
     let context_id = initial["contextId"].as_str().unwrap().to_string();
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            TENANT,
-            &initial,
-            Some(data.clone()),
-        ))
-        .await;
+    let reply = handler.run(TENANT, &initial, Some(data.clone())).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let update = signed_write_message(WriteSpec {
@@ -396,9 +350,7 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
     })
     .await;
-    let reply = handler
-        .run(MethodHandlerRequest::new(TENANT, &update, None))
-        .await;
+    let reply = handler.run(TENANT, &update, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let feed = message_store
@@ -445,18 +397,10 @@ async fn records_write_data_bearing_exact_replay_is_non_mutating() {
     let message: Message<Descriptor> = serde_json::from_value(write.clone()).unwrap();
     let cid = message_cid(&message).unwrap();
 
-    let reply = handler
-        .run(MethodHandlerRequest::new(TENANT, &write, None))
-        .await;
+    let reply = handler.run(TENANT, &write, None).await;
     assert_eq!(reply.status.code, 204, "{}", reply.status.detail);
 
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            TENANT,
-            &write,
-            Some(data.clone()),
-        ))
-        .await;
+    let reply = handler.run(TENANT, &write, Some(data.clone())).await;
     assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
 
     let feed = message_store
@@ -512,11 +456,7 @@ async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delet
         let initial_message: Message<Descriptor> = serde_json::from_value(initial.clone()).unwrap();
         let initial_cid = message_cid(&initial_message).unwrap();
         assert_eq!(
-            write_handler
-                .run(MethodHandlerRequest::new(TENANT, &initial, None))
-                .await
-                .status
-                .code,
+            write_handler.run(TENANT, &initial, None).await.status.code,
             204
         );
 
@@ -524,11 +464,7 @@ async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delet
             let delete =
                 signed_delete_message(&record_id, false, "2025-01-01T00:05:00.000000Z").await;
             assert_eq!(
-                delete_handler
-                    .run(MethodHandlerRequest::new(TENANT, &delete, None))
-                    .await
-                    .status
-                    .code,
+                delete_handler.run(TENANT, &delete, None).await.status.code,
                 202
             );
             serde_json::from_value::<Message<Descriptor>>(delete).unwrap()
@@ -545,11 +481,7 @@ async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delet
             .await;
             assert_eq!(
                 write_handler
-                    .run(MethodHandlerRequest::new(
-                        TENANT,
-                        &update,
-                        Some(data.clone())
-                    ))
+                    .run(TENANT, &update, Some(data.clone()))
                     .await
                     .status
                     .code,
@@ -560,11 +492,7 @@ async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delet
         let winner_cid = message_cid(&winner).unwrap();
 
         let reply = write_handler
-            .run(MethodHandlerRequest::new(
-                TENANT,
-                &initial,
-                Some(data.clone()),
-            ))
+            .run(TENANT, &initial, Some(data.clone()))
             .await;
         assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
 
@@ -622,15 +550,11 @@ async fn records_delete_retains_initial_feed_position_without_extra_wake() {
     let initial_message: Message<Descriptor> = serde_json::from_value(initial.clone()).unwrap();
     let initial_cid = message_cid(&initial_message).unwrap();
     let record_id = initial["recordId"].as_str().unwrap().to_string();
-    let reply = write_handler
-        .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
-        .await;
+    let reply = write_handler.run(TENANT, &initial, Some(data)).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let delete = signed_delete_message(&record_id, false, "2025-01-01T00:01:00.000000Z").await;
-    let reply = delete_handler
-        .run(MethodHandlerRequest::new(TENANT, &delete, None))
-        .await;
+    let reply = delete_handler.run(TENANT, &delete, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let feed = message_store
@@ -702,11 +626,7 @@ async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
         );
         assert_eq!(
             write_handler
-                .run(MethodHandlerRequest::new(
-                    TENANT,
-                    &initial,
-                    Some(data.clone()),
-                ))
+                .run(TENANT, &initial, Some(data.clone()),)
                 .await
                 .status
                 .code,
@@ -715,13 +635,11 @@ async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
 
         let statuses = if delete_first {
             let delete = delete_handler
-                .run(MethodHandlerRequest::new(TENANT, &older_delete, None))
+                .run(TENANT, &older_delete, None)
                 .await
                 .status
                 .code;
-            let write_reply = write_handler
-                .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
-                .await;
+            let write_reply = write_handler.run(TENANT, &newer_write, None).await;
             assert_eq!(
                 write_reply.status.error_code.as_deref(),
                 Some("RecordsWriteNotAllowedAfterDelete")
@@ -729,12 +647,12 @@ async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
             [delete, write_reply.status.code]
         } else {
             let write = write_handler
-                .run(MethodHandlerRequest::new(TENANT, &newer_write, None))
+                .run(TENANT, &newer_write, None)
                 .await
                 .status
                 .code;
             let delete = delete_handler
-                .run(MethodHandlerRequest::new(TENANT, &older_delete, None))
+                .run(TENANT, &older_delete, None)
                 .await
                 .status
                 .code;
@@ -798,11 +716,7 @@ async fn records_prune_wins_over_newer_plain_delete_in_both_arrival_orders() {
         );
         assert_eq!(
             write_handler
-                .run(MethodHandlerRequest::new(
-                    TENANT,
-                    &initial,
-                    Some(data.clone()),
-                ))
+                .run(TENANT, &initial, Some(data.clone()),)
                 .await
                 .status
                 .code,
@@ -811,24 +725,24 @@ async fn records_prune_wins_over_newer_plain_delete_in_both_arrival_orders() {
 
         let statuses = if prune_first {
             let prune = delete_handler
-                .run(MethodHandlerRequest::new(TENANT, &older_prune, None))
+                .run(TENANT, &older_prune, None)
                 .await
                 .status
                 .code;
             let plain = delete_handler
-                .run(MethodHandlerRequest::new(TENANT, &newer_delete, None))
+                .run(TENANT, &newer_delete, None)
                 .await
                 .status
                 .code;
             [prune, plain]
         } else {
             let plain = delete_handler
-                .run(MethodHandlerRequest::new(TENANT, &newer_delete, None))
+                .run(TENANT, &newer_delete, None)
                 .await
                 .status
                 .code;
             let prune = delete_handler
-                .run(MethodHandlerRequest::new(TENANT, &older_prune, None))
+                .run(TENANT, &older_prune, None)
                 .await
                 .status
                 .code;
@@ -874,11 +788,7 @@ async fn records_write_rejects_older_conflicting_write() {
     let context_id = initial["contextId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &initial,
-                Some(data.clone())
-            ))
+            .run("did:example:alice", &initial, Some(data.clone()))
             .await
             .status
             .code,
@@ -895,13 +805,7 @@ async fn records_write_rejects_older_conflicting_write() {
         ..WriteSpec::new("2025-01-01T00:09:00.000000Z")
     })
     .await;
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &older,
-            Some(data),
-        ))
-        .await;
+    let reply = handler.run("did:example:alice", &older, Some(data)).await;
     assert_eq!(reply.status.code, 409);
 }
 
@@ -930,13 +834,7 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
     })
     .await;
-    let reply = handler
-        .run(MethodHandlerRequest::new(
-            TENANT,
-            &write,
-            Some(data.clone()),
-        ))
-        .await;
+    let reply = handler.run(TENANT, &write, Some(data.clone())).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let protocol_cids = message_store
@@ -951,9 +849,7 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
         message_store.delete(TENANT, &cid).await.unwrap();
     }
 
-    let reply = handler
-        .run(MethodHandlerRequest::new(TENANT, &write, Some(data)))
-        .await;
+    let reply = handler.run(TENANT, &write, Some(data)).await;
     assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
     assert_eq!(
         message_store
@@ -1001,7 +897,7 @@ async fn records_delete_exact_replay_is_classified_before_mutable_protocol_valid
     let record_id = initial["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
-            .run(MethodHandlerRequest::new(TENANT, &initial, Some(data)))
+            .run(TENANT, &initial, Some(data))
             .await
             .status
             .code,
@@ -1010,11 +906,7 @@ async fn records_delete_exact_replay_is_classified_before_mutable_protocol_valid
 
     let delete = signed_delete_message(&record_id, false, "2025-01-01T00:01:00.000000Z").await;
     assert_eq!(
-        delete_handler
-            .run(MethodHandlerRequest::new(TENANT, &delete, None))
-            .await
-            .status
-            .code,
+        delete_handler.run(TENANT, &delete, None).await.status.code,
         202
     );
     let records_before = message_store
@@ -1037,9 +929,7 @@ async fn records_delete_exact_replay_is_classified_before_mutable_protocol_valid
         message_store.delete(TENANT, &cid).await.unwrap();
     }
 
-    let reply = delete_handler
-        .run(MethodHandlerRequest::new(TENANT, &delete, None))
-        .await;
+    let reply = delete_handler.run(TENANT, &delete, None).await;
     assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
     let delete_message: Message<Descriptor> = serde_json::from_value(delete).unwrap();
     assert_eq!(
@@ -1084,11 +974,7 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     let record_id = write["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &write,
-                Some(data)
-            ))
+            .run("did:example:alice", &write, Some(data))
             .await
             .status
             .code,
@@ -1100,11 +986,11 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
         .unwrap();
 
     let reply = read_handler
-        .run(MethodHandlerRequest::new(
+        .run(
             "did:example:alice",
             &unsigned_read_message(json!({ "recordId": record_id })),
             None,
-        ))
+        )
         .await;
     assert_eq!(reply.status.code, 410);
 }
@@ -1140,11 +1026,7 @@ async fn records_delete_prune_purges_descendant_records() {
     let parent_context_id = parent["contextId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &parent,
-                Some(data)
-            ))
+            .run("did:example:alice", &parent, Some(data))
             .await
             .status
             .code,
@@ -1165,11 +1047,7 @@ async fn records_delete_prune_purges_descendant_records() {
     let child_record_id = child["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &child,
-                Some(child_data)
-            ))
+            .run("did:example:alice", &child, Some(child_data))
             .await
             .status
             .code,
@@ -1178,13 +1056,7 @@ async fn records_delete_prune_purges_descendant_records() {
 
     let delete =
         signed_delete_message(&parent_record_id, true, "2025-01-01T00:02:00.000000Z").await;
-    let reply = delete_handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &delete,
-            None,
-        ))
-        .await;
+    let reply = delete_handler.run("did:example:alice", &delete, None).await;
     assert_eq!(reply.status.code, 202);
 
     let child_messages =
@@ -1227,7 +1099,7 @@ async fn records_delete_cleanup_failure_is_safe_and_resumable() {
     let record_id = write["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
-            .run(MethodHandlerRequest::new(TENANT, &write, Some(data)))
+            .run(TENANT, &write, Some(data))
             .await
             .status
             .code,
@@ -1237,9 +1109,7 @@ async fn records_delete_cleanup_failure_is_safe_and_resumable() {
     let delete = signed_delete_message(&record_id, false, "2025-01-01T00:01:00.000000Z").await;
     let delete_message: Message<Descriptor> = serde_json::from_value(delete.clone()).unwrap();
     data_store.fail_delete.store(true, Ordering::SeqCst);
-    let reply = delete_handler
-        .run(MethodHandlerRequest::new(TENANT, &delete, None))
-        .await;
+    let reply = delete_handler.run(TENANT, &delete, None).await;
     assert_eq!(reply.status.code, 500, "{}", reply.status.detail);
 
     let retained = fetch_record_messages(TENANT, &record_id, &message_store)
@@ -1306,11 +1176,7 @@ async fn superseded_prune_task_rechecks_winner_and_does_not_purge_descendants() 
     let parent_context_id = parent["contextId"].as_str().unwrap().to_string();
     assert_eq!(
         write_handler
-            .run(MethodHandlerRequest::new(
-                TENANT,
-                &parent,
-                Some(parent_data)
-            ))
+            .run(TENANT, &parent, Some(parent_data))
             .await
             .status
             .code,
@@ -1323,7 +1189,7 @@ async fn superseded_prune_task_rechecks_winner_and_does_not_purge_descendants() 
         signed_delete_message(&parent_record_id, true, "2025-01-01T00:02:00.000000Z").await;
     assert_eq!(
         delete_handler
-            .run(MethodHandlerRequest::new(TENANT, &winning_prune, None))
+            .run(TENANT, &winning_prune, None)
             .await
             .status
             .code,
@@ -1384,13 +1250,7 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     })
     .await;
     let old_record_id = old["recordId"].as_str().unwrap().to_string();
-    let resp = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &old,
-            Some(old_data),
-        ))
-        .await;
+    let resp = handler.run("did:example:alice", &old, Some(old_data)).await;
 
     assert_eq!(resp.status.code, 202, "{}", resp.status.detail);
 
@@ -1407,11 +1267,7 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     .await;
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &squash,
-                Some(squash_data)
-            ))
+            .run("did:example:alice", &squash, Some(squash_data))
             .await
             .status
             .code,
@@ -1435,11 +1291,7 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     })
     .await;
     let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &late_old,
-            Some(late_old_data),
-        ))
+        .run("did:example:alice", &late_old, Some(late_old_data))
         .await;
     assert_eq!(reply.status.code, 409);
     assert_eq!(
@@ -1489,11 +1341,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &grant,
-                Some(grant_data.clone())
-            ))
+            .run("did:example:alice", &grant, Some(grant_data.clone()))
             .await
             .status
             .code,
@@ -1512,11 +1360,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     })
     .await;
     let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &unpublished,
-            Some(unpublished_data),
-        ))
+        .run("did:example:alice", &unpublished, Some(unpublished_data))
         .await;
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert!(
@@ -1539,11 +1383,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     })
     .await;
     let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &published,
-            Some(published_data),
-        ))
+        .run("did:example:alice", &published, Some(published_data))
         .await;
     assert_eq!(reply.status.code, 202);
 }
@@ -1582,11 +1422,7 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &grant,
-                Some(grant_data.clone())
-            ))
+            .run("did:example:alice", &grant, Some(grant_data.clone()))
             .await
             .status
             .code,
@@ -1606,11 +1442,7 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
     .await;
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &request,
-                Some(request_data.clone())
-            ))
+            .run("did:example:alice", &request, Some(request_data.clone()))
             .await
             .status
             .code,
@@ -1632,11 +1464,11 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
     .await;
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
+            .run(
                 "did:example:alice",
                 &revocation,
                 Some(revocation_data.clone())
-            ))
+            )
             .await
             .status
             .code,
@@ -1676,13 +1508,7 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
         update_spec.data_format = "application/json".to_string();
         let update = signed_write_message(update_spec).await;
 
-        let reply = handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &update,
-                Some(data),
-            ))
-            .await;
+        let reply = handler.run("did:example:alice", &update, Some(data)).await;
         assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
         assert_eq!(
             reply.status.error_code.as_deref(),
@@ -1728,11 +1554,7 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     .await;
 
     let resp = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &grant,
-            Some(grant_data.clone()),
-        ))
+        .run("did:example:alice", &grant, Some(grant_data.clone()))
         .await;
 
     assert_eq!(resp.status.code, 202);
@@ -1752,11 +1574,7 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     .await;
     let note = with_author_delegated_grant(note, &delegated_grant, bob_signer()).await;
     let reply = handler
-        .run(MethodHandlerRequest::new(
-            "did:example:alice",
-            &note,
-            Some(note_data),
-        ))
+        .run("did:example:alice", &note, Some(note_data))
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
@@ -1793,11 +1611,7 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &grant,
-                Some(grant_data)
-            ))
+            .run("did:example:alice", &grant, Some(grant_data))
             .await
             .status
             .code,
@@ -1819,11 +1633,7 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     let note_record_id = note["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &note,
-                Some(note_data)
-            ))
+            .run("did:example:alice", &note, Some(note_data))
             .await
             .status
             .code,
@@ -1848,11 +1658,7 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     .await;
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                "did:example:alice",
-                &revocation,
-                Some(revoke_data)
-            ))
+            .run("did:example:alice", &revocation, Some(revoke_data))
             .await
             .status
             .code,
@@ -1990,8 +1796,9 @@ async fn records_event_log_subscribe_rejects_through_the_shared_ingress() {
     }
 
     // And the accepted side: a message both entry points admit is admitted by both. Dispatch's
-    // reply is its stub handler's 501, so the comparable fact is the ingress verdict, not the
-    // status — subscribe gets past ingress and reaches authorization.
+    // reply is the lookup-miss 501 (nothing is registered on `Dwn::default()`), so the
+    // comparable fact is the ingress verdict, not the status — subscribe gets past ingress
+    // and reaches authorization.
     let admitted = signed_records_subscribe_message(
         RecordsFilter {
             protocol: Some("http://example.com/notes".to_string()),
@@ -2566,7 +2373,7 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(TENANT, &grant, Some(grant_data)))
+            .run(TENANT, &grant, Some(grant_data))
             .await
             .status
             .code,
@@ -2630,11 +2437,7 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
     .await;
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(
-                TENANT,
-                &revocation,
-                Some(revoke_data)
-            ))
+            .run(TENANT, &revocation, Some(revoke_data))
             .await
             .status
             .code,
@@ -2691,7 +2494,7 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
     let grant_id = grant["recordId"].as_str().unwrap().to_string();
     assert_eq!(
         handler
-            .run(MethodHandlerRequest::new(TENANT, &grant, Some(grant_data)))
+            .run(TENANT, &grant, Some(grant_data))
             .await
             .status
             .code,
@@ -2786,11 +2589,7 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
         .await;
         let record_id = message["recordId"].as_str().unwrap().to_string();
         assert_eq!(
-            handler
-                .run(MethodHandlerRequest::new(TENANT, &message, Some(data)))
-                .await
-                .status
-                .code,
+            handler.run(TENANT, &message, Some(data)).await.status.code,
             202
         );
         record_id
@@ -2859,11 +2658,7 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
     // tombstone event itself must still be delivered: the stream is alive.
     let delete = signed_delete_message(&first, false, "2025-01-05T00:00:00.000000Z").await;
     assert_eq!(
-        delete_handler
-            .run(MethodHandlerRequest::new(TENANT, &delete, None))
-            .await
-            .status
-            .code,
+        delete_handler.run(TENANT, &delete, None).await.status.code,
         202
     );
     for _ in 0..500 {
@@ -2897,11 +2692,7 @@ async fn subscribe_nested_without_scope_rejected_unless_bounded() {
             "2025-01-01T00:10:00.000000Z",
         )
         .await;
-        handler
-            .run(MethodHandlerRequest::new(TENANT, &request, None))
-            .await
-            .status
-            .code
+        handler.run(TENANT, &request, None).await.status.code
     }
 
     let mut message_store = TestMessageStore::default();

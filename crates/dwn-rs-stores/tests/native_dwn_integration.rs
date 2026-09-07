@@ -29,7 +29,8 @@ async fn native_dwn_registers_exactly_the_current_handler_kinds() {
 
     // The registered dispatch set must match the descriptor-derived handler set exactly —
     // no missing kinds, and no handler wired for a kind outside `current_handler_kinds()`.
-    let registered: std::collections::BTreeSet<_> = node.dwn().handlers().keys().cloned().collect();
+    let registered: std::collections::BTreeSet<_> =
+        node.dwn().registered_kinds().into_iter().collect();
     let expected: std::collections::BTreeSet<_> = current_handler_kinds().into_iter().collect();
 
     assert_eq!(registered, expected);

@@ -15,12 +15,11 @@ use dwn_rs_core::descriptors::{
     SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
 use dwn_rs_core::dwn::validation as message_validation;
-use dwn_rs_core::dwn::{
-    current_handler_kinds, Dwn, MessageKind, MethodHandler, MethodHandlerRequest,
-};
+use dwn_rs_core::dwn::{current_handler_kinds, Dwn, MessageKind};
 use dwn_rs_core::interfaces::messages::protocols as protocol_types;
 use dwn_rs_core::stores::state_index::MemoryStateIndex;
 use dwn_rs_core::stores::StateIndex;
+use dwn_rs_core::testing::register_reply_stub;
 use dwn_rs_core::{Reply, Response};
 use dwn_rs_stores::SqliteNativeDwn;
 use futures_util::stream;
@@ -29,9 +28,7 @@ use serde_json::Value;
 use ssi_jwk::Algorithm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 
 const CID_MESSAGE_ASSERTION: &str = "cid.message";
 const CID_DESCRIPTOR_ASSERTION: &str = "cid.descriptor";
@@ -395,7 +392,7 @@ async fn fixture_messages_route_through_dwn_dispatch() {
     let mut dwn = Dwn::default();
     let current_kinds = current_handler_kinds();
     for kind in current_kinds.clone() {
-        dwn.register_handler(kind, RouteEchoHandler);
+        register_reply_stub(&mut dwn, kind, Response::ok());
     }
 
     let mut routed = 0usize;
@@ -818,34 +815,6 @@ fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
-#[derive(Clone, Copy)]
-struct RouteEchoHandler;
-
-impl MethodHandler for RouteEchoHandler {
-    fn handle<'a>(
-        &'a self,
-        request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
-        let _kind = request.kind;
-        Box::pin(async move { Response::ok() })
-    }
-}
-
-#[derive(Clone)]
-struct FixtureReplyHandler {
-    reply: Response<Reply>,
-}
-
-impl MethodHandler for FixtureReplyHandler {
-    fn handle<'a>(
-        &'a self,
-        _request: MethodHandlerRequest<'a>,
-    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + 'a>> {
-        let reply = self.reply.clone();
-        Box::pin(async move { reply })
-    }
-}
-
 fn assert_message_process_fixture_shape(case: &FixtureCase) {
     let process = message_process_fixture(case);
     assert!(
@@ -930,12 +899,7 @@ async fn assert_message_process_reply(case: &FixtureCase) {
         if let Some(handler) = &process.handler {
             assert_eq!(kind.as_str(), *handler, "{} process handler key", case.id);
         }
-        node.dwn_mut().register_handler(
-            kind,
-            FixtureReplyHandler {
-                reply: process_reply(case),
-            },
-        );
+        register_reply_stub(node.dwn_mut(), kind, process_reply(case));
     }
 
     let reply = node

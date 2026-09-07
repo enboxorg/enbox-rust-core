@@ -373,7 +373,7 @@ mod ingress_tests {
 
     use super::*;
     use crate::descriptors::records::{QueryDescriptor, RecordsMethod};
-    use crate::dwn::{Dwn, Handler, HandlerContext, MethodHandlerRequest};
+    use crate::dwn::{Dwn, Handler, HandlerContext};
     use crate::fields::Fields;
     use crate::testing::{
         signed_write_message, unsigned_count_message, unsigned_query_message,
@@ -471,12 +471,13 @@ mod ingress_tests {
         }
     }
 
-    /// Admission covers every registered handler, not just typed ones: a raw
-    /// [`crate::dwn::MethodHandler`] — which the default registry is built from — is never
-    /// reached by a message that does not pass schema validation.
+    /// Admission runs before handler lookup: an admitted message with no registered
+    /// handler answers 501 from the lookup-miss branch, while a message that does not
+    /// pass schema validation is rejected 400 without reaching any handler.
     #[tokio::test]
-    async fn a_raw_method_handler_is_not_reached_without_admission() {
-        // `Dwn::default()`'s stub handlers answer 501 for anything they are reached with.
+    async fn unadmitted_messages_never_reach_a_handler() {
+        // `Dwn::default()` registers nothing, so the admitted query falls through to the
+        // lookup-miss 501.
         let dwn = Dwn::default();
 
         let admitted = dwn.process_message(TENANT, valid_query()).await;
@@ -503,7 +504,7 @@ mod ingress_tests {
 
         VALIDATE_MESSAGE_CALLS.with(|calls| calls.set(0));
         let reply = AdmittedQueryHandler::default()
-            .run(MethodHandlerRequest::new(TENANT, &raw, None))
+            .run(TENANT, &raw, None)
             .await;
 
         assert_eq!(reply.status.code, 200);
