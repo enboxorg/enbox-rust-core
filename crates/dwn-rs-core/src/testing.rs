@@ -18,6 +18,7 @@ use crate::descriptors::{
     records::entry_id, ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor,
     RecordsWriteDescriptor, SubscribeDescriptor,
 };
+use crate::dwn::{Dwn, MessageKind, MethodHandler, MethodHandlerRequest, TenantGate};
 use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::handlers::records::common::message_cid;
@@ -25,6 +26,7 @@ use crate::interfaces::messages::protocols::{ActionWho, RecordLimit, Type};
 use crate::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::stores::MessageStore;
 use crate::{Descriptor, Fields, MapValue, Message, Pagination, ProgressToken, Value};
+use crate::{Reply, Response};
 
 #[derive(Clone)]
 pub struct WriteSpec {
@@ -505,6 +507,50 @@ pub fn test_public_jwk(key_id: &str) -> JWK {
         Some(key_id),
     )
     .unwrap()
+}
+
+/// Register a fixed reply for `kind`. Test-only: production methods implement `Handler`.
+pub fn register_reply_stub<
+    MessageStore,
+    DataStore,
+    StateIndex,
+    EventLog,
+    ResumableTaskStore,
+    ReplicationFeedReader,
+    DidResolver,
+    Gate,
+>(
+    dwn: &mut Dwn<
+        MessageStore,
+        DataStore,
+        StateIndex,
+        EventLog,
+        ResumableTaskStore,
+        ReplicationFeedReader,
+        DidResolver,
+        Gate,
+    >,
+    kind: MessageKind,
+    reply: Response<Reply>,
+) where
+    Gate: TenantGate,
+{
+    dwn.register_handler(kind, ReplyStub { reply });
+}
+
+#[derive(Clone)]
+struct ReplyStub {
+    reply: Response<Reply>,
+}
+
+impl MethodHandler for ReplyStub {
+    fn handle<'a>(
+        &'a self,
+        _request: MethodHandlerRequest<'a>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response<Reply>> + Send + 'a>> {
+        let reply = self.reply.clone();
+        Box::pin(async move { reply })
+    }
 }
 
 /// Fail-closed guard for narrow test doubles that resolve entries by key
