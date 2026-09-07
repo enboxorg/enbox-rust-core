@@ -117,7 +117,6 @@ where
         event_log: Some(stores.event_log.clone()),
         resumable_task_store: Some(stores.resumable_task_store.clone()),
         replication_feed_reader: Some(stores.replication_feed_reader.clone()),
-        handlers: crate::dwn::default_method_handlers(),
     });
 
     let rfr = stores.replication_feed_reader.clone();
@@ -172,7 +171,6 @@ where
         event_log: Some(stores.event_log.clone()),
         resumable_task_store: Some(stores.resumable_task_store.clone()),
         replication_feed_reader: Some(stores.replication_feed_reader.clone()),
-        handlers: crate::dwn::default_method_handlers(),
     });
 
     let rfr = stores.replication_feed_reader.clone();

@@ -1796,8 +1796,9 @@ async fn records_event_log_subscribe_rejects_through_the_shared_ingress() {
     }
 
     // And the accepted side: a message both entry points admit is admitted by both. Dispatch's
-    // reply is its stub handler's 501, so the comparable fact is the ingress verdict, not the
-    // status — subscribe gets past ingress and reaches authorization.
+    // reply is the lookup-miss 501 (nothing is registered on `Dwn::default()`), so the
+    // comparable fact is the ingress verdict, not the status — subscribe gets past ingress
+    // and reaches authorization.
     let admitted = signed_records_subscribe_message(
         RecordsFilter {
             protocol: Some("http://example.com/notes".to_string()),

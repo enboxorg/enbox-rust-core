@@ -471,12 +471,13 @@ mod ingress_tests {
         }
     }
 
-    /// Admission covers every registered handler, not just typed ones: a raw
-    /// [`crate::dwn::MethodHandler`] — which the default registry is built from — is never
-    /// reached by a message that does not pass schema validation.
+    /// Admission runs before handler lookup: an admitted message with no registered
+    /// handler answers 501 from the lookup-miss branch, while a message that does not
+    /// pass schema validation is rejected 400 without reaching any handler.
     #[tokio::test]
-    async fn a_raw_method_handler_is_not_reached_without_admission() {
-        // `Dwn::default()`'s stub handlers answer 501 for anything they are reached with.
+    async fn unadmitted_messages_never_reach_a_handler() {
+        // `Dwn::default()` registers nothing, so the admitted query falls through to the
+        // lookup-miss 501.
         let dwn = Dwn::default();
 
         let admitted = dwn.process_message(TENANT, valid_query()).await;

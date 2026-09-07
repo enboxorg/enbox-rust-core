@@ -40,8 +40,8 @@ pub mod events;
 pub mod filters;
 // `Handler::handle` impls are written as `fn(..) -> impl Future<..> + Send { async move {..} }`
 // rather than `async fn`, because the `+ Send` bound is required by the dyn-dispatched
-// `HandlerAdapter` and bare `async fn` in a trait impl cannot express it. clippy's
-// `manual_async_fn` doesn't account for that bound, so its suggestion would not compile.
+// crate-internal erasure boundary and bare `async fn` in a trait impl cannot express it.
+// clippy's `manual_async_fn` doesn't account for that bound, so its suggestion would not compile.
 #[allow(clippy::manual_async_fn)]
 pub mod handlers;
 pub mod identity;
