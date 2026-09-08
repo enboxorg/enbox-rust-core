@@ -11,8 +11,7 @@ use crate::identity::agent::{
     jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
     AgentKeyManager, DidProvider, PortableDid, SecretStore,
 };
-use crate::identity::setup::protocol_requires_encryption;
-use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Who};
+use crate::interfaces::messages::protocols::Definition;
 use crate::permissions::{PermissionScope, RecordsMethod, RecordsScope};
 use ssi_jwk::JWK;
 
@@ -217,10 +216,10 @@ where
     let mut multi_party_protocols = BTreeSet::new();
 
     for request in requests {
-        if !protocol_requires_encryption(&request.protocol_definition) {
+        if !request.protocol_definition.requires_encryption() {
             continue;
         }
-        let multi_party = is_multi_party_context(&request.protocol_definition);
+        let multi_party = request.protocol_definition.allows_multi_party();
         for scope in &request.permission_scopes {
             if !is_read_like_scope(scope) {
                 continue;
@@ -569,33 +568,6 @@ pub fn is_read_like_scope(scope: &PermissionScope) -> bool {
     )
 }
 
-pub fn is_multi_party_context(definition: &Definition) -> bool {
-    definition
-        .structure
-        .values()
-        .any(|rule_set| rule_set_has_multi_party_access(rule_set, None))
-}
-
-fn rule_set_has_multi_party_access(rule_set: &RuleSet, current_path: Option<&str>) -> bool {
-    if rule_set.role == Some(true) {
-        return true;
-    }
-    if rule_set.actions.iter().any(|action| match action {
-        Action::Who(action) => {
-            matches!(action.who, Who::Author | Who::Recipient)
-                && action.can.contains(&Can::Read)
-                && (current_path.is_none() || action.of.is_some())
-        }
-        Action::Role(_) => false,
-    }) {
-        return true;
-    }
-    rule_set
-        .rules
-        .iter()
-        .any(|(path, child)| rule_set_has_multi_party_access(child, Some(path.as_str())))
-}
-
 fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<String> {
     let Some(root_key) = tenant_did
         .document
@@ -652,7 +624,7 @@ mod tests {
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
-    use crate::interfaces::messages::protocols::{ActionWho, Type};
+    use crate::interfaces::messages::protocols::{Action, ActionWho, Can, RuleSet, Type, Who};
     use crate::permissions::{ProtocolPath, RecordsMethod, RecordsScope, RecordsSelector};
 
     #[tokio::test]

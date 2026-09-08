@@ -293,6 +293,26 @@ impl Definition {
         rule_set_at_path(protocol_path, &self.structure)
     }
 
+    /// Whether any declared type requires encryption.
+    pub fn requires_encryption(&self) -> bool {
+        self.types
+            .values()
+            .any(|protocol_type| protocol_type.encryption_required == Some(true))
+    }
+
+    /// Whether any rule set carries injected key agreement.
+    pub fn has_encryption(&self) -> bool {
+        self.structure.values().any(rule_set_has_encryption)
+    }
+
+    /// Whether any path admits a multi-party reader: a role record, or an
+    /// author/recipient read rule that does not pin its own context.
+    pub fn allows_multi_party(&self) -> bool {
+        self.structure
+            .values()
+            .any(|rule_set| rule_set_allows_multi_party(rule_set, None))
+    }
+
     /// The referenced position for a record written exactly at a `$ref`
     /// attachment root. Deeper paths belong to the composing protocol and
     /// yield `None`.
@@ -315,6 +335,30 @@ pub fn get_rule_set_at_path<'a>(
     structure: &'a BTreeMap<String, RuleSet>,
 ) -> Option<&'a RuleSet> {
     rule_set_at_path(protocol_path, structure)
+}
+
+fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
+    rule_set.key_agreement.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
+}
+
+fn rule_set_allows_multi_party(rule_set: &RuleSet, current_path: Option<&str>) -> bool {
+    if rule_set.role == Some(true) {
+        return true;
+    }
+    if rule_set.actions.iter().any(|action| match action {
+        Action::Who(action) => {
+            matches!(action.who, Who::Author | Who::Recipient)
+                && action.can.contains(&Can::Read)
+                && (current_path.is_none() || action.of.is_some())
+        }
+        Action::Role(_) => false,
+    }) {
+        return true;
+    }
+    rule_set
+        .rules
+        .iter()
+        .any(|(path, child)| rule_set_allows_multi_party(child, Some(path.as_str())))
 }
 
 fn rule_set_at_path<'a>(
@@ -461,11 +505,7 @@ fn validate_uses(
 }
 
 fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionError> {
-    let has_encrypted_types = definition
-        .types
-        .values()
-        .any(|protocol_type| protocol_type.encryption_required == Some(true));
-    if has_encrypted_types && definition.key_agreement.is_none() {
+    if definition.requires_encryption() && definition.key_agreement.is_none() {
         return Err(protocol_error(
             "ProtocolsConfigureMissingTopLevelKeyAgreement",
             format!(

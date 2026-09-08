@@ -297,17 +297,6 @@ pub struct RestoreFlowResult {
     pub remote_pushes: Vec<ProtocolInstallResult>,
 }
 
-pub fn protocol_requires_encryption(definition: &Definition) -> bool {
-    definition
-        .types
-        .values()
-        .any(|protocol_type| protocol_type.encryption_required == Some(true))
-}
-
-pub fn protocol_has_encryption(definition: &Definition) -> bool {
-    definition.structure.values().any(rule_set_has_encryption)
-}
-
 pub async fn install_protocol_if_needed<E, K>(
     endpoint: &E,
     key_manager: &K,
@@ -321,12 +310,12 @@ where
     let installed = endpoint
         .query_protocol(&tenant_did.uri, &definition.protocol)
         .await?;
-    let requires_encryption = protocol_requires_encryption(&definition);
+    let requires_encryption = definition.requires_encryption();
     if let Some(installed) = installed {
         return Ok(ProtocolInstallResult {
             protocol: definition.protocol,
             installed: false,
-            encryption_active: requires_encryption && protocol_has_encryption(&installed),
+            encryption_active: requires_encryption && installed.has_encryption(),
         });
     }
 
@@ -526,10 +515,6 @@ fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<St
         ));
     }
     Ok(root_key_id)
-}
-
-fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
-    rule_set.key_agreement.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
 }
 
 /// In-memory `ProtocolEndpoint` for development, tests, and the wallet

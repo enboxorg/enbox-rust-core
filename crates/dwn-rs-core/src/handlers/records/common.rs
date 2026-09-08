@@ -750,8 +750,7 @@ where
             Err(ProtocolDefinitionLookupError::NotFound(_)) => return Ok(None),
             Err(error) => return Err(error.to_string()),
         };
-    let rule_set = match protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
-    {
+    let rule_set = match definition.rule_at(protocol_path) {
         Some(rule_set) => rule_set,
         None => return Ok(None),
     };
@@ -1005,10 +1004,9 @@ where
     .await
     .map_err(|err| err.to_string())?;
 
-    let rule_set = protocol_types::get_rule_set_at_path(protocol_path, &definition.structure)
-        .ok_or_else(|| {
-            format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
-        })?;
+    let rule_set = definition.rule_at(protocol_path).ok_or_else(|| {
+        format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
+    })?;
 
     let invoked_role = auth_ctx
         .protocol_role()
@@ -1100,11 +1098,9 @@ where
     )
     .await
     .map_err(|err| err.to_string())?;
-    let rule_set =
-        protocol_types::get_rule_set_at_path(protocol_path.as_str(), &definition.structure)
-            .ok_or_else(|| {
-                format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
-            })?;
+    let rule_set = definition.rule_at(protocol_path.as_str()).ok_or_else(|| {
+        format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
+    })?;
     let chain = construct_record_chain(tenant, message, message_store).await?;
     let actions = actions_for_message_kind(tenant, message, author, kind, message_store).await?;
     authorize_actions(
