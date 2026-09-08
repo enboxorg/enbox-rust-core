@@ -18,7 +18,8 @@ use crate::fields::WriteFields;
 use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
 use crate::handlers::query::ProtocolsQueryHandler;
 use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, Type, Who,
+    self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, ProtocolKeyAgreement,
+    Type, Who,
 };
 use crate::protocols::RuleSet;
 use crate::stores::memory::MemoryMessageStore;
@@ -1372,6 +1373,252 @@ fn validate_definition_rejects_invalid_protocol_rules() {
     });
     let error = protocol_types::validate_definition(&descriptor.definition).unwrap_err();
     assert_eq!(error.code, "ProtocolsConfigureInvalidSize");
+}
+
+fn enc_key_agreement() -> ProtocolKeyAgreement {
+    ProtocolKeyAgreement {
+        public_key_jwk: serde_json::from_value(serde_json::json!({
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+        }))
+        .unwrap(),
+    }
+}
+
+fn enc_reader_definition() -> Definition {
+    Definition {
+        protocol: "http://example.com/enc".to_string(),
+        published: true,
+        uses: None,
+        key_agreement: Some(enc_key_agreement()),
+        types: BTreeMap::from([
+            (
+                "note".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(true),
+                },
+            ),
+            (
+                "member".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: None,
+                },
+            ),
+        ]),
+        structure: BTreeMap::from([
+            (
+                "note".to_string(),
+                RuleSet {
+                    key_agreement: Some(enc_key_agreement()),
+                    actions: vec![Action::Role(ActionRole {
+                        role: "member".to_string(),
+                        can: vec![Can::Create, Can::Read],
+                    })],
+                    ..Default::default()
+                },
+            ),
+            (
+                "member".to_string(),
+                RuleSet {
+                    role: Some(true),
+                    key_agreement: Some(enc_key_agreement()),
+                    actions: vec![Action::Who(ActionWho {
+                        who: Who::Author,
+                        of: Some("member".to_string()),
+                        can: vec![Can::Create],
+                    })],
+                    ..Default::default()
+                },
+            ),
+        ]),
+    }
+}
+
+#[test]
+fn validate_definition_accepts_keyed_encrypted_definition() {
+    protocol_types::validate_definition(&enc_reader_definition())
+        .expect("keyed encrypted definition must validate");
+}
+
+#[test]
+fn validate_definition_rejects_encrypted_types_without_top_level_key() {
+    let mut definition = enc_reader_definition();
+    definition.key_agreement = None;
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ProtocolsConfigureMissingTopLevelKeyAgreement");
+}
+
+#[test]
+fn validate_definition_rejects_encrypted_path_without_path_key() {
+    let mut definition = enc_reader_definition();
+    definition.structure.get_mut("note").unwrap().key_agreement = None;
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(
+        error.code,
+        "ProtocolsConfigureMissingEncryptedPathKeyAgreement"
+    );
+}
+
+#[test]
+fn validate_definition_rejects_encrypted_path_readable_by_anyone() {
+    let mut definition = enc_reader_definition();
+    definition
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .actions
+        .push(Action::Who(ActionWho {
+            who: Who::Anyone,
+            of: None,
+            can: vec![Can::Create, Can::Read],
+        }));
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ProtocolsConfigureInvalidEncryptedAnyoneRead");
+}
+
+#[test]
+fn validate_definition_rejects_role_resolving_to_encrypted_type() {
+    let mut definition = enc_reader_definition();
+    definition
+        .types
+        .get_mut("member")
+        .unwrap()
+        .encryption_required = Some(true);
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ProtocolsConfigureInvalidEncryptedRoleType");
+}
+
+#[test]
+fn validate_definition_rejects_read_role_without_owning_key() {
+    let mut definition = enc_reader_definition();
+    definition
+        .structure
+        .get_mut("member")
+        .unwrap()
+        .key_agreement = None;
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(
+        error.code,
+        "ProtocolsConfigureInvalidEncryptedRoleMissingKeyAgreement"
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-005
+#[tokio::test]
+async fn protocols_configure_rejects_cross_protocol_role_with_encrypted_type() {
+    use crate::testing::put_protocol_definition;
+
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        Definition {
+            protocol: "http://example.com/blog".to_string(),
+            published: true,
+            uses: None,
+            key_agreement: Some(enc_key_agreement()),
+            types: BTreeMap::from([(
+                "member".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(true),
+                },
+            )]),
+            structure: BTreeMap::from([(
+                "member".to_string(),
+                RuleSet {
+                    role: Some(true),
+                    key_agreement: Some(enc_key_agreement()),
+                    actions: vec![Action::Who(ActionWho {
+                        who: Who::Author,
+                        of: Some("member".to_string()),
+                        can: vec![Can::Create],
+                    })],
+                    ..Default::default()
+                },
+            )]),
+        },
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    let handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+
+    let definition = Definition {
+        protocol: "http://example.com/composed".to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([(
+            "blog".to_string(),
+            "http://example.com/blog".to_string(),
+        )])),
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "post".to_string(),
+            Type {
+                schema: None,
+                data_formats: Some(vec!["text/plain".to_string()]),
+                encryption_required: None,
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "post".to_string(),
+            RuleSet {
+                actions: vec![Action::Role(ActionRole {
+                    role: "blog:member".to_string(),
+                    can: vec![Can::Create, Can::Read],
+                })],
+                ..Default::default()
+            },
+        )]),
+    };
+    let descriptor = ConfigureDescriptor {
+        message_timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-02T00:00:00.000000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+        definition,
+        permission_grant_id: None,
+    };
+    let reply = handler
+        .run(
+            "did:example:alice",
+            &signed_configure_descriptor(descriptor).await,
+            None,
+        )
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureInvalidEncryptedRoleType"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+#[test]
+fn validate_definition_rejects_cross_protocol_read_role_on_encrypted_path() {
+    let mut definition = enc_reader_definition();
+    definition.uses = Some(BTreeMap::from([(
+        "blog".to_string(),
+        "http://example.com/blog".to_string(),
+    )]));
+    definition.structure.get_mut("note").unwrap().actions = vec![Action::Role(ActionRole {
+        role: "blog:member".to_string(),
+        can: vec![Can::Create, Can::Read],
+    })];
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(
+        error.code,
+        "ProtocolsConfigureInvalidEncryptedCrossProtocolRole"
+    );
 }
 
 #[allow(dead_code)]

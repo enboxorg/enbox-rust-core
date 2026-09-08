@@ -208,6 +208,22 @@ pub(crate) fn validate_refs_and_roles_recursively(
                                 action.role, child_protocol_path, definition.protocol
                             ));
                         }
+                        let role_type = parsed
+                            .protocol_path
+                            .split('/')
+                            .next_back()
+                            .unwrap_or_default();
+                        let role_type_encrypted = definition
+                            .types
+                            .get(role_type)
+                            .and_then(|protocol_type| protocol_type.encryption_required)
+                            == Some(true);
+                        if role_type_encrypted {
+                            return Err(format!(
+                                "ProtocolsConfigureInvalidEncryptedRoleType: cross-protocol role '{}' at protocol path '{}' resolves to encrypted type '{role_type}' in protocol '{}'; role records cannot be encrypted.",
+                                action.role, child_protocol_path, definition.protocol
+                            ));
+                        }
                     }
                 }
                 protocol_types::Action::Who(action) => {

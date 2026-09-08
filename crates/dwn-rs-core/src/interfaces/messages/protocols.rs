@@ -401,6 +401,20 @@ fn validate_uses(
 }
 
 fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionError> {
+    let has_encrypted_types = definition
+        .types
+        .values()
+        .any(|protocol_type| protocol_type.encryption_required == Some(true));
+    if has_encrypted_types && definition.key_agreement.is_none() {
+        return Err(protocol_error(
+            "ProtocolsConfigureMissingTopLevelKeyAgreement",
+            format!(
+                "Protocol '{}' declares encrypted types but has no top-level $keyAgreement.",
+                definition.protocol
+            ),
+        ));
+    }
+
     let record_types = definition.types.keys().cloned().collect::<Vec<_>>();
     let mut roles = Vec::new();
     fetch_role_paths("", &definition.structure, &mut roles)?;
@@ -412,6 +426,7 @@ fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionE
         &roles,
         definition.uses.as_ref(),
         &definition.types,
+        &definition.structure,
     )
 }
 
@@ -446,6 +461,7 @@ fn validate_rule_map(
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
     types: &BTreeMap<String, Type>,
+    root_structure: &BTreeMap<String, RuleSet>,
 ) -> Result<(), ProtocolDefinitionError> {
     for (record_type, rule_set) in rules {
         if rule_set.reference.is_none()
@@ -462,7 +478,7 @@ fn validate_rule_map(
         }
 
         let child_path = child_protocol_path(protocol_path, record_type);
-        validate_rule_set(&child_path, rule_set, roles, uses, types)?;
+        validate_rule_set(&child_path, rule_set, roles, uses, types, root_structure)?;
         validate_rule_map(
             &child_path,
             &rule_set.rules,
@@ -470,6 +486,7 @@ fn validate_rule_map(
             roles,
             uses,
             types,
+            root_structure,
         )?;
     }
 
@@ -482,6 +499,7 @@ fn validate_rule_set(
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
     types: &BTreeMap<String, Type>,
+    root_structure: &BTreeMap<String, RuleSet>,
 ) -> Result<(), ProtocolDefinitionError> {
     if rule_set.reference.is_some() {
         if protocol_path.contains('/') {
@@ -524,14 +542,86 @@ fn validate_rule_set(
 
     validate_actions(protocol_path, &rule_set.actions, roles, uses)?;
     validate_role_record_issuance(protocol_path, rule_set)?;
+    validate_encrypted_path(protocol_path, rule_set, types, root_structure)?;
 
-    if let Some(type_name) = protocol_path.split('/').next_back() {
-        if types
-            .get(type_name)
-            .and_then(|protocol_type| protocol_type.encryption_required)
-            == Some(true)
-        {
-            // TypeScript only warns when encrypted records are readable by anyone.
+    Ok(())
+}
+
+/// Rejects invalid encrypted-reader configurations for a path whose type
+/// requires encryption, and rejects role-record paths that resolve to an
+/// encrypted type. Role references were already resolved against the local
+/// role list by [`validate_actions`]; cross-protocol aliases by `uses`.
+fn validate_encrypted_path(
+    protocol_path: &str,
+    rule_set: &RuleSet,
+    types: &BTreeMap<String, Type>,
+    root_structure: &BTreeMap<String, RuleSet>,
+) -> Result<(), ProtocolDefinitionError> {
+    let type_name = protocol_path.split('/').next_back().unwrap_or_default();
+    let path_encrypted = types
+        .get(type_name)
+        .and_then(|protocol_type| protocol_type.encryption_required)
+        == Some(true);
+
+    if rule_set.role == Some(true) && path_encrypted {
+        return Err(protocol_error(
+            "ProtocolsConfigureInvalidEncryptedRoleType",
+            format!(
+                "Role path '{protocol_path}' resolves to encrypted type '{type_name}'; role records cannot be encrypted."
+            ),
+        ));
+    }
+
+    if !path_encrypted {
+        return Ok(());
+    }
+
+    if rule_set.key_agreement.is_none() {
+        return Err(protocol_error(
+            "ProtocolsConfigureMissingEncryptedPathKeyAgreement",
+            format!("Encrypted protocol path '{protocol_path}' has no $keyAgreement."),
+        ));
+    }
+
+    let anyone_can_read = rule_set.actions.iter().any(|action| {
+        matches!(action, Action::Who(who) if who.who == Who::Anyone && who.can.contains(&Can::Read))
+    });
+    if anyone_can_read {
+        return Err(protocol_error(
+            "ProtocolsConfigureInvalidEncryptedAnyoneRead",
+            format!(
+                "Encrypted protocol path '{protocol_path}' allows {{ who: 'anyone', can: ['read'] }}."
+            ),
+        ));
+    }
+
+    for action in &rule_set.actions {
+        let Action::Role(role) = action else {
+            continue;
+        };
+        if !role.can.contains(&Can::Read) {
+            continue;
+        }
+        if parse_cross_protocol_ref(&role.role).is_some() {
+            return Err(protocol_error(
+                "ProtocolsConfigureInvalidEncryptedCrossProtocolRole",
+                format!(
+                    "Encrypted protocol path '{protocol_path}' references cross-protocol read role '{}'.",
+                    role.role
+                ),
+            ));
+        }
+        let role_keyed = get_rule_set_at_path(&role.role, root_structure)
+            .and_then(|role_rule_set| role_rule_set.key_agreement.as_ref())
+            .is_some();
+        if !role_keyed {
+            return Err(protocol_error(
+                "ProtocolsConfigureInvalidEncryptedRoleMissingKeyAgreement",
+                format!(
+                    "Encrypted protocol path '{protocol_path}' references role '{}' with no $keyAgreement.",
+                    role.role
+                ),
+            ));
         }
     }
 
