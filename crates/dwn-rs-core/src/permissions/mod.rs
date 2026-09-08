@@ -341,6 +341,7 @@ pub fn permissions_protocol_definition() -> Definition {
         protocol: PERMISSIONS_PROTOCOL_URI.to_string(),
         published: true,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([
             (
                 "request".to_string(),

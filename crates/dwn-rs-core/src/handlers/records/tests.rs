@@ -3055,3 +3055,594 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
         SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
     );
 }
+
+use crate::encryption::{
+    ContentEncryptionAlgorithm, EncryptionEnvelope, KeyAgreementAlgorithm, KeyEncryption,
+    ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
+};
+use crate::protocols::{Definition, ProtocolKeyAgreement, RuleSet, Type};
+use ssi_jwk::JWK;
+
+const ENC_NOTES_PROTOCOL: &str = "http://example.com/enc-notes";
+const ENC_T1: &str = "2024-12-01T00:00:00.000000Z";
+const ENC_MID: &str = "2024-12-15T00:00:00.000000Z";
+const ENC_T2: &str = "2025-01-01T00:00:00.000000Z";
+const ENC_LATE: &str = "2025-01-02T00:00:00.000000Z";
+const ENC_WRITE_TIME: &str = "2025-01-03T00:00:00.000000Z";
+const SECRET_DATA: &[u8] = b"encrypted note";
+
+fn path_key_jwk() -> JWK {
+    serde_json::from_value(json!({
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+    }))
+    .unwrap()
+}
+
+fn path_key_id() -> String {
+    path_key_jwk().thumbprint().unwrap()
+}
+
+fn keyed_rule_set() -> RuleSet {
+    RuleSet {
+        key_agreement: Some(ProtocolKeyAgreement {
+            public_key_jwk: path_key_jwk(),
+        }),
+        ..Default::default()
+    }
+}
+
+fn enc_notes_definition(encrypted: bool, keyed: bool) -> Definition {
+    Definition {
+        protocol: ENC_NOTES_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: if keyed {
+            Some(ProtocolKeyAgreement {
+                public_key_jwk: path_key_jwk(),
+            })
+        } else {
+            None
+        },
+        types: BTreeMap::from([(
+            "note".to_string(),
+            Type {
+                schema: None,
+                data_formats: Some(vec!["text/plain".to_string()]),
+                encryption_required: if encrypted { Some(true) } else { None },
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "note".to_string(),
+            if keyed {
+                keyed_rule_set()
+            } else {
+                RuleSet::default()
+            },
+        )]),
+    }
+}
+
+fn protocol_path_entry(key_id: &str) -> KeyEncryption {
+    KeyEncryption::ProtocolPath {
+        algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+        key_id: key_id.to_string(),
+        ephemeral_public_key: path_key_jwk(),
+        encrypted_key: "a2V5".to_string(),
+    }
+}
+
+fn role_audience_entry() -> KeyEncryption {
+    KeyEncryption::RoleAudience {
+        algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+        key_id: "role-kid".to_string(),
+        ephemeral_public_key: path_key_jwk(),
+        encrypted_key: "a2V5".to_string(),
+        protocol: ENC_NOTES_PROTOCOL.to_string(),
+        role_path: "note/role".to_string(),
+    }
+}
+
+fn envelope_with_entries(entries: Vec<KeyEncryption>) -> EncryptionEnvelope {
+    EncryptionEnvelope {
+        algorithm: ContentEncryptionAlgorithm::A256Ctr,
+        initialization_vector: "oKGio6SlpqeoqaqrrK2urw".to_string(),
+        key_encryption: entries,
+    }
+}
+
+async fn enc_protocol_write(
+    protocol: &str,
+    protocol_path: &str,
+    timestamp: &str,
+    envelope: Option<EncryptionEnvelope>,
+) -> serde_json::Value {
+    let data = Bytes::from_static(SECRET_DATA);
+    signed_write_message(WriteSpec {
+        protocol: protocol.to_string(),
+        protocol_path: protocol_path.to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        encryption: envelope,
+        ..WriteSpec::new(timestamp)
+    })
+    .await
+}
+
+async fn enc_test_handler(
+    message_store: TestMessageStore,
+    data_store: TestDataStore,
+) -> RecordsWriteHandler<TestMessageStore, TestDataStore> {
+    RecordsWriteHandler::<_, _>::new(message_store, data_store, Some(Arc::new(test_resolver())))
+}
+
+async fn open_stores() -> (TestMessageStore, TestDataStore) {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    (message_store, data_store)
+}
+
+fn write_data() -> Option<Bytes> {
+    Some(Bytes::from_static(SECRET_DATA))
+}
+
+// Covers: DWN-PROTO-001, DWN-ENC-001
+#[tokio::test]
+async fn records_write_encrypted_path_with_matching_entry_is_accepted() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        enc_notes_definition(true, true),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let write =
+        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-001
+#[tokio::test]
+async fn records_write_encrypted_path_without_envelope_is_rejected() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        enc_notes_definition(true, true),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let write = enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, None).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRequired")
+    );
+}
+
+// Covers: DWN-PROTO-001
+#[tokio::test]
+async fn records_write_plaintext_path_with_envelope_is_rejected() {
+    let (message_store, data_store) = open_stores().await;
+    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let write = enc_protocol_write(
+        "http://example.com/notes",
+        "note",
+        ENC_WRITE_TIME,
+        Some(envelope),
+    )
+    .await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionNotAllowed")
+    );
+}
+
+// Covers: DWN-PROTO-001
+#[tokio::test]
+async fn records_write_encrypted_path_without_path_key_is_rejected() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        enc_notes_definition(true, false),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let write =
+        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionKeyAgreementMissing")
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-006
+#[tokio::test]
+async fn records_write_encrypted_path_with_wrong_entry_is_rejected() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        enc_notes_definition(true, true),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let wrong_key = envelope_with_entries(vec![protocol_path_entry("other-kid")]);
+    let write =
+        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(wrong_key)).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionProtocolPathEntryMissing")
+    );
+
+    let role_only = envelope_with_entries(vec![role_audience_entry()]);
+    let write = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        "2025-01-03T00:01:00.000000Z",
+        Some(role_only),
+    )
+    .await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionProtocolPathEntryMissing")
+    );
+}
+
+// Covers: DWN-PROTO-006, DWN-ENC-001
+#[tokio::test]
+async fn records_write_encrypted_path_with_extra_entries_is_accepted() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        enc_notes_definition(true, true),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let envelope = envelope_with_entries(vec![
+        protocol_path_entry("other-kid"),
+        role_audience_entry(),
+        protocol_path_entry(&path_key_id()),
+    ]);
+    let write =
+        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-001
+#[tokio::test]
+async fn records_write_grant_key_path_bypasses_path_key_lookup() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        Definition {
+            protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
+            published: true,
+            uses: None,
+            key_agreement: None,
+            types: BTreeMap::from([(
+                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: Some(true),
+                },
+            )]),
+            structure: BTreeMap::from([(
+                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
+                RuleSet::default(),
+            )]),
+        },
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry("recipient-kid")]);
+    let write = enc_protocol_write(
+        ENCRYPTION_PROTOCOL_URI,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENC_WRITE_TIME,
+        Some(envelope),
+    )
+    .await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let bare = enc_protocol_write(
+        ENCRYPTION_PROTOCOL_URI,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        "2025-01-03T00:01:00.000000Z",
+        None,
+    )
+    .await;
+    let reply = handler.run("did:example:alice", &bare, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRequired")
+    );
+}
+
+const REF_BLOG_PROTOCOL: &str = "http://example.com/blog";
+const COMPOSED_PROTOCOL: &str = "http://example.com/composed";
+
+fn referenced_blog_definition(encrypted: bool) -> Definition {
+    Definition {
+        protocol: REF_BLOG_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "post".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: if encrypted { Some(true) } else { None },
+            },
+        )]),
+        structure: BTreeMap::from([("post".to_string(), RuleSet::default())]),
+    }
+}
+
+fn composed_definition() -> Definition {
+    Definition {
+        protocol: COMPOSED_PROTOCOL.to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([(
+            "blog".to_string(),
+            REF_BLOG_PROTOCOL.to_string(),
+        )])),
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "comment".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: Some(true),
+            },
+        )]),
+        structure: BTreeMap::from([
+            (
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    rules: BTreeMap::from([("comment".to_string(), keyed_rule_set())]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "article".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    }
+}
+
+fn keyed_blog_definition() -> Definition {
+    Definition {
+        protocol: REF_BLOG_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: Some(ProtocolKeyAgreement {
+            public_key_jwk: path_key_jwk(),
+        }),
+        types: BTreeMap::from([(
+            "post".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: Some(true),
+            },
+        )]),
+        structure: BTreeMap::from([("post".to_string(), keyed_rule_set())]),
+    }
+}
+
+// Covers: DWN-PROTO-004, DWN-PROTO-005
+#[tokio::test]
+async fn records_write_ref_position_follows_referenced_type_policy() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        referenced_blog_definition(true),
+        ENC_T1,
+    )
+    .await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        composed_definition(),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, None).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRequired")
+    );
+
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        referenced_blog_definition(false),
+        ENC_T1,
+    )
+    .await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        composed_definition(),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, Some(envelope)).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionNotAllowed")
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-005
+#[tokio::test]
+async fn records_write_ref_roots_use_referenced_key_namespace() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        keyed_blog_definition(),
+        ENC_T1,
+    )
+    .await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        composed_definition(),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    for path in ["post", "article"] {
+        let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+        let write =
+            enc_protocol_write(COMPOSED_PROTOCOL, path, ENC_WRITE_TIME, Some(envelope)).await;
+        let reply = handler.run("did:example:alice", &write, write_data()).await;
+        assert_eq!(reply.status.code, 202, "{} at {path}", reply.status.detail);
+    }
+
+    let write = enc_protocol_write(COMPOSED_PROTOCOL, "article", ENC_WRITE_TIME, None).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRequired")
+    );
+}
+
+// Covers: DWN-PROTO-005
+#[tokio::test]
+async fn records_write_local_child_below_ref_uses_composing_key_namespace() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        referenced_blog_definition(false),
+        ENC_T1,
+    )
+    .await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        composed_definition(),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let write = enc_protocol_write(
+        COMPOSED_PROTOCOL,
+        "post/comment",
+        ENC_WRITE_TIME,
+        Some(envelope),
+    )
+    .await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-004
+#[tokio::test]
+async fn records_write_policy_follows_governing_definition_over_time() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        enc_notes_definition(true, true),
+        ENC_T2,
+    )
+    .await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        enc_notes_definition(false, false),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let mid = enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_MID, None).await;
+    let reply = handler.run("did:example:alice", &mid, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let late_bare = enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_LATE, None).await;
+    let reply = handler
+        .run("did:example:alice", &late_bare, write_data())
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRequired")
+    );
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let late_keyed = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        "2025-01-02T00:01:00.000000Z",
+        Some(envelope),
+    )
+    .await;
+    let reply = handler
+        .run("did:example:alice", &late_keyed, write_data())
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}

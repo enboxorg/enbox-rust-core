@@ -58,7 +58,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         .protocol(&original.portable_did.uri, &protocol.protocol)
         .unwrap()
         .expect("installed protocol");
-    assert!(installed.structure["note"].encryption.is_some());
+    assert!(installed.structure["note"].key_agreement.is_some());
 
     let delegate_read = derive_delegate_keys(
         &original.key_manager,
@@ -123,7 +123,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         .unwrap()
         .expect("pulled remote protocol");
     assert!(pulled_remote_protocol.structure["note"]
-        .encryption
+        .key_agreement
         .is_some());
 
     save_delegate_decryption_keys(&restored.secret_store, &delegate_read.decryption_keys)
@@ -307,6 +307,7 @@ fn encrypted_protocol() -> Definition {
         protocol: "https://protocol.example/notes".to_string(),
         published: true,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "note".to_string(),
             Type {

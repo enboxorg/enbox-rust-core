@@ -359,6 +359,93 @@ mod tests {
 
         validate_message(&message).expect("current encrypted RecordsWrite must validate");
     }
+
+    fn keyed_protocol_configure() -> serde_json::Value {
+        serde_json::json!({
+            "authorization": {},
+            "descriptor": {
+                "interface": "Protocols",
+                "method": "Configure",
+                "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+                "definition": {
+                    "protocol": "https://example.com/enc",
+                    "published": true,
+                    "$keyAgreement": {
+                        "publicKeyJwk": {
+                            "kty": "OKP",
+                            "crv": "X25519",
+                            "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+                        }
+                    },
+                    "types": {
+                        "note": { "dataFormats": ["text/plain"], "encryptionRequired": true }
+                    },
+                    "structure": {
+                        "note": {
+                            "$keyAgreement": {
+                                "publicKeyJwk": {
+                                    "kty": "OKP",
+                                    "crv": "X25519",
+                                    "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    type SchemaCase = (&'static str, fn(&mut serde_json::Value));
+
+    #[test]
+    fn protocol_definition_schema_rejects_legacy_and_malformed_key_material() {
+        validate_message(&keyed_protocol_configure()).expect("keyed definition must validate");
+
+        let cases: &[SchemaCase] = &[
+            ("legacy $encryption", |message| {
+                message["descriptor"]["definition"]["structure"]["note"]["$encryption"] = serde_json::json!({
+                    "rootKeyId": "did:example:alice#enc",
+                    "publicKeyJwk": {
+                        "kty": "OKP",
+                        "crv": "X25519",
+                        "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+                    }
+                });
+            }),
+            ("rootKeyId in $keyAgreement", |message| {
+                message["descriptor"]["definition"]["$keyAgreement"]["rootKeyId"] =
+                    serde_json::json!("did:example:alice#enc");
+            }),
+            ("private key material", |message| {
+                message["descriptor"]["definition"]["structure"]["note"]["$keyAgreement"]
+                    ["publicKeyJwk"]["d"] = serde_json::json!("ZA");
+            }),
+            ("non-X25519 curve", |message| {
+                message["descriptor"]["definition"]["structure"]["note"]["$keyAgreement"]
+                    ["publicKeyJwk"]["crv"] = serde_json::json!("Ed25519");
+            }),
+            ("$-prefixed type name", |message| {
+                let mut definition = message["descriptor"]["definition"].take();
+                definition["types"] = serde_json::json!({
+                    "$note": { "dataFormats": ["text/plain"] }
+                });
+                message["descriptor"]["definition"] = definition;
+            }),
+            ("strategy-bearing $recordLimit", |message| {
+                message["descriptor"]["definition"]["structure"]["note"]["$recordLimit"] =
+                    serde_json::json!({ "max": 1, "strategy": "reject" });
+            }),
+        ];
+        for (name, mutate) in cases {
+            let mut message = keyed_protocol_configure();
+            mutate(&mut message);
+            assert!(
+                validate_message(&message).is_err(),
+                "{name} must fail schema validation"
+            );
+        }
+    }
 }
 
 /// Ingress admission: every entry point into a node runs the same checks, in the same

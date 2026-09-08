@@ -68,6 +68,7 @@ async fn signed_configure_message(
         protocol: protocol.to_string(),
         published,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "note".to_string(),
             Type {

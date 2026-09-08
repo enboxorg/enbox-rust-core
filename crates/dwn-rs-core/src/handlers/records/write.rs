@@ -18,6 +18,9 @@ use crate::descriptors::{
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
+use crate::encryption::{
+    Encryption, KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
+};
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::protocols::configure::{
@@ -513,6 +516,37 @@ where
         set_encoded_data(message, None).map_err(RecordsWriteValidationError::from)
     }
 
+    async fn referenced_definition_for_ref_path(
+        &self,
+        tenant: &str,
+        descriptor: &RecordsWriteDescriptor,
+        definition: &protocol_types::Definition,
+        governing_timestamp: &str,
+    ) -> Result<Option<protocol_types::Definition>, RecordsWriteValidationError> {
+        let Some(parsed) = definition.ref_position(descriptor.protocol_path.as_str()) else {
+            return Ok(None);
+        };
+        let ref_uri = definition
+            .uses
+            .as_ref()
+            .and_then(|uses| uses.get(parsed.alias))
+            .ok_or_else(|| {
+                format!(
+                    "ProtocolsConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' does not exist in the 'uses' map.",
+                    parsed.alias, descriptor.protocol_path
+                )
+            })?;
+        Ok(Some(
+            fetch_protocol_definition(
+                tenant,
+                ref_uri,
+                &self.message_store,
+                Some(governing_timestamp),
+            )
+            .await?,
+        ))
+    }
+
     async fn validate_referential_integrity(
         &self,
         tenant: &str,
@@ -544,13 +578,121 @@ where
             )
             .await?
         };
-        let rule_set = protocol_types::get_rule_set_at_path(
-            descriptor.protocol_path.as_str(),
-            &definition.structure,
-        )
-        .ok_or_else(|| {
-            format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
-        })?;
+        let rule_set = definition
+            .rule_at(descriptor.protocol_path.as_str())
+            .ok_or_else(|| {
+                format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
+            })?;
+
+        // Covers: DWN-PROTO-001, DWN-PROTO-004, DWN-PROTO-005, DWN-ENC-001
+        // Protocol-declared encryption representation is enforced at admission
+        // against the definition governing the record timestamp. A record at
+        // a `$ref` position follows the referenced protocol's type and key
+        // namespace at the referenced target path; locally declared
+        // descendants follow the composing type map.
+        let referenced = self
+            .referenced_definition_for_ref_path(
+                tenant,
+                descriptor,
+                &definition,
+                &governing_timestamp,
+            )
+            .await?;
+        let ref_position = definition.ref_position(descriptor.protocol_path.as_str());
+        let (types, type_name) = match (&referenced, &ref_position) {
+            (Some(referenced), Some(position)) => (
+                &referenced.types,
+                position
+                    .protocol_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or_default(),
+            ),
+            _ => (
+                &definition.types,
+                descriptor
+                    .protocol_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or_default(),
+            ),
+        };
+        let key_agreement = match (&referenced, &ref_position) {
+            (Some(referenced), Some(position)) => referenced
+                .rule_at(position.protocol_path)
+                .and_then(|rule_set| rule_set.key_agreement.as_ref()),
+            _ => rule_set.key_agreement.as_ref(),
+        };
+        let encryption_required = types
+            .get(type_name)
+            .and_then(|protocol_type| protocol_type.encryption_required)
+            == Some(true);
+        let fields = write_fields(message).map_err(|error| error.to_string())?;
+        let has_envelope = fields.encryption.is_some();
+        if encryption_required && !has_envelope {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
+                format!(
+                    "type '{type_name}' requires encryption but message has no encryption metadata"
+                ),
+            )
+            .into());
+        }
+        if !encryption_required && has_envelope {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationEncryptionNotAllowed,
+                format!(
+                    "type '{type_name}' requires plaintext but message has encryption metadata"
+                ),
+            )
+            .into());
+        }
+        if encryption_required {
+            match key_agreement {
+                Some(agreement) => {
+                    let key_id = agreement.public_key_jwk.thumbprint().map_err(|error| {
+                        RecordsWriteValidationError::Internal(error.to_string())
+                    })?;
+                    let envelope = match fields.encryption.as_ref() {
+                        Some(Encryption::Envelope(envelope)) => envelope,
+                        _ => {
+                            return Err(DwnError::new(
+                                DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
+                                format!(
+                                    "type '{type_name}' requires encryption but message has no encryption metadata"
+                                ),
+                            )
+                            .into());
+                        }
+                    };
+                    let has_protocol_path_entry = envelope.key_encryption.iter().any(|entry| {
+                        matches!(entry, KeyEncryption::ProtocolPath { key_id: id, .. } if id == &key_id)
+                    });
+                    if !has_protocol_path_entry {
+                        return Err(DwnError::new(
+                            DwnErrorCode::ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
+                            format!(
+                                "encrypted record is missing a protocolPath keyEncryption entry for '{protocol_path}'"
+                            ),
+                        )
+                        .into());
+                    }
+                }
+                None => {
+                    let dynamic_recipient = definition.protocol == ENCRYPTION_PROTOCOL_URI
+                        && descriptor.protocol_path == ENCRYPTION_PROTOCOL_GRANT_KEY_PATH;
+                    if !dynamic_recipient {
+                        return Err(DwnError::new(
+                            DwnErrorCode::ProtocolAuthorizationEncryptionKeyAgreementMissing,
+                            format!(
+                                "encrypted protocol path '{protocol_path}' has no $keyAgreement"
+                            ),
+                        )
+                        .into());
+                    }
+                }
+            }
+        }
 
         if rule_set.immutable == Some(true) && !is_initial_write(message, author)? {
             return Err(DwnError::new(
@@ -676,9 +818,7 @@ where
             Ok(definition) => definition,
             Err(_) => return Ok(()),
         };
-        let Some(rule_set) =
-            protocol_types::get_rule_set_at_path(&descriptor.protocol_path, &definition.structure)
-        else {
+        let Some(rule_set) = definition.rule_at(&descriptor.protocol_path) else {
             return Ok(());
         };
         if rule_set.squash != Some(true) {

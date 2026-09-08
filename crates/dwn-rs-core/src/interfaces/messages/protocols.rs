@@ -23,6 +23,8 @@ pub struct Definition {
     pub protocol: String,
     pub published: bool,
     pub uses: Option<BTreeMap<String, String>>,
+    #[serde(rename = "$keyAgreement")]
+    pub key_agreement: Option<ProtocolKeyAgreement>,
     pub types: BTreeMap<String, Type>,
     pub structure: BTreeMap<String, RuleSet>,
 }
@@ -89,9 +91,7 @@ pub enum Action {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[skip_serializing_none]
-pub struct PathEncryption {
-    #[serde(rename = "rootKeyId")]
-    pub root_key_id: String,
+pub struct ProtocolKeyAgreement {
     #[serde(rename = "publicKeyJwk")]
     pub public_key_jwk: JWK,
 }
@@ -106,8 +106,8 @@ pub struct Size {
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct RuleSet {
-    #[serde(rename = "$encryption")]
-    pub encryption: Option<PathEncryption>,
+    #[serde(rename = "$keyAgreement")]
+    pub key_agreement: Option<ProtocolKeyAgreement>,
     #[serde(rename = "$actions", default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<Action>,
     #[serde(rename = "$role")]
@@ -133,7 +133,6 @@ pub struct RuleSet {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct RecordLimit {
     pub max: u64,
-    pub strategy: String,
 }
 
 #[skip_serializing_none]
@@ -286,7 +285,82 @@ pub fn validate_definition(definition: &Definition) -> Result<(), ProtocolDefini
     validate_structure(definition)
 }
 
+impl Definition {
+    /// The rule set governing a slash-joined protocol path. `structure` is
+    /// keyed by root segment; nesting lives under each rule set's `rules`.
+    pub fn rule_at(&self, protocol_path: &str) -> Option<&RuleSet> {
+        rule_set_at_path(protocol_path, &self.structure)
+    }
+
+    /// Whether any declared type requires encryption.
+    pub fn requires_encryption(&self) -> bool {
+        self.types
+            .values()
+            .any(|protocol_type| protocol_type.encryption_required == Some(true))
+    }
+
+    /// Whether any rule set carries injected key agreement.
+    pub fn has_encryption(&self) -> bool {
+        self.structure.values().any(rule_set_has_encryption)
+    }
+
+    /// Whether any path admits a multi-party reader: a role record, or an
+    /// author/recipient read rule that does not pin its own context.
+    pub fn allows_multi_party(&self) -> bool {
+        self.structure
+            .values()
+            .any(|rule_set| rule_set_allows_multi_party(rule_set, None))
+    }
+
+    /// The referenced position for a record written exactly at a `$ref`
+    /// attachment root. Deeper paths belong to the composing protocol and
+    /// yield `None`.
+    pub fn ref_position(&self, protocol_path: &str) -> Option<CrossProtocolRef<'_>> {
+        let mut segments = protocol_path.split('/');
+        let root_segment = segments.next().unwrap_or_default();
+        if segments.next().is_some() {
+            return None;
+        }
+        let reference = self
+            .structure
+            .get(root_segment)
+            .and_then(|rule_set| rule_set.reference.as_deref())?;
+        parse_cross_protocol_ref(reference)
+    }
+}
+
 pub fn get_rule_set_at_path<'a>(
+    protocol_path: &str,
+    structure: &'a BTreeMap<String, RuleSet>,
+) -> Option<&'a RuleSet> {
+    rule_set_at_path(protocol_path, structure)
+}
+
+fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
+    rule_set.key_agreement.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
+}
+
+fn rule_set_allows_multi_party(rule_set: &RuleSet, current_path: Option<&str>) -> bool {
+    if rule_set.role == Some(true) {
+        return true;
+    }
+    if rule_set.actions.iter().any(|action| match action {
+        Action::Who(action) => {
+            matches!(action.who, Who::Author | Who::Recipient)
+                && action.can.contains(&Can::Read)
+                && (current_path.is_none() || action.of.is_some())
+        }
+        Action::Role(_) => false,
+    }) {
+        return true;
+    }
+    rule_set
+        .rules
+        .iter()
+        .any(|(path, child)| rule_set_allows_multi_party(child, Some(path.as_str())))
+}
+
+fn rule_set_at_path<'a>(
     protocol_path: &str,
     structure: &'a BTreeMap<String, RuleSet>,
 ) -> Option<&'a RuleSet> {
@@ -301,6 +375,28 @@ pub fn get_rule_set_at_path<'a>(
         current = &next.rules;
     }
     rule_set
+}
+
+/// Whether two protocol definitions carry the same authored policy, ignoring
+/// runtime-injected `$keyAgreement` metadata. Comparison only; schema
+/// validation stays strict and independent. Legacy `$encryption` needs no
+/// handling here: typed parsing and the strict schemas already reject it.
+pub fn authored_definitions_equal(left: &Definition, right: &Definition) -> bool {
+    stripped_definition(left) == stripped_definition(right)
+}
+
+fn stripped_definition(definition: &Definition) -> Definition {
+    let mut clone = definition.clone();
+    clone.key_agreement = None;
+    strip_rule_sets(&mut clone.structure);
+    clone
+}
+
+fn strip_rule_sets(rules: &mut BTreeMap<String, RuleSet>) {
+    for rule_set in rules.values_mut() {
+        rule_set.key_agreement = None;
+        strip_rule_sets(&mut rule_set.rules);
+    }
 }
 
 pub fn parse_cross_protocol_ref(value: &str) -> Option<CrossProtocolRef<'_>> {
@@ -348,6 +444,16 @@ fn validate_uses(
 }
 
 fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionError> {
+    if definition.requires_encryption() && definition.key_agreement.is_none() {
+        return Err(protocol_error(
+            "ProtocolsConfigureMissingTopLevelKeyAgreement",
+            format!(
+                "Protocol '{}' declares encrypted types but has no top-level $keyAgreement.",
+                definition.protocol
+            ),
+        ));
+    }
+
     let record_types = definition.types.keys().cloned().collect::<Vec<_>>();
     let mut roles = Vec::new();
     fetch_role_paths("", &definition.structure, &mut roles)?;
@@ -359,6 +465,7 @@ fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionE
         &roles,
         definition.uses.as_ref(),
         &definition.types,
+        &definition.structure,
     )
 }
 
@@ -393,6 +500,7 @@ fn validate_rule_map(
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
     types: &BTreeMap<String, Type>,
+    root_structure: &BTreeMap<String, RuleSet>,
 ) -> Result<(), ProtocolDefinitionError> {
     for (record_type, rule_set) in rules {
         if rule_set.reference.is_none()
@@ -409,7 +517,7 @@ fn validate_rule_map(
         }
 
         let child_path = child_protocol_path(protocol_path, record_type);
-        validate_rule_set(&child_path, rule_set, roles, uses, types)?;
+        validate_rule_set(&child_path, rule_set, roles, uses, types, root_structure)?;
         validate_rule_map(
             &child_path,
             &rule_set.rules,
@@ -417,6 +525,7 @@ fn validate_rule_map(
             roles,
             uses,
             types,
+            root_structure,
         )?;
     }
 
@@ -429,6 +538,7 @@ fn validate_rule_set(
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
     types: &BTreeMap<String, Type>,
+    root_structure: &BTreeMap<String, RuleSet>,
 ) -> Result<(), ProtocolDefinitionError> {
     if rule_set.reference.is_some() {
         if protocol_path.contains('/') {
@@ -457,13 +567,11 @@ fn validate_rule_set(
     }
 
     if let Some(record_limit) = &rule_set.record_limit {
-        if record_limit.max < 1
-            || !matches!(record_limit.strategy.as_str(), "reject" | "purgeOldest")
-        {
+        if record_limit.max < 1 {
             return Err(protocol_error(
                 "ProtocolsConfigureInvalidRecordLimit",
                 format!(
-                    "Invalid $recordLimit at protocol path '{protocol_path}': max must be >= 1 and strategy must be reject or purgeOldest."
+                    "Invalid $recordLimit at protocol path '{protocol_path}': max must be >= 1."
                 ),
             ));
         }
@@ -471,14 +579,86 @@ fn validate_rule_set(
 
     validate_actions(protocol_path, &rule_set.actions, roles, uses)?;
     validate_role_record_issuance(protocol_path, rule_set)?;
+    validate_encrypted_path(protocol_path, rule_set, types, root_structure)?;
 
-    if let Some(type_name) = protocol_path.split('/').next_back() {
-        if types
-            .get(type_name)
-            .and_then(|protocol_type| protocol_type.encryption_required)
-            == Some(true)
-        {
-            // TypeScript only warns when encrypted records are readable by anyone.
+    Ok(())
+}
+
+/// Rejects invalid encrypted-reader configurations for a path whose type
+/// requires encryption, and rejects role-record paths that resolve to an
+/// encrypted type. Role references were already resolved against the local
+/// role list by [`validate_actions`]; cross-protocol aliases by `uses`.
+fn validate_encrypted_path(
+    protocol_path: &str,
+    rule_set: &RuleSet,
+    types: &BTreeMap<String, Type>,
+    root_structure: &BTreeMap<String, RuleSet>,
+) -> Result<(), ProtocolDefinitionError> {
+    let type_name = protocol_path.split('/').next_back().unwrap_or_default();
+    let path_encrypted = types
+        .get(type_name)
+        .and_then(|protocol_type| protocol_type.encryption_required)
+        == Some(true);
+
+    if rule_set.role == Some(true) && path_encrypted {
+        return Err(protocol_error(
+            "ProtocolsConfigureInvalidEncryptedRoleType",
+            format!(
+                "Role path '{protocol_path}' resolves to encrypted type '{type_name}'; role records cannot be encrypted."
+            ),
+        ));
+    }
+
+    if !path_encrypted {
+        return Ok(());
+    }
+
+    if rule_set.key_agreement.is_none() {
+        return Err(protocol_error(
+            "ProtocolsConfigureMissingEncryptedPathKeyAgreement",
+            format!("Encrypted protocol path '{protocol_path}' has no $keyAgreement."),
+        ));
+    }
+
+    let anyone_can_read = rule_set.actions.iter().any(|action| {
+        matches!(action, Action::Who(who) if who.who == Who::Anyone && who.can.contains(&Can::Read))
+    });
+    if anyone_can_read {
+        return Err(protocol_error(
+            "ProtocolsConfigureInvalidEncryptedAnyoneRead",
+            format!(
+                "Encrypted protocol path '{protocol_path}' allows {{ who: 'anyone', can: ['read'] }}."
+            ),
+        ));
+    }
+
+    for action in &rule_set.actions {
+        let Action::Role(role) = action else {
+            continue;
+        };
+        if !role.can.contains(&Can::Read) {
+            continue;
+        }
+        if parse_cross_protocol_ref(&role.role).is_some() {
+            return Err(protocol_error(
+                "ProtocolsConfigureInvalidEncryptedCrossProtocolRole",
+                format!(
+                    "Encrypted protocol path '{protocol_path}' references cross-protocol read role '{}'.",
+                    role.role
+                ),
+            ));
+        }
+        let role_keyed = get_rule_set_at_path(&role.role, root_structure)
+            .and_then(|role_rule_set| role_rule_set.key_agreement.as_ref())
+            .is_some();
+        if !role_keyed {
+            return Err(protocol_error(
+                "ProtocolsConfigureInvalidEncryptedRoleMissingKeyAgreement",
+                format!(
+                    "Encrypted protocol path '{protocol_path}' references role '{}' with no $keyAgreement.",
+                    role.role
+                ),
+            ));
         }
     }
 
@@ -514,7 +694,7 @@ fn validate_ref_node(
         || rule_set.role.is_some()
         || rule_set.size.is_some()
         || rule_set.tags.is_some()
-        || rule_set.encryption.is_some()
+        || rule_set.key_agreement.is_some()
         || rule_set.record_limit.is_some()
         || rule_set.immutable.is_some()
         || rule_set.delivery.is_some()
@@ -802,5 +982,113 @@ fn protocol_error(code: &'static str, message: impl Into<String>) -> ProtocolDef
     ProtocolDefinitionError {
         code,
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn key_agreement() -> ProtocolKeyAgreement {
+        ProtocolKeyAgreement {
+            public_key_jwk: serde_json::from_value(json!({
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "GDW9p9yD8p7p9yD8p7p9yD8p7p9yD8p7p9yD8p4"
+            }))
+            .unwrap(),
+        }
+    }
+
+    fn note_definition(keyed: bool, encrypted: bool) -> Definition {
+        Definition {
+            protocol: "https://protocol.example/notes".to_string(),
+            published: true,
+            uses: None,
+            key_agreement: keyed.then(key_agreement),
+            types: BTreeMap::from([(
+                "note".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(encrypted),
+                },
+            )]),
+            structure: BTreeMap::from([(
+                "note".to_string(),
+                RuleSet {
+                    key_agreement: keyed.then(key_agreement),
+                    ..Default::default()
+                },
+            )]),
+        }
+    }
+
+    // Covers: DWN-PROTO-005
+    #[test]
+    fn rule_at_walks_nested_segments() {
+        let definition = Definition {
+            protocol: "https://protocol.example/composed".to_string(),
+            published: true,
+            uses: None,
+            key_agreement: None,
+            types: BTreeMap::new(),
+            structure: BTreeMap::from([(
+                "post".to_string(),
+                RuleSet {
+                    rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                    ..Default::default()
+                },
+            )]),
+        };
+        assert!(definition.rule_at("post").is_some());
+        assert!(definition.rule_at("post/comment").is_some());
+        assert!(definition.rule_at("post/missing").is_none());
+        assert!(definition.rule_at("missing").is_none());
+    }
+
+    // Covers: DWN-PROTO-005
+    #[test]
+    fn ref_position_only_matches_ref_attachment_roots() {
+        let definition = Definition {
+            protocol: "https://protocol.example/composed".to_string(),
+            published: true,
+            uses: Some(BTreeMap::from([(
+                "blog".to_string(),
+                "https://protocol.example/blog".to_string(),
+            )])),
+            key_agreement: None,
+            types: BTreeMap::new(),
+            structure: BTreeMap::from([(
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                    ..Default::default()
+                },
+            )]),
+        };
+        let position = definition
+            .ref_position("post")
+            .expect("ref root must resolve");
+        assert_eq!(position.alias, "blog");
+        assert_eq!(position.protocol_path, "post");
+        assert!(definition.ref_position("post/comment").is_none());
+        assert!(definition.ref_position("missing").is_none());
+    }
+
+    // Covers: DWN-PROTO-001
+    #[test]
+    fn authored_definitions_equal_ignores_key_material_but_not_policy() {
+        assert!(authored_definitions_equal(
+            &note_definition(true, true),
+            &note_definition(false, true)
+        ));
+
+        assert!(!authored_definitions_equal(
+            &note_definition(true, true),
+            &note_definition(true, false)
+        ));
     }
 }

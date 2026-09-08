@@ -82,7 +82,7 @@
                 "status": { "type": "string", "enum": ["open", "closed"] },
                 "priority": { "type": "integer", "minimum": 1, "maximum": 5 }
               },
-              "$recordLimit": { "max": 100, "strategy": "reject" },
+              "$recordLimit": { "max": 100 },
               "$immutable": true,
               "$delivery": "direct",
               "$squash": true
@@ -186,7 +186,7 @@
     },
     {
       "id": "protocol-invalid-record-limit",
-      "description": "$recordLimit max must be positive and strategy must be supported.",
+      "description": "$recordLimit max must be positive.",
       "rustStatus": "supported",
       "protocolAuthorization": {
         "directives": ["$recordLimit"],
@@ -201,7 +201,7 @@
           "structure": {
             "entry": {
               "$actions": [{ "who": "anyone", "can": ["create"] }],
-              "$recordLimit": { "max": 0, "strategy": "reject" }
+              "$recordLimit": { "max": 0 }
             }
           }
         }

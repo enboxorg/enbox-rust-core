@@ -18,7 +18,8 @@ use crate::fields::WriteFields;
 use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
 use crate::handlers::query::ProtocolsQueryHandler;
 use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, Type, Who,
+    self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, ProtocolKeyAgreement,
+    Type, Who,
 };
 use crate::protocols::RuleSet;
 use crate::stores::memory::MemoryMessageStore;
@@ -1101,6 +1102,7 @@ fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> Con
             protocol: protocol.to_string(),
             published,
             uses: None,
+            key_agreement: None,
             types: BTreeMap::from([(
                 "note".to_string(),
                 Type {
@@ -1134,6 +1136,7 @@ fn base_thread_descriptor() -> ConfigureDescriptor {
             protocol: "http://example.com/thread-protocol".to_string(),
             published: true,
             uses: None,
+            key_agreement: None,
             types: BTreeMap::from([
                 (
                     "thread".to_string(),
@@ -1192,6 +1195,7 @@ fn composed_descriptor(protocol: &str, role: &str) -> ConfigureDescriptor {
                 "threads".to_string(),
                 "http://example.com/thread-protocol".to_string(),
             )])),
+            key_agreement: None,
             types: BTreeMap::from([(
                 "comment".to_string(),
                 Type {
@@ -1371,10 +1375,978 @@ fn validate_definition_rejects_invalid_protocol_rules() {
     assert_eq!(error.code, "ProtocolsConfigureInvalidSize");
 }
 
+fn enc_key_agreement() -> ProtocolKeyAgreement {
+    ProtocolKeyAgreement {
+        public_key_jwk: serde_json::from_value(serde_json::json!({
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+        }))
+        .unwrap(),
+    }
+}
+
+fn enc_reader_definition() -> Definition {
+    Definition {
+        protocol: "http://example.com/enc".to_string(),
+        published: true,
+        uses: None,
+        key_agreement: Some(enc_key_agreement()),
+        types: BTreeMap::from([
+            (
+                "note".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(true),
+                },
+            ),
+            (
+                "member".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: None,
+                },
+            ),
+        ]),
+        structure: BTreeMap::from([
+            (
+                "note".to_string(),
+                RuleSet {
+                    key_agreement: Some(enc_key_agreement()),
+                    actions: vec![Action::Role(ActionRole {
+                        role: "member".to_string(),
+                        can: vec![Can::Create, Can::Read],
+                    })],
+                    ..Default::default()
+                },
+            ),
+            (
+                "member".to_string(),
+                RuleSet {
+                    role: Some(true),
+                    key_agreement: Some(enc_key_agreement()),
+                    actions: vec![Action::Who(ActionWho {
+                        who: Who::Author,
+                        of: Some("member".to_string()),
+                        can: vec![Can::Create],
+                    })],
+                    ..Default::default()
+                },
+            ),
+        ]),
+    }
+}
+
+#[test]
+fn validate_definition_accepts_keyed_encrypted_definition() {
+    protocol_types::validate_definition(&enc_reader_definition())
+        .expect("keyed encrypted definition must validate");
+}
+
+#[test]
+fn validate_definition_rejects_encrypted_types_without_top_level_key() {
+    let mut definition = enc_reader_definition();
+    definition.key_agreement = None;
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ProtocolsConfigureMissingTopLevelKeyAgreement");
+}
+
+#[test]
+fn validate_definition_rejects_encrypted_path_without_path_key() {
+    let mut definition = enc_reader_definition();
+    definition.structure.get_mut("note").unwrap().key_agreement = None;
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(
+        error.code,
+        "ProtocolsConfigureMissingEncryptedPathKeyAgreement"
+    );
+}
+
+#[test]
+fn validate_definition_rejects_encrypted_path_readable_by_anyone() {
+    let mut definition = enc_reader_definition();
+    definition
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .actions
+        .push(Action::Who(ActionWho {
+            who: Who::Anyone,
+            of: None,
+            can: vec![Can::Create, Can::Read],
+        }));
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ProtocolsConfigureInvalidEncryptedAnyoneRead");
+}
+
+#[test]
+fn validate_definition_rejects_role_resolving_to_encrypted_type() {
+    let mut definition = enc_reader_definition();
+    definition
+        .types
+        .get_mut("member")
+        .unwrap()
+        .encryption_required = Some(true);
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ProtocolsConfigureInvalidEncryptedRoleType");
+}
+
+#[test]
+fn validate_definition_rejects_read_role_without_owning_key() {
+    let mut definition = enc_reader_definition();
+    definition
+        .structure
+        .get_mut("member")
+        .unwrap()
+        .key_agreement = None;
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(
+        error.code,
+        "ProtocolsConfigureInvalidEncryptedRoleMissingKeyAgreement"
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-005
+#[tokio::test]
+async fn protocols_configure_rejects_cross_protocol_role_with_encrypted_type() {
+    use crate::testing::put_protocol_definition;
+
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        Definition {
+            protocol: "http://example.com/blog".to_string(),
+            published: true,
+            uses: None,
+            key_agreement: Some(enc_key_agreement()),
+            types: BTreeMap::from([(
+                "member".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(true),
+                },
+            )]),
+            structure: BTreeMap::from([(
+                "member".to_string(),
+                RuleSet {
+                    role: Some(true),
+                    key_agreement: Some(enc_key_agreement()),
+                    actions: vec![Action::Who(ActionWho {
+                        who: Who::Author,
+                        of: Some("member".to_string()),
+                        can: vec![Can::Create],
+                    })],
+                    ..Default::default()
+                },
+            )]),
+        },
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    let handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+
+    let definition = Definition {
+        protocol: "http://example.com/composed".to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([(
+            "blog".to_string(),
+            "http://example.com/blog".to_string(),
+        )])),
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "post".to_string(),
+            Type {
+                schema: None,
+                data_formats: Some(vec!["text/plain".to_string()]),
+                encryption_required: None,
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "post".to_string(),
+            RuleSet {
+                actions: vec![Action::Role(ActionRole {
+                    role: "blog:member".to_string(),
+                    can: vec![Can::Create, Can::Read],
+                })],
+                ..Default::default()
+            },
+        )]),
+    };
+    let descriptor = ConfigureDescriptor {
+        message_timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-02T00:00:00.000000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+        definition,
+        permission_grant_id: None,
+    };
+    let reply = handler
+        .run(
+            "did:example:alice",
+            &signed_configure_descriptor(descriptor).await,
+            None,
+        )
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureInvalidEncryptedRoleType"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+#[test]
+fn validate_definition_rejects_cross_protocol_read_role_on_encrypted_path() {
+    let mut definition = enc_reader_definition();
+    definition.uses = Some(BTreeMap::from([(
+        "blog".to_string(),
+        "http://example.com/blog".to_string(),
+    )]));
+    definition.structure.get_mut("note").unwrap().actions = vec![Action::Role(ActionRole {
+        role: "blog:member".to_string(),
+        can: vec![Can::Create, Can::Read],
+    })];
+    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(
+        error.code,
+        "ProtocolsConfigureInvalidEncryptedCrossProtocolRole"
+    );
+}
+
 #[allow(dead_code)]
 fn _message_from_descriptor(descriptor: ConfigureDescriptor) -> Message<Descriptor> {
     Message {
         descriptor: Descriptor::Protocols(Box::new(Protocols::Configure(descriptor))),
         fields: Fields::Write(WriteFields::default()),
     }
+}
+
+use crate::encryption::{
+    ContentEncryptionAlgorithm, EncryptionEnvelope, KeyAgreementAlgorithm, KeyEncryption,
+};
+use crate::handlers::records::write::RecordsWriteHandler;
+use crate::stores::{DataStore, DataStoreGetResult, DataStorePutResult};
+use crate::testing::{signed_write_message, WriteSpec};
+use futures_util::{stream, Stream, StreamExt};
+
+const FLIP_PROTOCOL: &str = "http://example.com/flip";
+const FLIP_T1: &str = "2025-01-01T00:00:00.000000Z";
+const FLIP_T1_5: &str = "2025-01-01T12:00:00.000000Z";
+const FLIP_MID: &str = "2025-01-02T00:00:00.000000Z";
+const FLIP_T2: &str = "2025-01-03T00:00:00.000000Z";
+const FLIP_T3: &str = "2025-01-04T00:00:00.000000Z";
+const FLIP_T4: &str = "2025-01-05T00:00:00.000000Z";
+const FLIP_DATA: &[u8] = b"immutable note";
+const ROTATED_X: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+fn flip_key_jwk(x: &str) -> JWK {
+    serde_json::from_value(serde_json::json!({
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": x
+    }))
+    .unwrap()
+}
+
+fn flip_key_id(x: &str) -> String {
+    flip_key_jwk(x).thumbprint().unwrap()
+}
+
+fn flip_keyed(encrypted: bool, x: &str) -> Definition {
+    Definition {
+        protocol: FLIP_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: Some(ProtocolKeyAgreement {
+            public_key_jwk: flip_key_jwk(x),
+        }),
+        types: BTreeMap::from([(
+            "note".to_string(),
+            Type {
+                schema: None,
+                data_formats: Some(vec!["text/plain".to_string()]),
+                encryption_required: if encrypted { Some(true) } else { None },
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "note".to_string(),
+            RuleSet {
+                key_agreement: Some(ProtocolKeyAgreement {
+                    public_key_jwk: flip_key_jwk(x),
+                }),
+                actions: vec![Action::Who(ActionWho {
+                    who: Who::Author,
+                    of: Some("note".to_string()),
+                    can: vec![Can::Create, Can::Read],
+                })],
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+fn flip_plain() -> Definition {
+    Definition {
+        protocol: FLIP_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "note".to_string(),
+            Type {
+                schema: None,
+                data_formats: Some(vec!["text/plain".to_string()]),
+                encryption_required: None,
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "note".to_string(),
+            RuleSet {
+                actions: vec![Action::Who(ActionWho {
+                    who: Who::Anyone,
+                    of: None,
+                    can: vec![Can::Create, Can::Read],
+                })],
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+fn flip_envelope(key_id: &str) -> EncryptionEnvelope {
+    EncryptionEnvelope {
+        algorithm: ContentEncryptionAlgorithm::A256Ctr,
+        initialization_vector: "oKGio6SlpqeoqaqrrK2urw".to_string(),
+        key_encryption: vec![KeyEncryption::ProtocolPath {
+            algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+            key_id: key_id.to_string(),
+            ephemeral_public_key: flip_key_jwk("C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"),
+            encrypted_key: "a2V5".to_string(),
+        }],
+    }
+}
+
+type StubDataValues = BTreeMap<(String, String, String), bytes::Bytes>;
+
+#[derive(Clone, Default)]
+struct StubDataStore {
+    values: Arc<std::sync::RwLock<StubDataValues>>,
+}
+
+impl DataStore for StubDataStore {
+    async fn open(&mut self) -> Result<(), crate::errors::DataStoreError> {
+        Ok(())
+    }
+
+    async fn close(&mut self) {}
+
+    fn put<T: Stream<Item = bytes::Bytes> + Send + Unpin>(
+        &self,
+        tenant: &str,
+        record_id: &str,
+        data_cid: &str,
+        mut data_stream: T,
+    ) -> impl Future<Output = Result<DataStorePutResult, crate::errors::DataStoreError>> + Send
+    {
+        let values = self.values.clone();
+        let key = (
+            tenant.to_string(),
+            record_id.to_string(),
+            data_cid.to_string(),
+        );
+        async move {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = data_stream.next().await {
+                bytes.extend_from_slice(&chunk);
+            }
+            let bytes = bytes::Bytes::from(bytes);
+            let data_size = bytes.len();
+            values.write().unwrap().insert(key, bytes);
+            Ok(DataStorePutResult { data_size })
+        }
+    }
+
+    fn get(
+        &self,
+        tenant: &str,
+        record_id: &str,
+        data_cid: &str,
+    ) -> impl Future<Output = Result<Option<DataStoreGetResult>, crate::errors::DataStoreError>> + Send
+    {
+        let values = self.values.clone();
+        let key = (
+            tenant.to_string(),
+            record_id.to_string(),
+            data_cid.to_string(),
+        );
+        async move {
+            Ok(values.read().unwrap().get(&key).cloned().map(|bytes| {
+                let data_size = bytes.len();
+                DataStoreGetResult {
+                    data_size,
+                    data_stream: Box::pin(stream::iter(vec![Ok::<_, std::io::Error>(bytes)])),
+                }
+            }))
+        }
+    }
+
+    fn delete(
+        &self,
+        _tenant: &str,
+        _record_id: &str,
+        _data_cid: &str,
+    ) -> impl Future<Output = Result<(), crate::errors::DataStoreError>> + Send {
+        async move { Ok(()) }
+    }
+
+    fn clear(&self) -> impl Future<Output = Result<(), crate::errors::DataStoreError>> + Send {
+        async move { Ok(()) }
+    }
+}
+
+async fn flip_harness() -> (
+    ProtocolsConfigureHandler<MemoryMessageStore>,
+    RecordsWriteHandler<MemoryMessageStore, StubDataStore>,
+    MemoryMessageStore,
+) {
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    let configures =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+    let writes = RecordsWriteHandler::new(
+        message_store.clone(),
+        StubDataStore::default(),
+        Some(Arc::new(test_resolver())),
+    );
+    (configures, writes, message_store)
+}
+
+async fn run_flip_configure<S>(
+    configures: &ProtocolsConfigureHandler<S>,
+    definition: Definition,
+    timestamp: &str,
+) -> crate::Response<crate::replies::protocols::Configure>
+where
+    S: MessageStore + Clone + Send + Sync + 'static,
+{
+    let descriptor = ConfigureDescriptor {
+        message_timestamp: chrono::DateTime::parse_from_rfc3339(timestamp)
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+        definition,
+        permission_grant_id: None,
+    };
+    configures
+        .run(
+            "did:example:alice",
+            &signed_configure_descriptor(descriptor).await,
+            None,
+        )
+        .await
+}
+
+async fn admit_flip_record<S>(
+    writes: &RecordsWriteHandler<S, StubDataStore>,
+    protocol: &str,
+    protocol_path: &str,
+    timestamp: &str,
+    envelope: Option<EncryptionEnvelope>,
+) -> crate::Response<crate::replies::records::Write>
+where
+    S: MessageStore + Clone + Send + Sync + 'static,
+{
+    use bytes::Bytes;
+
+    let data = Bytes::from_static(FLIP_DATA);
+    let message = signed_write_message(WriteSpec {
+        protocol: protocol.to_string(),
+        protocol_path: protocol_path.to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        encryption: envelope,
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    writes.run("did:example:alice", &message, Some(data)).await
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_rejects_plaintext_to_encrypted_flip_after_use() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+        "{}",
+        reply.status.detail
+    );
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 409, "exact replay stays a conflict");
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_rejects_encrypted_to_plaintext_flip_after_use() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(
+        &writes,
+        FLIP_PROTOCOL,
+        "note",
+        FLIP_MID,
+        Some(flip_envelope(&flip_key_id(flip_x))),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T2).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-PROTO-001
+#[tokio::test]
+async fn protocols_configure_accepts_policy_change_without_records() {
+    let (configures, _, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_accepts_removed_populated_path() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let mut v1 = flip_plain();
+    v1.types.insert(
+        "doc".to_string(),
+        Type {
+            schema: None,
+            data_formats: Some(vec!["text/plain".to_string()]),
+            encryption_required: Some(true),
+        },
+    );
+    v1.key_agreement = Some(ProtocolKeyAgreement {
+        public_key_jwk: flip_key_jwk(flip_x),
+    });
+    v1.structure.insert(
+        "doc".to_string(),
+        RuleSet {
+            key_agreement: Some(ProtocolKeyAgreement {
+                public_key_jwk: flip_key_jwk(flip_x),
+            }),
+            actions: vec![Action::Who(ActionWho {
+                who: Who::Author,
+                of: Some("doc".to_string()),
+                can: vec![Can::Create, Can::Read],
+            })],
+            ..Default::default()
+        },
+    );
+    let reply = run_flip_configure(&configures, v1, FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(
+        &writes,
+        FLIP_PROTOCOL,
+        "doc",
+        FLIP_MID,
+        Some(flip_envelope(&flip_key_id(flip_x))),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_accepts_key_rotation_and_governs_new_writes() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(
+        &writes,
+        FLIP_PROTOCOL,
+        "note",
+        FLIP_MID,
+        Some(flip_envelope(&flip_key_id(flip_x))),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, ROTATED_X), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(
+        &writes,
+        FLIP_PROTOCOL,
+        "note",
+        FLIP_T3,
+        Some(flip_envelope(&flip_key_id(ROTATED_X))),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-004, DWN-PROTO-005
+#[tokio::test]
+async fn protocols_configure_rejects_composed_policy_flip() {
+    const BLOG: &str = "http://example.com/blog";
+    const COMPOSER: &str = "http://example.com/composer";
+
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let blog_v1 = Definition {
+        protocol: BLOG.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "post".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: None,
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "post".to_string(),
+            RuleSet {
+                actions: vec![Action::Who(ActionWho {
+                    who: Who::Anyone,
+                    of: None,
+                    can: vec![Can::Create, Can::Read],
+                })],
+                ..Default::default()
+            },
+        )]),
+    };
+    let reply = run_flip_configure(&configures, blog_v1, FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let composer = Definition {
+        protocol: COMPOSER.to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([("blog".to_string(), BLOG.to_string())])),
+        key_agreement: None,
+        types: BTreeMap::new(),
+        structure: BTreeMap::from([
+            (
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "article".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    };
+    let reply = run_flip_configure(&configures, composer, FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, COMPOSER, "post", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, COMPOSER, "article", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let mut blog_v2 = flip_keyed(true, flip_x);
+    blog_v2.protocol = BLOG.to_string();
+    blog_v2.types = BTreeMap::from([(
+        "post".to_string(),
+        Type {
+            schema: None,
+            data_formats: None,
+            encryption_required: Some(true),
+        },
+    )]);
+    blog_v2.structure = BTreeMap::from([(
+        "post".to_string(),
+        RuleSet {
+            key_agreement: Some(ProtocolKeyAgreement {
+                public_key_jwk: flip_key_jwk(flip_x),
+            }),
+            actions: vec![Action::Who(ActionWho {
+                who: Who::Author,
+                of: Some("post".to_string()),
+                can: vec![Can::Create, Can::Read],
+            })],
+            ..Default::default()
+        },
+    )]);
+    let reply = run_flip_configure(&configures, blog_v2, FLIP_T2).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply.status.detail.contains("imported by protocol"),
+        "{}",
+        reply.status.detail
+    );
+    assert!(
+        reply.status.detail.contains("'article'"),
+        "differently named $ref root is evaluated: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_out_of_order_arrival_uses_governing_definition() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T4).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_rejects_historical_insert_matching_newest_policy() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // Same policy as newest, but a retained record contradicts the incoming
+    // representation: the scan judges records, not configurations.
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T1_5).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_rejects_historical_insert_contradicting_records() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(
+        &writes,
+        FLIP_PROTOCOL,
+        "note",
+        FLIP_T4,
+        Some(flip_envelope(&flip_key_id(flip_x))),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // Stale plaintext insert: the retained encrypted record contradicts it.
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1_5).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+#[derive(Clone)]
+struct FailRecordsQueries {
+    inner: MemoryMessageStore,
+}
+
+fn is_protocol_records_query(filters: &Filters) -> bool {
+    filters.set.iter().any(|entry| {
+        let is_write = matches!(
+            entry.get(&FilterKey::Index("method".to_string())),
+            Some(Filter::Equal(Value::String(method))) if method == "Write"
+        );
+        let has_protocol = entry
+            .keys()
+            .any(|key| matches!(key, FilterKey::Index(name) if name == "protocol"));
+        is_write && has_protocol
+    })
+}
+
+impl MessageStore for FailRecordsQueries {
+    async fn open(&mut self) -> Result<(), crate::errors::MessageStoreError> {
+        self.inner.open().await
+    }
+
+    async fn close(&mut self) {
+        self.inner.close().await
+    }
+
+    fn put<D: crate::descriptors::MessageDescriptor + Send>(
+        &self,
+        tenant: &str,
+        message: Message<D>,
+        indexes: KeyValues,
+    ) -> impl Future<Output = Result<(), crate::errors::MessageStoreError>> + Send
+    where
+        Message<Descriptor>: From<Message<D>>,
+    {
+        self.inner.put(tenant, message, indexes)
+    }
+
+    async fn commit_latest_state(
+        &self,
+        tenant: &str,
+        transition: LatestStateTransition,
+    ) -> Result<LatestStateTransitionResult, crate::errors::MessageStoreError> {
+        self.inner.commit_latest_state(tenant, transition).await
+    }
+
+    async fn get(
+        &self,
+        tenant: &str,
+        cid: &str,
+    ) -> Result<Option<Message<Descriptor>>, crate::errors::MessageStoreError> {
+        self.inner.get(tenant, cid).await
+    }
+
+    fn query(
+        &self,
+        tenant: &str,
+        filters: Filters,
+        sort: Option<MessageSort>,
+        pagination: Option<Pagination>,
+        record_limit: Option<RecordLimitOccupancy>,
+    ) -> impl Future<Output = Result<MessageQueryResult, crate::errors::MessageStoreError>> + Send
+    {
+        let inner = self.inner.clone();
+        let tenant = tenant.to_string();
+        async move {
+            if is_protocol_records_query(&filters) {
+                return Err(crate::errors::MessageStoreError::StoreError(
+                    crate::errors::StoreError::InternalException(
+                        "injected records query failure".to_string(),
+                    ),
+                ));
+            }
+            inner
+                .query(&tenant, filters, sort, pagination, record_limit)
+                .await
+        }
+    }
+
+    async fn count(
+        &self,
+        tenant: &str,
+        filters: Filters,
+        sort: Option<MessageSort>,
+        record_limit: Option<RecordLimitOccupancy>,
+    ) -> Result<u64, crate::errors::MessageStoreError> {
+        self.inner.count(tenant, filters, sort, record_limit).await
+    }
+
+    async fn delete(
+        &self,
+        tenant: &str,
+        cid: &str,
+    ) -> Result<(), crate::errors::MessageStoreError> {
+        self.inner.delete(tenant, cid).await
+    }
+
+    async fn clear(&self) -> Result<(), crate::errors::MessageStoreError> {
+        self.inner.clear().await
+    }
+}
+
+// Covers: DWN-PROTO-001
+#[tokio::test]
+async fn protocols_configure_scan_failure_fails_closed() {
+    let mut inner = MemoryMessageStore::default();
+    inner.open().await.unwrap();
+    let store = FailRecordsQueries { inner };
+    let configures = ProtocolsConfigureHandler::new(store.clone(), Some(Arc::new(test_resolver())));
+    let writes = RecordsWriteHandler::new(
+        store.clone(),
+        StubDataStore::default(),
+        Some(Arc::new(test_resolver())),
+    );
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 500, "{}", reply.status.detail);
 }

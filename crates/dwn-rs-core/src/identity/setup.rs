@@ -7,7 +7,7 @@ use crate::identity::agent::{
     jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
     AgentKeyManager, PortableDid, SecretStore,
 };
-use crate::interfaces::messages::protocols::{Definition, PathEncryption, RuleSet};
+use crate::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
@@ -297,17 +297,6 @@ pub struct RestoreFlowResult {
     pub remote_pushes: Vec<ProtocolInstallResult>,
 }
 
-pub fn protocol_requires_encryption(definition: &Definition) -> bool {
-    definition
-        .types
-        .values()
-        .any(|protocol_type| protocol_type.encryption_required == Some(true))
-}
-
-pub fn protocol_has_encryption(definition: &Definition) -> bool {
-    definition.structure.values().any(rule_set_has_encryption)
-}
-
 pub async fn install_protocol_if_needed<E, K>(
     endpoint: &E,
     key_manager: &K,
@@ -321,18 +310,18 @@ where
     let installed = endpoint
         .query_protocol(&tenant_did.uri, &definition.protocol)
         .await?;
-    let requires_encryption = protocol_requires_encryption(&definition);
+    let requires_encryption = definition.requires_encryption();
     if let Some(installed) = installed {
         return Ok(ProtocolInstallResult {
             protocol: definition.protocol,
             installed: false,
-            encryption_active: requires_encryption && protocol_has_encryption(&installed),
+            encryption_active: requires_encryption && installed.has_encryption(),
         });
     }
 
     let encryption_active = requires_encryption;
     let definition = if requires_encryption {
-        inject_protocol_encryption(definition, key_manager, tenant_did).await?
+        inject_protocol_encryption(&definition, key_manager, tenant_did).await?
     } else {
         definition
     };
@@ -398,35 +387,43 @@ where
 }
 
 pub async fn inject_protocol_encryption<K>(
-    mut definition: Definition,
+    definition: &Definition,
     key_manager: &K,
     tenant_did: &PortableDid,
 ) -> AgentIdentityResult<Definition>
 where
     K: AgentKeyManager,
 {
+    let mut clone = definition.clone();
     let root_key_id = key_agreement_root_key_id(tenant_did)?;
+    let root_key_jwk = key_manager
+        .derive_public_jwk(
+            &root_key_id,
+            vec![
+                PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                clone.protocol.clone(),
+            ],
+        )
+        .await?;
+    clone.key_agreement = Some(ProtocolKeyAgreement {
+        public_key_jwk: root_key_jwk,
+    });
     let mut paths = Vec::new();
-    for (root, rule_set) in &definition.structure {
+    for (root, rule_set) in &clone.structure {
         collect_protocol_paths(rule_set, vec![root.clone()], &mut paths);
     }
     for relative_path in paths {
         let mut derivation_path = vec![
             PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-            definition.protocol.clone(),
+            clone.protocol.clone(),
         ];
         derivation_path.extend(relative_path.clone());
         let public_key_jwk = key_manager
             .derive_public_jwk(&root_key_id, derivation_path)
             .await?;
-        set_path_encryption(
-            &mut definition,
-            &relative_path,
-            &root_key_id,
-            public_key_jwk,
-        )?;
+        set_path_encryption(&mut clone, &relative_path, public_key_jwk)?;
     }
-    Ok(definition)
+    Ok(clone)
 }
 
 fn collect_protocol_paths(
@@ -447,7 +444,6 @@ fn collect_protocol_paths(
 fn set_path_encryption(
     definition: &mut Definition,
     relative_path: &[String],
-    root_key_id: &str,
     public_key_jwk: JWK,
 ) -> AgentIdentityResult<()> {
     let Some((root, rest)) = relative_path.split_first() else {
@@ -470,8 +466,7 @@ fn set_path_encryption(
             )
         })?;
     }
-    rule_set.encryption = Some(PathEncryption {
-        root_key_id: root_key_id.to_string(),
+    rule_set.key_agreement = Some(ProtocolKeyAgreement {
         public_key_jwk: public_key_jwk.to_public(),
     });
     Ok(())
@@ -520,10 +515,6 @@ fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<St
         ));
     }
     Ok(root_key_id)
-}
-
-fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
-    rule_set.encryption.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
 }
 
 /// In-memory `ProtocolEndpoint` for development, tests, and the wallet
@@ -704,17 +695,71 @@ mod tests {
             .protocol(&agent_did.uri, &definition.protocol)
             .unwrap()
             .expect("installed protocol");
+        assert!(installed.key_agreement.is_some());
         let rule = installed.structure.get("note").unwrap();
-        let encryption = rule.encryption.as_ref().unwrap();
-        assert!(encryption.root_key_id.ends_with("#enc"));
+        let key_agreement = rule.key_agreement.as_ref().unwrap();
         assert_eq!(
-            serde_json::to_value(&encryption.public_key_jwk).unwrap()["crv"],
+            serde_json::to_value(&key_agreement.public_key_jwk).unwrap()["crv"],
             JsonValue::String("X25519".to_string())
         );
         assert!(remote
             .protocol(&agent_did.uri, &definition.protocol)
             .unwrap()
             .is_some());
+    }
+
+    // Covers: DWN-PROTO-005
+    #[tokio::test]
+    async fn inject_clones_input_injects_root_key_and_skips_ref_nodes() {
+        let (agent_did, key_manager) = agent_did_with_keys().await;
+        let definition = composed_notes_definition();
+        let snapshot = definition.clone();
+
+        let augmented = inject_protocol_encryption(&definition, &key_manager, &agent_did)
+            .await
+            .unwrap();
+        assert_eq!(definition, snapshot);
+
+        let root_key_id = key_agreement_root_key_id(&agent_did).unwrap();
+        let expected_root = key_manager
+            .derive_public_jwk(
+                &root_key_id,
+                vec![
+                    PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                    definition.protocol.clone(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            augmented.key_agreement.unwrap().public_key_jwk,
+            expected_root
+        );
+
+        let post = augmented.structure.get("post").unwrap();
+        assert!(post.key_agreement.is_none());
+        let expected_child = key_manager
+            .derive_public_jwk(
+                &root_key_id,
+                vec![
+                    PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                    definition.protocol.clone(),
+                    "post".to_string(),
+                    "comment".to_string(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            post.rules
+                .get("comment")
+                .unwrap()
+                .key_agreement
+                .clone()
+                .unwrap()
+                .public_key_jwk,
+            expected_child
+        );
     }
 
     #[tokio::test]
@@ -852,11 +897,40 @@ mod tests {
         (initialization.portable_did, key_manager)
     }
 
+    fn composed_notes_definition() -> Definition {
+        Definition {
+            protocol: "https://protocol.example/composed-notes".to_string(),
+            published: true,
+            uses: Some(BTreeMap::from([(
+                "blog".to_string(),
+                "https://protocol.example/blog".to_string(),
+            )])),
+            key_agreement: None,
+            types: BTreeMap::from([(
+                "comment".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(true),
+                },
+            )]),
+            structure: BTreeMap::from([(
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                    ..Default::default()
+                },
+            )]),
+        }
+    }
+
     fn encrypted_protocol() -> Definition {
         Definition {
             protocol: "https://protocol.example/notes".to_string(),
             published: true,
             uses: None,
+            key_agreement: None,
             types: BTreeMap::from([(
                 "note".to_string(),
                 Type {

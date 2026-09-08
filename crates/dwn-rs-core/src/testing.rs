@@ -13,12 +13,15 @@ use serde_json::json;
 use ssi_jwk::Algorithm;
 
 use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
-use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
+use crate::cid::{
+    generate_cid_from_json, generate_cid_from_serialized, generate_dag_pb_cid_from_bytes,
+};
 use crate::descriptors::{
     records::entry_id, ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor,
     RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::{Dwn, MessageKind, MethodHandler, MethodHandlerRequest, TenantGate};
+use crate::encryption::{Encryption, EncryptionEnvelope};
 use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::handlers::records::common::message_cid;
@@ -48,6 +51,7 @@ pub struct WriteSpec {
     pub published: Option<bool>,
     pub permission_grant_id: Option<String>,
     pub squash: Option<bool>,
+    pub encryption: Option<EncryptionEnvelope>,
 }
 
 impl WriteSpec {
@@ -71,6 +75,7 @@ impl WriteSpec {
             published: None,
             permission_grant_id: None,
             squash: None,
+            encryption: None,
         }
     }
 }
@@ -104,16 +109,31 @@ pub async fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
             .unwrap_or_else(|| record_id.clone())
     });
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
-    let signature_payload =
+    let mut signature_payload =
         payload_with_permission_grant(&record_id, &context_id, spec.permission_grant_id.as_deref());
+    if let Some(envelope) = &spec.encryption {
+        let encryption_cid =
+            generate_cid_from_serialized(Encryption::Envelope(envelope.clone())).unwrap();
+        signature_payload
+            .as_object_mut()
+            .expect("signature payload must be an object")
+            .insert(
+                "encryptionCid".to_string(),
+                serde_json::Value::String(encryption_cid.to_string()),
+            );
+    }
     let signature =
         signature_for_descriptor(&descriptor_json, signature_payload, spec.signer).await;
-    json!({
+    let mut message = json!({
         "descriptor": descriptor_json,
         "recordId": record_id,
         "contextId": context_id,
         "authorization": { "signature": signature }
-    })
+    });
+    if let Some(envelope) = &spec.encryption {
+        message["encryption"] = serde_json::to_value(envelope).unwrap();
+    }
+    message
 }
 
 pub async fn with_author_delegated_grant(
@@ -243,6 +263,7 @@ where
         protocol: "http://example.com/notes".to_string(),
         published: true,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "note".to_string(),
             Type {
@@ -301,6 +322,7 @@ where
         protocol: "http://example.com/notes".to_string(),
         published: false,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "note".to_string(),
             Type {
@@ -340,6 +362,45 @@ where
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
+/// Stores an arbitrary protocol definition as a configure message at the
+/// given timestamp, for tests that need keyed, composed, or historical
+/// protocol versions the fixed protocol helpers do not cover.
+pub async fn put_protocol_definition<M>(
+    tenant: &str,
+    message_store: &M,
+    definition: Definition,
+    timestamp: &str,
+) where
+    M: MessageStore,
+{
+    let protocol = definition.protocol.clone();
+    let message = Message {
+        descriptor: Descriptor::Protocols(Box::new(ProtocolsDescriptor::Configure(
+            ConfigureDescriptor {
+                message_timestamp: parse_time(timestamp),
+                definition,
+                permission_grant_id: None,
+            },
+        ))),
+        fields: Fields::Write(WriteFields::default()),
+    };
+    let indexes = BTreeMap::from([
+        (
+            "interface".to_string(),
+            Value::String("Protocols".to_string()),
+        ),
+        ("method".to_string(), Value::String("Configure".to_string())),
+        ("protocol".to_string(), Value::String(protocol)),
+        ("published".to_string(), Value::Bool(true)),
+        ("isLatestBaseState".to_string(), Value::Bool(true)),
+        (
+            "messageTimestamp".to_string(),
+            Value::String(timestamp.to_string()),
+        ),
+    ]);
+    message_store.put(tenant, message, indexes).await.unwrap();
+}
+
 /// Installs a protocol with `$recordLimit` rules for record-limit parity
 /// scenarios: at most 2 records at the root `post` path and at most 1 record
 /// per direct parent at the nested `thread/message` path. Actions are empty
@@ -352,10 +413,7 @@ where
 {
     const PROTOCOL: &str = "http://example.com/limited";
     let limited = |max: u64| RuleSet {
-        record_limit: Some(RecordLimit {
-            max,
-            strategy: "reject".to_string(),
-        }),
+        record_limit: Some(RecordLimit { max }),
         ..Default::default()
     };
     let text_type = || Type {
@@ -367,6 +425,7 @@ where
         protocol: PROTOCOL.to_string(),
         published: false,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([
             ("post".to_string(), text_type()),
             ("thread".to_string(), text_type()),

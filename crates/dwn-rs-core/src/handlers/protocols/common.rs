@@ -55,6 +55,23 @@ pub(crate) fn protocol_configure_filters(protocol: &str, latest_only: bool) -> F
     Filters::from(filters)
 }
 
+pub(crate) fn latest_configure_filters() -> Filters {
+    let mut filters = BTreeMap::new();
+    filters.insert(
+        FilterKey::Index("interface".to_string()),
+        Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+    );
+    filters.insert(
+        FilterKey::Index("method".to_string()),
+        Filter::Equal(Value::String(CONFIGURE_METHOD.to_string())),
+    );
+    filters.insert(
+        FilterKey::Index("isLatestBaseState".to_string()),
+        Filter::Equal(Value::Bool(true)),
+    );
+    Filters::from(filters)
+}
+
 pub(crate) fn protocol_definition_lookup_filters(
     protocol: &str,
     message_timestamp: Option<&str>,
@@ -174,12 +191,26 @@ pub(crate) fn validate_refs_and_roles_recursively(
                         parsed.alias, child_protocol_path
                     )
                 })?;
-                validate_ref_target(
-                    &definition.protocol,
-                    &definition.structure,
-                    parsed.protocol_path,
-                    &child_protocol_path,
-                )?;
+                let mut current = &definition.structure;
+                let mut traversed = Vec::new();
+                for segment in parsed.protocol_path.split('/') {
+                    traversed.push(segment);
+                    let Some(node) = current.get(segment) else {
+                        return Err(format!(
+                            "ProtocolsConfigureInvalidRefProtocolPath: '$ref' at protocol path '{child_protocol_path}' references type path '{}' which does not exist in protocol '{}'.",
+                            parsed.protocol_path, definition.protocol
+                        ));
+                    };
+                    if node.reference.is_some() {
+                        return Err(format!(
+                            "ProtocolsConfigureInvalidRefTargetThroughRef: '$ref' at protocol path '{child_protocol_path}' references type path '{}' in protocol '{}', but node '{}' is itself a '$ref'.",
+                            parsed.protocol_path,
+                            definition.protocol,
+                            traversed.join("/")
+                        ));
+                    }
+                    current = &node.rules;
+                }
             }
         }
 
@@ -193,10 +224,7 @@ pub(crate) fn validate_refs_and_roles_recursively(
                                 parsed.alias, child_protocol_path
                             )
                         })?;
-                        let Some(role_rule_set) = protocol_types::get_rule_set_at_path(
-                            parsed.protocol_path,
-                            &definition.structure,
-                        ) else {
+                        let Some(role_rule_set) = definition.rule_at(parsed.protocol_path) else {
                             return Err(format!(
                                 "ProtocolsConfigureInvalidCrossProtocolRole: role '{}' at protocol path '{}' does not exist in protocol '{}'.",
                                 action.role, child_protocol_path, definition.protocol
@@ -205,6 +233,22 @@ pub(crate) fn validate_refs_and_roles_recursively(
                         if role_rule_set.role != Some(true) {
                             return Err(format!(
                                 "ProtocolsConfigureInvalidCrossProtocolRole: role '{}' at protocol path '{}' does not point to a valid role in protocol '{}'.",
+                                action.role, child_protocol_path, definition.protocol
+                            ));
+                        }
+                        let role_type = parsed
+                            .protocol_path
+                            .split('/')
+                            .next_back()
+                            .unwrap_or_default();
+                        let role_type_encrypted = definition
+                            .types
+                            .get(role_type)
+                            .and_then(|protocol_type| protocol_type.encryption_required)
+                            == Some(true);
+                        if role_type_encrypted {
+                            return Err(format!(
+                                "ProtocolsConfigureInvalidEncryptedRoleType: cross-protocol role '{}' at protocol path '{}' resolves to encrypted type '{role_type}' in protocol '{}'; role records cannot be encrypted.",
                                 action.role, child_protocol_path, definition.protocol
                             ));
                         }
@@ -219,12 +263,7 @@ pub(crate) fn validate_refs_and_roles_recursively(
                                     parsed.alias, child_protocol_path
                                 )
                             })?;
-                            if protocol_types::get_rule_set_at_path(
-                                parsed.protocol_path,
-                                &definition.structure,
-                            )
-                            .is_none()
-                            {
+                            if definition.rule_at(parsed.protocol_path).is_none() {
                                 return Err(format!(
                                     "ProtocolsConfigureInvalidCrossProtocolOf: reference '{}' at protocol path '{}' does not point to a valid type path in protocol '{}'.",
                                     of, child_protocol_path, definition.protocol
@@ -243,32 +282,6 @@ pub(crate) fn validate_refs_and_roles_recursively(
         )?;
     }
 
-    Ok(())
-}
-
-pub(crate) fn validate_ref_target(
-    protocol: &str,
-    structure: &BTreeMap<String, RuleSet>,
-    target_path: &str,
-    source_path: &str,
-) -> Result<(), String> {
-    let mut current = structure;
-    let mut traversed = Vec::new();
-    for segment in target_path.split('/') {
-        traversed.push(segment);
-        let Some(node) = current.get(segment) else {
-            return Err(format!(
-                "ProtocolsConfigureInvalidRefProtocolPath: '$ref' at protocol path '{source_path}' references type path '{target_path}' which does not exist in protocol '{protocol}'."
-            ));
-        };
-        if node.reference.is_some() {
-            return Err(format!(
-                "ProtocolsConfigureInvalidRefTargetThroughRef: '$ref' at protocol path '{source_path}' references type path '{target_path}' in protocol '{protocol}', but node '{}' is itself a '$ref'.",
-                traversed.join("/")
-            ));
-        }
-        current = &node.rules;
-    }
     Ok(())
 }
 

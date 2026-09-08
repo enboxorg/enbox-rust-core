@@ -19,6 +19,7 @@ fn test_configure_descriptor() {
         protocol: "example".to_string(),
         published: true,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::new(),
         structure: BTreeMap::new(),
     };
@@ -55,6 +56,7 @@ fn test_protocol_definition() {
         protocol: protocol.clone(),
         published,
         uses: None,
+        key_agreement: None,
         types,
         structure,
     };
@@ -93,10 +95,13 @@ fn test_protocol_type() {
 
 #[test]
 fn test_protocol_rule() {
-    let encryption = Some(protocols::PathEncryption {
-        root_key_id: "root".to_string(),
-        public_key_jwk: JWK::generate_ed25519().unwrap(),
-    });
+    let public_key_jwk: JWK = serde_json::from_value(serde_json::json!({
+        "kty": "OKP",
+        "crv": "X25519",
+        "x": "GDW9p9yD8p7p9yD8p7p9yD8p7p9yD8p7p9yD8p4"
+    }))
+    .unwrap();
+    let key_agreement = Some(protocols::ProtocolKeyAgreement { public_key_jwk });
     let actions = vec![protocols::Action::Who(ActionWho {
         who: protocols::Who::Anyone,
         of: None,
@@ -116,7 +121,7 @@ fn test_protocol_rule() {
 
     let rules: BTreeMap<String, protocols::RuleSet> = BTreeMap::new();
     let protocol_rule = protocols::RuleSet {
-        encryption: encryption.clone(),
+        key_agreement: key_agreement.clone(),
         actions: actions.clone(),
         role,
         reference: None,
@@ -130,7 +135,7 @@ fn test_protocol_rule() {
     };
 
     let json = json!({
-        "$encryption": encryption.clone(),
+        "$keyAgreement": key_agreement.clone(),
         "$actions": actions,
         "$role": role,
         "$size": size,
@@ -144,7 +149,7 @@ fn test_protocol_rule() {
     );
 
     let json = json!({
-        "$encryption": encryption,
+        "$keyAgreement": key_agreement,
         "$actions": actions,
         "$role": role,
         "$size": size,
@@ -155,7 +160,7 @@ fn test_protocol_rule() {
     let mut rules: BTreeMap<String, protocols::RuleSet> = BTreeMap::new();
     rules.insert("key".to_string(), protocols::RuleSet::default());
     let protocol_rule = protocols::RuleSet {
-        encryption,
+        key_agreement,
         actions,
         role,
         reference: None,
