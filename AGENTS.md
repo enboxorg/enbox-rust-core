@@ -55,6 +55,10 @@ Keep these distinct and never collapse them:
    parity target where a documented draft divergence exists.
 3. Current Rust behaviour (this repository) — implementation, not authority.
 
+Port observable behaviour and semantic contracts, not TypeScript implementation
+structure. Use idiomatic Rust types, ownership, error handling, and architecture
+unless an invariant requires otherwise.
+
 Supporting knowledge layers: `../knowledge/implementation/` (engine contracts),
 `../knowledge/conformance/` (observable behaviour), `../knowledge/invariants/`
 (stable IDs), `../knowledge/decisions/` (accepted ADRs and divergences).
