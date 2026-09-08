@@ -55,6 +55,23 @@ pub(crate) fn protocol_configure_filters(protocol: &str, latest_only: bool) -> F
     Filters::from(filters)
 }
 
+pub(crate) fn latest_configure_filters() -> Filters {
+    let mut filters = BTreeMap::new();
+    filters.insert(
+        FilterKey::Index("interface".to_string()),
+        Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+    );
+    filters.insert(
+        FilterKey::Index("method".to_string()),
+        Filter::Equal(Value::String(CONFIGURE_METHOD.to_string())),
+    );
+    filters.insert(
+        FilterKey::Index("isLatestBaseState".to_string()),
+        Filter::Equal(Value::Bool(true)),
+    );
+    Filters::from(filters)
+}
+
 pub(crate) fn protocol_definition_lookup_filters(
     protocol: &str,
     message_timestamp: Option<&str>,

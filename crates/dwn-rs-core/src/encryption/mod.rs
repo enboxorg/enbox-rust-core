@@ -30,6 +30,17 @@ pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
 pub const SEAL_DERIVATION_SCHEME: &str = "seal";
 pub const ENCRYPTION_PROTOCOL_URI: &str = "https://identity.foundation/dwn/protocols/encryption";
 pub const ENCRYPTION_PROTOCOL_GRANT_KEY_PATH: &str = "grantKey";
+pub const ENCRYPTION_CONTROL_AUDIENCE_PATH: &str = "$encryption/audience";
+pub const ENCRYPTION_CONTROL_DELIVERY_PATH: &str = "$encryption/delivery";
+
+/// Whether a protocol path is a reserved encryption-control path whose
+/// records never participate in representation-policy checks.
+pub fn is_encryption_control_path(protocol_path: &str) -> bool {
+    matches!(
+        protocol_path,
+        ENCRYPTION_CONTROL_AUDIENCE_PATH | ENCRYPTION_CONTROL_DELIVERY_PATH
+    )
+}
 
 /// RecordsWrite `keyEncryption` derivation schemes. Upstream only admits
 /// `protocolPath` and `roleAudience` here; seal wrapping is a separate type.

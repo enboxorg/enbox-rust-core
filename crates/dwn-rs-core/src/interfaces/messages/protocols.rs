@@ -356,6 +356,66 @@ fn strip_rule_sets(rules: &mut BTreeMap<String, RuleSet>) {
     }
 }
 
+/// Whether a configure can change a path's stored representation: any type's
+/// encryption boolean flips, or composition redirects a path to another type
+/// policy. Key rotation alone never counts.
+pub fn has_encryption_policy_change(previous: &Definition, incoming: &Definition) -> bool {
+    let mut type_names = std::collections::BTreeSet::new();
+    type_names.extend(previous.types.keys().cloned());
+    type_names.extend(incoming.types.keys().cloned());
+    for type_name in type_names {
+        let previously_required = previous
+            .types
+            .get(&type_name)
+            .and_then(|protocol_type| protocol_type.encryption_required)
+            == Some(true);
+        let incoming_required = incoming
+            .types
+            .get(&type_name)
+            .and_then(|protocol_type| protocol_type.encryption_required)
+            == Some(true);
+        if previously_required != incoming_required {
+            return true;
+        }
+    }
+
+    composition_policy(previous) != composition_policy(incoming)
+}
+
+/// Only the composition fields that can redirect a path to another type
+/// policy: `$ref` attachments and the `uses` map. `BTreeMap` iteration order
+/// is canonical, so derived structural equality is sufficient.
+#[derive(PartialEq, Eq)]
+struct CompositionPolicy {
+    references: Vec<(String, String)>,
+    uses: Vec<(String, String)>,
+}
+
+fn composition_policy(definition: &Definition) -> CompositionPolicy {
+    fn visit(rules: &BTreeMap<String, RuleSet>, parent: &str, out: &mut Vec<(String, String)>) {
+        for (name, child) in rules {
+            let path = child_protocol_path(parent, name);
+            if let Some(reference) = child.reference.as_deref() {
+                out.push((path.clone(), reference.to_string()));
+            }
+            visit(&child.rules, &path, out);
+        }
+    }
+
+    let mut references = Vec::new();
+    visit(&definition.structure, "", &mut references);
+    let uses: Vec<(String, String)> = definition
+        .uses
+        .as_ref()
+        .map(|uses| {
+            uses.iter()
+                .map(|(alias, uri)| (alias.clone(), uri.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    CompositionPolicy { references, uses }
+}
+
 pub fn parse_cross_protocol_ref(value: &str) -> Option<CrossProtocolRef<'_>> {
     let (alias, protocol_path) = value.split_once(':')?;
     if alias.is_empty() || protocol_path.is_empty() || protocol_path.contains(':') {
@@ -1039,6 +1099,39 @@ mod tests {
         assert_eq!(position.protocol_path, "post");
         assert!(definition.ref_position("post/comment").is_none());
         assert!(definition.ref_position("missing").is_none());
+    }
+
+    // Covers: DWN-PROTO-001
+    #[test]
+    fn encryption_policy_change_detects_boolean_and_composition_shifts() {
+        let plain = note_definition(false, false);
+        let encrypted = note_definition(true, true);
+        assert!(has_encryption_policy_change(&plain, &encrypted));
+        assert!(has_encryption_policy_change(&encrypted, &plain));
+        assert!(!has_encryption_policy_change(&plain, &plain));
+        assert!(!has_encryption_policy_change(&encrypted, &encrypted));
+
+        // Key rotation alone never counts as a policy change.
+        let mut rotated = encrypted.clone();
+        rotated.key_agreement = Some(ProtocolKeyAgreement {
+            public_key_jwk: serde_json::from_value(json!({
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            }))
+            .unwrap(),
+        });
+        assert!(!has_encryption_policy_change(&encrypted, &rotated));
+
+        // Redirecting a path to another type policy counts.
+        let mut recomposed = plain.clone();
+        recomposed.uses = Some(BTreeMap::from([(
+            "blog".to_string(),
+            "https://protocol.example/blog".to_string(),
+        )]));
+        recomposed.structure.get_mut("note").unwrap().reference = Some("blog:post".to_string());
+        assert!(has_encryption_policy_change(&plain, &recomposed));
+        assert!(!has_encryption_policy_change(&recomposed, &recomposed));
     }
 
     // Covers: DWN-PROTO-001

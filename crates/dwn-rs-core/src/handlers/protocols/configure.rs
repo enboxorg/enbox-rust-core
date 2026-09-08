@@ -1,16 +1,21 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
 use crate::core_protocol::CoreProtocolRegistry;
+use crate::descriptors::records::{records_write_descriptor, write_fields};
 use crate::descriptors::ConfigureDescriptor;
 use crate::dwn::HandlerContext;
+use crate::encryption::is_encryption_control_path;
+use crate::filters::Filters;
+use crate::handlers::records::common::{filter_map, string_filter};
+use crate::handlers::records::{RECORDS_INTERFACE, WRITE_METHOD};
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition};
 use crate::replies::protocols::Configure;
 use crate::stores::{LatestStateMutation, LatestStateTransition};
-use crate::{permissions, Handler, Message, Pagination, Response};
+use crate::{canonical_rfc3339, permissions, Handler, Message, Pagination, Response};
 use crate::{MessageSort, SortDirection};
 
 use super::common::*;
@@ -122,6 +127,22 @@ where
                 return Response::bad_request(detail.to_string());
             }
 
+            // Covers: DWN-PROTO-001, DWN-PROTO-004, DWN-PROTO-005
+            // Representation policy is immutable once records exist under a
+            // path. The scan runs before the configure commits.
+            let incoming_timestamp = canonical_rfc3339(descriptor.message_timestamp);
+            if let Err(reply) = self
+                .validate_encryption_policy_immutable(
+                    tenant,
+                    &descriptor.definition,
+                    &incoming_timestamp,
+                    &existing_messages,
+                )
+                .await
+            {
+                return reply;
+            }
+
             let transition =
                 match plan_configure_transition(message, &incoming_cid, &author, existing_messages)
                 {
@@ -181,6 +202,227 @@ where
             Err(ProtocolDefinitionLookupError::NotFound(_)) => Ok(None),
             Err(err) => Err(err.to_string()),
         }
+    }
+
+    #[allow(clippy::result_large_err)]
+    async fn validate_encryption_policy_immutable(
+        &self,
+        tenant: &str,
+        incoming: &Definition,
+        incoming_timestamp: &str,
+        existing: &[Message<crate::Descriptor>],
+    ) -> Result<(), Response<Configure>> {
+        let mut newest: Option<&Message<crate::Descriptor>> = None;
+        let mut newest_cid = String::new();
+        for message in existing {
+            let cid = message_cid(message).map_err(Response::bad_request)?;
+            let is_newer = match newest {
+                None => true,
+                Some(current) => {
+                    compare_configure_messages(&cid, message, &newest_cid, current)
+                        == Ordering::Greater
+                }
+            };
+            if is_newer {
+                newest = Some(message);
+                newest_cid = cid;
+            }
+        }
+        let Some(newest) = newest else {
+            return Ok(());
+        };
+        let previous = protocols_configure_descriptor(newest)
+            .map(|descriptor| descriptor.definition.clone())
+            .map_err(Response::bad_request)?;
+        if !protocol_types::has_encryption_policy_change(&previous, incoming) {
+            return Ok(());
+        }
+
+        let filter = filter_map([
+            ("interface", string_filter(RECORDS_INTERFACE)),
+            ("method", string_filter(WRITE_METHOD)),
+            ("protocol", string_filter(&incoming.protocol)),
+        ]);
+        let records = self
+            .message_store
+            .query(tenant, Filters::from(filter), None, None, None)
+            .await
+            .map(|result| result.messages)
+            .map_err(|err| store_error_reply(err.to_string()))?;
+        let mut policy_by_path: BTreeMap<String, bool> = BTreeMap::new();
+        for record in &records {
+            let descriptor = records_write_descriptor(record)
+                .map_err(|err| store_error_reply(err.to_string()))?;
+            let protocol_path = descriptor.protocol_path.clone();
+            if is_encryption_control_path(&protocol_path) {
+                continue;
+            }
+            if incoming.rule_at(&protocol_path).is_none() {
+                continue;
+            }
+            let required = match policy_by_path.get(&protocol_path) {
+                Some(required) => *required,
+                None => {
+                    let required = self
+                        .effective_incoming_policy(
+                            tenant,
+                            incoming,
+                            &protocol_path,
+                            incoming_timestamp,
+                        )
+                        .await?;
+                    policy_by_path.insert(protocol_path.clone(), required);
+                    required
+                }
+            };
+            let encrypted = write_fields(record)
+                .map(|fields| fields.encryption.is_some())
+                .map_err(|err| store_error_reply(err.to_string()))?;
+            if encrypted == required {
+                continue;
+            }
+            return Err(Response::bad_request(format!(
+                "ProtocolsConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{protocol_path}' after records exist; install the changed definition under a new protocol URI."
+            )));
+        }
+
+        self.validate_composed_encryption_policy_immutable(tenant, incoming)
+            .await
+    }
+
+    #[allow(clippy::result_large_err)]
+    async fn effective_incoming_policy(
+        &self,
+        tenant: &str,
+        incoming: &Definition,
+        protocol_path: &str,
+        incoming_timestamp: &str,
+    ) -> Result<bool, Response<Configure>> {
+        let type_name = protocol_path.split('/').next_back().unwrap_or_default();
+        if let Some(parsed) = incoming.ref_position(protocol_path) {
+            let ref_uri = incoming
+                .uses
+                .as_ref()
+                .and_then(|uses| uses.get(parsed.alias))
+                .ok_or_else(|| {
+                    Response::bad_request(format!(
+                        "ProtocolsConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{protocol_path}' does not exist in the 'uses' map.",
+                        parsed.alias
+                    ))
+                })?;
+            let referenced =
+                fetch_protocol_definition(tenant, ref_uri, &self.message_store, Some(incoming_timestamp))
+                    .await
+                    .map_err(|err| match err {
+                        ProtocolDefinitionLookupError::NotFound(uri) => Response::bad_request(
+                            format!("ProtocolAuthorizationProtocolNotFound: unable to find protocol definition for {uri}"),
+                        ),
+                        ProtocolDefinitionLookupError::Store(detail) => {
+                            store_error_reply(detail)
+                        }
+                        ProtocolDefinitionLookupError::InvalidMessage(detail) => {
+                            Response::bad_request(detail)
+                        }
+                    })?;
+            return Ok(referenced
+                .types
+                .get(type_name)
+                .and_then(|protocol_type| protocol_type.encryption_required)
+                == Some(true));
+        }
+        Ok(incoming
+            .types
+            .get(type_name)
+            .and_then(|protocol_type| protocol_type.encryption_required)
+            == Some(true))
+    }
+
+    #[allow(clippy::result_large_err)]
+    async fn validate_composed_encryption_policy_immutable(
+        &self,
+        tenant: &str,
+        incoming: &Definition,
+    ) -> Result<(), Response<Configure>> {
+        let configurations = self
+            .message_store
+            .query(tenant, latest_configure_filters(), None, None, None)
+            .await
+            .map(|result| result.messages)
+            .map_err(|err| store_error_reply(err.to_string()))?;
+        let mut policies: BTreeMap<String, BTreeMap<String, bool>> = BTreeMap::new();
+        for configuration in &configurations {
+            let composing = protocols_configure_descriptor(configuration)
+                .map(|descriptor| descriptor.definition.clone())
+                .map_err(|err| store_error_reply(err.to_string()))?;
+            let aliases: BTreeSet<&str> = composing
+                .uses
+                .as_ref()
+                .map(|uses| {
+                    uses.iter()
+                        .filter(|(_, uri)| *uri == &incoming.protocol)
+                        .map(|(alias, _)| alias.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if aliases.is_empty() {
+                continue;
+            }
+            for (root_path, rule_set) in &composing.structure {
+                let Some(reference) = rule_set.reference.as_deref() else {
+                    continue;
+                };
+                let Some(parsed) = protocol_types::parse_cross_protocol_ref(reference) else {
+                    continue;
+                };
+                if !aliases.contains(parsed.alias) {
+                    continue;
+                }
+                let required = incoming
+                    .types
+                    .get(root_path.as_str())
+                    .and_then(|protocol_type| protocol_type.encryption_required)
+                    == Some(true);
+                policies
+                    .entry(composing.protocol.clone())
+                    .or_default()
+                    .insert(root_path.clone(), required);
+            }
+        }
+        if policies.is_empty() {
+            return Ok(());
+        }
+
+        for (protocol, paths) in &policies {
+            let filter = filter_map([
+                ("interface", string_filter(RECORDS_INTERFACE)),
+                ("method", string_filter(WRITE_METHOD)),
+                ("protocol", string_filter(protocol)),
+            ]);
+            let records = self
+                .message_store
+                .query(tenant, Filters::from(filter), None, None, None)
+                .await
+                .map(|result| result.messages)
+                .map_err(|err| store_error_reply(err.to_string()))?;
+            for record in &records {
+                let descriptor = records_write_descriptor(record)
+                    .map_err(|err| store_error_reply(err.to_string()))?;
+                let Some(required) = paths.get(&descriptor.protocol_path) else {
+                    continue;
+                };
+                let encrypted = write_fields(record)
+                    .map(|fields| fields.encryption.is_some())
+                    .map_err(|err| store_error_reply(err.to_string()))?;
+                if encrypted == *required {
+                    continue;
+                }
+                return Err(Response::bad_request(format!(
+                    "ProtocolsConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{}' imported by protocol '{protocol}' after records exist; install the changed definition under a new protocol URI.",
+                    descriptor.protocol_path
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
