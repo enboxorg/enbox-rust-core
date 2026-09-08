@@ -413,10 +413,7 @@ where
 {
     const PROTOCOL: &str = "http://example.com/limited";
     let limited = |max: u64| RuleSet {
-        record_limit: Some(RecordLimit {
-            max,
-            strategy: "reject".to_string(),
-        }),
+        record_limit: Some(RecordLimit { max }),
         ..Default::default()
     };
     let text_type = || Type {

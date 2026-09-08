@@ -212,29 +212,7 @@ where
         incoming_timestamp: &str,
         existing: &[Message<crate::Descriptor>],
     ) -> Result<(), Response<Configure>> {
-        let mut newest: Option<&Message<crate::Descriptor>> = None;
-        let mut newest_cid = String::new();
-        for message in existing {
-            let cid = message_cid(message).map_err(Response::bad_request)?;
-            let is_newer = match newest {
-                None => true,
-                Some(current) => {
-                    compare_configure_messages(&cid, message, &newest_cid, current)
-                        == Ordering::Greater
-                }
-            };
-            if is_newer {
-                newest = Some(message);
-                newest_cid = cid;
-            }
-        }
-        let Some(newest) = newest else {
-            return Ok(());
-        };
-        let previous = protocols_configure_descriptor(newest)
-            .map(|descriptor| descriptor.definition.clone())
-            .map_err(Response::bad_request)?;
-        if !protocol_types::has_encryption_policy_change(&previous, incoming) {
+        if existing.is_empty() {
             return Ok(());
         }
 
@@ -298,7 +276,6 @@ where
         protocol_path: &str,
         incoming_timestamp: &str,
     ) -> Result<bool, Response<Configure>> {
-        let type_name = protocol_path.split('/').next_back().unwrap_or_default();
         if let Some(parsed) = incoming.ref_position(protocol_path) {
             let ref_uri = incoming
                 .uses
@@ -324,12 +301,18 @@ where
                             Response::bad_request(detail)
                         }
                     })?;
+            let type_name = parsed
+                .protocol_path
+                .split('/')
+                .next_back()
+                .unwrap_or_default();
             return Ok(referenced
                 .types
                 .get(type_name)
                 .and_then(|protocol_type| protocol_type.encryption_required)
                 == Some(true));
         }
+        let type_name = protocol_path.split('/').next_back().unwrap_or_default();
         Ok(incoming
             .types
             .get(type_name)
@@ -377,9 +360,14 @@ where
                 if !aliases.contains(parsed.alias) {
                     continue;
                 }
+                let type_name = parsed
+                    .protocol_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or_default();
                 let required = incoming
                     .types
-                    .get(root_path.as_str())
+                    .get(type_name)
                     .and_then(|protocol_type| protocol_type.encryption_required)
                     == Some(true);
                 policies

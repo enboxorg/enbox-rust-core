@@ -3435,14 +3435,43 @@ fn composed_definition() -> Definition {
                 encryption_required: Some(true),
             },
         )]),
-        structure: BTreeMap::from([(
+        structure: BTreeMap::from([
+            (
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    rules: BTreeMap::from([("comment".to_string(), keyed_rule_set())]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "article".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    }
+}
+
+fn keyed_blog_definition() -> Definition {
+    Definition {
+        protocol: REF_BLOG_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: Some(ProtocolKeyAgreement {
+            public_key_jwk: path_key_jwk(),
+        }),
+        types: BTreeMap::from([(
             "post".to_string(),
-            RuleSet {
-                reference: Some("blog:post".to_string()),
-                rules: BTreeMap::from([("comment".to_string(), keyed_rule_set())]),
-                ..Default::default()
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: Some(true),
             },
         )]),
+        structure: BTreeMap::from([("post".to_string(), keyed_rule_set())]),
     }
 }
 
@@ -3498,6 +3527,43 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
     assert_eq!(
         reply.status.error_code.as_deref(),
         Some("ProtocolAuthorizationEncryptionNotAllowed")
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-005
+#[tokio::test]
+async fn records_write_ref_roots_use_referenced_key_namespace() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        keyed_blog_definition(),
+        ENC_T1,
+    )
+    .await;
+    put_protocol_definition(
+        "did:example:alice",
+        &message_store,
+        composed_definition(),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    for path in ["post", "article"] {
+        let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+        let write =
+            enc_protocol_write(COMPOSED_PROTOCOL, path, ENC_WRITE_TIME, Some(envelope)).await;
+        let reply = handler.run("did:example:alice", &write, write_data()).await;
+        assert_eq!(reply.status.code, 202, "{} at {path}", reply.status.detail);
+    }
+
+    let write = enc_protocol_write(COMPOSED_PROTOCOL, "article", ENC_WRITE_TIME, None).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRequired")
     );
 }
 

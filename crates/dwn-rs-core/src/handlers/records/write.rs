@@ -587,8 +587,9 @@ where
         // Covers: DWN-PROTO-001, DWN-PROTO-004, DWN-PROTO-005, DWN-ENC-001
         // Protocol-declared encryption representation is enforced at admission
         // against the definition governing the record timestamp. A record at
-        // a `$ref` position follows the referenced protocol's type map;
-        // locally declared descendants follow the composing type map.
+        // a `$ref` position follows the referenced protocol's type and key
+        // namespace at the referenced target path; locally declared
+        // descendants follow the composing type map.
         let referenced = self
             .referenced_definition_for_ref_path(
                 tenant,
@@ -597,15 +598,31 @@ where
                 &governing_timestamp,
             )
             .await?;
-        let types = referenced
-            .as_ref()
-            .map(|referenced| &referenced.types)
-            .unwrap_or(&definition.types);
-        let type_name = descriptor
-            .protocol_path
-            .split('/')
-            .next_back()
-            .unwrap_or_default();
+        let ref_position = definition.ref_position(descriptor.protocol_path.as_str());
+        let (types, type_name) = match (&referenced, &ref_position) {
+            (Some(referenced), Some(position)) => (
+                &referenced.types,
+                position
+                    .protocol_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or_default(),
+            ),
+            _ => (
+                &definition.types,
+                descriptor
+                    .protocol_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or_default(),
+            ),
+        };
+        let key_agreement = match (&referenced, &ref_position) {
+            (Some(referenced), Some(position)) => referenced
+                .rule_at(position.protocol_path)
+                .and_then(|rule_set| rule_set.key_agreement.as_ref()),
+            _ => rule_set.key_agreement.as_ref(),
+        };
         let encryption_required = types
             .get(type_name)
             .and_then(|protocol_type| protocol_type.encryption_required)
@@ -631,7 +648,7 @@ where
             .into());
         }
         if encryption_required {
-            match &rule_set.key_agreement {
+            match key_agreement {
                 Some(agreement) => {
                     let key_id = agreement.public_key_jwk.thumbprint().map_err(|error| {
                         RecordsWriteValidationError::Internal(error.to_string())

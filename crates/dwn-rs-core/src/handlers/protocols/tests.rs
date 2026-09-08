@@ -1639,6 +1639,7 @@ use futures_util::{stream, Stream, StreamExt};
 
 const FLIP_PROTOCOL: &str = "http://example.com/flip";
 const FLIP_T1: &str = "2025-01-01T00:00:00.000000Z";
+const FLIP_T1_5: &str = "2025-01-01T12:00:00.000000Z";
 const FLIP_MID: &str = "2025-01-02T00:00:00.000000Z";
 const FLIP_T2: &str = "2025-01-03T00:00:00.000000Z";
 const FLIP_T3: &str = "2025-01-04T00:00:00.000000Z";
@@ -2073,18 +2074,30 @@ async fn protocols_configure_rejects_composed_policy_flip() {
         uses: Some(BTreeMap::from([("blog".to_string(), BLOG.to_string())])),
         key_agreement: None,
         types: BTreeMap::new(),
-        structure: BTreeMap::from([(
-            "post".to_string(),
-            RuleSet {
-                reference: Some("blog:post".to_string()),
-                ..Default::default()
-            },
-        )]),
+        structure: BTreeMap::from([
+            (
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "article".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    ..Default::default()
+                },
+            ),
+        ]),
     };
     let reply = run_flip_configure(&configures, composer, FLIP_T1).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let reply = admit_flip_record(&writes, COMPOSER, "post", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, COMPOSER, "article", FLIP_MID, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let mut blog_v2 = flip_keyed(true, flip_x);
@@ -2118,6 +2131,11 @@ async fn protocols_configure_rejects_composed_policy_flip() {
         "{}",
         reply.status.detail
     );
+    assert!(
+        reply.status.detail.contains("'article'"),
+        "differently named $ref root is evaluated: {}",
+        reply.status.detail
+    );
 }
 
 // Covers: DWN-PROTO-004
@@ -2137,6 +2155,73 @@ async fn protocols_configure_out_of_order_arrival_uses_governing_definition() {
 
     let reply = run_flip_configure(&configures, flip_plain(), FLIP_T4).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_rejects_historical_insert_matching_newest_policy() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // Same policy as newest, but a retained record contradicts the incoming
+    // representation: the scan judges records, not configurations.
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T1_5).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-004
+#[tokio::test]
+async fn protocols_configure_rejects_historical_insert_contradicting_records() {
+    let (configures, writes, _) = flip_harness().await;
+    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
+
+    let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = admit_flip_record(
+        &writes,
+        FLIP_PROTOCOL,
+        "note",
+        FLIP_T4,
+        Some(flip_envelope(&flip_key_id(flip_x))),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // Stale plaintext insert: the retained encrypted record contradicts it.
+    let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1_5).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+        "{}",
+        reply.status.detail
+    );
 }
 
 #[derive(Clone)]
