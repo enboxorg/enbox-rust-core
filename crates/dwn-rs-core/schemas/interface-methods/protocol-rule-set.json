@@ -139,17 +139,14 @@
       }
     },
     "$recordLimit": {
+      "$comment": "Limits visible records within each direct parent context. This directive cannot be combined with `$role`.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["max", "strategy"],
+      "required": ["max"],
       "properties": {
         "max": {
           "type": "integer",
           "minimum": 1
-        },
-        "strategy": {
-          "type": "string",
-          "enum": ["reject", "purgeOldest"]
         }
       }
     },

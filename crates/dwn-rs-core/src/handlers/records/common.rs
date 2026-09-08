@@ -2751,7 +2751,7 @@ mod tests {
                     "published": false,
                     "types": {},
                     "structure": {
-                        "post": { "$recordLimit": { "max": max, "strategy": "reject" } }
+                        "post": { "$recordLimit": { "max": max } }
                     }
                 }
             }

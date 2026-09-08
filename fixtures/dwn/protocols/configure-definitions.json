@@ -229,8 +229,8 @@
       "id": "protocols-configure-enbox-directives",
       "description": "ProtocolsConfigure descriptor using Enbox $recordLimit, $immutable, $delivery, and $squash directives.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreiam5a5h3n4xreg3ge43x2qcbt53cdrbzobb3xjsnqlhs2fqhk3p6q",
-      "messageCid": "bafyreida2df4ptfdiesyxr3dyt6uoney2dvvbc2p3og72twkiqjzi5lf7u",
+      "descriptorCid": "bafyreigrd3z6j4n6thffv2ms2mr2woqiwzxjzg6knjntrhj2oq2ejus5ym",
+      "messageCid": "bafyreicoo2piqwtlvkj76cky5p34lqx4uudlik76vtfvkyymevosokz4di",
       "message": {
         "descriptor": {
           "interface": "Protocols",
@@ -254,8 +254,7 @@
                   }
                 ],
                 "$recordLimit": {
-                  "max": 100,
-                  "strategy": "reject"
+                  "max": 100
                 },
                 "$immutable": true,
                 "$delivery": "direct",
