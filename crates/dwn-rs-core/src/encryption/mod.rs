@@ -28,6 +28,8 @@ use ssi_jwk::JWK;
 pub const KEY_AGREEMENT_ALGORITHM: &str = "X25519-HKDF-SHA256+A256KW";
 pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
 pub const SEAL_DERIVATION_SCHEME: &str = "seal";
+pub const ENCRYPTION_PROTOCOL_URI: &str = "https://identity.foundation/dwn/protocols/encryption";
+pub const ENCRYPTION_PROTOCOL_GRANT_KEY_PATH: &str = "grantKey";
 
 /// RecordsWrite `keyEncryption` derivation schemes. Upstream only admits
 /// `protocolPath` and `roleAudience` here; seal wrapping is a separate type.

@@ -286,7 +286,38 @@ pub fn validate_definition(definition: &Definition) -> Result<(), ProtocolDefini
     validate_structure(definition)
 }
 
+impl Definition {
+    /// The rule set governing a slash-joined protocol path. `structure` is
+    /// keyed by root segment; nesting lives under each rule set's `rules`.
+    pub fn rule_at(&self, protocol_path: &str) -> Option<&RuleSet> {
+        rule_set_at_path(protocol_path, &self.structure)
+    }
+
+    /// The referenced position for a record written exactly at a `$ref`
+    /// attachment root. Deeper paths belong to the composing protocol and
+    /// yield `None`.
+    pub fn ref_position(&self, protocol_path: &str) -> Option<CrossProtocolRef<'_>> {
+        let mut segments = protocol_path.split('/');
+        let root_segment = segments.next().unwrap_or_default();
+        if segments.next().is_some() {
+            return None;
+        }
+        let reference = self
+            .structure
+            .get(root_segment)
+            .and_then(|rule_set| rule_set.reference.as_deref())?;
+        parse_cross_protocol_ref(reference)
+    }
+}
+
 pub fn get_rule_set_at_path<'a>(
+    protocol_path: &str,
+    structure: &'a BTreeMap<String, RuleSet>,
+) -> Option<&'a RuleSet> {
+    rule_set_at_path(protocol_path, structure)
+}
+
+fn rule_set_at_path<'a>(
     protocol_path: &str,
     structure: &'a BTreeMap<String, RuleSet>,
 ) -> Option<&'a RuleSet> {
@@ -865,6 +896,59 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    // Covers: DWN-PROTO-005
+    #[test]
+    fn rule_at_walks_nested_segments() {
+        let definition = Definition {
+            protocol: "https://protocol.example/composed".to_string(),
+            published: true,
+            uses: None,
+            key_agreement: None,
+            types: BTreeMap::new(),
+            structure: BTreeMap::from([(
+                "post".to_string(),
+                RuleSet {
+                    rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                    ..Default::default()
+                },
+            )]),
+        };
+        assert!(definition.rule_at("post").is_some());
+        assert!(definition.rule_at("post/comment").is_some());
+        assert!(definition.rule_at("post/missing").is_none());
+        assert!(definition.rule_at("missing").is_none());
+    }
+
+    // Covers: DWN-PROTO-005
+    #[test]
+    fn ref_position_only_matches_ref_attachment_roots() {
+        let definition = Definition {
+            protocol: "https://protocol.example/composed".to_string(),
+            published: true,
+            uses: Some(BTreeMap::from([(
+                "blog".to_string(),
+                "https://protocol.example/blog".to_string(),
+            )])),
+            key_agreement: None,
+            types: BTreeMap::new(),
+            structure: BTreeMap::from([(
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                    ..Default::default()
+                },
+            )]),
+        };
+        let position = definition
+            .ref_position("post")
+            .expect("ref root must resolve");
+        assert_eq!(position.alias, "blog");
+        assert_eq!(position.protocol_path, "post");
+        assert!(definition.ref_position("post/comment").is_none());
+        assert!(definition.ref_position("missing").is_none());
     }
 
     // Covers: DWN-PROTO-001

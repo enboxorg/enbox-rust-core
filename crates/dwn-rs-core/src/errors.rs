@@ -18,6 +18,10 @@ pub enum DwnErrorCode {
     RecordsWriteGetInitialWriteNotFound,
     GrantAuthorizationGrantMissing,
     ProtocolAuthorizationMatchingRoleRecordNotFound,
+    ProtocolAuthorizationEncryptionRequired,
+    ProtocolAuthorizationEncryptionNotAllowed,
+    ProtocolAuthorizationEncryptionKeyAgreementMissing,
+    ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
     ProtocolAuthorizationEncryptionRoleAudienceMissing,
     EncryptionControlValidateDeliveryAudienceMissing,
     EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
@@ -60,6 +64,18 @@ impl DwnErrorCode {
             Self::GrantAuthorizationGrantMissing => "GrantAuthorizationGrantMissing",
             Self::ProtocolAuthorizationMatchingRoleRecordNotFound => {
                 "ProtocolAuthorizationMatchingRoleRecordNotFound"
+            }
+            Self::ProtocolAuthorizationEncryptionRequired => {
+                "ProtocolAuthorizationEncryptionRequired"
+            }
+            Self::ProtocolAuthorizationEncryptionNotAllowed => {
+                "ProtocolAuthorizationEncryptionNotAllowed"
+            }
+            Self::ProtocolAuthorizationEncryptionKeyAgreementMissing => {
+                "ProtocolAuthorizationEncryptionKeyAgreementMissing"
+            }
+            Self::ProtocolAuthorizationEncryptionProtocolPathEntryMissing => {
+                "ProtocolAuthorizationEncryptionProtocolPathEntryMissing"
             }
             Self::ProtocolAuthorizationEncryptionRoleAudienceMissing => {
                 "ProtocolAuthorizationEncryptionRoleAudienceMissing"
@@ -141,6 +157,18 @@ impl TryFrom<&str> for DwnErrorCode {
             "GrantAuthorizationGrantMissing" => Ok(Self::GrantAuthorizationGrantMissing),
             "ProtocolAuthorizationMatchingRoleRecordNotFound" => {
                 Ok(Self::ProtocolAuthorizationMatchingRoleRecordNotFound)
+            }
+            "ProtocolAuthorizationEncryptionRequired" => {
+                Ok(Self::ProtocolAuthorizationEncryptionRequired)
+            }
+            "ProtocolAuthorizationEncryptionNotAllowed" => {
+                Ok(Self::ProtocolAuthorizationEncryptionNotAllowed)
+            }
+            "ProtocolAuthorizationEncryptionKeyAgreementMissing" => {
+                Ok(Self::ProtocolAuthorizationEncryptionKeyAgreementMissing)
+            }
+            "ProtocolAuthorizationEncryptionProtocolPathEntryMissing" => {
+                Ok(Self::ProtocolAuthorizationEncryptionProtocolPathEntryMissing)
             }
             "ProtocolAuthorizationEncryptionRoleAudienceMissing" => {
                 Ok(Self::ProtocolAuthorizationEncryptionRoleAudienceMissing)
