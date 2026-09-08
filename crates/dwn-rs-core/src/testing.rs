@@ -243,6 +243,7 @@ where
         protocol: "http://example.com/notes".to_string(),
         published: true,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "note".to_string(),
             Type {
@@ -301,6 +302,7 @@ where
         protocol: "http://example.com/notes".to_string(),
         published: false,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "note".to_string(),
             Type {
@@ -367,6 +369,7 @@ where
         protocol: PROTOCOL.to_string(),
         published: false,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([
             ("post".to_string(), text_type()),
             ("thread".to_string(), text_type()),

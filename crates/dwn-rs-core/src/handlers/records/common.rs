@@ -1870,6 +1870,7 @@ mod tests {
             protocol: ROLE_TEST_PROTOCOL.to_string(),
             published: false,
             uses,
+            key_agreement: None,
             types: BTreeMap::new(),
             structure: BTreeMap::new(),
         }

@@ -1101,6 +1101,7 @@ fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> Con
             protocol: protocol.to_string(),
             published,
             uses: None,
+            key_agreement: None,
             types: BTreeMap::from([(
                 "note".to_string(),
                 Type {
@@ -1134,6 +1135,7 @@ fn base_thread_descriptor() -> ConfigureDescriptor {
             protocol: "http://example.com/thread-protocol".to_string(),
             published: true,
             uses: None,
+            key_agreement: None,
             types: BTreeMap::from([
                 (
                     "thread".to_string(),
@@ -1192,6 +1194,7 @@ fn composed_descriptor(protocol: &str, role: &str) -> ConfigureDescriptor {
                 "threads".to_string(),
                 "http://example.com/thread-protocol".to_string(),
             )])),
+            key_agreement: None,
             types: BTreeMap::from([(
                 "comment".to_string(),
                 Type {

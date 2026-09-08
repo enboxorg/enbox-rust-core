@@ -23,6 +23,8 @@ pub struct Definition {
     pub protocol: String,
     pub published: bool,
     pub uses: Option<BTreeMap<String, String>>,
+    #[serde(rename = "$keyAgreement")]
+    pub key_agreement: Option<ProtocolKeyAgreement>,
     pub types: BTreeMap<String, Type>,
     pub structure: BTreeMap<String, RuleSet>,
 }
@@ -89,9 +91,7 @@ pub enum Action {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[skip_serializing_none]
-pub struct PathEncryption {
-    #[serde(rename = "rootKeyId")]
-    pub root_key_id: String,
+pub struct ProtocolKeyAgreement {
     #[serde(rename = "publicKeyJwk")]
     pub public_key_jwk: JWK,
 }
@@ -106,8 +106,8 @@ pub struct Size {
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct RuleSet {
-    #[serde(rename = "$encryption")]
-    pub encryption: Option<PathEncryption>,
+    #[serde(rename = "$keyAgreement")]
+    pub key_agreement: Option<ProtocolKeyAgreement>,
     #[serde(rename = "$actions", default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<Action>,
     #[serde(rename = "$role")]
@@ -514,7 +514,7 @@ fn validate_ref_node(
         || rule_set.role.is_some()
         || rule_set.size.is_some()
         || rule_set.tags.is_some()
-        || rule_set.encryption.is_some()
+        || rule_set.key_agreement.is_some()
         || rule_set.record_limit.is_some()
         || rule_set.immutable.is_some()
         || rule_set.delivery.is_some()

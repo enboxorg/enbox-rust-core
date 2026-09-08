@@ -7,7 +7,7 @@ use crate::identity::agent::{
     jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
     AgentKeyManager, PortableDid, SecretStore,
 };
-use crate::interfaces::messages::protocols::{Definition, PathEncryption, RuleSet};
+use crate::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
@@ -419,12 +419,7 @@ where
         let public_key_jwk = key_manager
             .derive_public_jwk(&root_key_id, derivation_path)
             .await?;
-        set_path_encryption(
-            &mut definition,
-            &relative_path,
-            &root_key_id,
-            public_key_jwk,
-        )?;
+        set_path_encryption(&mut definition, &relative_path, public_key_jwk)?;
     }
     Ok(definition)
 }
@@ -447,7 +442,6 @@ fn collect_protocol_paths(
 fn set_path_encryption(
     definition: &mut Definition,
     relative_path: &[String],
-    root_key_id: &str,
     public_key_jwk: JWK,
 ) -> AgentIdentityResult<()> {
     let Some((root, rest)) = relative_path.split_first() else {
@@ -470,8 +464,7 @@ fn set_path_encryption(
             )
         })?;
     }
-    rule_set.encryption = Some(PathEncryption {
-        root_key_id: root_key_id.to_string(),
+    rule_set.key_agreement = Some(ProtocolKeyAgreement {
         public_key_jwk: public_key_jwk.to_public(),
     });
     Ok(())
@@ -523,7 +516,7 @@ fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<St
 }
 
 fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
-    rule_set.encryption.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
+    rule_set.key_agreement.is_some() || rule_set.rules.values().any(rule_set_has_encryption)
 }
 
 /// In-memory `ProtocolEndpoint` for development, tests, and the wallet
@@ -705,10 +698,9 @@ mod tests {
             .unwrap()
             .expect("installed protocol");
         let rule = installed.structure.get("note").unwrap();
-        let encryption = rule.encryption.as_ref().unwrap();
-        assert!(encryption.root_key_id.ends_with("#enc"));
+        let key_agreement = rule.key_agreement.as_ref().unwrap();
         assert_eq!(
-            serde_json::to_value(&encryption.public_key_jwk).unwrap()["crv"],
+            serde_json::to_value(&key_agreement.public_key_jwk).unwrap()["crv"],
             JsonValue::String("X25519".to_string())
         );
         assert!(remote
@@ -857,6 +849,7 @@ mod tests {
             protocol: "https://protocol.example/notes".to_string(),
             published: true,
             uses: None,
+            key_agreement: None,
             types: BTreeMap::from([(
                 "note".to_string(),
                 Type {

@@ -137,6 +137,7 @@ fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> Jso
         protocol: protocol.to_string(),
         published,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "note".to_string(),
             Type {
@@ -290,6 +291,7 @@ async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
         protocol: "http://test-protocol.xyz".to_string(),
         published: true,
         uses: None,
+        key_agreement: None,
         types: BTreeMap::from([(
             "testRecord".to_string(),
             Type {

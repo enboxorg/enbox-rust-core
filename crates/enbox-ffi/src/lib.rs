@@ -2192,8 +2192,8 @@ mod tests {
         let augmented: serde_json::Value =
             serde_json::from_str(&augmented_raw).expect("definition json");
         assert!(
-            augmented["structure"]["note"]["$encryption"].is_object(),
-            "encryption block missing: {augmented:?}"
+            augmented["structure"]["note"]["$keyAgreement"].is_object(),
+            "key agreement block missing: {augmented:?}"
         );
 
         let install_raw = core

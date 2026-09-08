@@ -832,6 +832,7 @@ mod tests {
             protocol: "https://protocol.example/notes".to_string(),
             published: true,
             uses: None,
+            key_agreement: None,
             types: BTreeMap::from([(
                 "note".to_string(),
                 Type {
