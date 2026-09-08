@@ -303,6 +303,28 @@ pub fn get_rule_set_at_path<'a>(
     rule_set
 }
 
+/// Whether two protocol definitions carry the same authored policy, ignoring
+/// runtime-injected `$keyAgreement` metadata. Comparison only; schema
+/// validation stays strict and independent. Legacy `$encryption` needs no
+/// handling here: typed parsing and the strict schemas already reject it.
+pub fn authored_definitions_equal(left: &Definition, right: &Definition) -> bool {
+    stripped_definition(left) == stripped_definition(right)
+}
+
+fn stripped_definition(definition: &Definition) -> Definition {
+    let mut clone = definition.clone();
+    clone.key_agreement = None;
+    strip_rule_sets(&mut clone.structure);
+    clone
+}
+
+fn strip_rule_sets(rules: &mut BTreeMap<String, RuleSet>) {
+    for rule_set in rules.values_mut() {
+        rule_set.key_agreement = None;
+        strip_rule_sets(&mut rule_set.rules);
+    }
+}
+
 pub fn parse_cross_protocol_ref(value: &str) -> Option<CrossProtocolRef<'_>> {
     let (alias, protocol_path) = value.split_once(':')?;
     if alias.is_empty() || protocol_path.is_empty() || protocol_path.contains(':') {
@@ -802,5 +824,60 @@ fn protocol_error(code: &'static str, message: impl Into<String>) -> ProtocolDef
     ProtocolDefinitionError {
         code,
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn key_agreement() -> ProtocolKeyAgreement {
+        ProtocolKeyAgreement {
+            public_key_jwk: serde_json::from_value(json!({
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": "GDW9p9yD8p7p9yD8p7p9yD8p7p9yD8p7p9yD8p4"
+            }))
+            .unwrap(),
+        }
+    }
+
+    fn note_definition(keyed: bool, encrypted: bool) -> Definition {
+        Definition {
+            protocol: "https://protocol.example/notes".to_string(),
+            published: true,
+            uses: None,
+            key_agreement: keyed.then(key_agreement),
+            types: BTreeMap::from([(
+                "note".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(encrypted),
+                },
+            )]),
+            structure: BTreeMap::from([(
+                "note".to_string(),
+                RuleSet {
+                    key_agreement: keyed.then(key_agreement),
+                    ..Default::default()
+                },
+            )]),
+        }
+    }
+
+    // Covers: DWN-PROTO-001
+    #[test]
+    fn authored_definitions_equal_ignores_key_material_but_not_policy() {
+        assert!(authored_definitions_equal(
+            &note_definition(true, true),
+            &note_definition(false, true)
+        ));
+
+        assert!(!authored_definitions_equal(
+            &note_definition(true, true),
+            &note_definition(true, false)
+        ));
     }
 }

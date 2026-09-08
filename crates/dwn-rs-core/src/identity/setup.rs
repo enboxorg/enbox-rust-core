@@ -332,7 +332,7 @@ where
 
     let encryption_active = requires_encryption;
     let definition = if requires_encryption {
-        inject_protocol_encryption(definition, key_manager, tenant_did).await?
+        inject_protocol_encryption(&definition, key_manager, tenant_did).await?
     } else {
         definition
     };
@@ -398,30 +398,43 @@ where
 }
 
 pub async fn inject_protocol_encryption<K>(
-    mut definition: Definition,
+    definition: &Definition,
     key_manager: &K,
     tenant_did: &PortableDid,
 ) -> AgentIdentityResult<Definition>
 where
     K: AgentKeyManager,
 {
+    let mut clone = definition.clone();
     let root_key_id = key_agreement_root_key_id(tenant_did)?;
+    let root_key_jwk = key_manager
+        .derive_public_jwk(
+            &root_key_id,
+            vec![
+                PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                clone.protocol.clone(),
+            ],
+        )
+        .await?;
+    clone.key_agreement = Some(ProtocolKeyAgreement {
+        public_key_jwk: root_key_jwk,
+    });
     let mut paths = Vec::new();
-    for (root, rule_set) in &definition.structure {
+    for (root, rule_set) in &clone.structure {
         collect_protocol_paths(rule_set, vec![root.clone()], &mut paths);
     }
     for relative_path in paths {
         let mut derivation_path = vec![
             PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-            definition.protocol.clone(),
+            clone.protocol.clone(),
         ];
         derivation_path.extend(relative_path.clone());
         let public_key_jwk = key_manager
             .derive_public_jwk(&root_key_id, derivation_path)
             .await?;
-        set_path_encryption(&mut definition, &relative_path, public_key_jwk)?;
+        set_path_encryption(&mut clone, &relative_path, public_key_jwk)?;
     }
-    Ok(definition)
+    Ok(clone)
 }
 
 fn collect_protocol_paths(
@@ -697,6 +710,7 @@ mod tests {
             .protocol(&agent_did.uri, &definition.protocol)
             .unwrap()
             .expect("installed protocol");
+        assert!(installed.key_agreement.is_some());
         let rule = installed.structure.get("note").unwrap();
         let key_agreement = rule.key_agreement.as_ref().unwrap();
         assert_eq!(
@@ -707,6 +721,60 @@ mod tests {
             .protocol(&agent_did.uri, &definition.protocol)
             .unwrap()
             .is_some());
+    }
+
+    // Covers: DWN-PROTO-005
+    #[tokio::test]
+    async fn inject_clones_input_injects_root_key_and_skips_ref_nodes() {
+        let (agent_did, key_manager) = agent_did_with_keys().await;
+        let definition = composed_notes_definition();
+        let snapshot = definition.clone();
+
+        let augmented = inject_protocol_encryption(&definition, &key_manager, &agent_did)
+            .await
+            .unwrap();
+        assert_eq!(definition, snapshot);
+
+        let root_key_id = key_agreement_root_key_id(&agent_did).unwrap();
+        let expected_root = key_manager
+            .derive_public_jwk(
+                &root_key_id,
+                vec![
+                    PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                    definition.protocol.clone(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            augmented.key_agreement.unwrap().public_key_jwk,
+            expected_root
+        );
+
+        let post = augmented.structure.get("post").unwrap();
+        assert!(post.key_agreement.is_none());
+        let expected_child = key_manager
+            .derive_public_jwk(
+                &root_key_id,
+                vec![
+                    PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                    definition.protocol.clone(),
+                    "post".to_string(),
+                    "comment".to_string(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            post.rules
+                .get("comment")
+                .unwrap()
+                .key_agreement
+                .clone()
+                .unwrap()
+                .public_key_jwk,
+            expected_child
+        );
     }
 
     #[tokio::test]
@@ -842,6 +910,34 @@ mod tests {
             .await
             .unwrap();
         (initialization.portable_did, key_manager)
+    }
+
+    fn composed_notes_definition() -> Definition {
+        Definition {
+            protocol: "https://protocol.example/composed-notes".to_string(),
+            published: true,
+            uses: Some(BTreeMap::from([(
+                "blog".to_string(),
+                "https://protocol.example/blog".to_string(),
+            )])),
+            key_agreement: None,
+            types: BTreeMap::from([(
+                "comment".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: Some(vec!["text/plain".to_string()]),
+                    encryption_required: Some(true),
+                },
+            )]),
+            structure: BTreeMap::from([(
+                "post".to_string(),
+                RuleSet {
+                    reference: Some("blog:post".to_string()),
+                    rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                    ..Default::default()
+                },
+            )]),
+        }
     }
 
     fn encrypted_protocol() -> Definition {

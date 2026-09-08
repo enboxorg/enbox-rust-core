@@ -816,8 +816,8 @@ impl EnboxCore {
     /// protocol, or for sharing a pre-augmented definition with another
     /// agent that needs to push the same protocol.
     ///
-    /// Returns JSON-encoded [`Definition`] with `encryption` populated on
-    /// each leaf rule set.
+    /// Returns JSON-encoded [`Definition`] with `$keyAgreement` populated at
+    /// the definition root and each locally governed rule set.
     pub fn inject_protocol_encryption(
         &self,
         tenant_did_json: String,
@@ -833,7 +833,7 @@ impl EnboxCore {
             })?;
         let (_node, key_manager) = self.require_local_endpoint_components(&portable_did)?;
         let augmented = self.runtime.block_on(inject_protocol_encryption(
-            definition,
+            &definition,
             &key_manager,
             &portable_did,
         ))?;
