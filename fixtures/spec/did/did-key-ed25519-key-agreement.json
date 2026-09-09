@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "description": "Ed25519 to X25519 conversion during key-agreement recipient selection. Both key literals come from the W3C-CCG did:key method specification's Ed25519/X25519 worked example: the Ed25519 signing key z6Mkha... and the X25519 key-agreement key z6LSj7... the spec derives from it. The expected X25519 value is the spec's own published counterpart, independently decoded from its publicKeyMultibase — it is NOT produced by the Rust conversion on the expected side, so this is a genuine conformance check of the birational Edwards-to-Montgomery map rather than a tautology.",
+  "source": {
+    "spec": {
+      "name": "The did:key Method",
+      "organization": "W3C Credentials Community Group (W3C-CCG)",
+      "url": "https://w3c-ccg.github.io/did-method-key/",
+      "section": "Ed25519 / X25519 worked example (Multikey verificationMethod)",
+      "algorithm": {
+        "multibase": "base58btc ('z')",
+        "multicodec": "ed25519-pub (0xed 0x01) and x25519-pub (0xec 0x01)",
+        "map": "u = (1 + y) / (1 - y) mod 2^255-19",
+        "reference": "https://w3c-ccg.github.io/did-method-key/#ed25519-x25519"
+      }
+    },
+    "vector": {
+      "repository": "github.com/w3c-ccg/did-method-key",
+      "path": "index.html",
+      "permalink": "https://raw.githubusercontent.com/w3c-ccg/did-method-key/main/index.html",
+      "ed25519Multibase": "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+      "x25519Multibase": "z6LSj72tK8brWgZja8NLRwPigth2T9QRiG1uH9oKZuKjdh9p",
+      "note": "The document below is constructed for this assertion — did:key itself publishes no keyAgreement relationship, and the resolver deliberately keeps did:key signing-only. Only the key literals are taken from the spec; they are what the assertion checks."
+    }
+  },
+  "cases": [
+    {
+      "id": "ed25519-key-agreement-converted-to-x25519",
+      "description": "keyAgreement names an Ed25519 verification method. Upstream converts such a key to X25519 rather than rejecting it (packages/agent/src/dwn-encryption.ts), so selection returns the Montgomery form of the Ed25519 point while preserving the source verification-method id unchanged.",
+      "did": "did:example:ed25519-recipient",
+      "document": {
+        "id": "did:example:ed25519-recipient",
+        "verificationMethod": [
+          {
+            "id": "did:example:ed25519-recipient#key-1",
+            "type": "JsonWebKey2020",
+            "controller": "did:example:ed25519-recipient",
+            "publicKeyJwk": {
+              "kty": "OKP",
+              "crv": "Ed25519",
+              "x": "Lm_M42cB3HkUiODQsXRcweM6TByfzEHGO9ND274JcOY"
+            }
+          }
+        ],
+        "keyAgreement": ["did:example:ed25519-recipient#key-1"]
+      },
+      "expected": {
+        "publicKey": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "x": "bl_3kgKpz9jgsg350CNuHa_kQL3B60Gi-98WmdQW2h8",
+          "kid": "did:example:ed25519-recipient#key-1"
+        }
+      },
+      "verification": {
+        "method": "independent-tool",
+        "tool": "pure-Python base58btc decoder + multicodec strip + base64url, plus the birational map u = (1+y)/(1-y) mod 2^255-19 computed directly from the Ed25519 point — neither via the Rust impl",
+        "ed25519PublicKeyHex": "2e6fcce36701dc791488e0d0b1745cc1e33a4c1c9fcc41c63bd343dbbe0970e6",
+        "x25519PublicKeyHex": "6e5ff79202a9cfd8e0b20df9d0236e1dafe440bdc1eb41a2fbdf1699d416da1f",
+        "note": "The X25519 hex derived by the birational map equals the hex decoded from the spec's published x25519Multibase, so the two independent derivations agree before the impl is consulted."
+      }
+    }
+  ]
+}
