@@ -1,6 +1,7 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use bytes::Bytes;
+use dwn_rs_core::auth::resolver::recipient::resolve_key_agreement_key;
 use dwn_rs_core::auth::resolver::DidResolver;
 use dwn_rs_core::auth::{
     Jws, JwsSignature, PrivateJwkSigner, StaticPublicKeyResolver, UniversalResolver, JWK,
@@ -3120,6 +3121,7 @@ where
 const SPEC_DESCRIPTOR_CID_ASSERTION: &str = "spec.descriptorCid";
 const SPEC_CID_DAGCBOR_ASSERTION: &str = "spec.cid.dagcbor";
 const SPEC_DID_RESOLVE_ASSERTION: &str = "spec.did.resolve";
+const SPEC_DID_KEY_AGREEMENT_ASSERTION: &str = "spec.did.keyAgreement";
 const SPEC_JWS_VERIFY_ASSERTION: &str = "spec.jws.verify";
 
 #[derive(Debug, Deserialize)]
@@ -3182,6 +3184,11 @@ struct SpecFixtureCase {
     object: Option<Value>,
     #[serde(default)]
     did: Option<String>,
+    /// Inline DID document for `spec.did.keyAgreement` cases. These vectors
+    /// assert recipient selection over a published document rather than
+    /// network resolution, so the document is supplied instead of resolved.
+    #[serde(default)]
+    document: Option<Value>,
     #[serde(default)]
     jws: Option<SpecJwsInput>,
     #[serde(default, rename = "publicJwk")]
@@ -3480,6 +3487,121 @@ async fn fixture_did_resolution_match_spec() {
     assert!(
         checked > 0,
         "at least one spec DID resolution case must be checked"
+    );
+}
+
+/// Serves one fixture-supplied DID document for every DID asked of it, so a
+/// published vector can drive recipient selection without network resolution.
+#[derive(Clone)]
+struct SpecDocumentResolver {
+    document: ssi_dids_core::Document,
+}
+
+impl DidResolver for SpecDocumentResolver {
+    fn resolve<'a>(
+        &'a self,
+        _did: &'a str,
+    ) -> dwn_rs_core::auth::resolver::ResolverFuture<
+        'a,
+        Result<dwn_rs_core::auth::resolver::Resolution, dwn_rs_core::auth::resolver::ResolverError>,
+    > {
+        let document = self.document.clone();
+        Box::pin(async move { Ok(dwn_rs_core::auth::resolver::Resolution::new(document)) })
+    }
+}
+
+/// Track A conformance: key-agreement recipient selection must pick the key a
+/// published DID-method vector declares for `keyAgreement`, preserve that
+/// verification method's id, and — where the declared key is Ed25519 — return
+/// the X25519 counterpart the did:key spec publishes for it. Every expected
+/// value is a spec literal; none is recomputed by the impl on the expected
+/// side.
+#[tokio::test]
+async fn fixture_did_key_agreement_selection_matches_spec() {
+    let mut checked = 0usize;
+    for set in load_spec_fixture_sets() {
+        if !set.has_assertion(SPEC_DID_KEY_AGREEMENT_ASSERTION) {
+            continue;
+        }
+
+        let source = &set.fixture_set.source.spec;
+        assert!(!source.name.is_empty(), "{} spec name", set.set_ref.id);
+        assert!(!source.url.is_empty(), "{} spec url", set.set_ref.id);
+        assert!(
+            !source.section.is_empty(),
+            "{} spec section",
+            set.set_ref.id
+        );
+
+        for case in &set.fixture_set.cases {
+            let did = case
+                .did
+                .as_deref()
+                .unwrap_or_else(|| panic!("{} key-agreement case must include a did", case.id));
+            let document_value = case.document.as_ref().unwrap_or_else(|| {
+                panic!("{} key-agreement case must include a document", case.id)
+            });
+            let expected = case.expected.public_key.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "{} key-agreement case must include expected.publicKey",
+                    case.id
+                )
+            });
+
+            let document: ssi_dids_core::Document = serde_json::from_value(document_value.clone())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{} fixture document is not a DID document: {error}",
+                        case.id
+                    )
+                });
+            let resolver = SpecDocumentResolver { document };
+
+            let recipients = resolve_key_agreement_key(did, &resolver)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{} key-agreement selection failed: {error}", case.id)
+                });
+
+            assert_eq!(
+                recipients.len(),
+                1,
+                "{} vector declares exactly one key-agreement key",
+                case.id
+            );
+            let recipient = &recipients[0];
+
+            let expected_jwk: JWK = serde_json::from_value(serde_json::json!({
+                "kty": expected.kty,
+                "crv": expected.crv,
+                "x": expected.x,
+            }))
+            .unwrap_or_else(|error| panic!("{} expected JWK is invalid: {error}", case.id));
+
+            assert!(
+                recipient.public_key.equals_public(&expected_jwk),
+                "{} selected key must match the spec-vector literal",
+                case.id
+            );
+            assert!(
+                recipient.public_key.is_public(),
+                "{} selected key must carry no private material",
+                case.id
+            );
+            if let Some(expected_key_id) = expected.kid.as_deref() {
+                assert_eq!(
+                    recipient.key_id, expected_key_id,
+                    "{} recipient key id must be the source verification-method id",
+                    case.id
+                );
+            }
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "at least one spec key-agreement case must be checked"
     );
 }
 

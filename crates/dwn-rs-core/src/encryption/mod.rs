@@ -18,12 +18,16 @@ pub mod kdf;
 pub mod legacy_jwe;
 pub mod x25519;
 
+use std::collections::BTreeMap;
+
 pub use error::EncryptionError;
 pub use kdf::derive_private_key_bytes;
 
 use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD as base64url};
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
+
+use crate::auth::resolver::recipient::RecipientKey;
 
 pub const KEY_AGREEMENT_ALGORITHM: &str = "X25519-HKDF-SHA256+A256KW";
 pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
@@ -212,6 +216,25 @@ pub struct EncryptionInput {
     pub initialization_vector: Vec<u8>,
     #[serde(rename = "keyEncryptionInputs")]
     pub key_encryption_inputs: Vec<KeyEncryptionInput>,
+}
+
+pub fn recipient_key_encryption_inputs(
+    recipients: &[RecipientKey],
+) -> Result<Vec<KeyEncryptionInput>, EncryptionError> {
+    Ok(recipients
+        .iter()
+        .map(|recipient| -> Result<_, EncryptionError> {
+            let key_id = recipient.public_key.thumbprint()?;
+            Ok((key_id, recipient.public_key.clone()))
+        })
+        .collect::<Result<BTreeMap<_, _>, EncryptionError>>()?
+        .into_iter()
+        .map(|(key_id, public_key)| KeyEncryptionInput::ProtocolPath {
+            algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+            key_id,
+            public_key,
+        })
+        .collect())
 }
 
 /// Builder input for a single `keyEncryption` entry, discriminated by
@@ -456,8 +479,39 @@ impl EncryptionEnvelope {
         )
     }
 
+    /// Unwraps the content encryption key using whichever `keyEncryption`
+    /// entry belongs to `recipient_private_jwk`.
+    ///
+    /// Entries are addressed by the RFC 8037 thumbprint of the recipient's
+    /// public key, matching how upstream locates a reader's entry. An envelope
+    /// wrapped for several recipients is therefore readable by each of them.
+    /// When no entry carries a matching `keyId` — an envelope whose entries are
+    /// keyed by something other than a recipient thumbprint — every entry is
+    /// tried in turn; AES-KW's integrity check gates acceptance, so a
+    /// non-matching entry fails rather than yielding a wrong key.
     pub fn unwrap_cek(&self, recipient_private_jwk: &JWK) -> Result<Vec<u8>, EncryptionError> {
-        self.unwrap_cek_with_key_encryption(0, recipient_private_jwk)
+        if let Some(index) = self.key_encryption_index_for(recipient_private_jwk) {
+            return self.unwrap_cek_with_key_encryption(index, recipient_private_jwk);
+        }
+
+        let mut last_error = None;
+        for index in 0..self.key_encryption.len() {
+            match self.unwrap_cek_with_key_encryption(index, recipient_private_jwk) {
+                Ok(cek) => return Ok(cek),
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(EncryptionError::MissingKeyEncryptionEntry { index: 0 }))
+    }
+
+    /// Index of the entry whose `keyId` is the thumbprint of this key's public
+    /// half, if any.
+    fn key_encryption_index_for(&self, recipient_private_jwk: &JWK) -> Option<usize> {
+        let thumbprint = recipient_private_jwk.to_public().thumbprint().ok()?;
+        self.key_encryption
+            .iter()
+            .position(|entry| entry.key_id() == thumbprint)
     }
 
     pub fn unwrap_cek_with_key_encryption(
@@ -720,6 +774,112 @@ mod tests {
             "protocol": "https://example.com/protocol"
         }))
         .is_err());
+    }
+
+    fn x25519_keypair() -> (JWK, JWK) {
+        use ssi_jwk::{Base64urlUInt, OctetParams, Params};
+
+        let secret = x25519_dalek::StaticSecret::random();
+        let public = x25519_dalek::PublicKey::from(&secret);
+        let private_jwk = JWK::from(Params::OKP(OctetParams {
+            curve: "X25519".to_string(),
+            public_key: Base64urlUInt(public.as_bytes().to_vec()),
+            private_key: Some(Base64urlUInt(secret.to_bytes().to_vec())),
+        }));
+
+        (x25519::public_jwk(public.as_bytes()), private_jwk)
+    }
+
+    /// Envelope entries are addressed by RFC 8037 thumbprint, not by the
+    /// verification-method id the recipient key carries for audit.
+    ///
+    /// Covers: DWN-ENC-002
+    #[test]
+    fn recipient_inputs_are_keyed_by_thumbprint_and_deduplicated() {
+        let (public_key, _) = x25519_keypair();
+        let (other_public_key, _) = x25519_keypair();
+
+        // The same key material declared under two verification-method ids.
+        let recipients = vec![
+            RecipientKey {
+                key_id: "did:example:alice#phone".to_string(),
+                public_key: public_key.clone(),
+            },
+            RecipientKey {
+                key_id: "did:example:alice#laptop".to_string(),
+                public_key: public_key.clone(),
+            },
+            RecipientKey {
+                key_id: "did:example:alice#tablet".to_string(),
+                public_key: other_public_key.clone(),
+            },
+        ];
+
+        let inputs = recipient_key_encryption_inputs(&recipients).unwrap();
+
+        assert_eq!(
+            inputs.len(),
+            2,
+            "duplicate key material collapses to one entry"
+        );
+        let key_ids = inputs
+            .iter()
+            .map(|input| input.key_id().to_string())
+            .collect::<Vec<_>>();
+        assert!(key_ids.contains(&public_key.thumbprint().unwrap()));
+        assert!(key_ids.contains(&other_public_key.thumbprint().unwrap()));
+        for input in &inputs {
+            assert!(
+                !input.key_id().starts_with("did:"),
+                "entry keyId must be a thumbprint, not a verification-method id"
+            );
+            assert_eq!(input.derivation_scheme(), DerivationScheme::ProtocolPath);
+        }
+    }
+
+    /// A multi-key recipient must stay readable from every declared key: each
+    /// entry unwraps to the same CEK using only its own private key.
+    ///
+    /// Covers: DWN-ENC-001, DWN-ENC-002
+    #[test]
+    fn multi_key_recipient_envelope_unwraps_from_each_declared_key() {
+        let (phone_public, phone_private) = x25519_keypair();
+        let (laptop_public, laptop_private) = x25519_keypair();
+
+        let recipients = vec![
+            RecipientKey {
+                key_id: "did:example:alice#phone".to_string(),
+                public_key: phone_public,
+            },
+            RecipientKey {
+                key_id: "did:example:alice#laptop".to_string(),
+                public_key: laptop_public,
+            },
+        ];
+
+        let cek = (0u8..32).collect::<Vec<_>>();
+        let envelope = EncryptionEnvelope::build_encryption(&EncryptionInput {
+            algorithm: None,
+            key: cek.clone(),
+            initialization_vector: (0xa0u8..0xb0).collect(),
+            key_encryption_inputs: recipient_key_encryption_inputs(&recipients).unwrap(),
+        })
+        .unwrap();
+
+        assert_eq!(envelope.key_encryption.len(), 2);
+        envelope.validate().unwrap();
+
+        for private_key in [&phone_private, &laptop_private] {
+            assert_eq!(
+                envelope.unwrap_cek(private_key).unwrap(),
+                cek,
+                "each declared key must recover the same content encryption key"
+            );
+        }
+
+        // A key that was never an audience recovers nothing.
+        let (_, stranger_private) = x25519_keypair();
+        assert!(envelope.unwrap_cek(&stranger_private).is_err());
     }
 
     #[test]

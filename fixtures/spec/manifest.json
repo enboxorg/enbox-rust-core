@@ -6,27 +6,51 @@
     {
       "id": "spec.records.descriptor-cid",
       "path": "records/descriptor-cid.json",
-      "assertions": ["spec.descriptorCid"]
+      "assertions": [
+        "spec.descriptorCid"
+      ]
     },
     {
       "id": "spec.cid.dag-cbor",
       "path": "cid/dag-cbor.json",
-      "assertions": ["spec.cid.dagcbor"]
+      "assertions": [
+        "spec.cid.dagcbor"
+      ]
     },
     {
       "id": "spec.did.did-key-ed25519",
       "path": "did/did-key-ed25519.json",
-      "assertions": ["spec.did.resolve"]
+      "assertions": [
+        "spec.did.resolve"
+      ]
     },
     {
       "id": "spec.did.did-jwk",
       "path": "did/did-jwk.json",
-      "assertions": ["spec.did.resolve"]
+      "assertions": [
+        "spec.did.resolve"
+      ]
     },
     {
       "id": "spec.crypto.jws-ed25519-rfc8037",
       "path": "crypto/jws-ed25519-rfc8037.json",
-      "assertions": ["spec.jws.verify"]
+      "assertions": [
+        "spec.jws.verify"
+      ]
+    },
+    {
+      "id": "spec.did.did-dht-key-agreement",
+      "path": "did/did-dht-key-agreement.json",
+      "assertions": [
+        "spec.did.keyAgreement"
+      ]
+    },
+    {
+      "id": "spec.did.did-key-ed25519-key-agreement",
+      "path": "did/did-key-ed25519-key-agreement.json",
+      "assertions": [
+        "spec.did.keyAgreement"
+      ]
     }
   ]
 }

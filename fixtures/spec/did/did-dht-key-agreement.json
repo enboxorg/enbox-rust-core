@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "oracle": "spec",
+  "description": "Key-agreement recipient selection from a did:dht DID document. The document is taken verbatim from the did:dht method specification's published test vector 3, which declares a keyAgreement relationship referencing an X25519 verification method. The expected recipient key is the X25519 public key and verification-method id the spec vector publishes — hardcoded spec literals, NOT recomputed by the impl on the expected side. Only the `service` entry is omitted; it plays no part in recipient selection.",
+  "source": {
+    "spec": {
+      "name": "The DID DHT Method",
+      "organization": "Decentralized Identity Foundation",
+      "url": "https://did-dht.com/",
+      "section": "Test Vectors — Vector 3 (document with keyAgreement, gateways, and previous-DID proof)",
+      "algorithm": {
+        "relationship": "keyAgreement",
+        "dnsRecordType": "t=3 (X25519 key-agreement key)",
+        "reference": "https://did-dht.com/#test-vectors"
+      }
+    },
+    "vector": {
+      "repository": "github.com/decentralized-identity/did-dht",
+      "path": "spec test vector 3",
+      "mirror": "enboxorg/enbox packages/dids/tests/fixtures/test-vectors/did-dht/vector-3.json",
+      "note": "The vector's own DNS encoding carries the key-agreement key as `_k1._did. TXT t=3;k=3POE0_i2mGeZ2qiQCA3KcLfi1fZo0311CXFSIwt1nB4`, which is the same key material asserted here. DNS-packet decoding is covered separately by the did:dht resolver tests; this set asserts recipient selection over the resulting document."
+    }
+  },
+  "cases": [
+    {
+      "id": "did-dht-key-agreement-reference",
+      "description": "keyAgreement holds an absolute DID URL referencing an X25519 verification method in the same document. Selection dereferences the fragment, returns the X25519 key public-only, and preserves the source verification-method id as the recipient key id. The Ed25519 verification method (#0) is declared for authentication/assertionMethod and MUST NOT be selected.",
+      "did": "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy",
+      "document": {
+        "id": "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy",
+        "verificationMethod": [
+          {
+            "id": "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#0",
+            "type": "JsonWebKey",
+            "controller": "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy",
+            "publicKeyJwk": {
+              "kid": "TchFveGbbRf58hDDchTr_TAJ7XnWSrrGf8DK4rzG4nE",
+              "alg": "EdDSA",
+              "crv": "Ed25519",
+              "kty": "OKP",
+              "x": "sTyTLYw-n1NI9X-84NaCuis1wZjAA8lku6f6Et5201g"
+            }
+          },
+          {
+            "id": "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#WVy5IWMa36AoyAXZDvPd5j9zxt2t-GjifDEV-DwgIdQ",
+            "type": "JsonWebKey",
+            "controller": "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy",
+            "publicKeyJwk": {
+              "kid": "WVy5IWMa36AoyAXZDvPd5j9zxt2t-GjifDEV-DwgIdQ",
+              "alg": "ECDH-ES+A128KW",
+              "crv": "X25519",
+              "kty": "OKP",
+              "x": "3POE0_i2mGeZ2qiQCA3KcLfi1fZo0311CXFSIwt1nB4"
+            }
+          }
+        ],
+        "authentication": [
+          "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#0"
+        ],
+        "assertionMethod": [
+          "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#0"
+        ],
+        "keyAgreement": [
+          "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#WVy5IWMa36AoyAXZDvPd5j9zxt2t-GjifDEV-DwgIdQ"
+        ],
+        "capabilityInvocation": [
+          "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#0"
+        ],
+        "capabilityDelegation": [
+          "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#0"
+        ]
+      },
+      "expected": {
+        "publicKey": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "x": "3POE0_i2mGeZ2qiQCA3KcLfi1fZo0311CXFSIwt1nB4",
+          "kid": "did:dht:sr6jgmcc84xig18ix66qbiwnzeiumocaaybh13f5w97bfzus4pcy#WVy5IWMa36AoyAXZDvPd5j9zxt2t-GjifDEV-DwgIdQ"
+        }
+      }
+    }
+  ]
+}
