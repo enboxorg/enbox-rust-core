@@ -37,6 +37,9 @@ pub enum ResolverError {
 
     #[error("invalid signature")]
     InvalidSignature,
+
+    #[error("key agreement not found for {did}")]
+    KeyAgreementNotFound { did: String },
 }
 
 impl ResolverError {
@@ -54,6 +57,7 @@ impl ResolverError {
             Self::InvalidPublicKeyLength { .. } => "invalidPublicKeyLength",
             Self::InvalidPublicKeyType { .. } => "invalidPublicKeyType",
             Self::InvalidSignature => "invalidSignature",
+            Self::KeyAgreementNotFound { .. } => "keyAgreementNotFound",
         }
     }
 }

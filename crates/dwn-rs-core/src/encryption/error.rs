@@ -42,6 +42,9 @@ pub enum EncryptionError {
     #[error("invalid empty key derivation path segment")]
     EmptyDerivationPathSegment,
 
+    #[error("invalid JWK thumbprint")]
+    InvalidJwkThumbprint(#[from] ssi_jwk::Error),
+
     #[error("invalid base64url {label}: {error}")]
     InvalidBase64Url { label: String, error: String },
 

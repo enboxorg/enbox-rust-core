@@ -16,6 +16,7 @@ pub mod error;
 pub(crate) mod http;
 pub mod jwk;
 pub mod key;
+pub mod recipient;
 pub mod r#static;
 pub mod universal;
 pub mod web;

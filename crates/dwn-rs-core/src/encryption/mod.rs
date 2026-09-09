@@ -18,12 +18,16 @@ pub mod kdf;
 pub mod legacy_jwe;
 pub mod x25519;
 
+use std::collections::BTreeMap;
+
 pub use error::EncryptionError;
 pub use kdf::derive_private_key_bytes;
 
 use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD as base64url};
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
+
+use crate::auth::resolver::recipient::RecipientKey;
 
 pub const KEY_AGREEMENT_ALGORITHM: &str = "X25519-HKDF-SHA256+A256KW";
 pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
@@ -212,6 +216,25 @@ pub struct EncryptionInput {
     pub initialization_vector: Vec<u8>,
     #[serde(rename = "keyEncryptionInputs")]
     pub key_encryption_inputs: Vec<KeyEncryptionInput>,
+}
+
+pub fn recipient_key_encryption_inputs(
+    recipients: &[RecipientKey],
+) -> Result<Vec<KeyEncryptionInput>, EncryptionError> {
+    Ok(recipients
+        .iter()
+        .map(|recipient| -> Result<_, EncryptionError> {
+            let key_id = recipient.public_key.thumbprint()?;
+            Ok((key_id, recipient.public_key.clone()))
+        })
+        .collect::<Result<BTreeMap<_, _>, EncryptionError>>()?
+        .into_iter()
+        .map(|(key_id, public_key)| KeyEncryptionInput::ProtocolPath {
+            algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+            key_id,
+            public_key,
+        })
+        .collect())
 }
 
 /// Builder input for a single `keyEncryption` entry, discriminated by
