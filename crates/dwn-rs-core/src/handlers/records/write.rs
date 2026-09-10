@@ -114,6 +114,34 @@ where
                 ..
             } = ctx;
 
+            // Covers: DWN-REC-003
+            // Exact replay is classified from the parsed message alone, before
+            // authentication and before mutable protocol, role, grant, parent,
+            // record-limit, or state-relative admission can reinterpret it. An
+            // identical retained CID is the same bytes the store already
+            // admitted, so re-resolving its signer proves nothing and must not
+            // be able to turn a settled replay into a different reply when the
+            // resolver is unreachable.
+            let record_id = match record_id(&message) {
+                Some(record_id) => record_id,
+                None => {
+                    return Response::bad_request(
+                        "RecordsWriteMissingRecordId: recordId is required".to_string(),
+                    )
+                }
+            };
+            let existing_messages = match self.existing_record_messages(tenant, &record_id).await {
+                Ok(messages) => messages,
+                Err(reply) => return reply,
+            };
+            let transition_plan = match plan_records_transition(&message, &existing_messages) {
+                Ok(plan) => plan,
+                Err(detail) => return Response::bad_request(detail),
+            };
+            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. }) {
+                return Response::conflict();
+            }
+
             let signature = match permissions::validate_authorization_signature(
                 &message,
                 self.did_resolver.as_deref(),
@@ -138,29 +166,6 @@ where
 
             if let Err(detail) = validate_records_write_integrity(&message, &signature) {
                 return Response::bad_request(detail);
-            }
-
-            let record_id = match record_id(&message) {
-                Some(record_id) => record_id,
-                None => {
-                    return Response::bad_request(
-                        "RecordsWriteMissingRecordId: recordId is required".to_string(),
-                    )
-                }
-            };
-            let existing_messages = match self.existing_record_messages(tenant, &record_id).await {
-                Ok(messages) => messages,
-                Err(reply) => return reply,
-            };
-            let transition_plan = match plan_records_transition(&message, &existing_messages) {
-                Ok(plan) => plan,
-                Err(detail) => return Response::bad_request(detail),
-            };
-            // Covers: DWN-REC-003
-            // Exact replay is classified before mutable protocol, role, grant, parent,
-            // record-limit, or state-relative admission can reinterpret it.
-            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. }) {
-                return Response::conflict();
             }
 
             if let Err(error) = self

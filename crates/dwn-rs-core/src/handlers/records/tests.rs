@@ -418,6 +418,105 @@ async fn records_write_data_bearing_exact_replay_is_non_mutating() {
     );
 }
 
+/// Resolver whose every lookup fails, standing in for a signer DID whose
+/// document has become unreachable since the message was first admitted.
+struct UnavailableResolver;
+
+impl crate::auth::resolver::DidResolver for UnavailableResolver {
+    fn resolve<'a>(
+        &'a self,
+        _did: &'a str,
+    ) -> crate::auth::resolver::ResolverFuture<
+        'a,
+        Result<crate::auth::resolver::Resolution, crate::auth::resolver::ResolverError>,
+    > {
+        Box::pin(async { Err(crate::auth::resolver::ResolverError::NotFound) })
+    }
+}
+
+#[tokio::test]
+async fn exact_replay_returns_conflict_without_resolving_the_signer() {
+    // Covers: DWN-REC-003
+    // An identical retained CID is classified from the parsed message alone.
+    // Re-resolving the signer of bytes the store already admitted proves
+    // nothing, so an unreachable resolver must not turn a settled replay into
+    // a 401, nor produce any storage or feed effect.
+    const TENANT: &str = "did:example:alice";
+
+    let publisher = RecordingWakePublisher::default();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+
+    let write = signed_write_message(WriteSpec {
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+
+    let admitted = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let reply = admitted.run(TENANT, &write, None).await;
+    assert_eq!(reply.status.code, 204, "{}", reply.status.detail);
+
+    let feed_after_admit = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    let wakes_after_admit = publisher.positions();
+
+    // Same tenant and stores, but the signer's DID no longer resolves.
+    let degraded = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(UnavailableResolver)),
+    );
+    let reply = degraded.run(TENANT, &write, None).await;
+    assert_eq!(
+        reply.status.code, 409,
+        "replay must be settled before resolution: {}",
+        reply.status.detail
+    );
+
+    let feed_after_replay = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        feed_after_replay.events.len(),
+        feed_after_admit.events.len(),
+        "replay must not append a feed entry"
+    );
+    assert_eq!(
+        feed_after_replay.cursor.map(|cursor| cursor.position),
+        feed_after_admit.cursor.map(|cursor| cursor.position),
+        "replay must not advance the feed cursor"
+    );
+    assert_eq!(
+        publisher.positions(),
+        wakes_after_admit,
+        "replay must not publish a wake"
+    );
+
+    // A non-identical write from the same unresolvable signer still needs
+    // authentication: the shortcut covers retained identical messages only.
+    let different = signed_write_message(WriteSpec {
+        published: Some(true),
+        ..WriteSpec::new("2025-01-02T00:00:00.000000Z")
+    })
+    .await;
+    let reply = degraded.run(TENANT, &different, None).await;
+    assert_ne!(
+        reply.status.code, 409,
+        "only retained identical messages bypass authentication"
+    );
+}
+
 #[tokio::test]
 async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delete() {
     // Covers: DWN-REC-003
