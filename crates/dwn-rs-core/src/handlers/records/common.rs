@@ -16,7 +16,6 @@ use crate::descriptors::{
     DeleteDescriptor, Descriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
-use crate::encryption::Encryption;
 use crate::errors::{DwnError, DwnErrorCode, EventLogError};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
@@ -94,30 +93,21 @@ pub(crate) fn validate_records_write_integrity(
         .encryption
         .as_ref()
     {
-        match encryption {
-            Encryption::Envelope(envelope) => {
-                envelope.validate().map_err(|error| match error {
-                    crate::encryption::EncryptionError::InvalidInitializationVectorLength { found } => {
-                        format!(
-                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: A256CTR initializationVector must decode to 16 bytes, got {found}"
-                        )
-                    }
-                    crate::encryption::EncryptionError::InvalidBase64Url { label, error } => {
-                        format!(
-                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: {label} must be valid base64url: {error}"
-                        )
-                    }
-                    other => format!(
-                        "RecordsWriteValidateIntegrityEncryptionEphemeralPublicKeyInvalid: {other}"
-                    ),
-                })?;
+        encryption.validate().map_err(|error| match error {
+            crate::encryption::EncryptionError::InvalidInitializationVectorLength { found } => {
+                format!(
+                    "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: A256CTR initializationVector must decode to 16 bytes, got {found}"
+                )
             }
-            Encryption::LegacyJwe(_) => {
-                // Legacy JWE is deprecated. It's only valid for decryption of existing records, not
-                // for new writes. Reject any new writes with a legacy JWE.
-                return Err("RecordsWriteValidateIntegrityEncryptionLegacyJweInvalid: Legacy JWE is deprecated and not allowed for new writes".to_string());
+            crate::encryption::EncryptionError::InvalidBase64Url { label, error } => {
+                format!(
+                    "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: {label} must be valid base64url: {error}"
+                )
             }
-        }
+            other => format!(
+                "RecordsWriteValidateIntegrityEncryptionEphemeralPublicKeyInvalid: {other}"
+            ),
+        })?;
     }
 
     // `contextId` is a protocol-only surface: per DWN spec.md:1028 a record NOT

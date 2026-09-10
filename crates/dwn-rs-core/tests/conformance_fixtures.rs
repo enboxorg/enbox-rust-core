@@ -2391,7 +2391,7 @@ fn assert_jwe_production_model(case: &FixtureCase) {
     let encryption_value = record(case)
         .get("encryption")
         .unwrap_or_else(|| panic!("{} record must include encryption", case.id));
-    let encryption: dwn_rs_core::encryption::Encryption =
+    let encryption: dwn_rs_core::encryption::EncryptionEnvelope =
         serde_json::from_value(encryption_value.clone())
             .unwrap_or_else(|err| panic!("{} production JWE model decode failed: {err}", case.id));
     assert_eq!(

@@ -3,7 +3,7 @@ use serde_with::skip_serializing_none;
 
 use crate::{
     auth::{authorization::Authorization, jws::Jws},
-    encryption::Encryption,
+    encryption::EncryptionEnvelope,
     Value,
 };
 
@@ -161,7 +161,7 @@ pub struct WriteFields {
     pub record_id: Option<String>,
     #[serde(rename = "contextId")]
     pub context_id: Option<String>,
-    pub encryption: Option<Encryption>,
+    pub encryption: Option<EncryptionEnvelope>,
     pub attestation: Option<Jws>,
     #[serde(rename = "encodedData")]
     pub encoded_data: Option<String>,
@@ -227,7 +227,7 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                encryption: Some(Encryption::Envelope(EncryptionEnvelope {
+                encryption: Some(EncryptionEnvelope {
                     algorithm: ContentEncryptionAlgorithm::A256Ctr,
                     initialization_vector: "initialization_vector".to_string(),
                     key_encryption: vec![KeyEncryption::ProtocolPath {
@@ -236,7 +236,7 @@ mod tests {
                         ephemeral_public_key: jwk.clone(),
                         encrypted_key: "encrypted_key".to_string(),
                     }],
-                })),
+                }),
                 attestation: Some(Jws {
                     payload: Some("payload".to_string()),
                     signatures: Some(vec![JwsSignature {

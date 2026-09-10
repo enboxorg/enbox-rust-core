@@ -19,7 +19,7 @@ use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
 use crate::encryption::{
-    Encryption, KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
+    KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::filters::{Filter, FilterKey, Filters};
@@ -653,17 +653,14 @@ where
                     let key_id = agreement.public_key_jwk.thumbprint().map_err(|error| {
                         RecordsWriteValidationError::Internal(error.to_string())
                     })?;
-                    let envelope = match fields.encryption.as_ref() {
-                        Some(Encryption::Envelope(envelope)) => envelope,
-                        _ => {
-                            return Err(DwnError::new(
-                                DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
-                                format!(
-                                    "type '{type_name}' requires encryption but message has no encryption metadata"
-                                ),
-                            )
-                            .into());
-                        }
+                    let Some(envelope) = fields.encryption.as_ref() else {
+                        return Err(DwnError::new(
+                            DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
+                            format!(
+                                "type '{type_name}' requires encryption but message has no encryption metadata"
+                            ),
+                        )
+                        .into());
                     };
                     let has_protocol_path_entry = envelope.key_encryption.iter().any(|entry| {
                         matches!(entry, KeyEncryption::ProtocolPath { key_id: id, .. } if id == &key_id)

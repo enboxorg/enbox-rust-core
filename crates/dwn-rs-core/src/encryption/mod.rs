@@ -7,7 +7,7 @@
 //! removed upstream.
 //!
 //! Primitive implementations live in [`ctr`], [`aes_kw`], [`kdf`], and
-//! [`x25519`]; this module owns the wire types and the `Encryption` facade.
+//! [`x25519`]; this module owns the wire types and the `EncryptionEnvelope`.
 //! The agent encryption-control seal key wrap is modeled separately ([`SealKeyWrap`])
 //! because upstream keeps it distinct from `DwnEncryption.keyEncryption`.
 
@@ -15,7 +15,6 @@ pub mod aes_kw;
 pub mod ctr;
 pub mod error;
 pub mod kdf;
-pub mod legacy_jwe;
 pub mod x25519;
 
 use std::collections::BTreeMap;
@@ -170,30 +169,6 @@ impl KeyEncryption {
             KeyEncryption::ProtocolPath { algorithm, .. } => *algorithm,
             KeyEncryption::RoleAudience { algorithm, .. } => *algorithm,
         }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[serde(untagged)]
-pub enum Encryption {
-    Envelope(EncryptionEnvelope),
-    LegacyJwe(legacy_jwe::LegacyJweEncryption),
-}
-
-impl Encryption {
-    pub fn decrypt(
-        &self,
-        private_jwk: &JWK,
-        ciphertext: &[u8],
-    ) -> Result<Vec<u8>, EncryptionError> {
-        match self {
-            Encryption::Envelope(envelope) => envelope.decrypt(private_jwk, ciphertext),
-            Encryption::LegacyJwe(jwe) => jwe.decrypt(private_jwk, ciphertext),
-        }
-    }
-
-    pub fn is_legacy_jwe(&self) -> bool {
-        matches!(self, Encryption::LegacyJwe(_))
     }
 }
 
