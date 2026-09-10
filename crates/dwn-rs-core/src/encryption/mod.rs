@@ -33,6 +33,11 @@ pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
 pub const SEAL_DERIVATION_SCHEME: &str = "seal";
 pub const ENCRYPTION_PROTOCOL_URI: &str = "https://identity.foundation/dwn/protocols/encryption";
 pub const ENCRYPTION_PROTOCOL_GRANT_KEY_PATH: &str = "grantKey";
+/// Reserved virtual protocol-path root owning the control record paths
+/// below. A protocol definition may never declare it; enforcement lives with
+/// the rest of protocol-definition validation in
+/// [`crate::protocols::validate_reserved_control_namespace`].
+pub const ENCRYPTION_CONTROL_ROOT_PATH: &str = "$encryption";
 pub const ENCRYPTION_CONTROL_AUDIENCE_PATH: &str = "$encryption/audience";
 pub const ENCRYPTION_CONTROL_DELIVERY_PATH: &str = "$encryption/delivery";
 

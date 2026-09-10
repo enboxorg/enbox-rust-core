@@ -2350,3 +2350,173 @@ async fn protocols_configure_scan_failure_fails_closed() {
     let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
     assert_eq!(reply.status.code, 500, "{}", reply.status.detail);
 }
+
+/// Placements of the reserved `$encryption` namespace, each with the detail it
+/// must report. The `types` and root-`structure` cases share a key name, so the
+/// expected wording is what keeps them from proving the same thing twice.
+const RESERVED_NAMESPACE_PLACEMENTS: [(&str, &str); 4] = [
+    ("types", "protocol type '$encryption'"),
+    ("root", "protocol structure path '$encryption'"),
+    ("nested", "protocol structure path 'thread/$encryption'"),
+    // Deeper than the protocol's own 10-level nesting rule. The scan carries no
+    // depth limit of its own, so the reservation is still named rather than
+    // falling through to an anonymous schema failure.
+    (
+        "deep",
+        "protocol structure path 'thread/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/d11/$encryption'",
+    ),
+];
+
+fn definition_with_reserved_namespace(placement: &str) -> serde_json::Value {
+    let mut definition = serde_json::json!({
+        "protocol": "http://example.com/protocol",
+        "published": true,
+        "types": { "thread": {} },
+        "structure": { "thread": {} }
+    });
+    match placement {
+        "types" => definition["types"]["$encryption"] = serde_json::json!({}),
+        "root" => definition["structure"]["$encryption"] = serde_json::json!({}),
+        "nested" => definition["structure"]["thread"]["$encryption"] = serde_json::json!({}),
+        "deep" => {
+            let mut branch = &mut definition["structure"]["thread"];
+            for level in 1..=11 {
+                branch[format!("d{level}")] = serde_json::json!({});
+                branch = &mut branch[format!("d{level}")];
+            }
+            branch["$encryption"] = serde_json::json!({});
+        }
+        other => panic!("unknown placement {other}"),
+    }
+    definition
+}
+
+fn configure_message_with_raw_definition(definition: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "descriptor": {
+            "interface": "Protocols",
+            "method": "Configure",
+            "messageTimestamp": "2025-01-01T00:00:00.000000Z",
+            "definition": definition
+        },
+        "authorization": {
+            "signature": { "payload": "", "signatures": [] }
+        }
+    })
+}
+
+// Covers: ENBOX-ENC-001
+// Packet requirement 1, parsing route. `$encryption` is reserved for control
+// records, so a definition may never declare it — as a type, as a root
+// structure entry, or nested at any depth.
+#[test]
+fn reserved_encryption_namespace_is_named_before_schema_validation() {
+    for (placement, expected_detail) in RESERVED_NAMESPACE_PLACEMENTS {
+        let message =
+            configure_message_with_raw_definition(definition_with_reserved_namespace(placement));
+
+        let error = crate::validation::admit_message(&message)
+            .expect_err("reserved namespace must be rejected");
+        assert_eq!(
+            error.code,
+            crate::errors::DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath,
+            "{placement} placement must name the reservation, got: {error}"
+        );
+        assert!(
+            error.detail.contains(expected_detail),
+            "{placement} placement must report \"{expected_detail}\", got: {}",
+            error.detail
+        );
+
+        // The ordering is the point. Schema validation rejects every
+        // `$`-prefixed key anonymously, so running it first would bury the
+        // reservation under a generic failure.
+        let schema_only = crate::validation::validate_message(&message)
+            .expect_err("schema also rejects the reserved key");
+        assert_eq!(
+            schema_only.code,
+            crate::errors::DwnErrorCode::SchemaValidatorFailure,
+            "{placement} placement should otherwise surface only a schema failure"
+        );
+    }
+}
+
+// Covers: ENBOX-ENC-001
+// Packet requirement 1, construction route. `RuleSet` absorbs unknown keys via
+// `#[serde(flatten)]`, so a locally built definition can carry the reserved
+// namespace without ever being parsed from the wire.
+#[tokio::test]
+async fn reserved_encryption_namespace_is_rejected_during_construction() {
+    use crate::descriptors::MessageParameters;
+
+    for (placement, expected_detail) in RESERVED_NAMESPACE_PLACEMENTS {
+        let definition: Definition =
+            serde_json::from_value(definition_with_reserved_namespace(placement))
+                .expect("definition fixture must deserialize");
+
+        let error = crate::descriptors::protocols::ConfigureParameters {
+            message_timestamp: None,
+            definition,
+            permission_grant_id: None,
+            delegated_grant: None,
+        }
+        .build()
+        .await
+        .expect_err("reserved namespace must not build");
+
+        assert!(
+            error
+                .message
+                .contains("ProtocolsConfigureReservedEncryptionControlPath"),
+            "{placement} placement must name the reservation, got: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains(expected_detail),
+            "{placement} placement must report \"{expected_detail}\", got: {}",
+            error.message
+        );
+    }
+}
+
+// Covers: ENBOX-ENC-001
+// Why the reserved-namespace scan takes raw JSON rather than a typed
+// `Definition`: when the reserved entry's *value* is malformed, the definition
+// cannot be constructed at all, so a typed scan would never see the key it
+// exists to reject and the reservation would fall through to an anonymous
+// schema failure.
+#[test]
+fn reserved_namespace_is_named_even_when_the_definition_cannot_be_typed() {
+    let untypeable = [
+        (
+            "reserved structure entry holding a non-rule-set",
+            serde_json::json!({
+                "protocol": "http://example.com/protocol", "published": true,
+                "types": { "thread": {} },
+                "structure": { "thread": { "$encryption": "garbage" } }
+            }),
+        ),
+        (
+            "reserved type holding a non-type",
+            serde_json::json!({
+                "protocol": "http://example.com/protocol", "published": true,
+                "types": { "$encryption": 42 },
+                "structure": { "thread": {} }
+            }),
+        ),
+    ];
+
+    for (label, raw) in untypeable {
+        assert!(
+            serde_json::from_value::<Definition>(raw.clone()).is_err(),
+            "{label} must be untypeable, or this test proves nothing"
+        );
+        let error = crate::protocols::validate_reserved_control_namespace(&raw)
+            .expect_err("reserved namespace must still be named");
+        assert_eq!(
+            error.code,
+            crate::errors::DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath,
+            "{label} must name the reservation, got: {error}"
+        );
+    }
+}

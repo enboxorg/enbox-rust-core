@@ -12,6 +12,7 @@ pub enum DwnErrorCode {
     GeneralJwsVerifierGetPublicKeyNotFound,
     ProtocolAuthorizationProtocolNotFound,
     ProtocolsConfigureComposedProtocolNotInstalled,
+    ProtocolsConfigureReservedEncryptionControlPath,
     ProtocolAuthorizationParentRecordNotFound,
     ProtocolAuthorizationCrossProtocolParentNotFound,
     ProtocolAuthorizationParentNotFoundConstructingRecordChain,
@@ -50,6 +51,9 @@ impl DwnErrorCode {
             Self::ProtocolAuthorizationProtocolNotFound => "ProtocolAuthorizationProtocolNotFound",
             Self::ProtocolsConfigureComposedProtocolNotInstalled => {
                 "ProtocolsConfigureComposedProtocolNotInstalled"
+            }
+            Self::ProtocolsConfigureReservedEncryptionControlPath => {
+                "ProtocolsConfigureReservedEncryptionControlPath"
             }
             Self::ProtocolAuthorizationParentRecordNotFound => {
                 "ProtocolAuthorizationParentRecordNotFound"
@@ -143,6 +147,9 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "ProtocolsConfigureComposedProtocolNotInstalled" => {
                 Ok(Self::ProtocolsConfigureComposedProtocolNotInstalled)
+            }
+            "ProtocolsConfigureReservedEncryptionControlPath" => {
+                Ok(Self::ProtocolsConfigureReservedEncryptionControlPath)
             }
             "ProtocolAuthorizationParentRecordNotFound" => {
                 Ok(Self::ProtocolAuthorizationParentRecordNotFound)
