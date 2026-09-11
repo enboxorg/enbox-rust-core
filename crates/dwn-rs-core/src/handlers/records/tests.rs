@@ -32,7 +32,9 @@ use crate::{
 use crate::{Descriptor, Value};
 
 use super::common::*;
-use super::control::{control_config_validity, verify_stored_create_action, ControlConfigValidity};
+use super::control::repair::{
+    control_config_validity, verify_stored_create_action, ControlConfigValidity,
+};
 use super::*;
 
 /// Drives a resumable delete the way a resume actually does: through the
@@ -5415,7 +5417,7 @@ async fn a_referenced_role_must_still_be_keyed_to_convey_deliveries() {
         let definition = definition_with_reader(role_keyed);
         let scope_path = "thread";
         let role_path = "member";
-        let roles = control::read_roles_under(&definition, scope_path);
+        let roles = control::visibility::read_roles_under(&definition, scope_path);
         assert_eq!(
             roles.contains(role_path),
             expect_reachable,
@@ -5527,7 +5529,8 @@ async fn the_current_audience_is_the_same_whatever_order_candidates_arrive_in() 
     let ranks: Vec<_> = candidates
         .iter()
         .map(|message| {
-            control::projection_rank(CONTROL_TENANT, message).expect("every candidate ranks")
+            control::projection::projection_rank(CONTROL_TENANT, message)
+                .expect("every candidate ranks")
         })
         .collect();
 

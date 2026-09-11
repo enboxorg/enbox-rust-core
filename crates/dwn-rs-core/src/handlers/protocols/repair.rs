@@ -22,7 +22,7 @@ use crate::descriptors::records::{is_initial_write, records_write_descriptor};
 use crate::encryption::control::ControlKind;
 use crate::filters::Filters;
 use crate::handlers::records::common::{filter_map, string_filter};
-use crate::handlers::records::control::{control_config_validity, ControlConfigValidity};
+use crate::handlers::records::control::repair::{control_config_validity, ControlConfigValidity};
 use crate::permissions::message_author;
 use crate::tasks::controller::ResumableControlPurgeData;
 use crate::tasks::manager::{ResumableTask, ResumableTaskManager, ResumableTaskName};
