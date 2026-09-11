@@ -18,7 +18,6 @@ use crate::handlers::records::common::{
     fetch_initial_write_message, fetch_newest_write, filter_map, message_record_id,
     message_record_limit_policy, published_sort_name, records_delete_descriptor,
     records_filter_to_filter_map, set_encoded_data, store_error_reply, string_filter,
-    IdentityProjector, RecordsProjector,
 };
 use crate::handlers::records::control;
 use crate::permissions::{self};
@@ -166,18 +165,9 @@ where
                         );
                     }
 
-                    let mut projected =
-                        match IdentityProjector.project_writes(vec![candidate]).await {
-                            Ok(projected) => projected,
-                            Err(detail) => {
-                                return store_error_reply(format!(
-                                    "failed to project records: {detail}"
-                                ))
-                            }
-                        };
-                    let Some(candidate) = projected.pop() else {
-                        continue;
-                    };
+                    // No current-audience projection here. Direct Read takes
+                    // the first readable candidate in the requested order; see
+                    // the control check below and DWN-REC-008.
 
                     let occupant = match message_record_limit_policy(
                         tenant,

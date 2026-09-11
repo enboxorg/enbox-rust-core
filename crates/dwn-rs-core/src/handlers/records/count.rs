@@ -7,9 +7,11 @@ use crate::descriptors::RecordsCountDescriptor;
 use crate::dwn::{Handler, HandlerContext};
 use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::handlers::records::common::{resolve_record_limit_policy, store_error_reply};
+use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self};
 use crate::replies::records::Count;
+use crate::Pagination;
 use crate::Response;
 
 use super::RecordsAuthorizationKind;
@@ -88,6 +90,67 @@ where
                 Ok(policy) => policy,
                 Err(detail) => return store_error_reply(detail),
             };
+
+            // A count whose population could contain control records cannot be
+            // delegated to the store. The store knows nothing of
+            // current-audience projection or control visibility, so it would
+            // report a population neither Query nor Subscribe would return —
+            // counting superseded audiences, and leaking the cardinality of
+            // records the requester may not read. Such counts are materialised
+            // and counted after the same passes the other collection surfaces
+            // apply.
+            //
+            // ponytail: materialises whenever controls are possible; narrow it
+            // with a cheap control-path probe if broad counts become hot.
+            if control::filter_may_match_controls(&descriptor.filter) {
+                let mut first_page = true;
+                let counted = match control::collect_visible_page(
+                    tenant,
+                    &message,
+                    signature.as_ref(),
+                    &descriptor.filter,
+                    None,
+                    &self.message_store,
+                    |cursor| {
+                        let filters = filters.clone();
+                        let record_limit = record_limit.clone();
+                        let cursor = if first_page {
+                            first_page = false;
+                            None
+                        } else {
+                            cursor
+                        };
+                        async move {
+                            let result = self
+                                .message_store
+                                .query(
+                                    tenant,
+                                    filters,
+                                    None,
+                                    Some(Pagination {
+                                        cursor,
+                                        limit: None,
+                                    }),
+                                    record_limit,
+                                )
+                                .await
+                                .map_err(|err| err.to_string())?;
+                            Ok((result.messages, result.cursor))
+                        }
+                    },
+                )
+                .await
+                {
+                    Ok((messages, _)) => messages.len() as u64,
+                    Err(control::ControlValidationError::Internal(detail)) => {
+                        return store_error_reply(detail)
+                    }
+                    Err(error) => return Response::unauthorized(error.to_string()),
+                };
+                return Response::ok().with_reply(Count {
+                    count: Some(counted),
+                });
+            }
 
             match self
                 .message_store

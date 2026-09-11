@@ -1,8 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::ops::Bound;
-use std::pin::Pin;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -1515,34 +1513,6 @@ where
 }
 
 /// Per-message projection capability for read surfaces. Query, Subscribe,
-/// and Read route matched writes through this seam before authorization,
-/// data retrieval, and delivery decisions; the encryption-control
-/// current-audience projection plugs in here by replacing the identity
-/// implementation. Kept deliberately narrow: projection maps populations,
-/// it never re-authorizes.
-pub(crate) trait RecordsProjector: Send + Sync {
-    fn project_writes<'a>(
-        &'a self,
-        messages: Vec<Message<Descriptor>>,
-    ) -> ProjectedWritesFuture<'a>;
-}
-
-pub(crate) type ProjectedWritesFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<Message<Descriptor>>, String>> + Send + 'a>>;
-
-/// Identity projection: every matched write stays visible. All read surfaces
-/// use this until the encryption-control projection lands.
-pub(crate) struct IdentityProjector;
-
-impl RecordsProjector for IdentityProjector {
-    fn project_writes<'a>(
-        &'a self,
-        messages: Vec<Message<Descriptor>>,
-    ) -> ProjectedWritesFuture<'a> {
-        Box::pin(async move { Ok(messages) })
-    }
-}
-
 pub(crate) async fn attach_initial_writes(
     tenant: &str,
     messages: Vec<Message<Descriptor>>,
@@ -2902,23 +2872,4 @@ mod tests {
     }
 
     // Covers: DWN-REC-001
-    #[tokio::test]
-    async fn identity_projection_preserves_population() {
-        let messages = vec![
-            limit_write_message("thread/message", Some("thread-1/message-1")),
-            limit_write_message("post", None),
-        ];
-        let projected = IdentityProjector
-            .project_writes(messages.clone())
-            .await
-            .expect("identity projection cannot fail");
-        assert_eq!(projected.len(), messages.len());
-        for (before, after) in messages.iter().zip(projected.iter()) {
-            assert_eq!(
-                message_cid(before).expect("cid"),
-                message_cid(after).expect("cid"),
-                "identity projection preserves every message"
-            );
-        }
-    }
 }

@@ -4143,14 +4143,17 @@ fn audience_payload_for(
 }
 
 struct ControlFixture {
-    handler: RecordsWriteHandler<TestMessageStore, TestDataStore>,
-    message_store: TestMessageStore,
+    // `MemoryMessageStore` rather than `TestMessageStore`: the test double
+    // truncates to a pagination limit without ever returning a cursor, so any
+    // page-refill behaviour tested against it would be silently untested.
+    handler: RecordsWriteHandler<MemoryMessageStore, TestDataStore>,
+    message_store: MemoryMessageStore,
     audience_key_id: String,
     seal_key_id: String,
 }
 
 async fn control_fixture() -> ControlFixture {
-    let mut message_store = TestMessageStore::default();
+    let mut message_store = MemoryMessageStore::default();
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
@@ -4383,7 +4386,7 @@ fn delivery_tags(role_path: &str, context_id: &str, key_id: &str, authority: &st
 
 /// Grants `recipient` the `member` role by storing a role record directly:
 /// role membership is the protocol's business, not the control plane's.
-async fn grant_member_role(message_store: &TestMessageStore, recipient: &str, timestamp: &str) {
+async fn grant_member_role(message_store: &MemoryMessageStore, recipient: &str, timestamp: &str) {
     let role = signed_write_message(WriteSpec {
         protocol: CONTROL_PROTOCOL.to_string(),
         protocol_path: "member".to_string(),
@@ -4413,6 +4416,13 @@ async fn grant_member_role(message_store: &TestMessageStore, recipient: &str, ti
         ("isLatestBaseState".to_string(), Value::Bool(true)),
         (
             "messageTimestamp".to_string(),
+            Value::String(timestamp.to_string()),
+        ),
+        // Sort properties are load-bearing: a store drops rows missing the one
+        // a query sorts by, so an index-light fixture would be invisible to
+        // Query while still being counted.
+        (
+            "dateCreated".to_string(),
             Value::String(timestamp.to_string()),
         ),
     ]);
@@ -5389,11 +5399,400 @@ async fn a_referenced_role_must_still_be_keyed_to_convey_deliveries() {
         let definition = definition_with_reader(role_keyed);
         let scope_path = "thread";
         let role_path = "member";
-        let roles = control::read_roles_under_for_test(&definition, scope_path);
+        let roles = control::read_roles_under(&definition, scope_path);
         assert_eq!(
             roles.contains(role_path),
             expect_reachable,
             "{label}: a subtree delegate's reach must follow the role's key agreement"
+        );
+    }
+}
+
+/// Admits an audience publishing `public_key`, signed by `signer`.
+async fn admit_audience_signed(
+    fixture: &ControlFixture,
+    public_key: &JWK,
+    author: &str,
+    signer: crate::auth::PrivateJwkSigner,
+    timestamp: &str,
+    grant_id: Option<&str>,
+) -> String {
+    let key_id = public_key.thumbprint().unwrap();
+    let data = audience_payload_for(public_key, "member", "", &key_id, &fixture.seal_key_id);
+    let write = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &key_id),
+        &data,
+        timestamp,
+        |spec| {
+            spec.author = author.to_string();
+            spec.signer = signer;
+            spec.permission_grant_id = grant_id.map(str::to_string);
+        },
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &write, Some(data))
+        .await;
+    assert_eq!(
+        reply.status.code, 202,
+        "audience must admit: {}",
+        reply.status.detail
+    );
+    key_id
+}
+
+/// Attaches a signature to a raw message so the projection comparator can read
+/// its actual signer.
+async fn signed_as(
+    mut message: serde_json::Value,
+    signer: crate::auth::PrivateJwkSigner,
+) -> Message<Descriptor> {
+    let descriptor = message["descriptor"].clone();
+    let signature = signature_for_descriptor(
+        &descriptor,
+        json!({
+            "recordId": message["recordId"].as_str().unwrap(),
+            "contextId": "",
+        }),
+        signer,
+    )
+    .await;
+    message["authorization"] = json!({ "signature": signature });
+    serde_json::from_value(message).expect("candidate fixture must deserialize")
+}
+
+fn projection_candidate(record_id: &str, date_created: &str) -> serde_json::Value {
+    json!({
+        "descriptor": {
+            "interface": "Records", "method": "Write",
+            "protocol": CONTROL_PROTOCOL, "protocolPath": AUDIENCE_PATH,
+            "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
+            "dataSize": 0, "dataFormat": "application/json",
+            "dateCreated": date_created,
+            "messageTimestamp": date_created
+        },
+        "recordId": record_id
+    })
+}
+
+// Covers: DWN-REC-004
+// The current audience for a role is the one a real tenant signature vouches
+// for, then the oldest, then the lowest record id — and that answer must not
+// depend on the order candidates arrive in. Oldest-first is what makes a later
+// flood of non-tenant audiences inert rather than letting the most recent
+// writer take over a role.
+#[tokio::test]
+async fn the_current_audience_is_the_same_whatever_order_candidates_arrive_in() {
+    // Three candidates spanning every dimension the comparator uses. The
+    // tenant-signed one is deliberately the newest and last by id, so a winner
+    // chosen on either of those would be visible.
+    let candidates = [
+        signed_as(
+            projection_candidate(
+                "zzz-newest-but-tenant-signed",
+                "2025-06-01T00:00:00.000000Z",
+            ),
+            test_signer(),
+        )
+        .await,
+        signed_as(
+            projection_candidate("aaa-oldest", "2025-01-01T00:00:00.000000Z"),
+            bob_signer(),
+        )
+        .await,
+        signed_as(
+            projection_candidate("bbb-same-date", "2025-01-01T00:00:00.000000Z"),
+            bob_signer(),
+        )
+        .await,
+    ];
+    let ranks: Vec<_> = candidates
+        .iter()
+        .map(|message| {
+            control::projection_rank(CONTROL_TENANT, message).expect("every candidate ranks")
+        })
+        .collect();
+
+    let winner = ranks
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| left.cmp(right))
+        .unwrap()
+        .0;
+    assert_eq!(
+        winner, 0,
+        "an actual tenant signature outranks age and record id"
+    );
+
+    // Every arrival order agrees on the same winner.
+    for permutation in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let chosen = permutation
+            .iter()
+            .map(|&index| (index, &ranks[index]))
+            .min_by(|(_, left), (_, right)| left.cmp(right))
+            .unwrap()
+            .0;
+        assert_eq!(
+            chosen, winner,
+            "arrival order {permutation:?} must not change the current audience"
+        );
+    }
+
+    // Among non-tenant candidates the oldest wins, and a tie breaks on the
+    // lower record id.
+    assert_eq!(
+        [&ranks[1], &ranks[2]].into_iter().min().unwrap(),
+        &ranks[1],
+        "oldest creation wins, so a later flood cannot take over the role"
+    );
+}
+
+// Covers: DWN-REC-004, DWN-REC-005
+// Collections show one current audience per role; direct Read still does not
+// project. A caller that pinned a specific stored key by its full four-field
+// identity keeps getting that key — it asked for a particular stored key, and
+// answering with a different one would be wrong — while a three-field tuple
+// names the role's directory and is projected.
+#[tokio::test]
+async fn collections_project_one_current_audience_but_exact_keys_bypass() {
+    let fixture = control_fixture().await;
+
+    // Two valid audiences for the same role. The older one is the current key.
+    let older = admit_audience_signed(
+        &fixture,
+        &audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:01:00.000000Z",
+        None,
+    )
+    .await;
+    let newer = admit_audience_signed(
+        &fixture,
+        &other_audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:02:00.000000Z",
+        None,
+    )
+    .await;
+
+    let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
+    let count_handler = RecordsCountHandler::new(fixture.message_store.clone(), None);
+
+    // A three-field tuple names the role's directory, so it is projected to one.
+    let directory = signed_request(
+        unsigned_query_message(exact_tuple_filter(None)),
+        test_signer(),
+        None,
+    )
+    .await;
+    let reply = query_handler.run(CONTROL_TENANT, &directory, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(
+        reply.reply.entries.as_ref().map(Vec::len),
+        Some(1),
+        "two stored audiences project to one current audience"
+    );
+
+    // Count reports the same projected population, not the stored one.
+    let directory_count = signed_request(
+        unsigned_count_message(exact_tuple_filter(None)),
+        test_signer(),
+        None,
+    )
+    .await;
+    let reply = count_handler
+        .run(CONTROL_TENANT, &directory_count, None)
+        .await;
+    assert_eq!(
+        reply.reply.count,
+        Some(1),
+        "Count must agree with Query: {}",
+        reply.status.detail
+    );
+
+    // Pinning the whole identity bypasses projection, for either key.
+    for (label, key_id) in [("current", &older), ("superseded", &newer)] {
+        let exact = signed_request(
+            unsigned_query_message(exact_tuple_filter(Some(key_id))),
+            test_signer(),
+            None,
+        )
+        .await;
+        let reply = query_handler.run(CONTROL_TENANT, &exact, None).await;
+        assert_eq!(
+            reply.reply.entries.as_ref().map(Vec::len),
+            Some(1),
+            "a fully pinned {label} key must come back as asked: {}",
+            reply.status.detail
+        );
+    }
+}
+
+// Covers: DWN-REC-005, DWN-REC-008
+// A storage page is not a reply page. Projection removes superseded audiences,
+// so filtering one storage page and returning would hand back a short page —
+// here an empty one, because the only record on the first page is the one
+// projection drops.
+//
+// The delegate's audience sorts first but loses the projection to the tenant's,
+// which is what puts a non-current record alone on page one.
+#[tokio::test]
+async fn a_query_page_refills_past_records_projection_removed() {
+    let fixture = control_fixture().await;
+    let grant_id = issue_write_grant(&fixture, "member", "2025-01-01T00:00:30.000000Z").await;
+
+    // Written first, by a delegate: ordered first, but never current.
+    let delegate_key = admit_audience_signed(
+        &fixture,
+        &audience_key_jwk(),
+        "did:example:bob",
+        bob_signer(),
+        "2025-01-01T00:01:00.000000Z",
+        Some(&grant_id),
+    )
+    .await;
+    // Written second, by the tenant: an actual tenant signature outranks age.
+    let tenant_key = admit_audience_signed(
+        &fixture,
+        &other_audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:02:00.000000Z",
+        None,
+    )
+    .await;
+
+    let mut request = unsigned_query_message(exact_tuple_filter(None));
+    request["descriptor"]["pagination"] = json!({ "limit": 1 });
+    let query = signed_request(request, test_signer(), None).await;
+
+    let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
+    let reply = query_handler.run(CONTROL_TENANT, &query, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+
+    let entries = reply.reply.entries.unwrap_or_default();
+    assert_eq!(
+        entries.len(),
+        1,
+        "the page must refill past the record projection removed rather than come back empty"
+    );
+    let returned = crate::descriptors::records::records_write_descriptor(
+        &serde_json::from_value::<Message<Descriptor>>(serde_json::to_value(&entries[0]).unwrap())
+            .unwrap(),
+    )
+    .unwrap()
+    .tags
+    .as_ref()
+    .and_then(|tags| tags.get("keyId"))
+    .cloned();
+    assert_eq!(
+        returned,
+        Some(Value::String(tenant_key)),
+        "the refilled page must hold the current audience, not the delegate's"
+    );
+    assert_ne!(
+        returned,
+        Some(Value::String(delegate_key)),
+        "the superseded audience must not be what filled the page"
+    );
+}
+
+// Covers: DWN-REC-005, ENBOX-ENC-003
+// A broad Count must report the population Query would return. Counting through
+// the store would include superseded audiences and deliveries the requester
+// cannot read, so a protocol-wide count needs the same passes a control-only
+// one gets.
+#[tokio::test]
+async fn a_protocol_wide_count_agrees_with_query() {
+    const RECIPIENT: &str = "did:example:bob";
+    let fixture = control_fixture().await;
+
+    // Two audiences for one role (one superseded) plus a delivery to Bob.
+    admit_audience_signed(
+        &fixture,
+        &audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:01:00.000000Z",
+        None,
+    )
+    .await;
+    let key_id = admit_audience_signed(
+        &fixture,
+        &other_audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:02:00.000000Z",
+        None,
+    )
+    .await;
+    grant_member_role(
+        &fixture.message_store,
+        RECIPIENT,
+        "2025-01-01T00:03:00.000000Z",
+    )
+    .await;
+    let ciphertext = Bytes::from_static(b"sealed key material");
+    let delivery = control_write(
+        DELIVERY_PATH,
+        delivery_tags("member", "", &key_id, "roleHolder"),
+        &ciphertext,
+        "2025-01-01T00:04:00.000000Z",
+        |spec| {
+            spec.recipient = Some(RECIPIENT.to_string());
+            spec.encryption = Some(delivery_envelope());
+        },
+    )
+    .await;
+    assert_eq!(
+        fixture
+            .handler
+            .run(CONTROL_TENANT, &delivery, Some(ciphertext))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
+    let count_handler = RecordsCountHandler::new(fixture.message_store.clone(), None);
+
+    // A protocol-wide request, pinning no path at all.
+    let broad = json!({ "protocol": CONTROL_PROTOCOL });
+    for (label, signer) in [
+        ("an unrelated requester", signer_for("did:example:mallory")),
+        ("the tenant", test_signer()),
+    ] {
+        let query =
+            signed_request(unsigned_query_message(broad.clone()), signer.clone(), None).await;
+        let counted = signed_request(unsigned_count_message(broad.clone()), signer, None).await;
+
+        let query_reply = query_handler.run(CONTROL_TENANT, &query, None).await;
+        let count_reply = count_handler.run(CONTROL_TENANT, &counted, None).await;
+        let visible = query_reply
+            .reply
+            .entries
+            .as_ref()
+            .map(Vec::len)
+            .unwrap_or(0) as u64;
+
+        assert_eq!(
+            count_reply.reply.count,
+            Some(visible),
+            "{label}: Count must report the population Query returns, got {:?} vs {visible}: {}",
+            count_reply.reply.count,
+            count_reply.status.detail
         );
     }
 }

@@ -11,11 +11,16 @@
 //! own timestamp, not the newest one, so a configuration learned later cannot
 //! retroactively change what a record meant when it was written.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::descriptors::messages::record_id;
 use crate::descriptors::records::{is_initial_write, records_write_descriptor, write_fields};
 pub(crate) use crate::encryption::control::ControlKind;
-use crate::encryption::control::{required_string_tag, AudienceId, AudiencePayload};
+use crate::encryption::control::{required_string_tag, AudienceId, AudiencePayload, AudienceScope};
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::filters::message_filters::Records as RecordsFilter;
+use crate::filters::query::Cursor;
+use crate::filters::{FilterKey, Filters};
 use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Who};
 use crate::permissions::control::{resolve_control_actor, ControlActor};
 use crate::permissions::{
@@ -24,13 +29,9 @@ use crate::permissions::{
 };
 use crate::{Descriptor, Message};
 
-use std::collections::BTreeSet;
-
-use crate::descriptors::messages::record_id;
-
 use super::common::{
-    check_actor, construct_record_chain, extract_author, fetch_newest_write, message_timestamp,
-    role_record_exists,
+    bool_filter, check_actor, construct_record_chain, extract_author, fetch_newest_write,
+    filter_map, message_timestamp, role_record_exists, string_filter,
 };
 use crate::handlers::protocols::configure::{
     fetch_protocol_definition, ProtocolDefinitionLookupError,
@@ -673,6 +674,20 @@ pub(crate) fn filter_targets_only_controls(filter: &RecordsFilter) -> bool {
         .is_some_and(|path| ControlKind::from_protocol_path(path).is_some())
 }
 
+/// Whether a request's candidate population could contain control records.
+///
+/// Only a filter pinned to some other protocol path provably excludes them. A
+/// protocol-wide or unpinned request may sweep up audiences and deliveries, and
+/// must therefore be projected and visibility-checked like any other control
+/// request — counting such a population through the store would report
+/// superseded audiences and records the requester cannot read.
+pub(crate) fn filter_may_match_controls(filter: &RecordsFilter) -> bool {
+    match filter.protocol_path.as_deref() {
+        Some(path) => ControlKind::from_protocol_path(path).is_some(),
+        None => true,
+    }
+}
+
 /// Whether `signature` may read this control record.
 ///
 /// Control records are unpublished, so there is no anonymous path to any of
@@ -749,32 +764,44 @@ fn exact_audience_request_matches(
     id: &AudienceId,
     control: &Message<Descriptor>,
 ) -> bool {
-    if filter.record_id.is_some() && filter.record_id == record_id(control) {
-        return true;
+    // Reaching a directory entry needs only the role pinned; the key id is
+    // optional, because a three-field tuple still names one role's directory.
+    names_record(filter, control) || pins_audience_scope(filter, id)
+}
+
+/// Whether the caller pinned this record by id.
+fn names_record(filter: &RecordsFilter, control: &Message<Descriptor>) -> bool {
+    filter.record_id.is_some() && filter.record_id == record_id(control)
+}
+
+/// Reads a tag the caller pinned by equality.
+///
+/// A range or list predicate describes a region rather than a record and
+/// supplies nothing, which is what stops a caller reaching a specific key by
+/// gesturing near it.
+fn pinned_tag<'a>(filter: &'a RecordsFilter, tag: &str) -> Option<&'a str> {
+    match filter.tags.as_ref()?.get(tag)? {
+        crate::Filter::Equal(crate::Value::String(value)) => Some(value.as_str()),
+        _ => None,
     }
-    if filter.protocol.as_deref() != Some(id.scope.protocol.as_str())
-        || filter.protocol_path.as_deref() != Some(ControlKind::Audience.protocol_path())
-    {
-        return false;
-    }
-    let exact_tag = |tag: &str| -> Option<&str> {
-        match filter.tags.as_ref()?.get(tag)? {
-            crate::Filter::Equal(crate::Value::String(value)) => Some(value.as_str()),
-            _ => None,
-        }
-    };
-    // The three-field scope must be pinned; the key id is optional, and a tuple
-    // without it still names one role's directory rather than one record.
-    if exact_tag("protocol") != Some(id.scope.protocol.as_str())
-        || exact_tag("rolePath") != Some(id.scope.role_path.as_str())
-        || exact_tag("contextId") != Some(id.scope.context_id.as_str())
-    {
-        return false;
-    }
-    match exact_tag("keyId") {
-        Some(key_id) => key_id == id.key_id,
-        None => true,
-    }
+}
+
+/// Whether the caller pinned the three-field scope this audience belongs to.
+fn pins_audience_scope(filter: &RecordsFilter, id: &AudienceId) -> bool {
+    filter.protocol.as_deref() == Some(id.scope.protocol.as_str())
+        && filter.protocol_path.as_deref() == Some(ControlKind::Audience.protocol_path())
+        && pinned_tag(filter, "protocol") == Some(id.scope.protocol.as_str())
+        && pinned_tag(filter, "rolePath") == Some(id.scope.role_path.as_str())
+        && pinned_tag(filter, "contextId") == Some(id.scope.context_id.as_str())
+}
+
+/// Whether the caller pinned this audience's whole four-field identity.
+///
+/// Only that names one stored record, which is why only that bypasses
+/// projection: the caller asked for a particular key, not for whichever key is
+/// current.
+fn pins_audience_key(filter: &RecordsFilter, id: &AudienceId) -> bool {
+    pins_audience_scope(filter, id) && pinned_tag(filter, "keyId") == Some(id.key_id.as_str())
 }
 
 /// Broad audience visibility: a read grant covering the role, or the authority
@@ -913,7 +940,7 @@ fn grant_covers_role(scope: &PermissionScope, id: &AudienceId, method: RecordsMe
 /// Local role paths that the rule set at `scope_path`, or anything beneath it,
 /// grants read through. Cross-protocol role references are excluded: they name
 /// membership this protocol does not define.
-fn read_roles_under(definition: &Definition, scope_path: &str) -> BTreeSet<String> {
+pub(crate) fn read_roles_under(definition: &Definition, scope_path: &str) -> BTreeSet<String> {
     fn collect(definition: &Definition, rule_set: &RuleSet, found: &mut BTreeSet<String>) {
         for action in &rule_set.actions {
             if let Action::Role(role_action) = action {
@@ -980,10 +1007,193 @@ where
     Ok(visible)
 }
 
-#[cfg(test)]
-pub(crate) fn read_roles_under_for_test(
-    definition: &Definition,
-    scope_path: &str,
-) -> BTreeSet<String> {
-    read_roles_under(definition, scope_path)
+/// Where a candidate ranks as the current audience for its scope.
+///
+/// A real tenant signature outranks everything, then the oldest creation, then
+/// the lowest record id. Tenant priority is by *actual signer*: a delegated
+/// mint and an owner countersignature do not borrow it, which is what stops a
+/// delegate from installing a current key the tenant never signed for. Oldest
+/// rather than newest is deliberate — it makes a later flood of non-tenant
+/// audiences inert instead of letting the most recent writer take over a role.
+pub(crate) fn projection_rank(
+    tenant: &str,
+    record: &Message<Descriptor>,
+) -> Option<(bool, String, String)> {
+    let descriptor = records_write_descriptor(record).ok()?;
+    Some((
+        crate::permissions::message_signer(record)? != tenant,
+        crate::canonical_rfc3339(descriptor.date_created),
+        record_id(record)?,
+    ))
+}
+
+/// The record id of the audience currently representing `scope`.
+///
+/// Ranks over every stored audience in the scope rather than the page in hand,
+/// so the winner does not depend on the caller's filters, sort or pagination.
+async fn current_audience_record_id<MessageStore>(
+    tenant: &str,
+    scope: &AudienceScope,
+    message_store: &MessageStore,
+) -> Result<Option<String>, ControlValidationError>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let mut filter = filter_map([
+        ("interface", string_filter(super::RECORDS_INTERFACE)),
+        ("method", string_filter(super::WRITE_METHOD)),
+        ("protocol", string_filter(&scope.protocol)),
+        (
+            "protocolPath",
+            string_filter(ControlKind::Audience.protocol_path()),
+        ),
+        ("isLatestBaseState", bool_filter(true)),
+    ]);
+    for (tag, value) in [
+        ("protocol", scope.protocol.as_str()),
+        ("rolePath", scope.role_path.as_str()),
+        ("contextId", scope.context_id.as_str()),
+    ] {
+        filter.insert(FilterKey::Index(format!("tag.{tag}")), string_filter(value));
+    }
+
+    let stored = message_store
+        .query(tenant, Filters::from(filter), None, None, None)
+        .await
+        .map_err(|error| ControlValidationError::Internal(error.to_string()))?;
+
+    Ok(stored
+        .messages
+        .iter()
+        .filter_map(|record| projection_rank(tenant, record).map(|rank| (rank, record)))
+        .min_by(|(left, _), (right, _)| left.cmp(right))
+        .and_then(|(_, record)| record_id(record)))
+}
+
+/// Narrows a page of records to one current audience per scope.
+///
+/// Only audiences are projected; deliveries are addressed key material and each
+/// one stands alone. A caller that named a record by id, or pinned its whole
+/// four-field identity, bypasses projection entirely — that caller asked for a
+/// specific stored key, and answering with a different one would be wrong. A
+/// three-field tuple names a role's directory, not a record, so it does not
+/// bypass.
+///
+/// Selection never injects: a winner that fails the caller's own filters was
+/// not in the page and does not join it here.
+pub(crate) async fn project_current_audiences<MessageStore>(
+    tenant: &str,
+    filter: Option<&RecordsFilter>,
+    records: Vec<Message<Descriptor>>,
+    message_store: &MessageStore,
+) -> Result<Vec<Message<Descriptor>>, ControlValidationError>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    // Identify which records are subject to projection at all, keeping each
+    // one's decision beside it so the second pass re-derives nothing.
+    let mut projected_scopes = BTreeSet::new();
+    let subject: Vec<Option<AudienceScope>> = records
+        .iter()
+        .map(|record| {
+            if ControlKind::of(record) != Some(ControlKind::Audience) {
+                return None;
+            }
+            let id = AudienceId::from_message(record, ControlKind::Audience).ok()?;
+            let bypassed = filter.is_some_and(|filter| {
+                names_record(filter, record) || pins_audience_key(filter, &id)
+            });
+            if bypassed {
+                return None;
+            }
+            projected_scopes.insert(id.scope.clone());
+            Some(id.scope)
+        })
+        .collect();
+
+    if projected_scopes.is_empty() {
+        return Ok(records);
+    }
+
+    let mut current = BTreeMap::new();
+    for scope in projected_scopes {
+        let winner = current_audience_record_id(tenant, &scope, message_store).await?;
+        current.insert(scope, winner);
+    }
+
+    Ok(records
+        .into_iter()
+        .zip(subject)
+        .filter(|(record, scope)| match scope {
+            // Not an audience, or exempt from projection.
+            None => true,
+            Some(scope) => {
+                current.get(scope).and_then(Option::as_ref) == record_id(record).as_ref()
+            }
+        })
+        .map(|(record, _)| record)
+        .collect())
+}
+
+/// Fetches storage pages until the caller's visible limit is met or the store
+/// is exhausted, applying projection and control visibility to each.
+///
+/// A storage page is not a reply page. Projection drops superseded audiences
+/// and visibility drops control records the requester may not see, so filtering
+/// one storage page and returning would hand back a short page — or an empty
+/// one — while the records that belong in it sit on the next page. A caller
+/// asking for one record, newest first, would see nothing at all when the
+/// newest candidate happens to be superseded.
+///
+/// The returned cursor is the last storage page's, so a caller resumes after
+/// everything actually examined rather than re-reading what was filtered out.
+pub(crate) async fn collect_visible_page<MessageStore, Fetch, Fut>(
+    tenant: &str,
+    request: &Message<Descriptor>,
+    signature: Option<&AuthorizationContext>,
+    filter: &RecordsFilter,
+    limit: Option<u64>,
+    message_store: &MessageStore,
+    mut fetch: Fetch,
+) -> Result<(Vec<Message<Descriptor>>, Option<Cursor>), ControlValidationError>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+    Fetch: FnMut(Option<Cursor>) -> Fut,
+    Fut: std::future::Future<Output = Result<(Vec<Message<Descriptor>>, Option<Cursor>), String>>,
+{
+    let mut visible: Vec<Message<Descriptor>> = Vec::new();
+    let mut cursor = None;
+
+    loop {
+        let (page, next) = fetch(cursor.clone())
+            .await
+            .map_err(ControlValidationError::Internal)?;
+        let exhausted = page.is_empty() || next.is_none();
+        cursor = next;
+
+        let projected =
+            project_current_audiences(tenant, Some(filter), page, message_store).await?;
+        visible.extend(
+            filter_visible_controls(
+                tenant,
+                request,
+                signature,
+                Some(filter),
+                projected,
+                message_store,
+            )
+            .await?,
+        );
+
+        match limit {
+            Some(limit) if (visible.len() as u64) < limit && !exhausted => continue,
+            Some(limit) => {
+                // A refill can overshoot; the caller asked for a bounded page.
+                visible.truncate(limit as usize);
+                return Ok((visible, cursor));
+            }
+            None if exhausted => return Ok((visible, cursor)),
+            None => continue,
+        }
+    }
 }

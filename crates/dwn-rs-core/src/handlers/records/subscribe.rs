@@ -20,7 +20,6 @@ use crate::handlers::records::common::{
     date_sort_to_message_sort, event_log_error_reply, filter_map, message_record_id,
     message_record_limit_policy, records_subscribe_descriptor, records_subscribe_reply,
     resolve_record_limit_policy, should_protocol_authorize, store_error_reply, string_filter,
-    IdentityProjector, RecordsProjector,
 };
 use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
@@ -38,6 +37,7 @@ use crate::stores::{
 };
 use crate::validation::{ingest_message, ingress_rejection};
 use crate::Message;
+use crate::Pagination;
 use crate::Response;
 
 use super::{RecordsAuthorizationKind, RECORDS_INTERFACE, WRITE_METHOD};
@@ -154,45 +154,57 @@ where
                 Ok(policy) => policy,
                 Err(detail) => return store_error_reply(detail),
             };
-            let result = match self
-                .message_store
-                .query(
-                    tenant,
-                    filters,
-                    Some(date_sort_to_message_sort(
-                        descriptor.date_sort.as_ref(),
-                        false,
-                    )),
-                    descriptor.pagination.clone(),
-                    record_limit,
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(err) => return store_error_reply(err.to_string()),
-            };
-            let messages = match IdentityProjector.project_writes(result.messages).await {
-                Ok(messages) => messages,
-                Err(detail) => {
-                    return store_error_reply(format!("failed to project records: {detail}"))
-                }
-            };
-            let messages = match control::filter_visible_controls(
+            // A snapshot is a collection page and refills like one: projection
+            // and visibility both remove records, so one storage page is not
+            // one reply page.
+            let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), false);
+            let limit = descriptor.pagination.as_ref().and_then(|page| page.limit);
+            let start_cursor = descriptor
+                .pagination
+                .as_ref()
+                .and_then(|page| page.cursor.clone());
+            let mut first_page = true;
+            let (messages, cursor) = match control::collect_visible_page(
                 tenant,
                 &message,
                 signature.as_ref(),
-                Some(&descriptor.filter),
-                messages,
+                &descriptor.filter,
+                limit,
                 self.message_store.as_ref(),
+                |cursor| {
+                    let filters = filters.clone();
+                    let record_limit = record_limit.clone();
+                    let cursor = if first_page {
+                        first_page = false;
+                        start_cursor.clone()
+                    } else {
+                        cursor
+                    };
+                    async move {
+                        let result = self
+                            .message_store
+                            .query(
+                                tenant,
+                                filters,
+                                Some(sort),
+                                Some(Pagination { cursor, limit }),
+                                record_limit,
+                            )
+                            .await
+                            .map_err(|err| err.to_string())?;
+                        Ok((result.messages, result.cursor))
+                    }
+                },
             )
             .await
             {
-                Ok(messages) => messages,
+                Ok(page) => page,
                 Err(control::ControlValidationError::Internal(detail)) => {
                     return store_error_reply(detail)
                 }
                 Err(error) => return Response::unauthorized(error.to_string()),
             };
+
             let entries =
                 match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
                     Ok(entries) => entries,
@@ -205,7 +217,7 @@ where
             Response::ok().with_reply(Subscribe {
                 subscription_id: None,
                 entries: Some(entries.clone()),
-                cursor: result.cursor,
+                cursor,
                 error: None,
             })
         }
@@ -396,6 +408,14 @@ fn create_records_delivery_guard<MessageStore>(
     tenant: String,
     request_timestamp: String,
     delivery_auth: Option<DeliveryAuthorization>,
+    // The subscribe request and its requester, so live events answer to the
+    // same control visibility the snapshot applied. Without them a subscriber
+    // would receive, as it arrives, exactly what its own snapshot hid.
+    request: Message<Descriptor>,
+    signature: Option<AuthorizationContext>,
+    // The caller's own filter, so a subscriber that pinned one stored key keeps
+    // receiving that key rather than whichever becomes current.
+    records_filter: RecordsFilter,
     message_store: Arc<MessageStore>,
 ) -> (SubscriptionListener, GuardedSubscription)
 where
@@ -405,6 +425,9 @@ where
         let tenant = tenant.clone();
         let request_timestamp = request_timestamp.clone();
         let delivery_auth = delivery_auth.clone();
+        let request = request.clone();
+        let signature = signature.clone();
+        let records_filter = records_filter.clone();
         let message_store = message_store.clone();
         async move {
             let SubscriptionMessage::Event { cursor, event, .. } = &message else {
@@ -422,16 +445,55 @@ where
 
             if let Descriptor::Records(records) = &event.message.descriptor {
                 if matches!(records.as_ref(), Records::Write(_)) {
-                    let projected = match IdentityProjector
-                        .project_writes(vec![event.message.clone()])
-                        .await
+                    // Events are re-projected at delivery, not at open: an
+                    // audience that has since stopped being current must stop
+                    // being delivered.
+                    // A projection or visibility lookup that *fails* is not a
+                    // record the subscriber may not see. Suppressing it would
+                    // present a store outage as a successfully filtered event
+                    // and leave the stream running as though nothing were
+                    // wrong, so it ends the subscription instead.
+                    let control_failed = |detail: String| DeliveryDecision::Fail {
+                        cursor: cursor.clone(),
+                        error: SubscriptionError {
+                            code: SubscriptionErrorCode::RecordsDeliveryFailed,
+                            detail,
+                        },
+                    };
+
+                    let projected = match control::project_current_audiences(
+                        &tenant,
+                        Some(&records_filter),
+                        vec![event.message.clone()],
+                        message_store.as_ref(),
+                    )
+                    .await
                     {
                         Ok(projected) => projected,
-                        Err(_) => return DeliveryDecision::Suppress,
+                        Err(error) => return control_failed(error.to_string()),
                     };
+                    // Superseded: no longer the current audience for its scope.
                     let Some(write) = projected.into_iter().next() else {
                         return DeliveryDecision::Suppress;
                     };
+
+                    // Live events answer to the same control visibility as the
+                    // snapshot, so a subscriber cannot receive as it arrives
+                    // what a query would have hidden.
+                    match control::filter_visible_controls(
+                        &tenant,
+                        &request,
+                        signature.as_ref(),
+                        Some(&records_filter),
+                        vec![write.clone()],
+                        message_store.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(visible) if visible.is_empty() => return DeliveryDecision::Suppress,
+                        Ok(_) => {}
+                        Err(error) => return control_failed(error.to_string()),
+                    }
                     match project_write_occupancy(
                         &tenant,
                         &write,
@@ -543,6 +605,9 @@ where
             tenant.to_string(),
             canonical_rfc3339(descriptor.message_timestamp),
             delivery_auth,
+            message.clone(),
+            signature.clone(),
+            descriptor.filter.clone(),
             self.message_store.clone(),
         );
         let subscription = match self
@@ -610,14 +675,34 @@ where
                 return records_subscribe_reply(store_error_reply(err.to_string()), None);
             }
         };
-        let messages = match IdentityProjector.project_writes(result.messages).await {
+        let messages = match control::project_current_audiences(
+            tenant,
+            Some(&descriptor.filter),
+            result.messages,
+            self.message_store.as_ref(),
+        )
+        .await
+        {
             Ok(messages) => messages,
-            Err(detail) => {
+            Err(error) => {
                 let _ = (subscription.close)().await;
-                return records_subscribe_reply(
-                    store_error_reply(format!("failed to project records: {detail}")),
-                    None,
-                );
+                return records_subscribe_reply(store_error_reply(error.to_string()), None);
+            }
+        };
+        let messages = match control::filter_visible_controls(
+            tenant,
+            &message,
+            signature.as_ref(),
+            Some(&descriptor.filter),
+            messages,
+            self.message_store.as_ref(),
+        )
+        .await
+        {
+            Ok(messages) => messages,
+            Err(error) => {
+                let _ = (subscription.close)().await;
+                return records_subscribe_reply(store_error_reply(error.to_string()), None);
             }
         };
         let entries =
