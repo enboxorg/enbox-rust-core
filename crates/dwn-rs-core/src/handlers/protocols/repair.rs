@@ -17,24 +17,16 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::descriptors::messages::record_id;
-use crate::descriptors::records::{is_initial_write, records_write_descriptor};
-use crate::encryption::control::ControlKind;
-use crate::filters::Filters;
-use crate::handlers::records::common::{filter_map, string_filter};
-use crate::handlers::records::control::repair::{control_config_validity, ControlConfigValidity};
-use crate::permissions::message_author;
-use crate::tasks::controller::ResumableControlPurgeData;
+use crate::stores::ManagedResumableTask;
+use crate::tasks::controller::ResumableControlRepairData;
 use crate::tasks::manager::{ResumableTask, ResumableTaskManager, ResumableTaskName};
-use crate::{Descriptor, Message};
 
-use super::configure::ControlRepairer;
+use super::configure::{ControlRepairer, EnlistedRepair};
 
 /// Repairs control records through the resumable task machinery, so a removal
 /// interrupted partway is finished rather than lost.
 #[derive(Clone)]
 pub struct TaskControlRepairer<MessageStore, DataStore, TaskStore> {
-    message_store: MessageStore,
     task_manager: ResumableTaskManager<MessageStore, DataStore, TaskStore>,
 }
 
@@ -44,87 +36,26 @@ where
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     TaskStore: crate::stores::ResumableTaskStore + Clone + Send + Sync + 'static,
 {
-    pub fn new(
-        message_store: MessageStore,
-        task_manager: ResumableTaskManager<MessageStore, DataStore, TaskStore>,
-    ) -> Self {
-        Self {
-            message_store,
-            task_manager,
-        }
+    pub fn new(task_manager: ResumableTaskManager<MessageStore, DataStore, TaskStore>) -> Self {
+        Self { task_manager }
     }
 
-    async fn repair_protocol(&self, tenant: &str, protocol: &str) -> Result<(), String> {
-        for control in self.stored_control_initial_writes(tenant, protocol).await? {
-            if control_config_validity(tenant, &control, &self.message_store).await
-                != ControlConfigValidity::Invalid
-            {
-                continue;
-            }
-            let Some(record_id) = record_id(&control) else {
-                continue;
-            };
-
-            // Read before the purge starts: removing the messages destroys the
-            // only record of which data belonged here.
-            let data_cids = vec![records_write_descriptor(&control)
-                .map_err(|error| error.to_string())?
-                .data_cid
-                .clone()];
-
-            self.task_manager
-                .run(ResumableTask {
-                    name: ResumableTaskName::ControlPurge,
-                    data: serde_json::to_value(ResumableControlPurgeData {
-                        tenant: tenant.to_string(),
-                        record_id,
-                        data_cids,
-                    })
-                    .map_err(|error| error.to_string())?,
-                })
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    }
-
-    /// The control records this protocol holds, one entry per record.
-    ///
-    /// Only initial writes are examined. A control record is immutable, so its
-    /// initial write is the whole record, and judging each retained message
-    /// separately would ask the same question repeatedly of the same record.
-    async fn stored_control_initial_writes(
+    async fn enlist_protocol_repair(
         &self,
         tenant: &str,
         protocol: &str,
-    ) -> Result<Vec<Message<Descriptor>>, String> {
-        let mut found = Vec::new();
-        for path in [
-            ControlKind::Audience.protocol_path(),
-            ControlKind::Delivery.protocol_path(),
-        ] {
-            let filter = filter_map([
-                (
-                    "interface",
-                    string_filter(super::super::records::RECORDS_INTERFACE),
-                ),
-                ("method", string_filter(super::super::records::WRITE_METHOD)),
-                ("protocol", string_filter(protocol)),
-                ("protocolPath", string_filter(path)),
-            ]);
-            let result = self
-                .message_store
-                .query(tenant, Filters::from(filter), None, None, None)
-                .await
-                .map_err(|error| error.to_string())?;
-            for message in result.messages {
-                let author = message_author(&message).unwrap_or_default();
-                if is_initial_write(&message, &author).unwrap_or(false) {
-                    found.push(message);
-                }
-            }
-        }
-        Ok(found)
+    ) -> Result<ManagedResumableTask<ResumableTask>, String> {
+        self.task_manager
+            .enlist(ResumableTask {
+                name: ResumableTaskName::ControlRepair,
+                data: serde_json::to_value(ResumableControlRepairData {
+                    tenant: tenant.to_string(),
+                    protocol: protocol.to_string(),
+                })
+                .map_err(|error| error.to_string())?,
+            })
+            .await
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -135,11 +66,27 @@ where
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
     TaskStore: crate::stores::ResumableTaskStore + Clone + Send + Sync + 'static,
 {
-    fn repair<'a>(
+    fn enlist<'a>(
         &'a self,
         tenant: &'a str,
         protocol: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<EnlistedRepair, String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.enlist_protocol_repair(tenant, protocol)
+                .await
+                .map(EnlistedRepair)
+        })
+    }
+
+    fn fulfil<'a>(
+        &'a self,
+        enlisted: EnlistedRepair,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
-        Box::pin(self.repair_protocol(tenant, protocol))
+        Box::pin(async move {
+            self.task_manager
+                .fulfil(enlisted.0)
+                .await
+                .map_err(|error| error.to_string())
+        })
     }
 }

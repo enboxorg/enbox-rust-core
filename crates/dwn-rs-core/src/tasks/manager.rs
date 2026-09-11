@@ -10,7 +10,7 @@ use serde_json::Value as JsonValue;
 use crate::errors::ResumableTaskStoreError;
 use crate::stores::{ManagedResumableTask, ResumableTaskStore};
 use crate::tasks::controller::{
-    ResumableControlPurgeData, ResumableRecordsDeleteData, ResumableRecordsSquashData,
+    ResumableControlRepairData, ResumableRecordsDeleteData, ResumableRecordsSquashData,
     StorageController,
 };
 
@@ -21,7 +21,7 @@ pub const TIMEOUT_EXTENSION_FREQUENCY_SECONDS: u64 = 30;
 pub enum ResumableTaskName {
     RecordsDelete,
     RecordsSquash,
-    ControlPurge,
+    ControlRepair,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,8 +55,31 @@ where
     }
 
     pub async fn run(&self, task: ResumableTask) -> Result<(), ResumableTaskStoreError> {
+        let managed = self.enlist(task).await?;
+        self.fulfil(managed).await
+    }
+
+    /// Records the obligation to run `task` without running it yet.
+    ///
+    /// Splitting registration from execution is what lets a caller make the
+    /// obligation durable *before* the state change it answers for. Registering
+    /// afterwards leaves a window in which the change has landed and nothing
+    /// remembers that it needs answering; registering first leaves only the
+    /// harmless converse, a recorded obligation for a change that never
+    /// happened, which resumes, finds nothing to do and retires.
+    pub async fn enlist(
+        &self,
+        task: ResumableTask,
+    ) -> Result<ManagedResumableTask<ResumableTask>, ResumableTaskStoreError> {
         let timeout_in_seconds = TIMEOUT_EXTENSION_FREQUENCY_SECONDS * 2;
-        let managed = self.task_store.register(task, timeout_in_seconds).await?;
+        self.task_store.register(task, timeout_in_seconds).await
+    }
+
+    /// Runs an enlisted task, retiring it only once it succeeds.
+    pub async fn fulfil(
+        &self,
+        managed: ManagedResumableTask<ResumableTask>,
+    ) -> Result<(), ResumableTaskStoreError> {
         self.run_with_automatic_timeout_extension(managed).await
     }
 
@@ -139,15 +162,15 @@ where
                         )
                     })
             }
-            ResumableTaskName::ControlPurge => {
-                let data: ResumableControlPurgeData = serde_json::from_value(task.data.clone())
+            ResumableTaskName::ControlRepair => {
+                let data: ResumableControlRepairData = serde_json::from_value(task.data.clone())
                     .map_err(|err| {
                         ResumableTaskStoreError::StoreError(
                             crate::errors::StoreError::InternalException(err.to_string()),
                         )
                     })?;
                 self.storage_controller
-                    .perform_control_purge(data)
+                    .perform_control_repair(data)
                     .await
                     .map_err(|detail| {
                         ResumableTaskStoreError::StoreError(

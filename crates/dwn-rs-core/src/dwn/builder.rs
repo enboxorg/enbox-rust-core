@@ -234,13 +234,10 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
     // the configuration silently.
     dwn.register(
         ProtocolsConfigureHandler::new(message_store.clone(), resolver.clone()).with_repairer(
-            std::sync::Arc::new(TaskControlRepairer::new(
-                message_store.clone(),
-                ResumableTaskManager::new(
-                    resumable_task_store.clone(),
-                    StorageController::new(message_store.clone(), data_store.clone()),
-                ),
-            )),
+            std::sync::Arc::new(TaskControlRepairer::new(ResumableTaskManager::new(
+                resumable_task_store.clone(),
+                StorageController::new(message_store.clone(), data_store.clone()),
+            ))),
         ),
     );
     dwn.register(ProtocolsQueryHandler::new(

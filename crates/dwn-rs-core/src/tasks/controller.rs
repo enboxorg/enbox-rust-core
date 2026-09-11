@@ -10,14 +10,21 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::descriptors::records::records_write_descriptor;
+use crate::descriptors::messages::record_id;
+use crate::descriptors::records::{is_initial_write, records_write_descriptor};
+use crate::encryption::control::ControlKind;
+use crate::filters::Filters;
 use crate::handlers::records::common::{
-    delete_from_data_store_if_needed, extract_author, fetch_record_messages, find_initial_write,
-    message_cid, newest_message, purge_record_descendants, records_delete_descriptor,
+    delete_from_data_store_if_needed, extract_author, fetch_record_messages, filter_map,
+    find_initial_write, message_cid, newest_message, purge_record_descendants,
+    records_delete_descriptor, string_filter,
 };
+use crate::handlers::records::control::repair::{control_config_validity, ControlConfigValidity};
 use crate::handlers::records::delete::{perform_records_delete, RecordsDeleteExecution};
 use crate::handlers::records::state::{plan_records_transition, RecordsTransitionPlan};
 use crate::handlers::records::write::perform_records_squash;
+use crate::handlers::records::{RECORDS_INTERFACE, WRITE_METHOD};
+use crate::permissions::message_author;
 use crate::{Descriptor, Message};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +59,20 @@ pub struct ResumableControlPurgeData {
     pub tenant: String,
     pub record_id: String,
     pub data_cids: Vec<String>,
+}
+
+/// The obligation to re-examine one protocol's control records against the
+/// configuration history as it now stands.
+///
+/// The obligation is the whole scan rather than one record's removal. A scan
+/// that names its victims up front would have to survive the crash that
+/// interrupts it; naming only the protocol means resuming re-asks the question
+/// and finds whatever is still contradicted, which is also what makes repeated
+/// repair safe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResumableControlRepairData {
+    pub tenant: String,
+    pub protocol: String,
 }
 
 #[derive(Clone)]
@@ -172,6 +193,86 @@ where
                 .map_err(|err| err.to_string())?;
         }
         Ok(())
+    }
+
+    /// Re-examines this protocol's control records and removes the ones the
+    /// configuration contradicts.
+    ///
+    /// Idempotent by construction: each record is judged afresh, and a record
+    /// already purged is simply no longer there to judge. That is what lets an
+    /// interrupted repair resume by re-running rather than by remembering
+    /// where it stopped.
+    ///
+    /// A record that cannot be judged is kept, so a store failure mid-scan
+    /// aborts the pass with the obligation intact rather than continuing past
+    /// records it never really examined.
+    pub async fn perform_control_repair(
+        &self,
+        data: ResumableControlRepairData,
+    ) -> Result<(), String> {
+        let tenant = data.tenant.as_str();
+        for control in self
+            .stored_control_initial_writes(tenant, &data.protocol)
+            .await?
+        {
+            if control_config_validity(tenant, &control, &self.message_store).await
+                != ControlConfigValidity::Invalid
+            {
+                continue;
+            }
+            let Some(record_id) = record_id(&control) else {
+                continue;
+            };
+            // Read before the purge starts: removing the messages destroys the
+            // only record of which data belonged here.
+            let data_cids = vec![records_write_descriptor(&control)
+                .map_err(|error| error.to_string())?
+                .data_cid
+                .clone()];
+            self.perform_control_purge(ResumableControlPurgeData {
+                tenant: data.tenant.clone(),
+                record_id,
+                data_cids,
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// The control records this protocol holds, one entry per record.
+    ///
+    /// Only initial writes are examined. A control record is immutable, so its
+    /// initial write is the whole record, and judging each retained message
+    /// separately would ask the same question repeatedly of the same record.
+    async fn stored_control_initial_writes(
+        &self,
+        tenant: &str,
+        protocol: &str,
+    ) -> Result<Vec<Message<Descriptor>>, String> {
+        let mut found = Vec::new();
+        for path in [
+            ControlKind::Audience.protocol_path(),
+            ControlKind::Delivery.protocol_path(),
+        ] {
+            let filter = filter_map([
+                ("interface", string_filter(RECORDS_INTERFACE)),
+                ("method", string_filter(WRITE_METHOD)),
+                ("protocol", string_filter(protocol)),
+                ("protocolPath", string_filter(path)),
+            ]);
+            let result = self
+                .message_store
+                .query(tenant, Filters::from(filter), None, None, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            for message in result.messages {
+                let author = message_author(&message).unwrap_or_default();
+                if is_initial_write(&message, &author).unwrap_or(false) {
+                    found.push(message);
+                }
+            }
+        }
+        Ok(found)
     }
 
     pub async fn perform_records_squash(

@@ -15,7 +15,8 @@ use crate::handlers::records::common::{filter_map, string_filter};
 use crate::handlers::records::{RECORDS_INTERFACE, WRITE_METHOD};
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition};
 use crate::replies::protocols::Configure;
-use crate::stores::{LatestStateMutation, LatestStateTransition};
+use crate::stores::{LatestStateMutation, LatestStateTransition, ManagedResumableTask};
+use crate::tasks::manager::ResumableTask;
 use crate::{canonical_rfc3339, permissions, Handler, Message, Pagination, Response};
 use crate::{MessageSort, SortDirection};
 
@@ -28,11 +29,35 @@ use super::common::*;
 /// as generic parameters would put them on every construction of this handler —
 /// including the many that never repair anything. Erasing them keeps the cost
 /// where the capability is used.
+/// A repair obligation that has been durably recorded but not yet discharged.
+///
+/// Opaque here on purpose: configuration handling needs to hand the token back,
+/// not to know what a task store made of it.
+pub struct EnlistedRepair(pub(crate) ManagedResumableTask<ResumableTask>);
+
 pub trait ControlRepairer: Send + Sync {
-    fn repair<'a>(
+    /// Records the obligation to re-examine this protocol's control records.
+    ///
+    /// Called *before* the configuration commits. The obligation has to outlive
+    /// the crash that could happen immediately after the commit, and a task
+    /// registered after the commit cannot: there is a window in which the new
+    /// history is durable and nothing remembers it needs answering. Enlisting
+    /// first inverts the window into a harmless one — an obligation recorded
+    /// for a configuration that never landed resumes, re-asks the question
+    /// against the history as it actually stands, finds nothing contradicted
+    /// and retires.
+    fn enlist<'a>(
         &'a self,
         tenant: &'a str,
         protocol: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<EnlistedRepair, String>> + Send + 'a>>;
+
+    /// Discharges an enlisted obligation, retiring it only once the scan
+    /// completes. A scan that fails leaves the obligation in place for the
+    /// recovery pass to pick up.
+    fn fulfil<'a>(
+        &'a self,
+        enlisted: EnlistedRepair,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 }
 
@@ -179,6 +204,27 @@ where
                     Ok(None) => return Response::conflict(),
                     Err(detail) => return Response::bad_request(detail),
                 };
+            // Covers: DWN-PROTO-004
+            // The obligation to re-examine records is recorded before the
+            // configuration it answers for is committed, so no crash can leave
+            // an accepted history with nothing remembering to check it. If the
+            // obligation cannot even be recorded, the configuration is refused:
+            // nothing is durable yet, so a retry still changes something —
+            // which is exactly what makes refusing better than accepting a
+            // history this node could never repair against.
+            let enlisted = match &self.repairer {
+                Some(repairer) => {
+                    match repairer
+                        .enlist(tenant, &descriptor.definition.protocol)
+                        .await
+                    {
+                        Ok(enlisted) => Some((repairer, enlisted)),
+                        Err(detail) => return store_error_reply(detail),
+                    }
+                }
+                None => None,
+            };
+
             if let Err(err) = self
                 .message_store
                 .commit_latest_state(tenant, transition)
@@ -187,19 +233,17 @@ where
                 return store_error_reply(err.to_string());
             }
 
-            // Covers: DWN-PROTO-004
             // Only now, with the configuration durably accepted, are records
-            // re-examined against it. Running before the commit would judge
-            // them against a configuration that might never land.
-            if let Some(repairer) = &self.repairer {
-                if let Err(detail) = repairer
-                    .repair(tenant, &descriptor.definition.protocol)
-                    .await
-                {
+            // judged against it. Running before the commit would judge them
+            // against a configuration that might never land.
+            if let Some((repairer, enlisted)) = enlisted {
+                if let Err(detail) = repairer.fulfil(enlisted).await {
                     // The configuration is accepted either way: it is durable,
                     // and a repair that could not run leaves records in place
                     // rather than half-removed. Reporting it as a failed
-                    // configure would invite a retry that changes nothing.
+                    // configure would invite a retry that changes nothing —
+                    // the obligation is still enlisted, and the recovery pass
+                    // is what picks it up.
                     tracing::warn!(%tenant, detail, "control repair did not complete");
                 }
             }

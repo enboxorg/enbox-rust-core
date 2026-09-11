@@ -277,13 +277,10 @@ async fn configuring_a_protocol_purges_the_controls_it_invalidates() {
     crate::stores::ResumableTaskStore::open(&mut tasks)
         .await
         .unwrap();
-    let repairer = TaskControlRepairer::new(
-        fixture.message_store.clone(),
-        ResumableTaskManager::new(
-            tasks,
-            StorageController::new(fixture.message_store.clone(), data_store.clone()),
-        ),
-    );
+    let repairer = TaskControlRepairer::new(ResumableTaskManager::new(
+        tasks,
+        StorageController::new(fixture.message_store.clone(), data_store.clone()),
+    ));
 
     // A configuration in which `member` is no longer a role at all.
     let mut demoted = control_definition();
@@ -454,5 +451,148 @@ async fn a_transient_store_failure_never_reads_as_proof_the_record_is_invalid() 
         control_config_validity(CONTROL_TENANT, &audience, &flaky).await,
         ControlConfigValidity::Valid,
         "the record was always sound; only the store was not"
+    );
+}
+
+/// A task store that cannot record anything, standing in for one that is
+/// unavailable at exactly the wrong moment.
+#[derive(Clone, Default)]
+struct UnwritableTaskStore {
+    inner: MemoryResumableTaskStore,
+}
+
+impl crate::stores::ResumableTaskStore for UnwritableTaskStore {
+    async fn open(&mut self) -> Result<(), crate::errors::ResumableTaskStoreError> {
+        crate::stores::ResumableTaskStore::open(&mut self.inner).await
+    }
+
+    async fn close(&mut self) {
+        crate::stores::ResumableTaskStore::close(&mut self.inner).await
+    }
+
+    async fn register<
+        T: serde::Serialize + Send + Sync + serde::de::DeserializeOwned + std::fmt::Debug + 'static,
+    >(
+        &self,
+        _task: T,
+        _timeout_in_seconds: u64,
+    ) -> Result<crate::stores::ManagedResumableTask<T>, crate::errors::ResumableTaskStoreError>
+    {
+        Err(crate::errors::ResumableTaskStoreError::StoreError(
+            crate::errors::StoreError::InternalException("task store unavailable".to_string()),
+        ))
+    }
+
+    async fn grab<
+        T: serde::Serialize + Send + Sync + serde::de::DeserializeOwned + std::fmt::Debug + Unpin,
+    >(
+        &self,
+        count: u64,
+    ) -> Result<Vec<crate::stores::ManagedResumableTask<T>>, crate::errors::ResumableTaskStoreError>
+    {
+        self.inner.grab(count).await
+    }
+
+    async fn read<
+        T: serde::Serialize + Send + Sync + serde::de::DeserializeOwned + std::fmt::Debug,
+    >(
+        &self,
+        task_id: &str,
+    ) -> Result<
+        Option<crate::stores::ManagedResumableTask<T>>,
+        crate::errors::ResumableTaskStoreError,
+    > {
+        self.inner.read(task_id).await
+    }
+
+    async fn extend(
+        &self,
+        task_id: &str,
+        timeout_in_seconds: u64,
+    ) -> Result<(), crate::errors::ResumableTaskStoreError> {
+        self.inner.extend(task_id, timeout_in_seconds).await
+    }
+
+    async fn delete(&self, task_id: &str) -> Result<(), crate::errors::ResumableTaskStoreError> {
+        self.inner.delete(task_id).await
+    }
+
+    async fn clear(&self) -> Result<(), crate::errors::ResumableTaskStoreError> {
+        self.inner.clear().await
+    }
+}
+
+// Covers: DWN-PROTO-004, DWN-REC-006
+// The obligation to re-examine records is recorded before the configuration it
+// answers for is committed. A node that cannot record the obligation must
+// refuse the configuration rather than accept one it could never repair
+// against: nothing is durable yet, so refusing leaves a retry that still
+// changes something, while accepting would leave an accepted history
+// permanently contradicted by records nothing remembers to check.
+#[tokio::test]
+async fn a_configuration_is_refused_when_its_repair_cannot_be_enlisted() {
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    admit_audience(&fixture, &key_id, "2025-01-01T00:01:00.000000Z").await;
+
+    let mut data_store = TestDataStore::default();
+    data_store.open().await.unwrap();
+    let mut tasks = UnwritableTaskStore::default();
+    crate::stores::ResumableTaskStore::open(&mut tasks)
+        .await
+        .unwrap();
+    let repairer = TaskControlRepairer::new(ResumableTaskManager::new(
+        tasks,
+        StorageController::new(fixture.message_store.clone(), data_store.clone()),
+    ));
+
+    let mut demoted = control_definition();
+    demoted.structure.get_mut("member").unwrap().role = None;
+    let configure_handler = ProtocolsConfigureHandler::new(
+        fixture.message_store.clone(),
+        Some(Arc::new(test_resolver())),
+    )
+    .with_repairer(Arc::new(repairer));
+
+    let configure = signed_configure_with_definition(demoted, "2025-01-02T00:00:00.000000Z").await;
+    let reply = configure_handler
+        .run(CONTROL_TENANT, &configure, None)
+        .await;
+    assert!(
+        reply.status.code >= 500,
+        "a configuration whose repair cannot be enlisted must be refused, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+
+    // And it left nothing behind: neither the configuration nor a half-judged
+    // control record.
+    assert_eq!(
+        fixture
+            .message_store
+            .query(
+                CONTROL_TENANT,
+                Filters::from(filter_map([
+                    ("interface", string_filter("Protocols")),
+                    ("method", string_filter("Configure")),
+                    (
+                        "messageTimestamp",
+                        string_filter("2025-01-02T00:00:00.000000Z")
+                    ),
+                ])),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+            .messages
+            .len(),
+        0,
+        "the refused configuration must not have been committed"
+    );
+    assert!(
+        !stored_control_records(&fixture).await.is_empty(),
+        "and the control record it would have contradicted must still be there"
     );
 }
