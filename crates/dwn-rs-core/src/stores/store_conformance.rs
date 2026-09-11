@@ -466,6 +466,11 @@ async fn memory_message_store_orders_ties_by_cid() {
     run_sort_tie_break_stores(|| async { super::memory::MemoryMessageStore::default() }).await;
 }
 
+#[tokio::test]
+async fn memory_message_store_excludes_rows_missing_the_sort_property() {
+    run_sort_property_stores(|| async { super::memory::MemoryMessageStore::default() }).await;
+}
+
 // ---- record-limit occupancy battery ----
 //
 // Same assertions on every backend: deterministic winners independent of
@@ -669,6 +674,26 @@ where
     absent_policy_returns_unprojected(&factory).await;
 }
 
+/// Runs the sort-property battery: a record whose indexes lack the property a
+/// query sorts by is excluded from that query's results.
+///
+/// Upstream drops such items rather than ordering them among the rest
+/// (`index-level.ts` skips any item whose `sortProperty` is undefined), so a
+/// backend that returns them answers a differently-populated query than another
+/// backend would — the divergence `DWN-REC-001` exists to prevent.
+///
+/// The realistic case is publication sorting: an unpublished record carries no
+/// `datePublished` index, so sorting by it must not surface records that were
+/// never published.
+pub async fn run_sort_property_stores<S, F, Fut>(factory: F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    rows_missing_the_sort_property_are_excluded(&factory).await;
+}
+
 /// Runs the sort tie-break battery: equal primary keys order by CID in the
 /// requested direction on every backend, with cursors chaining without
 /// duplicates or skips.
@@ -679,6 +704,64 @@ where
     Fut: Future<Output = S>,
 {
     equal_timestamps_order_by_cid(&factory).await;
+}
+
+// Covers: DWN-REC-001
+async fn rows_missing_the_sort_property_are_excluded<S, F, Fut>(factory: &F)
+where
+    S: MessageStore,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let store = new_message_store(factory).await;
+
+    // Two rows alike but for one index: only `published` carries a
+    // `datePublished`, exactly as an unpublished record would not.
+    for (record_id, published) in [("sort-published", true), ("sort-unpublished", false)] {
+        let row = limit_row(record_id, None, None, 1, LIMIT_ROOT_PATH);
+        let mut indexes = limit_indexes(&row);
+        if published {
+            indexes.insert(
+                "datePublished".to_string(),
+                Value::String(limit_day(1).to_string()),
+            );
+        }
+        store
+            .put(TENANT, limit_message(&row), indexes)
+            .await
+            .unwrap();
+    }
+
+    for direction in [SortDirection::Ascending, SortDirection::Descending] {
+        let found = store
+            .query(
+                TENANT,
+                latest_writes_filter(),
+                Some(MessageSort::DatePublished(direction)),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            write_record_ids(&found.messages),
+            vec!["sort-published".to_string()],
+            "sorting by datePublished ({direction:?}) must exclude the row without one, \
+             not order it among the rest"
+        );
+    }
+
+    // The excluded row is present and reachable — it is the *sort* that
+    // excludes it, not the filter or the seeding.
+    let unsorted = store
+        .query(TENANT, latest_writes_filter(), None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        unsorted.messages.len(),
+        2,
+        "both rows must be stored, or the exclusion above proves nothing"
+    );
 }
 
 // Covers: DWN-REC-004
