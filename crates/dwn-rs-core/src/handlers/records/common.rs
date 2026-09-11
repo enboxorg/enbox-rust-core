@@ -2164,6 +2164,7 @@ mod tests {
             ),
             permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
             author_delegated_grant: None,
+            owner: None,
         };
         validate_records_write_integrity(&ok, &signature).expect("16-byte IV must validate");
 
@@ -2273,6 +2274,7 @@ mod tests {
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: None,
+            owner: None,
         }
     }
 

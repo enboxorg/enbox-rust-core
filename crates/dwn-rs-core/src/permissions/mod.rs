@@ -1,3 +1,4 @@
+pub mod control;
 pub mod errors;
 pub mod scopes;
 
@@ -7,6 +8,7 @@ use crate::auth::jws::{
 };
 use crate::descriptors::RECORDS;
 pub use crate::permissions::errors::AuthorizationValidationError;
+pub use crate::permissions::errors::DelegationSide;
 use crate::permissions::errors::{
     AuthorizationRequestError, GrantError, GrantMessageTypeError, PermissionError,
     ProtocolValidationError,
@@ -107,6 +109,23 @@ impl VerifiedAuthorizationPayload {
     }
 }
 
+/// A verified owner countersignature.
+///
+/// Mirrors the author/`authorDelegatedGrant` pair: the DWN owner may sign a
+/// message directly, or delegate that to a grantee. Present only once the
+/// countersignature has actually been verified — the wire fields alone say
+/// nothing, and treating their presence as proof would let any writer claim to
+/// be countersigned by the tenant.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnerAuthorization {
+    /// The owner the countersignature speaks for: the grantor under
+    /// delegation, otherwise the signer itself.
+    pub owner: String,
+    /// Who actually signed; differs from `owner` only under delegation.
+    pub signer: String,
+    pub delegated_grant: Option<PermissionGrant>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthorizationContext {
     pub signer: String,
@@ -114,6 +133,8 @@ pub struct AuthorizationContext {
     pub(crate) payload: VerifiedAuthorizationPayload,
     pub permission_grant_invocation: PermissionGrantInvocation,
     pub author_delegated_grant: Option<PermissionGrant>,
+    /// Verified owner countersignature, when the message carries one.
+    pub owner: Option<OwnerAuthorization>,
 }
 
 impl AuthorizationContext {
@@ -733,12 +754,20 @@ async fn validate_authorization_signature_inner(
     let mut author = signer.clone();
     let mut author_delegated_grant = None;
     if validate_delegated_grant {
-        author_delegated_grant =
-            validate_embedded_author_delegated_grant(authorization, &payload, did_resolver).await?;
+        author_delegated_grant = validate_embedded_delegated_grant(
+            DelegationSide::Author,
+            authorization.author_delegated_grant.as_deref(),
+            payload.delegated_grant_id(),
+            &signer,
+            did_resolver,
+        )
+        .await?;
         if let Some(grant) = &author_delegated_grant {
             author = grant.grantor.clone();
         }
     }
+
+    let owner = validate_owner_signature(message, authorization, did_resolver).await?;
 
     Ok(Some(AuthorizationContext {
         signer,
@@ -746,44 +775,123 @@ async fn validate_authorization_signature_inner(
         payload,
         permission_grant_invocation: permission_grants,
         author_delegated_grant,
+        owner,
     }))
 }
 
-async fn validate_embedded_author_delegated_grant(
+/// Verifies an owner countersignature, if present.
+///
+/// Until now these fields were parsed and never checked, so a forged
+/// `ownerSignature` was carried along unexamined. Verifying here — beside the
+/// author signature, in the one function every handler's authorization flows
+/// through — means no caller can forget to. Nothing in this repository
+/// produces owner signatures yet, so this only starts rejecting messages that
+/// were always invalid.
+async fn validate_owner_signature(
+    message: &Message<Descriptor>,
     authorization: &Authorization,
-    payload: &VerifiedAuthorizationPayload,
     did_resolver: Option<&dyn DidResolver>,
-) -> Result<Option<PermissionGrant>, GrantError> {
-    let Some(ref grant_message) = authorization.author_delegated_grant else {
-        if payload.delegated_grant_id().is_some() {
+) -> Result<Option<OwnerAuthorization>, GrantError> {
+    let Some(owner_signature) = &authorization.owner_signature else {
+        // A delegated grant with nothing countersigning it authorizes nobody.
+        if authorization.owner_delegated_grant.is_some() {
             return Err(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::MissingAuthorDelegateGrant,
+                AuthorizationRequestError::DelegatedGrantIdExistenceMismatch(DelegationSide::Owner),
             )
             .into());
         }
         return Ok(None);
     };
 
+    let unverified_signer =
+        signer_did_from_jws(owner_signature).map_err(AuthorizationValidationError::BadRequest)?;
+    let signer = match did_resolver {
+        Some(resolver) => owner_signature
+            .verify_signatures(resolver)
+            .await
+            .map_err(|err| AuthorizationValidationError::BadRequest(err.into()))?
+            .into_iter()
+            .next()
+            .ok_or(AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::NoSignerFound,
+            ))?,
+        None => unverified_signer,
+    };
+
+    // The countersignature must commit to this descriptor, not another.
+    let payload: AuthorizationPayloadData = decode_jws_payload(owner_signature)?;
+    validate_descriptor_cid(message, payload.descriptor_cid.clone())?;
+
+    let delegated_grant = validate_embedded_delegated_grant(
+        DelegationSide::Owner,
+        authorization.owner_delegated_grant.as_deref(),
+        payload.delegated_grant_id.as_deref(),
+        &signer,
+        did_resolver,
+    )
+    .await?;
+
+    let owner = delegated_grant
+        .as_ref()
+        .map(|grant| grant.grantor.clone())
+        .unwrap_or_else(|| signer.clone());
+
+    Ok(Some(OwnerAuthorization {
+        owner,
+        signer,
+        delegated_grant,
+    }))
+}
+
+/// Binds an embedded delegated grant to the signature that invoked it.
+///
+/// Four commitments, none of which the later lifetime, scope or grantee checks
+/// can establish after the fact:
+///
+/// - the signed `delegatedGrantId` and the embedded grant both exist, or
+///   neither does;
+/// - the embedded grant is the one whose CID was actually signed;
+/// - the grant is delegable at all;
+/// - it was issued to whoever signed.
+///
+/// Without them a perfectly valid signature can be paired with an unsigned
+/// choice of grant: the signature proves the signer approved *some* delegation,
+/// never that they approved this one. Author and owner delegation are the same
+/// mechanism hung off different signatures, so they share this validator rather
+/// than each growing their own partial version of it.
+async fn validate_embedded_delegated_grant(
+    side: DelegationSide,
+    grant_message: Option<&Message<RecordsWriteDescriptor>>,
+    signed_grant_id: Option<&str>,
+    signer: &str,
+    did_resolver: Option<&dyn DidResolver>,
+) -> Result<Option<PermissionGrant>, GrantError> {
+    let bad_request = |error: AuthorizationRequestError| -> GrantError {
+        AuthorizationValidationError::BadRequest(error).into()
+    };
+
+    let (grant_message, signed_grant_id) = match (grant_message, signed_grant_id) {
+        (Some(grant_message), Some(signed_grant_id)) => (grant_message, signed_grant_id),
+        (None, None) => return Ok(None),
+        _ => {
+            return Err(bad_request(
+                AuthorizationRequestError::DelegatedGrantIdExistenceMismatch(side),
+            ))
+        }
+    };
+
     let grant_cid = grant_message.cid().map_err(|err| {
         GrantError::InvalidGrant(AuthorizationRequestError::ValidationError(err.to_string()).into())
     })?;
-    let delegated_grant_id =
-        payload
-            .delegated_grant_id()
-            .ok_or(AuthorizationValidationError::BadRequest(
-                AuthorizationRequestError::DelegateGrantIDRequired,
-            ))?;
-    if delegated_grant_id != grant_cid.to_string() {
-        return Err(AuthorizationValidationError::BadRequest(
-            AuthorizationRequestError::DelegateAuthorMismatch,
-        )
-        .into());
+    if signed_grant_id != grant_cid.to_string() {
+        return Err(bad_request(
+            AuthorizationRequestError::DelegatedGrantCidMismatch(side),
+        ));
     }
 
-    let grant_message_general: Message<Descriptor> = (**grant_message).clone().into();
-
+    let grant_message: Message<Descriptor> = grant_message.clone().into();
     let grant_authorization = Box::pin(validate_authorization_signature_inner(
-        &grant_message_general,
+        &grant_message,
         did_resolver,
         true,
         false,
@@ -792,8 +900,20 @@ async fn validate_embedded_author_delegated_grant(
     .ok_or(AuthorizationValidationError::BadRequest(
         AuthorizationRequestError::SignatureRequired,
     ))?;
+    let grant = parse_permission_grant(&grant_message, &grant_authorization.author)?;
 
-    parse_permission_grant(&grant_message_general, &grant_authorization.author).map(Some)
+    if grant.delegated != Some(true) {
+        return Err(bad_request(AuthorizationRequestError::NotADelegatedGrant(
+            side,
+        )));
+    }
+    if grant.grantee != signer {
+        return Err(bad_request(
+            AuthorizationRequestError::DelegatedGrantGranteeMismatch(side),
+        ));
+    }
+
+    Ok(Some(grant))
 }
 
 fn decode_jws_payload<T: DeserializeOwned>(jws: &Jws) -> Result<T, AuthorizationValidationError> {
@@ -1469,7 +1589,7 @@ where
     Ok(())
 }
 
-async fn perform_base_validation<MessageStore>(
+pub(crate) async fn perform_base_validation<MessageStore>(
     incoming_message: &Message<Descriptor>,
     expected_grantor: &str,
     expected_grantee: &str,
@@ -1580,7 +1700,7 @@ fn verify_records_scope(
     Ok(())
 }
 
-fn verify_records_write_conditions(
+pub(crate) fn verify_records_write_conditions(
     records_write_message: &Message<Descriptor>,
     conditions: Option<&PermissionConditions>,
 ) -> Result<(), GrantError> {
@@ -2115,6 +2235,7 @@ mod tests {
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: grant,
+            owner: None,
         }
     }
 

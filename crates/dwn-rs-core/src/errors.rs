@@ -25,6 +25,19 @@ pub enum DwnErrorCode {
     ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
     ProtocolAuthorizationEncryptionRoleAudienceMissing,
     EncryptionControlValidateDeliveryAudienceMissing,
+    EncryptionControlReadUnauthorized,
+    EncryptionControlValidateAudienceContextIdInvalid,
+    EncryptionControlValidateAudienceKeyIdMismatch,
+    EncryptionControlValidateAudienceMissingRequiredTag,
+    EncryptionControlValidateAudienceRolePathInvalid,
+    EncryptionControlValidateAudienceSealKeyIdMismatch,
+    EncryptionControlValidateAudienceTagsMismatch,
+    EncryptionControlValidateAudienceWriterUnauthorized,
+    EncryptionControlValidateDeliveryMissingRequiredTag,
+    EncryptionControlValidateDeliveryRecipientAuthorityInvalid,
+    EncryptionControlValidateDeliveryRecipientMissing,
+    EncryptionControlValidateDeliveryTagsMismatch,
+    EncryptionControlValidateUnexpectedRecord,
     EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
     RecordsWriteMissingDataInPrevious,
     RecordsWriteMissingEncodedDataInPrevious,
@@ -34,6 +47,8 @@ pub enum DwnErrorCode {
     RecordsWriteImmutablePropertyChanged,
     ProtocolAuthorizationImmutableRecord,
     ProtocolAuthorizationSquashBackstop,
+    ProtocolAuthorizationStoredInitialWriteActionRulesNotFound,
+    ProtocolAuthorizationStoredInitialWriteActionNotAllowed,
     // Message ingress (admission) stage; see `dwn::validation::ingest_message`.
     MessageInterfaceOrMethodUndefined,
     MessageUnknownInterfaceOrMethod,
@@ -87,6 +102,43 @@ impl DwnErrorCode {
             Self::EncryptionControlValidateDeliveryAudienceMissing => {
                 "EncryptionControlValidateDeliveryAudienceMissing"
             }
+            Self::EncryptionControlReadUnauthorized => "EncryptionControlReadUnauthorized",
+            Self::EncryptionControlValidateAudienceContextIdInvalid => {
+                "EncryptionControlValidateAudienceContextIdInvalid"
+            }
+            Self::EncryptionControlValidateAudienceKeyIdMismatch => {
+                "EncryptionControlValidateAudienceKeyIdMismatch"
+            }
+            Self::EncryptionControlValidateAudienceMissingRequiredTag => {
+                "EncryptionControlValidateAudienceMissingRequiredTag"
+            }
+            Self::EncryptionControlValidateAudienceRolePathInvalid => {
+                "EncryptionControlValidateAudienceRolePathInvalid"
+            }
+            Self::EncryptionControlValidateAudienceSealKeyIdMismatch => {
+                "EncryptionControlValidateAudienceSealKeyIdMismatch"
+            }
+            Self::EncryptionControlValidateAudienceTagsMismatch => {
+                "EncryptionControlValidateAudienceTagsMismatch"
+            }
+            Self::EncryptionControlValidateAudienceWriterUnauthorized => {
+                "EncryptionControlValidateAudienceWriterUnauthorized"
+            }
+            Self::EncryptionControlValidateDeliveryMissingRequiredTag => {
+                "EncryptionControlValidateDeliveryMissingRequiredTag"
+            }
+            Self::EncryptionControlValidateDeliveryRecipientAuthorityInvalid => {
+                "EncryptionControlValidateDeliveryRecipientAuthorityInvalid"
+            }
+            Self::EncryptionControlValidateDeliveryRecipientMissing => {
+                "EncryptionControlValidateDeliveryRecipientMissing"
+            }
+            Self::EncryptionControlValidateDeliveryTagsMismatch => {
+                "EncryptionControlValidateDeliveryTagsMismatch"
+            }
+            Self::EncryptionControlValidateUnexpectedRecord => {
+                "EncryptionControlValidateUnexpectedRecord"
+            }
             Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing => {
                 "EncryptionControlValidateDeliveryRecipientRoleRecordMissing"
             }
@@ -100,12 +152,45 @@ impl DwnErrorCode {
             Self::RecordsWriteImmutablePropertyChanged => "RecordsWriteImmutablePropertyChanged",
             Self::ProtocolAuthorizationImmutableRecord => "ProtocolAuthorizationImmutableRecord",
             Self::ProtocolAuthorizationSquashBackstop => "ProtocolAuthorizationSquashBackstop",
+            Self::ProtocolAuthorizationStoredInitialWriteActionRulesNotFound => {
+                "ProtocolAuthorizationStoredInitialWriteActionRulesNotFound"
+            }
+            Self::ProtocolAuthorizationStoredInitialWriteActionNotAllowed => {
+                "ProtocolAuthorizationStoredInitialWriteActionNotAllowed"
+            }
             Self::MessageInterfaceOrMethodUndefined => "MessageInterfaceOrMethodUndefined",
             Self::MessageUnknownInterfaceOrMethod => "MessageUnknownInterfaceOrMethod",
             Self::SchemaValidatorFailure => "SchemaValidatorFailure",
             Self::SchemaValidatorSchemaNotFound => "SchemaValidatorSchemaNotFound",
             Self::MessageParseFailed => "MessageParseFailed",
         }
+    }
+
+    /// Whether this code proves a *stored* control record invalid under a newly
+    /// accepted protocol configuration, and so may be purged.
+    ///
+    /// Deliberately an allowlist, not a catch-all: parse, lookup and I/O
+    /// failures mean "unknown", and destroying custody material on an unknown
+    /// failure is unrecoverable. A code earns a place here only when it can
+    /// only arise from the configuration itself contradicting the record.
+    ///
+    /// Scoped to the four classes requirement 23 names. Upstream's equivalent
+    /// set is broader — it also purges on encryption-policy and type/schema
+    /// failures — so the repair commit must reconcile that delta deliberately
+    /// rather than by quietly widening this list. Erring narrow retains a
+    /// record that upstream would destroy, which is the recoverable direction.
+    #[allow(dead_code)] // Caller lands with config repair; see #272 requirement 23.
+    pub const fn is_control_invalidity(self) -> bool {
+        matches!(
+            self,
+            // Requirement 23 names exactly four classes: an invalid role, a
+            // governing seal-key mismatch, missing action rules, and a
+            // disallowed static action.
+            Self::EncryptionControlValidateAudienceRolePathInvalid
+                | Self::EncryptionControlValidateAudienceSealKeyIdMismatch
+                | Self::ProtocolAuthorizationStoredInitialWriteActionRulesNotFound
+                | Self::ProtocolAuthorizationStoredInitialWriteActionNotAllowed
+        )
     }
 
     pub const fn is_missing_dependency(self) -> bool {
@@ -183,6 +268,43 @@ impl TryFrom<&str> for DwnErrorCode {
             "EncryptionControlValidateDeliveryAudienceMissing" => {
                 Ok(Self::EncryptionControlValidateDeliveryAudienceMissing)
             }
+            "EncryptionControlReadUnauthorized" => Ok(Self::EncryptionControlReadUnauthorized),
+            "EncryptionControlValidateAudienceContextIdInvalid" => {
+                Ok(Self::EncryptionControlValidateAudienceContextIdInvalid)
+            }
+            "EncryptionControlValidateAudienceKeyIdMismatch" => {
+                Ok(Self::EncryptionControlValidateAudienceKeyIdMismatch)
+            }
+            "EncryptionControlValidateAudienceMissingRequiredTag" => {
+                Ok(Self::EncryptionControlValidateAudienceMissingRequiredTag)
+            }
+            "EncryptionControlValidateAudienceRolePathInvalid" => {
+                Ok(Self::EncryptionControlValidateAudienceRolePathInvalid)
+            }
+            "EncryptionControlValidateAudienceSealKeyIdMismatch" => {
+                Ok(Self::EncryptionControlValidateAudienceSealKeyIdMismatch)
+            }
+            "EncryptionControlValidateAudienceTagsMismatch" => {
+                Ok(Self::EncryptionControlValidateAudienceTagsMismatch)
+            }
+            "EncryptionControlValidateAudienceWriterUnauthorized" => {
+                Ok(Self::EncryptionControlValidateAudienceWriterUnauthorized)
+            }
+            "EncryptionControlValidateDeliveryMissingRequiredTag" => {
+                Ok(Self::EncryptionControlValidateDeliveryMissingRequiredTag)
+            }
+            "EncryptionControlValidateDeliveryRecipientAuthorityInvalid" => {
+                Ok(Self::EncryptionControlValidateDeliveryRecipientAuthorityInvalid)
+            }
+            "EncryptionControlValidateDeliveryRecipientMissing" => {
+                Ok(Self::EncryptionControlValidateDeliveryRecipientMissing)
+            }
+            "EncryptionControlValidateDeliveryTagsMismatch" => {
+                Ok(Self::EncryptionControlValidateDeliveryTagsMismatch)
+            }
+            "EncryptionControlValidateUnexpectedRecord" => {
+                Ok(Self::EncryptionControlValidateUnexpectedRecord)
+            }
             "EncryptionControlValidateDeliveryRecipientRoleRecordMissing" => {
                 Ok(Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing)
             }
@@ -200,6 +322,12 @@ impl TryFrom<&str> for DwnErrorCode {
                 Ok(Self::ProtocolAuthorizationImmutableRecord)
             }
             "ProtocolAuthorizationSquashBackstop" => Ok(Self::ProtocolAuthorizationSquashBackstop),
+            "ProtocolAuthorizationStoredInitialWriteActionRulesNotFound" => {
+                Ok(Self::ProtocolAuthorizationStoredInitialWriteActionRulesNotFound)
+            }
+            "ProtocolAuthorizationStoredInitialWriteActionNotAllowed" => {
+                Ok(Self::ProtocolAuthorizationStoredInitialWriteActionNotAllowed)
+            }
             "MessageInterfaceOrMethodUndefined" => Ok(Self::MessageInterfaceOrMethodUndefined),
             "MessageUnknownInterfaceOrMethod" => Ok(Self::MessageUnknownInterfaceOrMethod),
             "SchemaValidatorFailure" => Ok(Self::SchemaValidatorFailure),

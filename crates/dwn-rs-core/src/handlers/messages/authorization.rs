@@ -381,6 +381,7 @@ pub(crate) mod tests {
                 .map(PermissionGrantInvocation::Multi)
                 .unwrap_or(PermissionGrantInvocation::None),
             author_delegated_grant: None,
+            owner: None,
         }
     }
 

@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::descriptors::protocols::ProtocolsMethod;
 use crate::descriptors::MESSAGES_QUERY_SCHEMA;
 use crate::dwn::MessageKind;
+use crate::encryption::ENCRYPTION_AUDIENCE_SCHEMA;
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::interfaces::messages::descriptors::{
     MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA,
@@ -50,6 +51,10 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
         "https://identity.foundation/dwn/json-schemas/authorization-owner.json",
         include_str!("../../schemas/authorization-owner.json"),
+    ),
+    (
+        ENCRYPTION_AUDIENCE_SCHEMA,
+        include_str!("../../schemas/encryption/audience.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/defs.json",
@@ -236,7 +241,7 @@ pub fn validate_message(raw_message: &Value) -> Result<(), DwnError> {
     VALIDATE_MESSAGE_CALLS.with(|calls| calls.set(calls.get() + 1));
 
     let kind = MessageKind::from_message(raw_message)?;
-    let schema_not_found = || {
+    let schema_id = kind.schema_id().ok_or_else(|| {
         DwnError::new(
             DwnErrorCode::SchemaValidatorSchemaNotFound,
             format!(
@@ -245,13 +250,28 @@ pub fn validate_message(raw_message: &Value) -> Result<(), DwnError> {
                 kind.method(),
             ),
         )
-    };
-    let schema_id = kind.schema_id().ok_or_else(schema_not_found)?;
-    let validator = validators()?.get(schema_id).ok_or_else(schema_not_found)?;
-    if let Some(error) = validator.iter_errors(raw_message).next() {
-        return Err(schema_error(error.to_string()));
+    })?;
+    validate_against_schema(schema_id, raw_message)
+}
+
+/// Validate any JSON against one embedded schema by `$id`.
+///
+/// Messages reach this through [`validate_message`]; record *payloads* whose
+/// shape a protocol fixes — the encryption-control audience document — call it
+/// directly. Both share the one compiled registry, so a payload schema
+/// resolves `public-jwk.json` and `defs.json` the same way a message schema
+/// does.
+pub(crate) fn validate_against_schema(schema_id: &str, value: &Value) -> Result<(), DwnError> {
+    let validator = validators()?.get(schema_id).ok_or_else(|| {
+        DwnError::new(
+            DwnErrorCode::SchemaValidatorSchemaNotFound,
+            format!("schema {schema_id} not found"),
+        )
+    })?;
+    match validator.iter_errors(value).next() {
+        Some(error) => Err(schema_error(error.to_string())),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Recognize and schema-validate, before dispatch picks a handler.

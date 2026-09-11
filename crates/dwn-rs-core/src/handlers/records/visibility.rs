@@ -195,6 +195,7 @@ mod tests {
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: None,
+            owner: None,
         }
     }
 

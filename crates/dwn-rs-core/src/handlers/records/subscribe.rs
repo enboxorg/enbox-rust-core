@@ -713,6 +713,7 @@ mod tests {
                 .map(PermissionGrantInvocation::Single)
                 .unwrap_or(PermissionGrantInvocation::None),
             author_delegated_grant: delegated_grant,
+            owner: None,
         }
     }
 

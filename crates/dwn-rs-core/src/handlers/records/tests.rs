@@ -517,6 +517,126 @@ async fn exact_replay_returns_conflict_without_resolving_the_signer() {
     );
 }
 
+// Covers: DWN-AUTH-001, DWN-PROTO-003
+// An owner countersignature used to be carried along unexamined, so anyone
+// could append one and claim the tenant had endorsed their write. It is now
+// verified in the same place as the author signature, which is what keeps
+// signer, author and owner distinct rather than merely declared.
+//
+// Both forgeries are signed by a DID the resolver actually knows, so neither
+// can be turned away at resolution before the checks under test run, and each
+// breaks exactly one commitment: the first is genuinely signed but endorses a
+// different descriptor, the second endorses this descriptor but is not really
+// signed. Either alone would still pass if the other check were the only one
+// working.
+#[tokio::test]
+async fn a_forged_owner_countersignature_is_rejected() {
+    const TENANT: &str = "did:example:alice";
+
+    async fn admit(message: &serde_json::Value) -> crate::Response<crate::replies::records::Write> {
+        let mut message_store = MemoryMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        RecordsWriteHandler::<_, _>::new(message_store, data_store, Some(Arc::new(test_resolver())))
+            .run(TENANT, message, None)
+            .await
+    }
+
+    /// Countersigns `write` as Bob — a resolvable signer — over `descriptor_cid`.
+    async fn counter_signed(write: &serde_json::Value, descriptor_cid: &str) -> serde_json::Value {
+        let payload = serde_json::to_vec(&json!({ "descriptorCid": descriptor_cid })).unwrap();
+        let signature = crate::auth::Jws::create(payload.as_slice(), &[bob_signer()])
+            .await
+            .unwrap();
+        let mut counter_signed = write.clone();
+        counter_signed["authorization"]["ownerSignature"] =
+            serde_json::to_value(signature).unwrap();
+        counter_signed
+    }
+
+    let write = signed_write_message(WriteSpec {
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+
+    // The descriptor commitment the author already signed.
+    let author_payload: serde_json::Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(
+                write["authorization"]["signature"]["payload"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let descriptor_cid = author_payload["descriptorCid"].as_str().unwrap();
+
+    // Genuinely signed, but endorsing some other descriptor.
+    let wrong_commitment =
+        counter_signed(&write, "bafkreiforgeddescriptorcidthatmatchesnothing").await;
+
+    // Endorses this descriptor, but the signature bytes are not Bob's.
+    let mut bad_signature = counter_signed(&write, descriptor_cid).await;
+    bad_signature["authorization"]["ownerSignature"]["signatures"][0]["signature"] =
+        json!(URL_SAFE_NO_PAD.encode([0u8; 64]));
+
+    // Each submission runs against its own store, so none can be a replay of
+    // another and the countersignature is the only difference from the baseline.
+    let baseline = admit(&write).await;
+    assert_eq!(
+        baseline.status.code, 204,
+        "the same write without a countersignature must be admissible: {}",
+        baseline.status.detail
+    );
+
+    // The expected reason is asserted, not just the rejection: each forgery
+    // must be caught by the check it actually defeats, so neither check can
+    // silently stop working behind the other.
+    for (label, message, expected_reason) in [
+        (
+            "endorses a different descriptor",
+            wrong_commitment,
+            "cid mismatch",
+        ),
+        (
+            "is not really signed",
+            bad_signature,
+            "Signature verification failed",
+        ),
+    ] {
+        let reply = admit(&message).await;
+        assert!(
+            reply.status.code >= 400,
+            "owner countersignature that {label} must not be admitted, got {} {}",
+            reply.status.code,
+            reply.status.detail
+        );
+        assert!(
+            reply.status.detail.contains(expected_reason),
+            "{label} must be rejected with '{expected_reason}', got: {}",
+            reply.status.detail
+        );
+    }
+
+    // An owner-delegated grant with nothing countersigning it delegates
+    // nothing. This is the owner side of the same binding the author side
+    // enforces, so it also confirms the shared validator is reached with the
+    // owner's signature rather than the author's.
+    let mut dangling_grant = write.clone();
+    dangling_grant["authorization"]["ownerDelegatedGrant"] = write.clone();
+    let reply = admit(&dangling_grant).await;
+    assert!(
+        reply.status.code >= 400,
+        "an ownerDelegatedGrant without an ownerSignature must not be admitted, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+}
+
 #[tokio::test]
 async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delete() {
     // Covers: DWN-REC-003
@@ -1678,6 +1798,133 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
+// Covers: DWN-AUTH-001, DWN-AUTH-004
+// A signature over a delegated grant commits to *that* grant's CID. Without
+// binding the embedded grant back to the signed id, a perfectly valid
+// signature can be paired with an unsigned choice of grant — the signer
+// approved some delegation, never this one. The later lifetime, scope and
+// grantee checks all run against whichever grant was substituted in, so none
+// of them can recover the missing commitment.
+#[tokio::test]
+async fn an_embedded_delegated_grant_must_be_the_one_that_was_signed() {
+    const TENANT: &str = "did:example:alice";
+
+    async fn grant_with(
+        handler: &RecordsWriteHandler<TestMessageStore, TestDataStore>,
+        data: &'static [u8],
+        timestamp: &str,
+    ) -> serde_json::Value {
+        let data = Bytes::from_static(data);
+        let grant = signed_write_message(WriteSpec {
+            protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+            protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+            recipient: Some("did:example:bob".to_string()),
+            tags: Some(MapValue::from([(
+                "protocol".to_string(),
+                Value::String("http://example.com/notes".to_string()),
+            )])),
+            data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_size: data.len() as u64,
+            data_format: "application/json".to_string(),
+            ..WriteSpec::new(timestamp)
+        })
+        .await;
+        assert_eq!(
+            handler
+                .run(TENANT, &grant, Some(data.clone()))
+                .await
+                .status
+                .code,
+            202
+        );
+        let mut embedded = grant;
+        embedded["encodedData"] = serde_json::Value::String(URL_SAFE_NO_PAD.encode(&data));
+        embedded
+    }
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let signed_grant = grant_with(
+        &handler,
+        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#,
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    // A second, equally valid grant to the same grantee — the one a writer
+    // would rather have been given.
+    let substituted = grant_with(
+        &handler,
+        br#"{"dateExpires":"2025-03-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#,
+        "2025-01-01T00:00:30.000000Z",
+    )
+    .await;
+    let undelegated = grant_with(
+        &handler,
+        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":false}"#,
+        "2025-01-01T00:00:45.000000Z",
+    )
+    .await;
+
+    let note_data = Bytes::from_static(b"delegated note");
+    let note = || async {
+        signed_write_message(WriteSpec {
+            author: TENANT.to_string(),
+            signer: bob_signer(),
+            protocol: "http://example.com/notes".to_string(),
+            protocol_path: "note".to_string(),
+            data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
+            data_size: note_data.len() as u64,
+            ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+        })
+        .await
+    };
+
+    // Baseline: signed over the grant that is actually attached.
+    let honest = with_author_delegated_grant(note().await, &signed_grant, bob_signer()).await;
+    assert_eq!(
+        handler
+            .run(TENANT, &honest, Some(note_data.clone()))
+            .await
+            .status
+            .code,
+        202,
+        "the grant that was signed must be accepted"
+    );
+
+    // Signature still commits to `signed_grant`; a different grant is attached.
+    let mut swapped = with_author_delegated_grant(note().await, &signed_grant, bob_signer()).await;
+    swapped["authorization"]["authorDelegatedGrant"] = substituted;
+    let reply = handler.run(TENANT, &swapped, Some(note_data.clone())).await;
+    assert!(
+        reply.status.code >= 400,
+        "an unsigned choice of grant must not be honoured, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+
+    // A grant that was never delegable cannot be delegated with, even when it
+    // is the grant that was signed.
+    let not_delegated = with_author_delegated_grant(note().await, &undelegated, bob_signer()).await;
+    let reply = handler
+        .run(TENANT, &not_delegated, Some(note_data.clone()))
+        .await;
+    assert!(
+        reply.status.code >= 400,
+        "a non-delegated grant must not authorize a delegate, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+}
+
 #[tokio::test]
 async fn permissions_revocation_cleans_grant_authorized_messages() {
     let mut message_store = TestMessageStore::default();
@@ -2504,6 +2751,7 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
             grant_id.clone(),
         ),
         author_delegated_grant: None,
+        owner: None,
     };
     let auth = DeliveryAuthorization {
         message,
@@ -2628,6 +2876,7 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
                 grant_id,
             ),
             author_delegated_grant: None,
+            owner: None,
         },
         grant_valid_at_open: true,
         role_invoked: false,
@@ -3140,6 +3389,7 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
             ),
             permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
             author_delegated_grant: Some(grant),
+            owner: None,
         },
         grant_valid_at_open: true,
         role_invoked: false,

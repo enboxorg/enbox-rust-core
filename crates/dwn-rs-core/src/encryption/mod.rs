@@ -12,6 +12,7 @@
 //! because upstream keeps it distinct from `DwnEncryption.keyEncryption`.
 
 pub mod aes_kw;
+pub mod control;
 pub mod ctr;
 pub mod error;
 pub mod kdf;
@@ -19,6 +20,10 @@ pub mod x25519;
 
 use std::collections::BTreeMap;
 
+pub use control::{
+    is_encryption_control_path, is_reserved_control_namespace, AudienceId, AudiencePayload,
+    AudienceScope, ControlKind, ENCRYPTION_AUDIENCE_SCHEMA,
+};
 pub use error::EncryptionError;
 pub use kdf::derive_private_key_bytes;
 
@@ -41,17 +46,6 @@ pub const ENCRYPTION_CONTROL_ROOT_PATH: &str = "$encryption";
 pub const ENCRYPTION_CONTROL_AUDIENCE_PATH: &str = "$encryption/audience";
 pub const ENCRYPTION_CONTROL_DELIVERY_PATH: &str = "$encryption/delivery";
 
-/// Whether a protocol path is a reserved encryption-control path whose
-/// records never participate in representation-policy checks.
-pub fn is_encryption_control_path(protocol_path: &str) -> bool {
-    matches!(
-        protocol_path,
-        ENCRYPTION_CONTROL_AUDIENCE_PATH | ENCRYPTION_CONTROL_DELIVERY_PATH
-    )
-}
-
-/// RecordsWrite `keyEncryption` derivation schemes. Upstream only admits
-/// `protocolPath` and `roleAudience` here; seal wrapping is a separate type.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum DerivationScheme {
     #[serde(rename = "protocolPath")]
