@@ -34,6 +34,21 @@ use crate::{Descriptor, Value};
 use super::common::*;
 use super::*;
 
+/// Drives a resumable delete the way a resume actually does: through the
+/// controller that owns the stores, not a free function taking them.
+async fn resume_delete(
+    message_store: &TestMessageStore,
+    data_store: &TestDataStore,
+    message: &Message<Descriptor>,
+) -> Result<(), String> {
+    crate::tasks::controller::StorageController::new(message_store.clone(), data_store.clone())
+        .perform_records_delete(crate::tasks::controller::ResumableRecordsDeleteData {
+            tenant: "did:example:alice".to_string(),
+            message: message.clone(),
+        })
+        .await
+}
+
 #[derive(Clone, Default)]
 struct RecordingWakePublisher {
     wakes: Arc<Mutex<Vec<(String, u64)>>>,
@@ -1342,7 +1357,7 @@ async fn records_delete_cleanup_failure_is_safe_and_resumable() {
         .is_some());
 
     data_store.fail_delete.store(false, Ordering::SeqCst);
-    resume_records_delete_from_task(&message_store, &data_store, TENANT, &delete_message)
+    resume_delete(&message_store, &data_store, &delete_message)
         .await
         .unwrap();
     assert!(data_store
@@ -1434,7 +1449,7 @@ async fn superseded_prune_task_rechecks_winner_and_does_not_purge_descendants() 
         .unwrap();
 
     let losing_prune: Message<Descriptor> = serde_json::from_value(losing_prune).unwrap();
-    resume_records_delete_from_task(&message_store, &data_store, TENANT, &losing_prune)
+    resume_delete(&message_store, &data_store, &losing_prune)
         .await
         .unwrap();
     assert!(

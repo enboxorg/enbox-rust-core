@@ -27,8 +27,6 @@ pub enum RecordsAuthorizationKind {
     Subscribe,
 }
 
-pub(crate) use delete::{resume_records_delete_from_task, resume_records_squash_from_task};
-
 // The unit tests reference the per-method handler types by short name via `super::*`; the
 // builder uses their full submodule paths, so these re-exports are only needed under `test`.
 #[cfg(test)]

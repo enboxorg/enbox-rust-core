@@ -19,7 +19,6 @@ use crate::Message;
 use crate::Response;
 
 use super::state::{plan_records_transition, RecordsTransitionPlan};
-use super::write::perform_records_squash;
 
 #[derive(Clone)]
 pub struct RecordsDeleteHandler<MessageStore, DataStore> {
@@ -33,11 +32,11 @@ struct PreparedRecordsDeleteTransition {
     cleanup_cids: Vec<String>,
 }
 
-struct RecordsDeleteExecution<'a> {
-    message: &'a Message<Descriptor>,
-    existing_messages: &'a [Message<Descriptor>],
-    initial_write: &'a Message<Descriptor>,
-    plan: &'a RecordsTransitionPlan,
+pub(crate) struct RecordsDeleteExecution<'a> {
+    pub(crate) message: &'a Message<Descriptor>,
+    pub(crate) existing_messages: &'a [Message<Descriptor>],
+    pub(crate) initial_write: &'a Message<Descriptor>,
+    pub(crate) plan: &'a RecordsTransitionPlan,
 }
 
 impl<MessageStore, DataStore> Handler for RecordsDeleteHandler<MessageStore, DataStore>
@@ -186,7 +185,7 @@ impl<MessageStore, DataStore> RecordsDeleteHandler<MessageStore, DataStore> {
     }
 }
 
-async fn perform_records_delete<MessageStore, DataStore>(
+pub(crate) async fn perform_records_delete<MessageStore, DataStore>(
     message_store: &MessageStore,
     data_store: &DataStore,
     tenant: &str,
@@ -286,76 +285,4 @@ fn prepare_records_delete_transition(
         },
         cleanup_cids,
     })
-}
-
-pub(crate) async fn resume_records_delete_from_task<MessageStore, DataStore>(
-    message_store: &MessageStore,
-    data_store: &DataStore,
-    tenant: &str,
-    message: &Message<Descriptor>,
-) -> Result<(), String>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-{
-    let descriptor = records_delete_descriptor(message)?;
-    let existing_messages =
-        fetch_record_messages(tenant, &descriptor.record_id, message_store).await?;
-    let Some(newest_existing) = newest_message(&existing_messages) else {
-        return Ok(());
-    };
-    let plan = plan_records_transition(message, &existing_messages)?;
-    if matches!(plan, RecordsTransitionPlan::Superseded { .. }) {
-        return Ok(());
-    }
-    if matches!(plan, RecordsTransitionPlan::Duplicate { .. }) {
-        if descriptor.prune {
-            purge_record_descendants(tenant, &descriptor.record_id, message_store, data_store)
-                .await?;
-        }
-        for existing in &existing_messages {
-            if records_write_descriptor(existing).is_ok() {
-                delete_from_data_store_if_needed(tenant, existing, message, data_store).await?;
-            }
-        }
-        return Ok(());
-    }
-    let initial_write = find_initial_write(
-        &existing_messages,
-        extract_author(&newest_existing)
-            .as_deref()
-            .unwrap_or_default(),
-    )
-    .or_else(|| {
-        existing_messages
-            .iter()
-            .find(|message| records_write_descriptor(message).is_ok())
-            .cloned()
-    })
-    .ok_or_else(|| "RecordsDeleteAuthorizationFailed: initial write not found".to_string())?;
-    perform_records_delete(
-        message_store,
-        data_store,
-        tenant,
-        RecordsDeleteExecution {
-            message,
-            existing_messages: &existing_messages,
-            initial_write: &initial_write,
-            plan: &plan,
-        },
-    )
-    .await
-}
-
-pub(crate) async fn resume_records_squash_from_task<MessageStore, DataStore>(
-    message_store: &MessageStore,
-    data_store: &DataStore,
-    tenant: &str,
-    message: &Message<Descriptor>,
-) -> Result<(), String>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-{
-    perform_records_squash(message_store, data_store, tenant, message).await
 }
