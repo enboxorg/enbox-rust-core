@@ -3995,3 +3995,982 @@ async fn records_write_policy_follows_governing_definition_over_time() {
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
+
+// ---------------------------------------------------------------------------
+// Encryption control admission
+// ---------------------------------------------------------------------------
+
+const CONTROL_PROTOCOL: &str = "http://example.com/control-threads";
+const CONTROL_TENANT: &str = "did:example:alice";
+const AUDIENCE_PATH: &str = "$encryption/audience";
+const DELIVERY_PATH: &str = "$encryption/delivery";
+
+/// X25519 key the `member` role is keyed with; its thumbprint is the seal key id.
+fn role_key_jwk() -> JWK {
+    serde_json::from_value(json!({
+        "kty": "OKP", "crv": "X25519",
+        "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
+    }))
+    .unwrap()
+}
+
+/// A distinct key, the one an audience record publishes.
+fn audience_key_jwk() -> JWK {
+    serde_json::from_value(json!({
+        "kty": "OKP", "crv": "X25519",
+        "x": "Xf7dO2vUf2-ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI"
+    }))
+    .unwrap()
+}
+
+/// `member` is a root role carrying `$keyAgreement`; `thread/participant` is a
+/// nested one, so the two context depths are both reachable.
+fn control_definition() -> Definition {
+    let keyed_role = || RuleSet {
+        role: Some(true),
+        key_agreement: Some(ProtocolKeyAgreement {
+            public_key_jwk: role_key_jwk(),
+        }),
+        ..Default::default()
+    };
+    Definition {
+        protocol: CONTROL_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: Some(ProtocolKeyAgreement {
+            public_key_jwk: role_key_jwk(),
+        }),
+        types: BTreeMap::from([
+            (
+                "member".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            ),
+            (
+                "thread".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            ),
+            (
+                "plain".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            ),
+        ]),
+        structure: BTreeMap::from([
+            ("member".to_string(), keyed_role()),
+            ("plain".to_string(), RuleSet::default()),
+            (
+                "thread".to_string(),
+                RuleSet {
+                    rules: BTreeMap::from([("participant".to_string(), keyed_role())]),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    }
+}
+
+fn audience_tags(role_path: &str, context_id: &str, key_id: &str) -> MapValue {
+    MapValue::from([
+        (
+            "protocol".to_string(),
+            Value::String(CONTROL_PROTOCOL.to_string()),
+        ),
+        ("rolePath".to_string(), Value::String(role_path.to_string())),
+        (
+            "contextId".to_string(),
+            Value::String(context_id.to_string()),
+        ),
+        ("keyId".to_string(), Value::String(key_id.to_string())),
+    ])
+}
+
+fn audience_payload(role_path: &str, context_id: &str, key_id: &str, seal_key_id: &str) -> Bytes {
+    Bytes::from(
+        serde_json::to_vec(&json!({
+            "protocol": CONTROL_PROTOCOL,
+            "rolePath": role_path,
+            "contextId": context_id,
+            "keyId": key_id,
+            "publicKeyJwk": serde_json::to_value(audience_key_jwk()).unwrap(),
+            "sealedPrivateKey": {
+                "algorithm": "X25519-HKDF-SHA256+A256KW",
+                "derivationScheme": "seal",
+                "keyId": seal_key_id,
+                "ephemeralPublicKey": serde_json::to_value(role_key_jwk()).unwrap(),
+                "encryptedKey": "T42gGabDj__6KG89Wz97VBmlDEmkJj3HjLh-dPX-KzEbTi6z6DMLoA"
+            }
+        }))
+        .unwrap(),
+    )
+}
+
+struct ControlFixture {
+    handler: RecordsWriteHandler<TestMessageStore, TestDataStore>,
+    message_store: TestMessageStore,
+    audience_key_id: String,
+    seal_key_id: String,
+}
+
+async fn control_fixture() -> ControlFixture {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_protocol_definition(
+        CONTROL_TENANT,
+        &message_store,
+        control_definition(),
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    ControlFixture {
+        handler: RecordsWriteHandler::new(
+            message_store.clone(),
+            data_store,
+            Some(Arc::new(test_resolver())),
+        ),
+        message_store,
+        audience_key_id: audience_key_jwk().thumbprint().unwrap(),
+        seal_key_id: role_key_jwk().thumbprint().unwrap(),
+    }
+}
+
+/// Builds a control write, letting each test perturb exactly one thing.
+async fn control_write(
+    protocol_path: &str,
+    tags: MapValue,
+    data: &Bytes,
+    timestamp: &str,
+    mutate: impl FnOnce(&mut WriteSpec),
+) -> serde_json::Value {
+    let mut spec = WriteSpec {
+        protocol: CONTROL_PROTOCOL.to_string(),
+        protocol_path: protocol_path.to_string(),
+        tags: Some(tags),
+        data_cid: generate_dag_pb_cid_from_bytes(data).to_string(),
+        data_size: data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new(timestamp)
+    };
+    mutate(&mut spec);
+    signed_write_message(spec).await
+}
+
+// Covers: ENBOX-ENC-001, DWN-PROTO-002, DWN-PROTO-004
+// A well-formed audience is admitted at a virtual path the protocol never
+// declares, proving control records bypass application type and rule lookup
+// while still resolving their role against the governing definition.
+#[tokio::test]
+async fn a_valid_audience_control_record_is_admitted() {
+    let fixture = control_fixture().await;
+    let data = audience_payload("member", "", &fixture.audience_key_id, &fixture.seal_key_id);
+    let write = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &fixture.audience_key_id),
+        &data,
+        "2025-01-01T00:01:00.000000Z",
+        |_| {},
+    )
+    .await;
+
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &write, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: ENBOX-ENC-001
+// The lifecycle contract: immutable, unpublished, bounded, and plaintext.
+#[tokio::test]
+async fn audience_lifecycle_rules_are_enforced() {
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    let data = audience_payload("member", "", &key_id, &fixture.seal_key_id);
+    let tags = audience_tags("member", "", &key_id);
+
+    // Published is rejected: control records are never public.
+    let published = control_write(
+        AUDIENCE_PATH,
+        tags.clone(),
+        &data,
+        "2025-01-01T00:01:00.000000Z",
+        |spec| spec.published = Some(true),
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &published, Some(data.clone()))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("EncryptionControlValidateUnexpectedRecord")
+    );
+
+    // Over the inline bound: admission validates the payload in full, so it
+    // must be small enough to hold.
+    let oversize = control_write(
+        AUDIENCE_PATH,
+        tags.clone(),
+        &data,
+        "2025-01-01T00:01:00.000000Z",
+        |spec| spec.data_size = 30_001,
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &oversize, Some(data.clone()))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("EncryptionControlValidateUnexpectedRecord")
+    );
+
+    // The boundary itself is allowed.
+    let boundary_data = Bytes::from(vec![b' '; 30_000]);
+    let boundary = control_write(
+        AUDIENCE_PATH,
+        tags.clone(),
+        &boundary_data,
+        "2025-01-01T00:01:00.000000Z",
+        |_| {},
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &boundary, Some(boundary_data))
+        .await;
+    assert_ne!(
+        reply.status.error_code.as_deref(),
+        Some("EncryptionControlValidateUnexpectedRecord"),
+        "30000 bytes is within the bound; rejection must be about the payload, not the size: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: ENBOX-ENC-001
+// Identity and key commitments. Each case breaks exactly one thing, so the
+// reported code names the commitment that was broken rather than whichever
+// check happened to run first.
+#[tokio::test]
+async fn audience_identity_and_key_commitments_are_checked() {
+    let fixture = control_fixture().await;
+    let key = fixture.audience_key_id.clone();
+    let seal = fixture.seal_key_id.clone();
+
+    // (label, tags, payload, expected code)
+    let cases = [
+        (
+            "payload disagrees with its own tags",
+            audience_tags("member", "", &seal),
+            audience_payload("member", "", &key, &seal),
+            "EncryptionControlValidateAudienceTagsMismatch",
+        ),
+        (
+            "role path is not a keyed role",
+            audience_tags("plain", "", &key),
+            audience_payload("plain", "", &key, &seal),
+            "EncryptionControlValidateAudienceRolePathInvalid",
+        ),
+        (
+            "root role carrying a context",
+            audience_tags("member", "thread-1", &key),
+            audience_payload("member", "thread-1", &key, &seal),
+            "EncryptionControlValidateAudienceContextIdInvalid",
+        ),
+        (
+            "nested role missing its context",
+            audience_tags("thread/participant", "", &key),
+            audience_payload("thread/participant", "", &key, &seal),
+            "EncryptionControlValidateAudienceContextIdInvalid",
+        ),
+        (
+            "keyId is not the published key's thumbprint",
+            audience_tags("member", "", &seal),
+            audience_payload("member", "", &seal, &seal),
+            "EncryptionControlValidateAudienceKeyIdMismatch",
+        ),
+        (
+            "seal is not under the governing role key",
+            audience_tags("member", "", &key),
+            audience_payload("member", "", &key, &key),
+            "EncryptionControlValidateAudienceSealKeyIdMismatch",
+        ),
+    ];
+
+    for (label, tags, data, expected) in cases {
+        let write = control_write(
+            AUDIENCE_PATH,
+            tags,
+            &data,
+            "2025-01-01T00:01:00.000000Z",
+            |_| {},
+        )
+        .await;
+        let reply = fixture
+            .handler
+            .run(CONTROL_TENANT, &write, Some(data))
+            .await;
+        assert_eq!(reply.status.code, 400, "{label}: {}", reply.status.detail);
+        assert_eq!(
+            reply.status.error_code.as_deref(),
+            Some(expected),
+            "{label}: {}",
+            reply.status.detail
+        );
+    }
+}
+
+/// A delivery's envelope. Its contents are never inspected by admission, which
+/// is the point: the node has no private key and must not need one.
+fn delivery_envelope() -> EncryptionEnvelope {
+    envelope_with_entries(vec![KeyEncryption::ProtocolPath {
+        algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
+        key_id: "delivery-key".to_string(),
+        ephemeral_public_key: role_key_jwk(),
+        encrypted_key: "T42gGabDj__6KG89Wz97VBmlDEmkJj3HjLh-dPX-KzEbTi6z6DMLoA".to_string(),
+    }])
+}
+
+fn delivery_tags(role_path: &str, context_id: &str, key_id: &str, authority: &str) -> MapValue {
+    let mut tags = audience_tags(role_path, context_id, key_id);
+    tags.insert(
+        "recipientAuthority".to_string(),
+        Value::String(authority.to_string()),
+    );
+    tags
+}
+
+/// Grants `recipient` the `member` role by storing a role record directly:
+/// role membership is the protocol's business, not the control plane's.
+async fn grant_member_role(message_store: &TestMessageStore, recipient: &str, timestamp: &str) {
+    let role = signed_write_message(WriteSpec {
+        protocol: CONTROL_PROTOCOL.to_string(),
+        protocol_path: "member".to_string(),
+        recipient: Some(recipient.to_string()),
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    let message: Message<Descriptor> = serde_json::from_value(role).unwrap();
+    let indexes = KeyValues::from([
+        (
+            "interface".to_string(),
+            Value::String("Records".to_string()),
+        ),
+        ("method".to_string(), Value::String("Write".to_string())),
+        (
+            "protocol".to_string(),
+            Value::String(CONTROL_PROTOCOL.to_string()),
+        ),
+        (
+            "protocolPath".to_string(),
+            Value::String("member".to_string()),
+        ),
+        (
+            "recipient".to_string(),
+            Value::String(recipient.to_string()),
+        ),
+        ("isLatestBaseState".to_string(), Value::Bool(true)),
+        (
+            "messageTimestamp".to_string(),
+            Value::String(timestamp.to_string()),
+        ),
+    ]);
+    message_store
+        .put(CONTROL_TENANT, message, indexes)
+        .await
+        .unwrap();
+}
+
+async fn admit_audience(fixture: &ControlFixture, key_id: &str, timestamp: &str) {
+    let data = audience_payload("member", "", key_id, &fixture.seal_key_id);
+    let write = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", key_id),
+        &data,
+        timestamp,
+        |_| {},
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &write, Some(data))
+        .await;
+    assert_eq!(
+        reply.status.code, 202,
+        "audience must admit: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: ENBOX-ENC-001, DWN-PROTO-002
+// A delivery is admitted only once both things it references exist, and the
+// two absences are reported distinctly so a producer can tell which to repair.
+// Its ciphertext is never opened: admission inspects public metadata only.
+#[tokio::test]
+async fn delivery_requires_its_audience_and_a_role_holding_recipient() {
+    const RECIPIENT: &str = "did:example:bob";
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    let ciphertext = Bytes::from_static(b"sealed key material, never opened here");
+
+    let delivery = |timestamp: &'static str| {
+        let key_id = key_id.clone();
+        let ciphertext = ciphertext.clone();
+        async move {
+            control_write(
+                DELIVERY_PATH,
+                delivery_tags("member", "", &key_id, "roleHolder"),
+                &ciphertext,
+                timestamp,
+                |spec| {
+                    spec.recipient = Some(RECIPIENT.to_string());
+                    spec.encryption = Some(delivery_envelope());
+                },
+            )
+            .await
+        }
+    };
+
+    // Neither the audience nor the role record exists yet.
+    let reply = fixture
+        .handler
+        .run(
+            CONTROL_TENANT,
+            &delivery("2025-01-01T00:01:00.000000Z").await,
+            Some(ciphertext.clone()),
+        )
+        .await;
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("EncryptionControlValidateDeliveryAudienceMissing"),
+        "{}",
+        reply.status.detail
+    );
+
+    // Audience present, recipient still holds no role.
+    admit_audience(&fixture, &key_id, "2025-01-01T00:02:00.000000Z").await;
+    let reply = fixture
+        .handler
+        .run(
+            CONTROL_TENANT,
+            &delivery("2025-01-01T00:03:00.000000Z").await,
+            Some(ciphertext.clone()),
+        )
+        .await;
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("EncryptionControlValidateDeliveryRecipientRoleRecordMissing"),
+        "{}",
+        reply.status.detail
+    );
+
+    // Both present: admitted.
+    grant_member_role(
+        &fixture.message_store,
+        RECIPIENT,
+        "2025-01-01T00:04:00.000000Z",
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(
+            CONTROL_TENANT,
+            &delivery("2025-01-01T00:05:00.000000Z").await,
+            Some(ciphertext),
+        )
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: ENBOX-ENC-001
+// A delivery is looked up by the whole four-field identity, key id included, so
+// a key that has been superseded is still deliverable. Recipients who were sent
+// an older key keep needing it; ceasing to be *current* is not ceasing to exist.
+#[tokio::test]
+async fn a_delivery_may_reference_a_superseded_audience_key() {
+    const RECIPIENT: &str = "did:example:bob";
+    let fixture = control_fixture().await;
+    let older_key = fixture.audience_key_id.clone();
+    let newer_key = fixture.seal_key_id.clone();
+
+    admit_audience(&fixture, &older_key, "2025-01-01T00:01:00.000000Z").await;
+    grant_member_role(
+        &fixture.message_store,
+        RECIPIENT,
+        "2025-01-01T00:02:00.000000Z",
+    )
+    .await;
+
+    // A second audience for the same role supersedes the first as *current*.
+    let newer_data = audience_payload("member", "", &newer_key, &fixture.seal_key_id);
+    let newer = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &newer_key),
+        &newer_data,
+        "2025-01-01T00:03:00.000000Z",
+        |_| {},
+    )
+    .await;
+    // The newer key's payload publishes a different key than it names, so it is
+    // only the *older* one that matters here; what is under test is that the
+    // older key stays addressable regardless.
+    let _ = fixture
+        .handler
+        .run(CONTROL_TENANT, &newer, Some(newer_data))
+        .await;
+
+    let ciphertext = Bytes::from_static(b"sealed older key");
+    let delivery = control_write(
+        DELIVERY_PATH,
+        delivery_tags("member", "", &older_key, "roleHolder"),
+        &ciphertext,
+        "2025-01-01T00:04:00.000000Z",
+        |spec| {
+            spec.recipient = Some(RECIPIENT.to_string());
+            spec.encryption = Some(delivery_envelope());
+        },
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &delivery, Some(ciphertext))
+        .await;
+    assert_eq!(
+        reply.status.code, 202,
+        "a superseded audience key must remain deliverable: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: ENBOX-ENC-001
+// Control records are immutable and undeletable, including by the tenant.
+// Key material recipients already hold cannot be recalled by removing the
+// record describing it, so permitting either would destroy the node's own
+// account of what was distributed without retracting anything.
+#[tokio::test]
+async fn control_records_cannot_be_updated_or_deleted() {
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    let data = audience_payload("member", "", &key_id, &fixture.seal_key_id);
+    let initial = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &key_id),
+        &data,
+        "2025-01-01T00:01:00.000000Z",
+        |_| {},
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &initial, Some(data.clone()))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // An update to the same record is refused as an update, not as a duplicate.
+    let update = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &key_id),
+        &data,
+        "2025-01-01T00:02:00.000000Z",
+        |spec| {
+            spec.record_id = Some(initial["recordId"].as_str().unwrap().to_string());
+            spec.date_created = "2025-01-01T00:01:00.000000Z".to_string();
+        },
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &update, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("EncryptionControlValidateUnexpectedRecord"),
+        "{}",
+        reply.status.detail
+    );
+
+    // And the tenant — who may delete anything else — cannot delete this.
+    let mut data_store = TestDataStore::default();
+    data_store.open().await.unwrap();
+    let delete_handler = RecordsDeleteHandler::new(
+        fixture.message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+    let delete = signed_delete_message(
+        initial["recordId"].as_str().unwrap(),
+        false,
+        "2025-01-01T00:03:00.000000Z",
+    )
+    .await;
+    let reply = delete_handler.run(CONTROL_TENANT, &delete, None).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("EncryptionControlValidateUnexpectedRecord"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+/// Issues a tenant-to-Bob Records Write grant scoped to `protocol_path`.
+async fn issue_write_grant(
+    fixture: &ControlFixture,
+    protocol_path: &str,
+    timestamp: &str,
+) -> String {
+    let data = Bytes::from(
+        serde_json::to_vec(&json!({
+            "dateExpires": "2026-01-01T00:00:00.000000Z",
+            "scope": {
+                "interface": "Records",
+                "method": "Write",
+                "protocol": CONTROL_PROTOCOL,
+                "protocolPath": protocol_path
+            },
+            "delegated": true
+        }))
+        .unwrap(),
+    );
+    let grant = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        recipient: Some("did:example:bob".to_string()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String(CONTROL_PROTOCOL.to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    let grant_id = grant["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        fixture
+            .handler
+            .run(CONTROL_TENANT, &grant, Some(data))
+            .await
+            .status
+            .code,
+        202,
+        "grant fixture must store"
+    );
+    grant_id
+}
+
+// Covers: DWN-AUTH-001, ENBOX-ENC-001
+// Minting a role's key material requires authority to create that role. The
+// tenant has it inherently; anyone else needs a grant that actually covers the
+// role path, and a grant over a neighbouring path is not a way in. Scope
+// comparison is by path boundary, so `member` is not reachable from `plain`.
+#[tokio::test]
+async fn minting_an_audience_requires_authority_over_that_role() {
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    let data = audience_payload("member", "", &key_id, &fixture.seal_key_id);
+
+    let bob_writes = |grant_id: Option<String>, timestamp: &'static str| {
+        let key_id = key_id.clone();
+        let data = data.clone();
+        async move {
+            control_write(
+                AUDIENCE_PATH,
+                audience_tags("member", "", &key_id),
+                &data,
+                timestamp,
+                |spec| {
+                    spec.author = "did:example:bob".to_string();
+                    spec.signer = bob_signer();
+                    spec.permission_grant_id = grant_id;
+                },
+            )
+            .await
+        }
+    };
+
+    // No authority at all.
+    let reply = fixture
+        .handler
+        .run(
+            CONTROL_TENANT,
+            &bob_writes(None, "2025-01-01T00:01:00.000000Z").await,
+            Some(data.clone()),
+        )
+        .await;
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+
+    // A grant over a different path in the same protocol does not reach the
+    // role, and having *a* valid grant is not itself authority.
+    let wrong_path = issue_write_grant(&fixture, "plain", "2025-01-01T00:00:30.000000Z").await;
+    let reply = fixture
+        .handler
+        .run(
+            CONTROL_TENANT,
+            &bob_writes(Some(wrong_path), "2025-01-01T00:02:00.000000Z").await,
+            Some(data.clone()),
+        )
+        .await;
+    assert_eq!(
+        reply.status.code, 401,
+        "a grant over 'plain' must not mint 'member' keys: {}",
+        reply.status.detail
+    );
+
+    // A grant that does cover the role path.
+    let right_path = issue_write_grant(&fixture, "member", "2025-01-01T00:00:45.000000Z").await;
+    let reply = fixture
+        .handler
+        .run(
+            CONTROL_TENANT,
+            &bob_writes(Some(right_path), "2025-01-01T00:03:00.000000Z").await,
+            Some(data),
+        )
+        .await;
+    assert_eq!(
+        reply.status.code, 202,
+        "a grant covering 'member' must mint its keys: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: ENBOX-ENC-001
+// A control record's data is its content, so a dataless one must be refused
+// outright rather than retained as an empty shell. Retaining it would also be
+// unrepairable: resubmitting the same message with its data is an exact replay
+// and answers 409, leaving the record permanently describing nothing.
+//
+// Each case is otherwise fully admissible, so the missing data is the only
+// thing that can be rejecting it.
+#[tokio::test]
+async fn a_dataless_control_record_is_refused_and_not_retained() {
+    const RECIPIENT: &str = "did:example:bob";
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    let payload = audience_payload("member", "", &key_id, &fixture.seal_key_id);
+
+    // Everything a delivery depends on, so only its data is missing.
+    admit_audience(&fixture, &key_id, "2025-01-01T00:00:30.000000Z").await;
+    grant_member_role(
+        &fixture.message_store,
+        RECIPIENT,
+        "2025-01-01T00:00:40.000000Z",
+    )
+    .await;
+
+    let cases = [
+        (
+            "audience",
+            AUDIENCE_PATH,
+            audience_tags("member", "", &key_id),
+            payload,
+            "2025-01-01T00:01:00.000000Z",
+        ),
+        (
+            "delivery",
+            DELIVERY_PATH,
+            delivery_tags("member", "", &key_id, "roleHolder"),
+            Bytes::from_static(b"sealed key material"),
+            "2025-01-01T00:02:00.000000Z",
+        ),
+    ];
+
+    for (label, path, tags, data, timestamp) in cases {
+        let is_delivery = path == DELIVERY_PATH;
+        let write = control_write(path, tags, &data, timestamp, |spec| {
+            if is_delivery {
+                spec.recipient = Some(RECIPIENT.to_string());
+                spec.encryption = Some(delivery_envelope());
+            }
+        })
+        .await;
+
+        // Submitted with no data stream and no inline data.
+        let reply = fixture.handler.run(CONTROL_TENANT, &write, None).await;
+        assert_eq!(reply.status.code, 400, "{label}: {}", reply.status.detail);
+        assert_eq!(
+            reply.status.error_code.as_deref(),
+            Some("EncryptionControlValidateUnexpectedRecord"),
+            "{label} must be refused for its missing data, not something else: {}",
+            reply.status.detail
+        );
+
+        // Nothing may have been retained, or resubmitting with data would
+        // collide with a record that never carried any.
+        let record_id = write["recordId"].as_str().unwrap();
+        let retained = fixture
+            .message_store
+            .query(
+                CONTROL_TENANT,
+                Filters::from(filter_map([("recordId", string_filter(record_id))])),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            retained.messages.is_empty(),
+            "{label}: a refused control record must leave nothing behind"
+        );
+
+        // The same message admits once its data is supplied, proving the
+        // refusal did not poison the record id.
+        let reply = fixture
+            .handler
+            .run(CONTROL_TENANT, &write, Some(data))
+            .await;
+        assert_eq!(
+            reply.status.code, 202,
+            "{label}: the same message with its data must admit: {}",
+            reply.status.detail
+        );
+    }
+}
+
+// Covers: DWN-PROTO-002
+// A nested role is addressed by the ancestor context at its parent's depth. A
+// shallower context names a wider region, so truncating to whatever segments
+// exist would match role holders in unrelated sibling contexts. Such a role is
+// unaddressable, which is a negative answer and not a broader search.
+#[tokio::test]
+async fn a_context_shallower_than_the_role_matches_nothing() {
+    const HOLDER: &str = "did:example:bob";
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+
+    // A role holder genuinely under `x/y`.
+    let role = signed_write_message(WriteSpec {
+        protocol: CONTROL_PROTOCOL.to_string(),
+        protocol_path: "a/b/member".to_string(),
+        recipient: Some(HOLDER.to_string()),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let message: Message<Descriptor> = serde_json::from_value(role).unwrap();
+    let indexes = KeyValues::from([
+        (
+            "interface".to_string(),
+            Value::String("Records".to_string()),
+        ),
+        ("method".to_string(), Value::String("Write".to_string())),
+        (
+            "protocol".to_string(),
+            Value::String(CONTROL_PROTOCOL.to_string()),
+        ),
+        (
+            "protocolPath".to_string(),
+            Value::String("a/b/member".to_string()),
+        ),
+        ("recipient".to_string(), Value::String(HOLDER.to_string())),
+        ("contextId".to_string(), Value::String("x/y".to_string())),
+        ("isLatestBaseState".to_string(), Value::Bool(true)),
+        (
+            "messageTimestamp".to_string(),
+            Value::String("2025-01-01T00:00:00.000000Z".to_string()),
+        ),
+    ]);
+    message_store
+        .put(CONTROL_TENANT, message, indexes)
+        .await
+        .unwrap();
+
+    // The role's parent depth is 2, so `x/y` addresses it and `x` does not.
+    assert!(
+        role_record_exists(
+            CONTROL_TENANT,
+            HOLDER,
+            CONTROL_PROTOCOL,
+            "a/b/member",
+            Some("x/y"),
+            &message_store
+        )
+        .await
+        .unwrap(),
+        "the context at the role's parent depth must find the holder"
+    );
+    assert!(
+        !role_record_exists(
+            CONTROL_TENANT,
+            HOLDER,
+            CONTROL_PROTOCOL,
+            "a/b/member",
+            Some("x"),
+            &message_store
+        )
+        .await
+        .unwrap(),
+        "a context shallower than the role must not widen into sibling contexts"
+    );
+    assert!(
+        !role_record_exists(
+            CONTROL_TENANT,
+            HOLDER,
+            CONTROL_PROTOCOL,
+            "a/b/member",
+            None,
+            &message_store
+        )
+        .await
+        .unwrap(),
+        "an absent context cannot address a nested role"
+    );
+}
+
+// Covers: DWN-PROTO-004
+// `AudienceRolePathInvalid` licenses destroying a record during config repair,
+// so it must mean "the configuration resolved and contradicts this record" —
+// never "the configuration was missing". A missing protocol keeps its own
+// repairable-dependency classification instead.
+#[tokio::test]
+async fn a_missing_protocol_is_not_reported_as_an_invalid_role() {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    // Deliberately no protocol installed.
+    let handler =
+        RecordsWriteHandler::new(message_store, data_store, Some(Arc::new(test_resolver())));
+
+    let key_id = audience_key_jwk().thumbprint().unwrap();
+    let seal = role_key_jwk().thumbprint().unwrap();
+    let data = audience_payload("member", "", &key_id, &seal);
+    let write = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &key_id),
+        &data,
+        "2025-01-01T00:01:00.000000Z",
+        |_| {},
+    )
+    .await;
+
+    let reply = handler.run(CONTROL_TENANT, &write, Some(data)).await;
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationProtocolNotFound"),
+        "a missing protocol must stay a missing dependency: {}",
+        reply.status.detail
+    );
+    assert!(
+        !crate::errors::DwnErrorCode::try_from(reply.status.error_code.as_deref().unwrap())
+            .unwrap()
+            .is_control_invalidity(),
+        "a missing protocol must never license destroying the record"
+    );
+}

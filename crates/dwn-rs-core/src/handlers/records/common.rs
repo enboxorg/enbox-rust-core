@@ -1290,6 +1290,70 @@ where
     }))
 }
 
+/// Whether `recipient` holds `role_path` in `protocol`, within the context
+/// named by `context_id`.
+///
+/// The context dimension follows role depth: a root role has none, and a
+/// nested role is scoped by the ancestor context at its parent's depth. A
+/// nested role with no usable ancestor context is unaddressable, and no record
+/// can satisfy it — that is a negative answer, not an unscoped search that
+/// would match role holders in unrelated contexts.
+///
+/// Callers arrive with the role addressed two different ways — derived from a
+/// record chain during ordinary protocol authorization, or carried as explicit
+/// tags on a control record — so this takes the resolved address and leaves
+/// resolution to them.
+pub(crate) async fn role_record_exists<MessageStore>(
+    tenant: &str,
+    recipient: &str,
+    protocol: &str,
+    role_path: &str,
+    context_id: Option<&str>,
+    message_store: &MessageStore,
+) -> Result<bool, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let mut filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("method", string_filter(WRITE_METHOD)),
+        ("protocol", string_filter(protocol)),
+        ("protocolPath", string_filter(role_path)),
+        ("recipient", string_filter(recipient)),
+        ("isLatestBaseState", bool_filter(true)),
+    ]);
+    let ancestor_count = role_path.split('/').count().saturating_sub(1);
+    if ancestor_count > 0 {
+        // A nested role is addressed by the ancestor context at its parent's
+        // depth. A context shallower than that does not merely under-specify
+        // the search — it names a different, wider region, and truncating to
+        // whatever segments happen to exist would match role holders in
+        // unrelated sibling contexts. Such a role is unaddressable, which is a
+        // negative answer rather than a broader query.
+        let segments: Vec<&str> = context_id.unwrap_or_default().split('/').collect();
+        if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
+            return Ok(false);
+        }
+        filter.insert(
+            FilterKey::Index("contextId".to_string()),
+            Filter::Subtree(SubtreeFilter {
+                subtree: segments[..ancestor_count].join("/"),
+            }),
+        );
+    }
+    let result = message_store
+        .query(
+            tenant,
+            Filters::from(filter),
+            None,
+            Some(Pagination::with_limit(1)),
+            None,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(!result.messages.is_empty())
+}
+
 pub(crate) async fn matching_role_record_exists<MessageStore>(
     tenant: &str,
     author: &str,
@@ -1318,41 +1382,15 @@ where
             })?;
         protocol_path = parsed.protocol_path.to_string();
     }
-    let mut filter = filter_map([
-        ("interface", string_filter(RECORDS_INTERFACE)),
-        ("method", string_filter(WRITE_METHOD)),
-        ("protocol", string_filter(&protocol)),
-        ("protocolPath", string_filter(&protocol_path)),
-        ("recipient", string_filter(author)),
-        ("isLatestBaseState", bool_filter(true)),
-    ]);
-    if let Some(context) = record_chain.last().and_then(context_id) {
-        let ancestor_count = protocol_path.split('/').count().saturating_sub(1);
-        if ancestor_count > 0 {
-            let context_prefix = context
-                .split('/')
-                .take(ancestor_count)
-                .collect::<Vec<_>>()
-                .join("/");
-            filter.insert(
-                FilterKey::Index("contextId".to_string()),
-                Filter::Subtree(SubtreeFilter {
-                    subtree: context_prefix,
-                }),
-            );
-        }
-    }
-    let result = message_store
-        .query(
-            tenant,
-            Filters::from(filter),
-            None,
-            Some(Pagination::with_limit(1)),
-            None,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
-    Ok(!result.messages.is_empty())
+    role_record_exists(
+        tenant,
+        author,
+        &protocol,
+        &protocol_path,
+        record_chain.last().and_then(context_id).as_deref(),
+        message_store,
+    )
+    .await
 }
 
 pub(crate) async fn actions_for_message_kind<MessageStore>(

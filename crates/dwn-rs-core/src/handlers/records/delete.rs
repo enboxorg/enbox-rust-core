@@ -126,6 +126,19 @@ where
                     )
                 }
             };
+            // Control records are undeletable, including by the tenant. Key
+            // material that recipients already hold cannot be recalled by
+            // removing the record that described it, so allowing the delete
+            // would only destroy the node's own account of what was
+            // distributed. Checked before authorization because it is not a
+            // question of who is asking.
+            if crate::encryption::control::ControlKind::of(&initial_write).is_some() {
+                return Response::bad_request_error(crate::errors::DwnError::new(
+                    crate::errors::DwnErrorCode::EncryptionControlValidateUnexpectedRecord,
+                    "encryption control records cannot be deleted",
+                ));
+            }
+
             if let Err(detail) = authorize_records_delete(
                 tenant,
                 &message,

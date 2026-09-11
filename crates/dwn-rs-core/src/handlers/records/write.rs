@@ -18,6 +18,7 @@ use crate::descriptors::{
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
+use crate::encryption::control::ControlKind;
 use crate::encryption::{
     KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
@@ -35,6 +36,7 @@ use crate::handlers::records::common::{
     validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
     GoverningTimestampError,
 };
+use crate::handlers::records::control;
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Write;
@@ -63,6 +65,19 @@ enum RecordsWriteValidationError {
     Detail(String),
     #[error("{0}")]
     Internal(String),
+}
+
+impl From<control::ControlValidationError> for RecordsWriteValidationError {
+    /// Control admission distinguishes the same three outcomes this handler
+    /// does, so the mapping is one-to-one: a record defect stays a bad request,
+    /// an unavailable store stays an internal failure.
+    fn from(error: control::ControlValidationError) -> Self {
+        match error {
+            control::ControlValidationError::Dwn(error) => Self::Dwn(error),
+            control::ControlValidationError::Detail(detail) => Self::Detail(detail),
+            control::ControlValidationError::Internal(detail) => Self::Internal(detail),
+        }
+    }
 }
 
 impl From<String> for RecordsWriteValidationError {
@@ -236,7 +251,22 @@ where
             }
 
             let mut is_latest_base_state = false;
-            if let Some(data) = data.or_else(|| encoded_data_bytes(&message).ok().flatten()) {
+            let supplied_data = data.or_else(|| encoded_data_bytes(&message).ok().flatten());
+
+            // A control record's data *is* its content: an audience without a
+            // payload publishes no key, and a delivery without one delivers
+            // nothing. Admitting it dataless would also be unrepairable —
+            // resubmitting the same message with its data attached is an exact
+            // replay and answers 409 — so the record would be permanently
+            // stuck describing nothing.
+            if supplied_data.is_none() && ControlKind::of(&message).is_some() {
+                return Response::bad_request_error(DwnError::new(
+                    DwnErrorCode::EncryptionControlValidateUnexpectedRecord,
+                    "encryption control records must be written with their data",
+                ));
+            }
+
+            if let Some(data) = supplied_data {
                 if let Err(error) = self
                     .process_message_with_data_stream(tenant, &mut message, data)
                     .await
@@ -433,6 +463,15 @@ where
             data.len() as u64,
         )?;
 
+        // An audience record's payload is part of its admission contract: the
+        // key it publishes and the seal over that key are checked here, once
+        // the bytes the descriptor commits to are actually in hand.
+        if let Some(kind) = ControlKind::from_protocol_path(&descriptor.protocol_path) {
+            control::validate_payload(tenant, message, kind, &data, &self.message_store)
+                .await
+                .map_err(RecordsWriteValidationError::from)?;
+        }
+
         if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
             set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))
                 .map_err(RecordsWriteValidationError::from)?;
@@ -560,6 +599,24 @@ where
     ) -> Result<(), RecordsWriteValidationError> {
         let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
         let protocol_path = descriptor.protocol_path.clone();
+
+        // Control records live at virtual paths the protocol never declares, so
+        // there is no type or rule set to validate them against. They are
+        // admitted on their own fixed contract instead, and the application
+        // encryption-policy checks below deliberately do not apply: a control
+        // record's representation is fixed by its kind, not by the protocol.
+        if let Some(kind) = ControlKind::from_protocol_path(&protocol_path) {
+            return control::validate_referential_integrity(
+                tenant,
+                message,
+                kind,
+                author,
+                &self.message_store,
+            )
+            .await
+            .map_err(RecordsWriteValidationError::from);
+        }
+
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
 
@@ -764,6 +821,14 @@ where
         message: &Message<Descriptor>,
         auth: &AuthorizationContext,
     ) -> Result<(), String> {
+        // Control writes carry their own authority question — may this actor
+        // mint this role's key material — so they do not fall through to the
+        // ordinary grant and protocol-action ladder.
+        if let Some(kind) = ControlKind::of(message) {
+            return control::authorize_write(tenant, message, kind, auth, &self.message_store)
+                .await
+                .map_err(|error| error.to_string());
+        }
         if permissions::authorize_delegated_records_write(message, auth, &self.message_store)
             .await
             .map_err(|error| error.to_string())?
