@@ -55,7 +55,6 @@ pub(crate) struct CollectionAuthorization {
     /// Whether an invoked grant covered the request at open. Retained for
     /// delivery-time revalidation of mutable grant state.
     pub grant_authorized: bool,
-    pub control_only: bool,
 }
 
 /// Resolves the visibility plan for one collection request: anonymous
@@ -80,7 +79,6 @@ where
             author: None,
             protocol_authorized: false,
             grant_authorized: false,
-            control_only: false,
         });
     }
     let signature = signature
@@ -91,6 +89,12 @@ where
         control::authorize_control_read_request(tenant, message, signature, message_store)
             .await
             .map_err(|error| error.to_string())?;
+        // The invoked role or grant was just validated above, so it carries
+        // the same candidate weight it would on any other request. Discarding
+        // it here would leave a legitimately grant-bearing requester with no
+        // branch at all.
+        let invoked =
+            should_protocol_authorize(signature) || signature.permission_grant_id().is_some();
         return Ok(CollectionAuthorization {
             visibility: if signature.author == tenant {
                 VisibilityClass::Owner
@@ -98,9 +102,8 @@ where
                 VisibilityClass::NonOwner
             },
             author: Some(signature.author.clone()),
-            protocol_authorized: false,
-            grant_authorized: false,
-            control_only: true,
+            protocol_authorized: invoked,
+            grant_authorized: invoked,
         });
     }
 
@@ -131,7 +134,6 @@ where
             author: Some(signature.author.clone()),
             protocol_authorized,
             grant_authorized,
-            control_only: false,
         })
     } else {
         Ok(CollectionAuthorization {
@@ -139,7 +141,6 @@ where
             author: Some(signature.author.clone()),
             protocol_authorized,
             grant_authorized,
-            control_only: false,
         })
     }
 }
@@ -151,16 +152,6 @@ pub(crate) fn collection_filters(
     date_sort: Option<&DateSort>,
     mode: PlanMode,
 ) -> Filters {
-    // Control-only requests cannot match anything but control records, and
-    // those are gated per record afterwards, so narrowing by author/recipient
-    // here would only hide records the requester is entitled to reach.
-    if auth.control_only {
-        return match mode {
-            PlanMode::Snapshot => Filters::from(owner_records_filter(filter, date_sort)),
-            PlanMode::Event => Filters::from(owner_records_event_filter(filter)),
-        };
-    }
-
     match (auth.visibility, mode) {
         (VisibilityClass::Published, PlanMode::Snapshot) => {
             Filters::from(published_records_filter(filter, date_sort))
@@ -184,6 +175,7 @@ pub(crate) fn collection_filters(
                 date_sort,
                 author,
                 auth.protocol_authorized,
+                control::filter_pins_an_audience_scope(filter),
             ))
         }
         (VisibilityClass::NonOwner, PlanMode::Event) => {
@@ -195,6 +187,7 @@ pub(crate) fn collection_filters(
                 filter,
                 author,
                 auth.protocol_authorized,
+                control::filter_pins_an_audience_scope(filter),
             ))
         }
     }
@@ -285,7 +278,6 @@ mod tests {
             author: Some(PLAN_TENANT.to_string()),
             protocol_authorized: false,
             grant_authorized: false,
-            control_only: false,
         };
         let owner_sets = collection_filters(&owner, &filter, None, PlanMode::Snapshot).set;
         assert_eq!(owner_sets.len(), 1, "owner sees one un-narrowed set");
@@ -303,7 +295,6 @@ mod tests {
             author: None,
             protocol_authorized: false,
             grant_authorized: false,
-            control_only: false,
         };
         let published_sets = collection_filters(&published, &filter, None, PlanMode::Snapshot).set;
         assert_eq!(published_sets.len(), 1);
@@ -318,7 +309,6 @@ mod tests {
             author: Some(PLAN_AUTHOR.to_string()),
             protocol_authorized: false,
             grant_authorized: false,
-            control_only: false,
         };
         let non_owner_sets = collection_filters(&non_owner, &filter, None, PlanMode::Snapshot).set;
         assert_eq!(
@@ -343,7 +333,6 @@ mod tests {
             author: Some(PLAN_TENANT.to_string()),
             protocol_authorized: false,
             grant_authorized: false,
-            control_only: false,
         };
         let filter = RecordsFilter::default();
         let snapshot = collection_filters(&owner, &filter, None, PlanMode::Snapshot).set;

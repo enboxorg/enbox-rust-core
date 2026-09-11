@@ -673,3 +673,175 @@ async fn a_live_audience_is_disclosed_only_while_it_is_the_current_one() {
         "the stream must stay live, not close"
     );
 }
+
+// Covers: DWN-REC-005, DWN-REC-008
+// The reply page and its cursor must describe the same point in the stream. A
+// refill that asks for the whole limit again can return more than the caller
+// asked for, and trimming the surplus drops records that sit *before* the
+// cursor being returned — so continuing the query skips them and nothing the
+// caller can do will ever reach them.
+//
+// Four deliveries, three of them Bob's, paged two at a time: every one of his
+// must survive pagination.
+#[tokio::test]
+async fn paging_never_drops_a_visible_record_behind_its_own_cursor() {
+    const READER: &str = "did:example:bob";
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    admit_audience(&fixture, &key_id, "2025-01-01T00:01:00.000000Z").await;
+    for recipient in [READER, "did:example:carol"] {
+        grant_member_role(
+            &fixture.message_store,
+            recipient,
+            "2025-01-01T00:02:00.000000Z",
+        )
+        .await;
+    }
+
+    // Carol's sits second, so the first page of two holds one visible record
+    // and one hidden one — the refill then has capacity for exactly one more.
+    for (index, recipient) in [READER, "did:example:carol", READER, READER]
+        .into_iter()
+        .enumerate()
+    {
+        let ciphertext = Bytes::from_static(b"sealed key material");
+        let write = control_write(
+            DELIVERY_PATH,
+            delivery_tags("member", "", &key_id, "roleHolder"),
+            &ciphertext,
+            &format!("2025-01-01T00:0{}:00.000000Z", index + 3),
+            |spec| {
+                spec.recipient = Some(recipient.to_string());
+                spec.encryption = Some(delivery_envelope());
+            },
+        )
+        .await;
+        assert_eq!(
+            fixture
+                .handler
+                .run(CONTROL_TENANT, &write, Some(ciphertext))
+                .await
+                .status
+                .code,
+            202
+        );
+    }
+
+    let handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
+    let mut cursor: Option<serde_json::Value> = None;
+    let mut seen = 0;
+    for _ in 0..4 {
+        let mut request = unsigned_query_message(json!({
+            "protocol": CONTROL_PROTOCOL,
+            "protocolPath": DELIVERY_PATH,
+        }));
+        request["descriptor"]["pagination"] = match &cursor {
+            Some(cursor) => json!({ "limit": 2, "cursor": cursor }),
+            None => json!({ "limit": 2 }),
+        };
+        let request = signed_request(request, bob_signer(), None).await;
+        let reply = handler.run(CONTROL_TENANT, &request, None).await;
+        assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+        let entries = reply.reply.entries.unwrap_or_default();
+        assert!(
+            entries.len() <= 2,
+            "a page must never exceed the limit the caller asked for"
+        );
+        seen += entries.len();
+        cursor = reply
+            .reply
+            .cursor
+            .as_ref()
+            .map(|cursor| serde_json::to_value(cursor).unwrap());
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        seen, 3,
+        "every readable delivery must survive pagination, none stranded behind the cursor"
+    );
+}
+
+// Covers: DWN-REC-005, DWN-REC-008
+// The event-log Subscribe snapshot is the other collection entry point, and it
+// must agree with Query at the same head. Filtering a single storage page here
+// would let the native and WebSocket snapshot come back empty while a Query
+// with the same filter and limit returns the current audience.
+#[tokio::test]
+async fn the_event_log_snapshot_refills_like_every_other_collection_page() {
+    let wake_bus = InProcessWakeBus::new();
+    let fixture =
+        control_fixture_on(MemoryMessageStore::default().with_waker_publisher(wake_bus.clone()))
+            .await;
+    let grant_id = issue_write_grant(&fixture, "member", "2025-01-01T00:00:30.000000Z").await;
+
+    // The delegate's mint sorts first and loses the projection to the tenant's,
+    // so ascending with limit 1 puts the dropped record alone on page one.
+    admit_audience_signed(
+        &fixture,
+        &audience_key_jwk(),
+        "did:example:bob",
+        bob_signer(),
+        "2025-01-01T00:01:00.000000Z",
+        Some(&grant_id),
+    )
+    .await;
+    let tenant_key = admit_audience_signed(
+        &fixture,
+        &other_audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:02:00.000000Z",
+        None,
+    )
+    .await;
+
+    let event_log = DurableEventLog::new(fixture.message_store.clone(), wake_bus, None, None);
+    let handler = RecordsEventLogSubscribeHandler::new(
+        fixture.message_store.clone(),
+        event_log,
+        Some(Arc::new(test_resolver())),
+    );
+    let request = signed_records_subscribe_with_pagination(
+        RecordsFilter {
+            protocol: Some(CONTROL_PROTOCOL.to_string()),
+            protocol_path: Some(AUDIENCE_PATH.to_string()),
+            ..Default::default()
+        },
+        None,
+        Some(Pagination {
+            cursor: None,
+            limit: Some(1),
+        }),
+        "2025-01-01T00:10:00.000000Z",
+    )
+    .await;
+    let result = handler
+        .handle_subscribe(CONTROL_TENANT, &request, Box::new(|_| {}))
+        .await;
+    assert_eq!(
+        result.reply.status.code, 200,
+        "{}",
+        result.reply.status.detail
+    );
+
+    let entries = result.reply.reply.entries.clone().unwrap_or_default();
+    assert_eq!(
+        entries.len(),
+        1,
+        "the snapshot must refill past the superseded mint rather than come back empty"
+    );
+    let returned: Message<Descriptor> =
+        serde_json::from_value(serde_json::to_value(&entries[0]).unwrap()).unwrap();
+    assert_eq!(
+        crate::descriptors::records::records_write_descriptor(&returned)
+            .unwrap()
+            .tags
+            .as_ref()
+            .and_then(|tags| tags.get("keyId"))
+            .cloned(),
+        Some(Value::String(tenant_key)),
+        "and it must hold the current audience, the one Query would return"
+    );
+}

@@ -549,3 +549,136 @@ async fn a_subtree_read_grant_reaches_the_deliveries_of_the_role_it_reads_throug
         reply.status.detail
     );
 }
+
+// Covers: ENBOX-ENC-001, DWN-AUTH-005
+// Per-record control authorization runs *after* candidate selection; it does
+// not replace it. Naming an audience by id reaches it through direct Read, and
+// only there — letting a record id widen a collection would turn a known id
+// into a licence to enumerate, and hand back through Query what the ordinary
+// candidate branches were built to withhold.
+//
+// The exactly pinned tuple is the branch that does widen a collection, because
+// it names one role's directory rather than sweeping for it.
+#[tokio::test]
+async fn a_record_id_reaches_an_audience_only_through_direct_read() {
+    let (fixture, record_id, key_id) = audience_read_fixture().await;
+
+    let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
+    let by_id = signed_request(
+        unsigned_query_message(json!({
+            "protocol": CONTROL_PROTOCOL,
+            "protocolPath": AUDIENCE_PATH,
+            "recordId": record_id,
+        })),
+        bob_signer(),
+        None,
+    )
+    .await;
+    let reply = query_handler.run(CONTROL_TENANT, &by_id, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(
+        reply.reply.entries.unwrap_or_default().len(),
+        0,
+        "a record id must not widen a collection to an audience the requester has no authority over"
+    );
+
+    // The same reader, same record, through direct Read: allowed.
+    let reader = RecordsReadHandler::new(
+        fixture.message_store.clone(),
+        TestDataStore::default(),
+        None,
+    );
+    let read = signed_request(
+        unsigned_read_message(json!({ "recordId": record_id })),
+        bob_signer(),
+        None,
+    )
+    .await;
+    assert_eq!(
+        reader.run(CONTROL_TENANT, &read, None).await.status.code,
+        200,
+        "direct Read by id remains the deliberate route to a directory entry"
+    );
+
+    // And the exactly pinned tuple still reaches it through the collection.
+    let by_tuple = signed_request(
+        unsigned_query_message(exact_tuple_filter(Some(&key_id))),
+        bob_signer(),
+        None,
+    )
+    .await;
+    let reply = query_handler.run(CONTROL_TENANT, &by_tuple, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(
+        reply.reply.entries.unwrap_or_default().len(),
+        1,
+        "an exactly pinned tuple is the branch that widens a control collection"
+    );
+}
+
+// Covers: ENBOX-ENC-003, DWN-AUTH-005
+// A control subscription is opened through the control gate, so it has to be
+// rechecked through it. Asking the ordinary ladder whether the invoked grant
+// covers `$encryption/audience` asks whether a grant names a path no protocol
+// declares — the answer is always no, so a perfectly valid grant over the keyed
+// role would close the subscription at its first event.
+//
+// Checked at the authorization-context boundary, where the guard actually makes
+// the decision: a Records Subscribe descriptor carries no `permissionGrantId`,
+// so this context cannot currently be produced from the wire at all. See the
+// note on `descriptor_permission_grant_invocation`.
+#[tokio::test]
+async fn a_valid_control_grant_is_not_terminated_at_delivery() {
+    const READER: &str = "did:example:bob";
+
+    let fixture = control_fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        "Read",
+        READER,
+        "member",
+        "2025-01-01T00:00:30.000000Z",
+    )
+    .await;
+
+    let filter = RecordsFilter {
+        protocol: Some(CONTROL_PROTOCOL.to_string()),
+        protocol_path: Some(AUDIENCE_PATH.to_string()),
+        ..Default::default()
+    };
+    let request =
+        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
+    let message: Message<Descriptor> =
+        serde_json::from_value(request).expect("subscribe request must deserialize");
+    let auth_ctx = crate::permissions::AuthorizationContext {
+        signer: READER.to_string(),
+        author: READER.to_string(),
+        payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
+            crate::auth::jws::AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: Some(grant_id.clone()),
+                permission_grant_ids: None,
+                protocol_role: None,
+            },
+        ),
+        permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::Single(
+            grant_id.clone(),
+        ),
+        author_delegated_grant: None,
+        owner: None,
+    };
+    let auth = DeliveryAuthorization {
+        message,
+        filter,
+        auth_ctx,
+        grant_valid_at_open: true,
+        role_invoked: false,
+        request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+        control_only: true,
+    };
+
+    authorize_records_delivery(CONTROL_TENANT, &auth, &fixture.message_store)
+        .await
+        .expect("a grant that opened the control subscription must not fail at delivery");
+}

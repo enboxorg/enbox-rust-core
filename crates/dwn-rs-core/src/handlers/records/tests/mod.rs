@@ -2782,6 +2782,7 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
         grant_valid_at_open: true,
         role_invoked: false,
         request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+        control_only: false,
     };
 
     authorize_records_delivery(TENANT, &auth, &message_store)
@@ -2900,6 +2901,7 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
         grant_valid_at_open: true,
         role_invoked: false,
         request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+        control_only: false,
     };
 
     let error = authorize_records_delivery(TENANT, &auth, &message_store)
@@ -3406,6 +3408,7 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
         grant_valid_at_open: true,
         role_invoked: false,
         request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+        control_only: false,
     };
 
     let error = authorize_records_delivery(TENANT, &auth, &message_store)

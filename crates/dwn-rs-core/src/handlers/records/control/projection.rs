@@ -139,6 +139,12 @@ where
 /// asking for one record, newest first, would see nothing at all when the
 /// newest candidate happens to be superseded.
 ///
+/// Each refill asks for only the capacity still unfilled, which is what keeps
+/// the page and its cursor in step. Asking for the full limit again and
+/// trimming the surplus would be silent data loss: the trimmed records sit
+/// before the cursor this returns, so continuing the query skips them and no
+/// caller can ever reach them.
+///
 /// The returned cursor is the last storage page's, so a caller resumes after
 /// everything actually examined rather than re-reading what was filtered out.
 pub(crate) async fn collect_visible_page<MessageStore, Fetch, Fut>(
@@ -152,14 +158,17 @@ pub(crate) async fn collect_visible_page<MessageStore, Fetch, Fut>(
 ) -> Result<(Vec<Message<Descriptor>>, Option<Cursor>), ControlValidationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
-    Fetch: FnMut(Option<Cursor>) -> Fut,
+    // The remaining visible capacity, so each refill asks for what it still
+    // needs rather than for the whole page again.
+    Fetch: FnMut(Option<Cursor>, Option<u64>) -> Fut,
     Fut: std::future::Future<Output = Result<(Vec<Message<Descriptor>>, Option<Cursor>), String>>,
 {
     let mut visible: Vec<Message<Descriptor>> = Vec::new();
     let mut cursor = None;
 
     loop {
-        let (page, next) = fetch(cursor.clone())
+        let remaining = limit.map(|limit| limit.saturating_sub(visible.len() as u64));
+        let (page, next) = fetch(cursor.clone(), remaining)
             .await
             .map_err(ControlValidationError::Internal)?;
         let exhausted = page.is_empty() || next.is_none();
@@ -180,12 +189,10 @@ where
         );
 
         match limit {
+            // Never overshoots: each fetch asked for exactly the capacity left,
+            // and projection and visibility only remove.
             Some(limit) if (visible.len() as u64) < limit && !exhausted => continue,
-            Some(limit) => {
-                // A refill can overshoot; the caller asked for a bounded page.
-                visible.truncate(limit as usize);
-                return Ok((visible, cursor));
-            }
+            Some(_) => return Ok((visible, cursor)),
             None if exhausted => return Ok((visible, cursor)),
             None => continue,
         }

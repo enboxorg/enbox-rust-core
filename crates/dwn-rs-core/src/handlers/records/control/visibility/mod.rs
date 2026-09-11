@@ -3,6 +3,7 @@ use super::*;
 mod audience;
 pub(crate) mod delivery;
 
+pub(crate) use audience::filter_pins_an_audience_scope;
 use audience::{can_enumerate_audience, exact_audience_request_matches};
 pub(in crate::handlers::records::control) use audience::{names_record, pins_audience_key};
 use delivery::delivery_reachable_by_grant;

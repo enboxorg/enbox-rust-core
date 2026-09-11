@@ -584,12 +584,25 @@ pub(crate) fn non_owner_records_filters(
     date_sort: Option<&crate::descriptors::records::DateSort>,
     author: &str,
     protocol_authorized: bool,
+    exact_audience: bool,
 ) -> Vec<BTreeMap<FilterKey, Filter<Value>>> {
     let mut filters = Vec::new();
     if filter_includes_published_records(filter) {
         filters.push(published_records_filter(filter, date_sort));
     }
     if filter_includes_unpublished_records(filter) {
+        // An exactly pinned audience tuple names one role's directory, which
+        // any authenticated requester may reach. It is its own candidate
+        // branch rather than a relaxation of the others, so it widens nothing
+        // else the requester could not already see.
+        if exact_audience {
+            let mut map = owner_records_filter(filter, date_sort);
+            map.insert(
+                FilterKey::Index("published".to_string()),
+                bool_filter(false),
+            );
+            filters.push(map);
+        }
         if should_build_author_filter(filter, author) {
             let mut map = owner_records_filter(filter, date_sort);
             map.insert(
@@ -630,12 +643,21 @@ pub(crate) fn non_owner_records_event_filters(
     filter: &RecordsFilter,
     author: &str,
     protocol_authorized: bool,
+    exact_audience: bool,
 ) -> Vec<BTreeMap<FilterKey, Filter<Value>>> {
     let mut filters = Vec::new();
     if filter_includes_published_records(filter) {
         filters.push(published_records_event_filter(filter));
     }
     if filter_includes_unpublished_records(filter) {
+        if exact_audience {
+            let mut map = owner_records_event_filter(filter);
+            map.insert(
+                FilterKey::Index("published".to_string()),
+                bool_filter(false),
+            );
+            filters.push(map);
+        }
         if should_build_author_filter(filter, author) {
             let mut map = owner_records_event_filter(filter);
             map.insert(
@@ -2852,6 +2874,7 @@ mod tests {
             grant_valid_at_open: false,
             role_invoked: true,
             request_timestamp: HISTORY_MID.to_string(),
+            control_only: false,
         };
 
         authorize_records_delivery(ROLE_TEST_TENANT, &auth, &store)

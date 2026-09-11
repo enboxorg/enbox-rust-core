@@ -117,7 +117,7 @@ where
                 &descriptor.filter,
                 limit,
                 self.message_store.as_ref(),
-                |cursor| {
+                |cursor, remaining| {
                     let filters = filters.clone();
                     let record_limit = record_limit.clone();
                     let cursor = if first_page {
@@ -133,7 +133,10 @@ where
                                 tenant,
                                 filters,
                                 Some(sort),
-                                Some(Pagination { cursor, limit }),
+                                Some(Pagination {
+                                    cursor,
+                                    limit: remaining.or(limit),
+                                }),
                                 record_limit,
                             )
                             .await

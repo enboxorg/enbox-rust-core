@@ -53,6 +53,9 @@ pub(crate) struct DeliveryAuthorization {
     pub(crate) grant_valid_at_open: bool,
     pub(crate) role_invoked: bool,
     pub(crate) request_timestamp: String,
+    /// Whether the request was authorized through the control gate rather than
+    /// the ordinary protocol ladder, and so must be rechecked through it.
+    pub(crate) control_only: bool,
 }
 
 #[derive(Clone)]
@@ -171,7 +174,7 @@ where
                 &descriptor.filter,
                 limit,
                 self.message_store.as_ref(),
-                |cursor| {
+                |cursor, remaining| {
                     let filters = filters.clone();
                     let record_limit = record_limit.clone();
                     let cursor = if first_page {
@@ -187,7 +190,10 @@ where
                                 tenant,
                                 filters,
                                 Some(sort),
-                                Some(Pagination { cursor, limit }),
+                                Some(Pagination {
+                                    cursor,
+                                    limit: remaining.or(limit),
+                                }),
                                 record_limit,
                             )
                             .await
@@ -314,6 +320,26 @@ where
             code: SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed,
             detail,
         })?;
+
+    // A control-only subscription was opened through the control gate and is
+    // rechecked through it. The ordinary path would ask whether the invoked
+    // grant's scope covers `$encryption/audience` or `$encryption/delivery` —
+    // paths no protocol declares and no grant can name — so a perfectly valid
+    // grant over the keyed role would be read as out of scope and close the
+    // subscription at its first event. The gate re-runs on the restamped
+    // message, so expiry and revocation since open are still what terminate it,
+    // and per-record control scope is rechecked alongside the projection.
+    if auth.control_only {
+        return control::authorize_control_read_request(
+            tenant,
+            &delivery_message,
+            &auth.auth_ctx,
+            message_store,
+        )
+        .await
+        .map_err(|error| authorize_failed(&error.to_string()));
+    }
+
     match permissions::authorize_records_query_or_subscribe_with_grant(
         tenant,
         &delivery_message,
@@ -655,51 +681,55 @@ where
                 return records_subscribe_reply(store_error_reply(detail), None);
             }
         };
-        let result = match self
-            .message_store
-            .query(
-                tenant,
-                query_filters,
-                Some(date_sort_to_message_sort(
-                    descriptor.date_sort.as_ref(),
-                    false,
-                )),
-                descriptor.pagination.clone(),
-                record_limit,
-            )
-            .await
-        {
-            Ok(result) => result,
-            Err(err) => {
-                let _ = (subscription.close)().await;
-                return records_subscribe_reply(store_error_reply(err.to_string()), None);
-            }
-        };
-        let messages = match control::project_current_audiences(
-            tenant,
-            Some(&descriptor.filter),
-            result.messages,
-            self.message_store.as_ref(),
-        )
-        .await
-        {
-            Ok(messages) => messages,
-            Err(error) => {
-                let _ = (subscription.close)().await;
-                return records_subscribe_reply(store_error_reply(error.to_string()), None);
-            }
-        };
-        let messages = match control::filter_visible_controls(
+        // This snapshot is a collection page like any other, and refills like
+        // one. Filtering a single storage page here would let the native and
+        // WebSocket snapshot come back short — or empty — while Query at the
+        // same head returns a full visible page.
+        let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), false);
+        let limit = descriptor.pagination.as_ref().and_then(|page| page.limit);
+        let start_cursor = descriptor
+            .pagination
+            .as_ref()
+            .and_then(|page| page.cursor.clone());
+        let mut first_page = true;
+        let (messages, snapshot_cursor) = match control::collect_visible_page(
             tenant,
             &message,
             signature.as_ref(),
-            Some(&descriptor.filter),
-            messages,
+            &descriptor.filter,
+            limit,
             self.message_store.as_ref(),
+            |cursor, remaining| {
+                let query_filters = query_filters.clone();
+                let record_limit = record_limit.clone();
+                let cursor = if first_page {
+                    first_page = false;
+                    start_cursor.clone()
+                } else {
+                    cursor
+                };
+                async move {
+                    let result = self
+                        .message_store
+                        .query(
+                            tenant,
+                            query_filters,
+                            Some(sort),
+                            Some(Pagination {
+                                cursor,
+                                limit: remaining.or(limit),
+                            }),
+                            record_limit,
+                        )
+                        .await
+                        .map_err(|err| err.to_string())?;
+                    Ok((result.messages, result.cursor))
+                }
+            },
         )
         .await
         {
-            Ok(messages) => messages,
+            Ok(page) => page,
             Err(error) => {
                 let _ = (subscription.close)().await;
                 return records_subscribe_reply(store_error_reply(error.to_string()), None);
@@ -719,7 +749,7 @@ where
         let reply = Response::ok().with_reply(Subscribe {
             subscription_id: Some(subscription.id.clone()),
             entries: Some(entries.clone()),
-            cursor: result.cursor.clone(),
+            cursor: snapshot_cursor,
             error: None,
         });
 
@@ -771,6 +801,7 @@ where
                 grant_valid_at_open: auth.grant_authorized,
                 role_invoked: should_protocol_authorize(signature),
                 request_timestamp,
+                control_only: control::filter_targets_only_controls(&descriptor.filter),
             }),
             _ => None,
         };

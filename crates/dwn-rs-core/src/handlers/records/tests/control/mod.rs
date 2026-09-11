@@ -343,7 +343,10 @@ async fn issue_grant(
 ) -> String {
     let data = Bytes::from(
         serde_json::to_vec(&json!({
-            "dateExpires": "2026-01-01T00:00:00.000000Z",
+            // Far future rather than merely "after the fixture timestamps":
+            // checks that run at *now* — delivery reauthorization does — would
+            // otherwise start failing once the wall clock passed the expiry.
+            "dateExpires": "2099-01-01T00:00:00.000000Z",
             "scope": {
                 "interface": "Records",
                 "method": method,

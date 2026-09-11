@@ -111,7 +111,7 @@ where
                     &descriptor.filter,
                     None,
                     &self.message_store,
-                    |cursor| {
+                    |cursor, remaining| {
                         let filters = filters.clone();
                         let record_limit = record_limit.clone();
                         let cursor = if first_page {
@@ -129,7 +129,7 @@ where
                                     None,
                                     Some(Pagination {
                                         cursor,
-                                        limit: None,
+                                        limit: remaining,
                                     }),
                                     record_limit,
                                 )

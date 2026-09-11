@@ -26,7 +26,7 @@ pub(crate) use authorization::authorize_write;
 pub(crate) use projection::{collect_visible_page, project_current_audiences};
 pub(crate) use visibility::{
     authorize_control_read_request, can_read, filter_may_match_controls,
-    filter_targets_only_controls, filter_visible_controls,
+    filter_pins_an_audience_scope, filter_targets_only_controls, filter_visible_controls,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

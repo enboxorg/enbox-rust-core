@@ -45,13 +45,43 @@ pub(super) fn pinned_tag<'a>(filter: &'a RecordsFilter, tag: &str) -> Option<&'a
     }
 }
 
+/// Whether the caller pinned *some* audience scope exactly, without reference
+/// to any stored record.
+///
+/// Candidate selection needs this form: it decides which records a collection
+/// may consider before any of them has been read, so it cannot ask whether the
+/// tuple matches a particular one. Naming a record by id is deliberately not
+/// enough — that reaches a directory entry through direct Read, and widening a
+/// collection on it would let anyone enumerate an audience they happen to know
+/// the id of.
+pub(crate) fn filter_pins_an_audience_scope(filter: &RecordsFilter) -> bool {
+    audience_scope_pinned_by(filter).is_some()
+}
+
+/// The three-field scope the caller pinned, if it pinned one.
+fn audience_scope_pinned_by(filter: &RecordsFilter) -> Option<(&str, &str, &str)> {
+    if filter.protocol_path.as_deref() != Some(ControlKind::Audience.protocol_path()) {
+        return None;
+    }
+    let protocol = pinned_tag(filter, "protocol")?;
+    if filter.protocol.as_deref() != Some(protocol) {
+        return None;
+    }
+    Some((
+        protocol,
+        pinned_tag(filter, "rolePath")?,
+        pinned_tag(filter, "contextId")?,
+    ))
+}
+
 /// Whether the caller pinned the three-field scope this audience belongs to.
 pub(super) fn pins_audience_scope(filter: &RecordsFilter, id: &AudienceId) -> bool {
-    filter.protocol.as_deref() == Some(id.scope.protocol.as_str())
-        && filter.protocol_path.as_deref() == Some(ControlKind::Audience.protocol_path())
-        && pinned_tag(filter, "protocol") == Some(id.scope.protocol.as_str())
-        && pinned_tag(filter, "rolePath") == Some(id.scope.role_path.as_str())
-        && pinned_tag(filter, "contextId") == Some(id.scope.context_id.as_str())
+    audience_scope_pinned_by(filter)
+        == Some((
+            id.scope.protocol.as_str(),
+            id.scope.role_path.as_str(),
+            id.scope.context_id.as_str(),
+        ))
 }
 
 /// Whether the caller pinned this audience's whole four-field identity.
