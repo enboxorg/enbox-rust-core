@@ -328,6 +328,55 @@ mod tests {
         );
     }
 
+    // Covers: DWN-AUTH-004, DWN-AUTH-005
+    // A grant's window is checked against the message's own timestamp, not the
+    // clock. Revoking a grant stops writes made after the revocation without
+    // retroactively unmaking ones that were valid when they happened — the same
+    // reason repair never re-fetches grants.
+    #[tokio::test]
+    async fn grant_validity_is_judged_at_the_message_timestamp() {
+        let store = MemoryMessageStore::default();
+        let message = control_write();
+
+        // Message is dated 2025-01-10. A grant starting after it is not yet
+        // active, whatever the wall clock says.
+        let mut not_yet = grant("g8", AUTHOR, DELEGATE);
+        not_yet.date_granted = parse_time("2025-02-01T00:00:00.000000Z");
+        let mut future = context(DELEGATE, AUTHOR);
+        future.author_delegated_grant = Some(not_yet);
+        assert!(
+            resolve_control_actor(TENANT, &message, &future, &store)
+                .await
+                .is_err(),
+            "a grant that had not started confers nothing"
+        );
+
+        // Expiring exactly at the message timestamp is expired: the window is
+        // half-open, so a message at the boundary is outside it.
+        let mut at_expiry = grant("g9", AUTHOR, DELEGATE);
+        at_expiry.date_expires = parse_time("2025-01-10T00:00:00.000000Z");
+        let mut boundary = context(DELEGATE, AUTHOR);
+        boundary.author_delegated_grant = Some(at_expiry);
+        assert!(
+            resolve_control_actor(TENANT, &message, &boundary, &store)
+                .await
+                .is_err(),
+            "a grant expiring at the message timestamp does not cover it"
+        );
+
+        // One instant earlier still covers it.
+        let mut just_before = grant("g10", AUTHOR, DELEGATE);
+        just_before.date_expires = parse_time("2025-01-10T00:00:00.000001Z");
+        let mut inside = context(DELEGATE, AUTHOR);
+        inside.author_delegated_grant = Some(just_before);
+        assert!(
+            resolve_control_actor(TENANT, &message, &inside, &store)
+                .await
+                .is_ok(),
+            "a timestamp inside the window remains valid"
+        );
+    }
+
     // Covers: DWN-AUTH-004
     #[tokio::test]
     async fn an_invalid_grant_fails_the_write_rather_than_being_ignored() {
