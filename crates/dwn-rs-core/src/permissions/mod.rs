@@ -984,6 +984,21 @@ fn signer_did_from_jws(jws: &Jws) -> Result<String, AuthorizationRequestError> {
         .ok_or(AuthorizationRequestError::KidRequired)
 }
 
+/// The signature payload a stored message was written with, decoded but not
+/// verified.
+///
+/// Config repair replays what a record was admitted under without
+/// re-authenticating it: the signature was checked when the record was
+/// accepted, and whether the signer's DID still resolves today says nothing
+/// about whether the write was authorized then.
+pub(crate) fn stored_signature_payload(
+    message: &Message<Descriptor>,
+) -> Option<AuthorizationPayloadData> {
+    let authorization = authorization_from_message(message)?;
+    let jws: Jws = serde_json::from_value(authorization.get("signature")?.clone()).ok()?;
+    decode_jws_payload(&jws).ok()
+}
+
 pub fn message_author(message: &Message<Descriptor>) -> Option<String> {
     authorization_from_message(message)
         .and_then(|authorization| authorization.get("authorDelegatedGrant").cloned())

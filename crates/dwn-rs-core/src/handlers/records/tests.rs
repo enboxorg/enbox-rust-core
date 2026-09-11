@@ -32,6 +32,7 @@ use crate::{
 use crate::{Descriptor, Value};
 
 use super::common::*;
+use super::control::{control_config_validity, verify_stored_create_action, ControlConfigValidity};
 use super::*;
 
 /// Drives a resumable delete the way a resume actually does: through the
@@ -5810,4 +5811,190 @@ async fn a_protocol_wide_count_agrees_with_query() {
             count_reply.status.detail
         );
     }
+}
+
+/// Installs `definition` at `timestamp`, so a later configuration can change
+/// what an already-stored record means.
+async fn reconfigure(fixture: &ControlFixture, definition: Definition, timestamp: &str) {
+    put_protocol_definition(
+        CONTROL_TENANT,
+        &fixture.message_store,
+        definition,
+        timestamp,
+    )
+    .await;
+}
+
+async fn stored_audience(fixture: &ControlFixture) -> Message<Descriptor> {
+    let filter = filter_map([
+        ("interface", string_filter("Records")),
+        ("protocolPath", string_filter(AUDIENCE_PATH)),
+    ]);
+    fixture
+        .message_store
+        .query(CONTROL_TENANT, Filters::from(filter), None, None, None)
+        .await
+        .unwrap()
+        .messages
+        .into_iter()
+        .next()
+        .expect("an audience must be stored")
+}
+
+// Covers: DWN-PROTO-004
+// Configuration repair destroys custody material, so it fires only on a
+// contradiction the configuration itself owns. Each case changes exactly one
+// thing about the configuration and asserts the verdict that follows.
+#[tokio::test]
+async fn repair_removes_only_records_the_configuration_contradicts() {
+    let fixture = control_fixture().await;
+    admit_audience_signed(
+        &fixture,
+        &audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:01:00.000000Z",
+        None,
+    )
+    .await;
+    let audience = stored_audience(&fixture).await;
+
+    // Unchanged configuration: nothing to answer for.
+    assert_eq!(
+        control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
+        ControlConfigValidity::Valid,
+        "an unchanged configuration invalidates nothing"
+    );
+
+    // The role keeps its identity but loses its key agreement. New material
+    // cannot be minted, but what was already sealed under it stays valid —
+    // destroying it would be unrecoverable.
+    let mut unkeyed = control_definition();
+    unkeyed.structure.get_mut("member").unwrap().key_agreement = None;
+    reconfigure(&fixture, unkeyed, "2025-01-02T00:00:00.000000Z").await;
+    assert_eq!(
+        control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
+        ControlConfigValidity::Valid,
+        "a role that loses its key agreement must not cost custody of what it already sealed"
+    );
+
+    // The role stops being a role at all: the record now names something the
+    // protocol does not have.
+    let mut demoted = control_definition();
+    demoted.structure.get_mut("member").unwrap().role = None;
+    reconfigure(&fixture, demoted, "2025-01-03T00:00:00.000000Z").await;
+    assert_eq!(
+        control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
+        ControlConfigValidity::Invalid,
+        "a role that is no longer a role leaves the record contradicted"
+    );
+}
+
+// Covers: DWN-PROTO-004
+// Anything undetermined is kept. A record whose protocol cannot be found is not
+// a record proven wrong — the configuration may simply not have arrived — and
+// repair must not treat the two alike.
+#[tokio::test]
+async fn repair_retains_records_it_cannot_judge() {
+    let fixture = control_fixture().await;
+    admit_audience_signed(
+        &fixture,
+        &audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:01:00.000000Z",
+        None,
+    )
+    .await;
+    let audience = stored_audience(&fixture).await;
+
+    // A record whose protocol is absent entirely.
+    let empty_store = MemoryMessageStore::default();
+    assert_eq!(
+        control_config_validity(CONTROL_TENANT, &audience, &empty_store).await,
+        ControlConfigValidity::Unknown,
+        "a missing configuration is undetermined, never proof the record is wrong"
+    );
+}
+
+// Covers: DWN-PROTO-004, DWN-AUTH-001
+// The create-authority replay uses only what the record and the configuration
+// already say. A record whose authority came from the writer's own standing is
+// preserved without re-fetching grants or re-resolving DIDs, because their
+// absence today says nothing about what was authorized then. A record that
+// leaned on a protocol rule is judged by whether that rule still permits it.
+#[tokio::test]
+async fn stored_create_replay_uses_only_the_record_and_the_configuration() {
+    let fixture = control_fixture().await;
+    admit_audience_signed(
+        &fixture,
+        &audience_key_jwk(),
+        CONTROL_TENANT,
+        test_signer(),
+        "2025-01-01T00:01:00.000000Z",
+        None,
+    )
+    .await;
+    let tenant_written = stored_audience(&fixture).await;
+
+    // The base role declares no actions at all. A record leaning on a rule
+    // would be contradicted by that; the tenant's own is not.
+    let bare_role = control_definition()
+        .structure
+        .get("member")
+        .unwrap()
+        .clone();
+    assert!(
+        verify_stored_create_action(CONTROL_TENANT, &tenant_written, &bare_role).is_ok(),
+        "a tenant-authored record stands on its own authority, not on a rule"
+    );
+
+    // A record written by someone else, invoking nothing. Under a role that
+    // once let anyone create, it was admissible.
+    let permissive = RuleSet {
+        actions: vec![crate::protocols::Action::Who(crate::protocols::ActionWho {
+            who: crate::protocols::Who::Anyone,
+            of: None,
+            can: vec![crate::protocols::Can::Create],
+        })],
+        ..control_definition()
+            .structure
+            .get("member")
+            .unwrap()
+            .clone()
+    };
+    let bob_signed = signed_write_message(WriteSpec {
+        author: "did:example:bob".to_string(),
+        signer: bob_signer(),
+        protocol: CONTROL_PROTOCOL.to_string(),
+        protocol_path: AUDIENCE_PATH.to_string(),
+        tags: Some(audience_tags("member", "", &fixture.audience_key_id)),
+        ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+    })
+    .await;
+    let delegate_written: Message<Descriptor> =
+        serde_json::from_value(bob_signed).expect("bob's write must deserialize");
+    assert_ne!(
+        crate::permissions::message_author(&delegate_written),
+        Some(CONTROL_TENANT.to_string()),
+        "the record under test must not be tenant-authored, or it proves nothing"
+    );
+
+    assert!(
+        verify_stored_create_action(CONTROL_TENANT, &delegate_written, &permissive).is_ok(),
+        "the rule that admitted it still permits it"
+    );
+
+    // The same record once that rule is gone: now the configuration
+    // contradicts it, and the error is one repair is allowed to act on.
+    let error = verify_stored_create_action(CONTROL_TENANT, &delegate_written, &bare_role)
+        .expect_err("a record with no permitting rule is contradicted");
+    let crate::handlers::records::control::ControlValidationError::Dwn(error) = error else {
+        panic!("expected a coded failure");
+    };
+    assert!(
+        error.code.is_control_invalidity(),
+        "a removed create rule is a configuration-owned contradiction, got {:?}",
+        error.code
+    );
 }

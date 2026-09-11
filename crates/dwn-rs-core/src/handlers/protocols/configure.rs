@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
@@ -20,10 +21,29 @@ use crate::{MessageSort, SortDirection};
 
 use super::common::*;
 
+/// Re-examines stored control records after a configuration is accepted.
+///
+/// Type-erased deliberately. Repair needs a data store and a task store that
+/// configuration handling otherwise has no use for, and threading both through
+/// as generic parameters would put them on every construction of this handler —
+/// including the many that never repair anything. Erasing them keeps the cost
+/// where the capability is used.
+pub trait ControlRepairer: Send + Sync {
+    fn repair<'a>(
+        &'a self,
+        tenant: &'a str,
+        protocol: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+}
+
 #[derive(Clone)]
 pub struct ProtocolsConfigureHandler<MessageStore> {
     message_store: MessageStore,
     did_resolver: Option<Arc<dyn DidResolver>>,
+    /// Absent on a node that cannot finish what repair would start. Such a node
+    /// still accepts configurations and simply never repairs, rather than
+    /// half-removing records it cannot durably see through.
+    repairer: Option<Arc<dyn ControlRepairer>>,
 }
 
 impl<MessageStore> ProtocolsConfigureHandler<MessageStore> {
@@ -31,7 +51,16 @@ impl<MessageStore> ProtocolsConfigureHandler<MessageStore> {
         Self {
             message_store,
             did_resolver,
+            repairer: None,
         }
+    }
+
+    /// Gives this handler the ability to repair control records after a
+    /// configuration lands. Without it, configurations are accepted and nothing
+    /// is re-examined.
+    pub fn with_repairer(mut self, repairer: Arc<dyn ControlRepairer>) -> Self {
+        self.repairer = Some(repairer);
+        self
     }
 }
 
@@ -156,6 +185,23 @@ where
                 .await
             {
                 return store_error_reply(err.to_string());
+            }
+
+            // Covers: DWN-PROTO-004
+            // Only now, with the configuration durably accepted, are records
+            // re-examined against it. Running before the commit would judge
+            // them against a configuration that might never land.
+            if let Some(repairer) = &self.repairer {
+                if let Err(detail) = repairer
+                    .repair(tenant, &descriptor.definition.protocol)
+                    .await
+                {
+                    // The configuration is accepted either way: it is durable,
+                    // and a repair that could not run leaves records in place
+                    // rather than half-removed. Reporting it as a failed
+                    // configure would invite a retry that changes nothing.
+                    tracing::warn!(%tenant, detail, "control repair did not complete");
+                }
             }
 
             Response::accepted()
