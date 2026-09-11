@@ -14,6 +14,7 @@ use crate::handlers::records::common::{
     resolve_record_limit_policy, store_error_reply, IdentityProjector, QueryAuthorizationResult,
     RecordsProjector,
 };
+use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Query;
@@ -122,6 +123,22 @@ where
                 Err(detail) => {
                     return store_error_reply(format!("failed to project records: {detail}"))
                 }
+            };
+            let messages = match control::filter_visible_controls(
+                tenant,
+                &message,
+                signature.as_ref(),
+                Some(&descriptor.filter),
+                messages,
+                self.message_store.as_ref(),
+            )
+            .await
+            {
+                Ok(messages) => messages,
+                Err(control::ControlValidationError::Internal(detail)) => {
+                    return store_error_reply(detail)
+                }
+                Err(error) => return Response::unauthorized(error.to_string()),
             };
             let entries =
                 match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {

@@ -20,6 +20,7 @@ use crate::handlers::records::common::{
     records_filter_to_filter_map, set_encoded_data, store_error_reply, string_filter,
     IdentityProjector, RecordsProjector,
 };
+use crate::handlers::records::control;
 use crate::permissions::{self};
 use crate::replies::records::{Read, ReadEntry};
 use crate::Response;
@@ -216,15 +217,35 @@ where
                         continue;
                     }
 
-                    if let Err(detail) = authorize_records_read(
-                        tenant,
-                        &message,
-                        signature.as_ref(),
-                        &candidate,
-                        &self.message_store,
-                    )
-                    .await
-                    {
+                    let authorized = if control::ControlKind::of(&candidate).is_some() {
+                        match control::can_read(
+                            tenant,
+                            &message,
+                            signature.as_ref(),
+                            &candidate,
+                            Some(&descriptor.filter),
+                            &self.message_store,
+                        )
+                        .await
+                        {
+                            Ok(true) => Ok(()),
+                            Ok(false) => Err("EncryptionControlReadUnauthorized: requester is not authorized to read the encryption control record".to_string()),
+                            Err(control::ControlValidationError::Internal(detail)) => {
+                                return store_error_reply(detail)
+                            }
+                            Err(error) => Err(error.to_string()),
+                        }
+                    } else {
+                        authorize_records_read(
+                            tenant,
+                            &message,
+                            signature.as_ref(),
+                            &candidate,
+                            &self.message_store,
+                        )
+                        .await
+                    };
+                    if let Err(detail) = authorized {
                         if point_read {
                             return Response::unauthorized(detail);
                         }

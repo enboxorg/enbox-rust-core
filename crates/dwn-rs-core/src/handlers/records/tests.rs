@@ -4014,6 +4014,15 @@ fn role_key_jwk() -> JWK {
     .unwrap()
 }
 
+/// A second publishable key, so a role can hold more than one valid audience.
+fn other_audience_key_jwk() -> JWK {
+    serde_json::from_value(json!({
+        "kty": "OKP", "crv": "X25519",
+        "x": "B6r_Pp_BZydVRPTDpqF82Dfy7G54zYpXsePfs8wDWnY"
+    }))
+    .unwrap()
+}
+
 /// A distinct key, the one an audience record publishes.
 fn audience_key_jwk() -> JWK {
     serde_json::from_value(json!({
@@ -4096,13 +4105,31 @@ fn audience_tags(role_path: &str, context_id: &str, key_id: &str) -> MapValue {
 }
 
 fn audience_payload(role_path: &str, context_id: &str, key_id: &str, seal_key_id: &str) -> Bytes {
+    audience_payload_for(
+        &audience_key_jwk(),
+        role_path,
+        context_id,
+        key_id,
+        seal_key_id,
+    )
+}
+
+/// Builds an audience payload publishing `public_key`. `key_id` is separate so
+/// a test can deliberately name a key the payload does not carry.
+fn audience_payload_for(
+    public_key: &JWK,
+    role_path: &str,
+    context_id: &str,
+    key_id: &str,
+    seal_key_id: &str,
+) -> Bytes {
     Bytes::from(
         serde_json::to_vec(&json!({
             "protocol": CONTROL_PROTOCOL,
             "rolePath": role_path,
             "contextId": context_id,
             "keyId": key_id,
-            "publicKeyJwk": serde_json::to_value(audience_key_jwk()).unwrap(),
+            "publicKeyJwk": serde_json::to_value(public_key).unwrap(),
             "sealedPrivateKey": {
                 "algorithm": "X25519-HKDF-SHA256+A256KW",
                 "derivationScheme": "seal",
@@ -4973,4 +5000,400 @@ async fn a_missing_protocol_is_not_reported_as_an_invalid_role() {
             .is_control_invalidity(),
         "a missing protocol must never license destroying the record"
     );
+}
+
+/// Signs a Read/Query request as `signer`, so the requester is someone other
+/// than the tenant.
+async fn signed_request(
+    mut request: serde_json::Value,
+    signer: crate::auth::PrivateJwkSigner,
+    grant_id: Option<&str>,
+) -> serde_json::Value {
+    if let Some(grant_id) = grant_id {
+        request["descriptor"]["permissionGrantId"] = json!(grant_id);
+    }
+    let descriptor = request["descriptor"].clone();
+    let extra = match grant_id {
+        Some(grant_id) => json!({ "permissionGrantId": grant_id }),
+        None => json!({}),
+    };
+    let signature = signature_for_descriptor(&descriptor, extra, signer).await;
+    request["authorization"] = json!({ "signature": signature });
+    request
+}
+
+/// The tenant's own audience record, plus the handlers a reader needs.
+async fn audience_read_fixture() -> (ControlFixture, String, String) {
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    let data = audience_payload("member", "", &key_id, &fixture.seal_key_id);
+    let write = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &key_id),
+        &data,
+        "2025-01-01T00:01:00.000000Z",
+        |_| {},
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &write, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let record_id = write["recordId"].as_str().unwrap().to_string();
+    (fixture, record_id, key_id)
+}
+
+fn exact_tuple_filter(key_id: Option<&str>) -> serde_json::Value {
+    let mut tags = json!({
+        "protocol": CONTROL_PROTOCOL,
+        "rolePath": "member",
+        "contextId": "",
+    });
+    if let Some(key_id) = key_id {
+        tags["keyId"] = json!(key_id);
+    }
+    json!({
+        "protocol": CONTROL_PROTOCOL,
+        "protocolPath": AUDIENCE_PATH,
+        "tags": tags,
+    })
+}
+
+// Covers: ENBOX-ENC-001, DWN-AUTH-001
+// An audience is a directory entry: reachable by anyone who can already name it
+// exactly, but never by an anonymous reader and never by sweeping for it
+// without authority over the role.
+#[tokio::test]
+async fn an_audience_is_readable_by_exact_reference_but_not_by_sweeping() {
+    let (fixture, record_id, key_id) = audience_read_fixture().await;
+    let reader = RecordsReadHandler::new(
+        fixture.message_store.clone(),
+        TestDataStore::default(),
+        None,
+    );
+
+    // Anonymous: control records are unpublished, so there is no route at all.
+    let anonymous = unsigned_read_message(json!({ "recordId": record_id }));
+    let reply = reader.run(CONTROL_TENANT, &anonymous, None).await;
+    assert!(
+        reply.status.code >= 400,
+        "an unauthenticated reader must not reach a control record, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+
+    // Authenticated, naming the record exactly.
+    let by_id = signed_request(
+        unsigned_read_message(json!({ "recordId": record_id })),
+        bob_signer(),
+        None,
+    )
+    .await;
+    let reply = reader.run(CONTROL_TENANT, &by_id, None).await;
+    assert_eq!(
+        reply.status.code, 200,
+        "an exact recordId read must be allowed: {}",
+        reply.status.detail
+    );
+
+    // Authenticated, naming the full four-field tuple.
+    let by_tuple = signed_request(
+        unsigned_read_message(exact_tuple_filter(Some(&key_id))),
+        bob_signer(),
+        None,
+    )
+    .await;
+    let reply = reader.run(CONTROL_TENANT, &by_tuple, None).await;
+    assert_eq!(
+        reply.status.code, 200,
+        "an exact tuple read must be allowed: {}",
+        reply.status.detail
+    );
+
+    // Authenticated, but sweeping the whole control path with no authority.
+    let sweep = signed_request(
+        unsigned_read_message(json!({
+            "protocol": CONTROL_PROTOCOL,
+            "protocolPath": AUDIENCE_PATH,
+        })),
+        bob_signer(),
+        None,
+    )
+    .await;
+    let reply = reader.run(CONTROL_TENANT, &sweep, None).await;
+    assert_eq!(
+        reply.status.code, 404,
+        "a broad sweep must not surface control records: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: ENBOX-ENC-003, DWN-AUTH-005
+// A delivery is addressed key material. Its parties reach it; an unrelated DID
+// does not, and having *some* valid grant is not the same as having one that
+// connects the reader to this recipient.
+#[tokio::test]
+async fn a_delivery_is_readable_only_by_its_parties_or_a_connecting_grant() {
+    const RECIPIENT: &str = "did:example:bob";
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    admit_audience(&fixture, &key_id, "2025-01-01T00:01:00.000000Z").await;
+    grant_member_role(
+        &fixture.message_store,
+        RECIPIENT,
+        "2025-01-01T00:02:00.000000Z",
+    )
+    .await;
+
+    let ciphertext = Bytes::from_static(b"sealed key material");
+    let delivery = control_write(
+        DELIVERY_PATH,
+        delivery_tags("member", "", &key_id, "roleHolder"),
+        &ciphertext,
+        "2025-01-01T00:03:00.000000Z",
+        |spec| {
+            spec.recipient = Some(RECIPIENT.to_string());
+            spec.encryption = Some(delivery_envelope());
+        },
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &delivery, Some(ciphertext))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let record_id = delivery["recordId"].as_str().unwrap().to_string();
+
+    let reader = RecordsReadHandler::new(
+        fixture.message_store.clone(),
+        TestDataStore::default(),
+        None,
+    );
+    let read_as = |signer: crate::auth::PrivateJwkSigner| {
+        let record_id = record_id.clone();
+        async move {
+            signed_request(
+                unsigned_read_message(json!({ "recordId": record_id })),
+                signer,
+                None,
+            )
+            .await
+        }
+    };
+
+    // The recipient reads its own delivery.
+    let reply = reader
+        .run(CONTROL_TENANT, &read_as(bob_signer()).await, None)
+        .await;
+    assert_eq!(
+        reply.status.code, 200,
+        "the recipient must read its own delivery: {}",
+        reply.status.detail
+    );
+
+    // An unrelated DID does not, even naming the record exactly — an exact
+    // reference opens an audience directory entry, never delivered key material.
+    let reply = reader
+        .run(
+            CONTROL_TENANT,
+            &read_as(signer_for("did:example:mallory")).await,
+            None,
+        )
+        .await;
+    assert!(
+        reply.status.code >= 400,
+        "an unrelated DID must not read another recipient's delivery, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+}
+
+// Covers: ENBOX-ENC-001, DWN-REC-008
+// Direct Read scans for the first *readable* candidate in the requested order.
+// It deliberately does not apply the current-audience projection that Query,
+// Count and Subscribe use, so a descending read over two audiences for the same
+// role returns whichever comes first in that order — not whichever the
+// projection would call current.
+//
+// This is the documented exception to assuming every read surface sees the same
+// population. It is asserted rather than reconciled: unifying the two would be
+// a contract change, not an implementation tidy-up.
+#[tokio::test]
+async fn direct_read_takes_the_first_readable_candidate_not_the_projected_current() {
+    let fixture = control_fixture().await;
+    let first_key = fixture.audience_key_id.clone();
+    let second_key = other_audience_key_jwk().thumbprint().unwrap();
+
+    // Two genuinely valid audiences for the same role, written in order.
+    admit_audience(&fixture, &first_key, "2025-01-01T00:01:00.000000Z").await;
+    let later_data = audience_payload_for(
+        &other_audience_key_jwk(),
+        "member",
+        "",
+        &second_key,
+        &fixture.seal_key_id,
+    );
+    let later = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &second_key),
+        &later_data,
+        "2025-01-01T00:02:00.000000Z",
+        |_| {},
+    )
+    .await;
+    let reply = fixture
+        .handler
+        .run(CONTROL_TENANT, &later, Some(later_data))
+        .await;
+    assert_eq!(
+        reply.status.code, 202,
+        "both audiences must be admitted, or the ordering proves nothing: {}",
+        reply.status.detail
+    );
+
+    let reader = RecordsReadHandler::new(
+        fixture.message_store.clone(),
+        TestDataStore::default(),
+        None,
+    );
+
+    // A broad read over the role's audiences, newest first. The tenant reads,
+    // so authorization cannot be what decides the answer.
+    let mut request = unsigned_read_message(exact_tuple_filter(None));
+    request["descriptor"]["dateSort"] = json!("createdDescending");
+    let descending = signed_request(request, test_signer(), None).await;
+
+    let reply = reader.run(CONTROL_TENANT, &descending, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+
+    // Whatever comes back, it came from the requested ordering rather than a
+    // projection: the projection ranks oldest-first within a scope, so a
+    // descending read that returned the projected winner would be evidence the
+    // exception had been lost.
+    let returned = reply
+        .reply
+        .entry
+        .as_ref()
+        .and_then(|entry| entry.records_write.as_ref())
+        .expect("a readable candidate");
+    let returned_key = crate::descriptors::records::records_write_descriptor(returned)
+        .unwrap()
+        .tags
+        .as_ref()
+        .and_then(|tags| tags.get("keyId"))
+        .cloned();
+    assert_eq!(
+        returned_key,
+        Some(Value::String(second_key.clone())),
+        "descending Read must return the newest candidate, not the projected current"
+    );
+}
+
+// Covers: ENBOX-ENC-001, DWN-AUTH-001
+// The exact-tuple route has to work on collections, not just direct Read.
+// Ordinary candidate selection narrows a non-owner to published, authored or
+// received records — none of which a control record is — so without a control
+// branch in the shared plan the permission could never take effect: the query
+// would return nothing and the per-record check would never be consulted.
+#[tokio::test]
+async fn an_exact_audience_tuple_query_reaches_the_record() {
+    let (fixture, _record_id, key_id) = audience_read_fixture().await;
+    let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
+
+    // An unrelated authenticated requester naming the tuple exactly.
+    let exact = signed_request(
+        unsigned_query_message(exact_tuple_filter(Some(&key_id))),
+        bob_signer(),
+        None,
+    )
+    .await;
+    let reply = query_handler.run(CONTROL_TENANT, &exact, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(
+        reply.reply.entries.as_ref().map(Vec::len),
+        Some(1),
+        "an exact tuple query must reach the audience it names"
+    );
+
+    // Widening the candidate set must not become a leak: the same requester
+    // sweeping the control path without naming a tuple still sees nothing.
+    let sweep = signed_request(
+        unsigned_query_message(json!({
+            "protocol": CONTROL_PROTOCOL,
+            "protocolPath": AUDIENCE_PATH,
+        })),
+        bob_signer(),
+        None,
+    )
+    .await;
+    let reply = query_handler.run(CONTROL_TENANT, &sweep, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(
+        reply.reply.entries.as_ref().map(Vec::len).unwrap_or(0),
+        0,
+        "a broad sweep must still surface nothing"
+    );
+
+    // And the tenant sees its own record either way.
+    let as_tenant = signed_request(
+        unsigned_query_message(json!({
+            "protocol": CONTROL_PROTOCOL,
+            "protocolPath": AUDIENCE_PATH,
+        })),
+        test_signer(),
+        None,
+    )
+    .await;
+    let reply = query_handler.run(CONTROL_TENANT, &as_tenant, None).await;
+    assert_eq!(
+        reply.reply.entries.as_ref().map(Vec::len),
+        Some(1),
+        "the tenant reads its own control records: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: ENBOX-ENC-003, DWN-PROTO-004
+// A subtree read grant reaches roles that subtree grants read through — but
+// only while those roles are still keyed. A configuration that keeps a role and
+// drops its `$keyAgreement` stops it conveying key material, and the delegate's
+// reach must end with it; otherwise removing a key agreement would silently
+// leave retained deliveries readable through a role that keys nothing.
+#[tokio::test]
+async fn a_referenced_role_must_still_be_keyed_to_convey_deliveries() {
+    fn definition_with_reader(role_keyed: bool) -> Definition {
+        let mut definition = control_definition();
+        // `thread` grants read through the `member` role.
+        definition.structure.get_mut("thread").unwrap().actions =
+            vec![crate::protocols::Action::Role(
+                crate::protocols::ActionRole {
+                    role: "member".to_string(),
+                    can: vec![crate::protocols::Can::Read],
+                },
+            )];
+        if !role_keyed {
+            definition
+                .structure
+                .get_mut("member")
+                .unwrap()
+                .key_agreement = None;
+        }
+        definition
+    }
+
+    for (label, role_keyed, expect_reachable) in [
+        ("role still keyed", true, true),
+        ("key agreement removed", false, false),
+    ] {
+        let definition = definition_with_reader(role_keyed);
+        let scope_path = "thread";
+        let role_path = "member";
+        let roles = control::read_roles_under_for_test(&definition, scope_path);
+        assert_eq!(
+            roles.contains(role_path),
+            expect_reachable,
+            "{label}: a subtree delegate's reach must follow the role's key agreement"
+        );
+    }
 }
