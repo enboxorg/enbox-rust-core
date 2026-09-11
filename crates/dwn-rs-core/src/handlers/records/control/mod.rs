@@ -60,14 +60,6 @@ use crate::handlers::protocols::configure::{
     fetch_protocol_definition, ProtocolDefinitionLookupError,
 };
 
-/// Upper bound on control record data, matching the inline-encodable limit:
-/// admission validates an audience payload in full, so it must be small enough
-/// to hold rather than stream.
-pub(crate) const MAX_CONTROL_DATA_SIZE: u64 = 30_000;
-
-/// The only recipient authority a delivery may assert.
-const RECIPIENT_AUTHORITY_ROLE_HOLDER: &str = "roleHolder";
-
 fn control_error(code: DwnErrorCode, detail: impl Into<String>) -> ControlValidationError {
     ControlValidationError::Dwn(DwnError::new(code, detail))
 }

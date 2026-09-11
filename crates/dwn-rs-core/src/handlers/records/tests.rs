@@ -5417,7 +5417,7 @@ async fn a_referenced_role_must_still_be_keyed_to_convey_deliveries() {
         let definition = definition_with_reader(role_keyed);
         let scope_path = "thread";
         let role_path = "member";
-        let roles = control::visibility::read_roles_under(&definition, scope_path);
+        let roles = control::visibility::delivery::read_roles_under(&definition, scope_path);
         assert_eq!(
             roles.contains(role_path),
             expect_reachable,

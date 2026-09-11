@@ -1,5 +1,13 @@
 use super::*;
 
+/// Upper bound on control record data, matching the inline-encodable limit:
+/// admission validates an audience payload in full, so it must be small enough
+/// to hold rather than stream.
+pub(crate) const MAX_CONTROL_DATA_SIZE: u64 = 30_000;
+
+/// The only recipient authority a delivery may assert.
+const RECIPIENT_AUTHORITY_ROLE_HOLDER: &str = "roleHolder";
+
 /// Lifecycle rules shared by both control kinds.
 ///
 /// Immutability is checked as "is this an initial write" rather than "does a
