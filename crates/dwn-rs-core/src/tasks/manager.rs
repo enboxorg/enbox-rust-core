@@ -10,7 +10,8 @@ use serde_json::Value as JsonValue;
 use crate::errors::ResumableTaskStoreError;
 use crate::stores::{ManagedResumableTask, ResumableTaskStore};
 use crate::tasks::controller::{
-    ResumableRecordsDeleteData, ResumableRecordsSquashData, StorageController,
+    ResumableControlPurgeData, ResumableRecordsDeleteData, ResumableRecordsSquashData,
+    StorageController,
 };
 
 pub const TIMEOUT_EXTENSION_FREQUENCY_SECONDS: u64 = 30;
@@ -20,6 +21,7 @@ pub const TIMEOUT_EXTENSION_FREQUENCY_SECONDS: u64 = 30;
 pub enum ResumableTaskName {
     RecordsDelete,
     RecordsSquash,
+    ControlPurge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +132,22 @@ where
                     })?;
                 self.storage_controller
                     .perform_records_delete(data)
+                    .await
+                    .map_err(|detail| {
+                        ResumableTaskStoreError::StoreError(
+                            crate::errors::StoreError::InternalException(detail),
+                        )
+                    })
+            }
+            ResumableTaskName::ControlPurge => {
+                let data: ResumableControlPurgeData = serde_json::from_value(task.data.clone())
+                    .map_err(|err| {
+                        ResumableTaskStoreError::StoreError(
+                            crate::errors::StoreError::InternalException(err.to_string()),
+                        )
+                    })?;
+                self.storage_controller
+                    .perform_control_purge(data)
                     .await
                     .map_err(|detail| {
                         ResumableTaskStoreError::StoreError(
