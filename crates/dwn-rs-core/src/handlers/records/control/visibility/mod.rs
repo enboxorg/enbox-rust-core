@@ -1,3 +1,6 @@
+use crate::canonical_rfc3339;
+use crate::permissions::errors::PermissionError;
+
 use super::*;
 
 mod audience;
@@ -55,7 +58,7 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let requester = read_requester(signature);
-    let unauthorized = |error: crate::permissions::errors::PermissionError| {
+    let unauthorized = |error: PermissionError| {
         control_error(
             DwnErrorCode::EncryptionControlReadUnauthorized,
             error.to_string(),
@@ -92,7 +95,7 @@ where
 /// configuration.
 fn request_timestamp(read_message: &Message<Descriptor>) -> Result<String, ControlValidationError> {
     message_timestamp(read_message)
-        .map(crate::canonical_rfc3339)
+        .map(canonical_rfc3339)
         .map_err(&unexpected)
 }
 

@@ -1,4 +1,7 @@
 use super::visibility::{names_record, pins_audience_key};
+use crate::canonical_rfc3339;
+use crate::permissions::message_signer;
+
 use super::*;
 
 /// Where a candidate ranks as the current audience for its scope.
@@ -15,8 +18,8 @@ pub(crate) fn projection_rank(
 ) -> Option<(bool, String, String)> {
     let descriptor = records_write_descriptor(record).ok()?;
     Some((
-        crate::permissions::message_signer(record)? != tenant,
-        crate::canonical_rfc3339(descriptor.date_created),
+        message_signer(record)? != tenant,
+        canonical_rfc3339(descriptor.date_created),
         record_id(record)?,
     ))
 }

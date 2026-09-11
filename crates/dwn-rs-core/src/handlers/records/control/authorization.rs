@@ -1,3 +1,6 @@
+use crate::canonical_rfc3339;
+use crate::protocols::parse_cross_protocol_ref;
+
 use super::*;
 
 /// Writer authorization: may this actor mint this role's key material?
@@ -17,7 +20,7 @@ where
     let descriptor =
         records_write_descriptor(message).map_err(|error| unexpected(error.to_string()))?;
     let id = AudienceId::from_message(message, kind)?;
-    let timestamp = crate::canonical_rfc3339(descriptor.message_timestamp);
+    let timestamp = canonical_rfc3339(descriptor.message_timestamp);
     let role = resolve_role_audience_definition(tenant, &id, &timestamp, message_store).await?;
 
     let actor = resolve_control_actor(tenant, message, signature, message_store)
@@ -146,7 +149,7 @@ async fn invoked_role_is_held<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let (protocol, role_path) = match crate::protocols::parse_cross_protocol_ref(role_reference) {
+    let (protocol, role_path) = match parse_cross_protocol_ref(role_reference) {
         Some(parsed) => {
             let Some(protocol) = definition
                 .uses

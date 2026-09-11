@@ -1,3 +1,6 @@
+use crate::canonical_rfc3339;
+use crate::permissions::{message_author, stored_signature_payload};
+
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -43,7 +46,7 @@ where
     let descriptor =
         records_write_descriptor(control).map_err(|error| unexpected(error.to_string()))?;
     let id = AudienceId::from_message(control, kind)?;
-    let timestamp = crate::canonical_rfc3339(descriptor.message_timestamp);
+    let timestamp = canonical_rfc3339(descriptor.message_timestamp);
     let governing =
         resolve_role_audience_definition(tenant, &id, &timestamp, message_store).await?;
 
@@ -137,8 +140,7 @@ pub(crate) fn verify_stored_create_action(
     }
 
     let sought = actions_sought_by_stored_write(control, rule_set);
-    let invoked_role = crate::permissions::stored_signature_payload(control)
-        .and_then(|payload| payload.protocol_role);
+    let invoked_role = stored_signature_payload(control).and_then(|payload| payload.protocol_role);
 
     for action in &rule_set.actions {
         match action {
@@ -182,9 +184,9 @@ fn stored_write_is_directly_authorized(tenant: &str, control: &Message<Descripto
     let authorization = control.fields.authorization();
     authorization.owner_signature.is_some()
         || authorization.owner_delegated_grant.is_some()
-        || crate::permissions::message_author(control).as_deref() == Some(tenant)
+        || message_author(control).as_deref() == Some(tenant)
         || authorization.author_delegated_grant.is_some()
-        || crate::permissions::stored_signature_payload(control)
+        || stored_signature_payload(control)
             .is_some_and(|payload| payload.permission_grant_id.is_some())
 }
 

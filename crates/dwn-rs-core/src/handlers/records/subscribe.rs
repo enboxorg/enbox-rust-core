@@ -821,6 +821,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::testing::parse_time;
+
     use super::*;
     use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
     use crate::permissions::{
@@ -855,8 +857,8 @@ mod tests {
             id: "delegated-grant-1".to_string(),
             grantor: "did:example:alice".to_string(),
             grantee: "did:example:bob".to_string(),
-            date_granted: crate::testing::parse_time("2025-01-01T00:00:00.000000Z"),
-            date_expires: crate::testing::parse_time("2030-01-01T00:00:00.000000Z"),
+            date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
+            date_expires: parse_time("2030-01-01T00:00:00.000000Z"),
             delegated: Some(true),
             scope: PermissionScope::Records(RecordsScope {
                 method: RecordsMethod::Read,

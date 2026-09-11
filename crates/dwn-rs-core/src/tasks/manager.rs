@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::errors::ResumableTaskStoreError;
+use crate::errors::{ResumableTaskStoreError, StoreError};
 use crate::stores::{ManagedResumableTask, ResumableTaskStore};
 use crate::tasks::controller::{
     ResumableControlRepairData, ResumableRecordsDeleteData, ResumableRecordsSquashData,
@@ -149,49 +149,43 @@ where
             ResumableTaskName::RecordsDelete => {
                 let data: ResumableRecordsDeleteData = serde_json::from_value(task.data.clone())
                     .map_err(|err| {
-                        ResumableTaskStoreError::StoreError(
-                            crate::errors::StoreError::InternalException(err.to_string()),
-                        )
+                        ResumableTaskStoreError::StoreError(StoreError::InternalException(
+                            err.to_string(),
+                        ))
                     })?;
                 self.storage_controller
                     .perform_records_delete(data)
                     .await
                     .map_err(|detail| {
-                        ResumableTaskStoreError::StoreError(
-                            crate::errors::StoreError::InternalException(detail),
-                        )
+                        ResumableTaskStoreError::StoreError(StoreError::InternalException(detail))
                     })
             }
             ResumableTaskName::ControlRepair => {
                 let data: ResumableControlRepairData = serde_json::from_value(task.data.clone())
                     .map_err(|err| {
-                        ResumableTaskStoreError::StoreError(
-                            crate::errors::StoreError::InternalException(err.to_string()),
-                        )
+                        ResumableTaskStoreError::StoreError(StoreError::InternalException(
+                            err.to_string(),
+                        ))
                     })?;
                 self.storage_controller
                     .perform_control_repair(data)
                     .await
                     .map_err(|detail| {
-                        ResumableTaskStoreError::StoreError(
-                            crate::errors::StoreError::InternalException(detail),
-                        )
+                        ResumableTaskStoreError::StoreError(StoreError::InternalException(detail))
                     })
             }
             ResumableTaskName::RecordsSquash => {
                 let data: ResumableRecordsSquashData = serde_json::from_value(task.data.clone())
                     .map_err(|err| {
-                        ResumableTaskStoreError::StoreError(
-                            crate::errors::StoreError::InternalException(err.to_string()),
-                        )
+                        ResumableTaskStoreError::StoreError(StoreError::InternalException(
+                            err.to_string(),
+                        ))
                     })?;
                 self.storage_controller
                     .perform_records_squash(data)
                     .await
                     .map_err(|detail| {
-                        ResumableTaskStoreError::StoreError(
-                            crate::errors::StoreError::InternalException(detail),
-                        )
+                        ResumableTaskStoreError::StoreError(StoreError::InternalException(detail))
                     })
             }
         }

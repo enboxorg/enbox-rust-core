@@ -1,5 +1,12 @@
 //! Who may read a control record once it is stored.
 
+use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
+use crate::auth::PrivateJwkSigner;
+use crate::descriptors::records::records_write_descriptor;
+use crate::handlers::records::control::visibility::delivery::read_roles_under;
+use crate::permissions::{AuthorizationContext, VerifiedAuthorizationPayload};
+use crate::protocols::{Action, ActionRole, Can};
+
 use super::*;
 
 /// The tenant's own audience record, plus the handlers a reader needs.
@@ -134,7 +141,7 @@ async fn a_delivery_is_readable_only_by_its_parties_or_a_connecting_grant() {
         TestDataStore::default(),
         None,
     );
-    let read_as = |signer: crate::auth::PrivateJwkSigner| {
+    let read_as = |signer: PrivateJwkSigner| {
         let record_id = record_id.clone();
         async move {
             signed_request(
@@ -241,7 +248,7 @@ async fn direct_read_takes_the_first_readable_candidate_not_the_projected_curren
         .as_ref()
         .and_then(|entry| entry.records_write.as_ref())
         .expect("a readable candidate");
-    let returned_key = crate::descriptors::records::records_write_descriptor(returned)
+    let returned_key = records_write_descriptor(returned)
         .unwrap()
         .tags
         .as_ref()
@@ -329,13 +336,10 @@ async fn a_referenced_role_must_still_be_keyed_to_convey_deliveries() {
     fn definition_with_reader(role_keyed: bool) -> Definition {
         let mut definition = control_definition();
         // `thread` grants read through the `member` role.
-        definition.structure.get_mut("thread").unwrap().actions =
-            vec![crate::protocols::Action::Role(
-                crate::protocols::ActionRole {
-                    role: "member".to_string(),
-                    can: vec![crate::protocols::Can::Read],
-                },
-            )];
+        definition.structure.get_mut("thread").unwrap().actions = vec![Action::Role(ActionRole {
+            role: "member".to_string(),
+            can: vec![Can::Read],
+        })];
         if !role_keyed {
             definition
                 .structure
@@ -353,10 +357,7 @@ async fn a_referenced_role_must_still_be_keyed_to_convey_deliveries() {
         let definition = definition_with_reader(role_keyed);
         let scope_path = "thread";
         let role_path = "member";
-        let roles = crate::handlers::records::control::visibility::delivery::read_roles_under(
-            &definition,
-            scope_path,
-        );
+        let roles = read_roles_under(&definition, scope_path);
         assert_eq!(
             roles.contains(role_path),
             expect_reachable,
@@ -436,12 +437,10 @@ async fn a_tenant_delegate_gets_no_shortcut_to_unrelated_deliveries() {
 /// deliveries.
 fn definition_with_subtree_reader() -> Definition {
     let mut definition = control_definition();
-    definition.structure.get_mut("thread").unwrap().actions = vec![crate::protocols::Action::Role(
-        crate::protocols::ActionRole {
-            role: "member".to_string(),
-            can: vec![crate::protocols::Can::Read],
-        },
-    )];
+    definition.structure.get_mut("thread").unwrap().actions = vec![Action::Role(ActionRole {
+        role: "member".to_string(),
+        can: vec![Can::Read],
+    })];
     definition
 }
 
@@ -650,21 +649,17 @@ async fn a_valid_control_grant_is_not_terminated_at_delivery() {
         signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
     let message: Message<Descriptor> =
         serde_json::from_value(request).expect("subscribe request must deserialize");
-    let auth_ctx = crate::permissions::AuthorizationContext {
+    let auth_ctx = AuthorizationContext {
         signer: READER.to_string(),
         author: READER.to_string(),
-        payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
-            crate::auth::jws::AuthorizationPayloadData {
-                descriptor_cid: String::new(),
-                delegated_grant_id: None,
-                permission_grant_id: Some(grant_id.clone()),
-                permission_grant_ids: None,
-                protocol_role: None,
-            },
-        ),
-        permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::Single(
-            grant_id.clone(),
-        ),
+        payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+            descriptor_cid: String::new(),
+            delegated_grant_id: None,
+            permission_grant_id: Some(grant_id.clone()),
+            permission_grant_ids: None,
+            protocol_role: None,
+        }),
+        permission_grant_invocation: PermissionGrantInvocation::Single(grant_id.clone()),
         author_delegated_grant: None,
         owner: None,
     };

@@ -1,8 +1,19 @@
 //! Judging retained controls against a configuration, and destroying only the
 //! ones it contradicts.
 
+use std::fmt::Debug;
+
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+use crate::descriptors::{ConfigureDescriptor, MessageDescriptor};
+use crate::errors::{ResumableTaskStoreError, StoreError};
 use crate::handlers::protocols::TaskControlRepairer;
+use crate::handlers::records::control::ControlValidationError;
+use crate::permissions::message_author;
+use crate::protocols::{Action, ActionWho, Can, Who};
 use crate::stores::memory::MemoryResumableTaskStore;
+use crate::stores::{ManagedResumableTask, ResumableTaskStore};
 use crate::tasks::controller::StorageController;
 use crate::tasks::manager::ResumableTaskManager;
 
@@ -135,10 +146,10 @@ async fn stored_create_replay_uses_only_the_record_and_the_configuration() {
     // A record written by someone else, invoking nothing. Under a role that
     // once let anyone create, it was admissible.
     let permissive = RuleSet {
-        actions: vec![crate::protocols::Action::Who(crate::protocols::ActionWho {
-            who: crate::protocols::Who::Anyone,
+        actions: vec![Action::Who(ActionWho {
+            who: Who::Anyone,
             of: None,
-            can: vec![crate::protocols::Can::Create],
+            can: vec![Can::Create],
         })],
         ..control_definition()
             .structure
@@ -158,7 +169,7 @@ async fn stored_create_replay_uses_only_the_record_and_the_configuration() {
     let delegate_written: Message<Descriptor> =
         serde_json::from_value(bob_signed).expect("bob's write must deserialize");
     assert_ne!(
-        crate::permissions::message_author(&delegate_written),
+        message_author(&delegate_written),
         Some(CONTROL_TENANT.to_string()),
         "the record under test must not be tenant-authored, or it proves nothing"
     );
@@ -172,7 +183,7 @@ async fn stored_create_replay_uses_only_the_record_and_the_configuration() {
     // contradicts it, and the error is one repair is allowed to act on.
     let error = verify_stored_create_action(CONTROL_TENANT, &delegate_written, &bare_role)
         .expect_err("a record with no permitting rule is contradicted");
-    let crate::handlers::records::control::ControlValidationError::Dwn(error) = error else {
+    let ControlValidationError::Dwn(error) = error else {
         panic!("expected a coded failure");
     };
     assert!(
@@ -274,9 +285,7 @@ async fn configuring_a_protocol_purges_the_controls_it_invalidates() {
     let mut data_store = TestDataStore::default();
     data_store.open().await.unwrap();
     let mut tasks = MemoryResumableTaskStore::default();
-    crate::stores::ResumableTaskStore::open(&mut tasks)
-        .await
-        .unwrap();
+    ResumableTaskStore::open(&mut tasks).await.unwrap();
     let repairer = TaskControlRepairer::new(ResumableTaskManager::new(
         tasks,
         StorageController::new(fixture.message_store.clone(), data_store.clone()),
@@ -320,7 +329,7 @@ async fn signed_configure_with_definition(
     definition: Definition,
     timestamp: &str,
 ) -> serde_json::Value {
-    let descriptor = crate::descriptors::ConfigureDescriptor {
+    let descriptor = ConfigureDescriptor {
         message_timestamp: timestamp.parse().unwrap(),
         definition,
         permission_grant_id: None,
@@ -355,7 +364,7 @@ impl MessageStore for FlakyMessageStore {
         indexes: KeyValues,
     ) -> Result<(), MessageStoreError>
     where
-        D: crate::descriptors::MessageDescriptor + Send,
+        D: MessageDescriptor + Send,
         Message<Descriptor>: From<Message<D>>,
     {
         self.inner.put(tenant, message, indexes).await
@@ -384,7 +393,7 @@ impl MessageStore for FlakyMessageStore {
     ) -> Result<MessageQueryResult, MessageStoreError> {
         if self.fail_query.load(Ordering::SeqCst) {
             return Err(MessageStoreError::StoreError(
-                crate::errors::StoreError::InternalException("store unavailable".to_string()),
+                StoreError::InternalException("store unavailable".to_string()),
             ));
         }
         self.inner
@@ -461,35 +470,29 @@ struct UnwritableTaskStore {
     inner: MemoryResumableTaskStore,
 }
 
-impl crate::stores::ResumableTaskStore for UnwritableTaskStore {
-    async fn open(&mut self) -> Result<(), crate::errors::ResumableTaskStoreError> {
-        crate::stores::ResumableTaskStore::open(&mut self.inner).await
+impl ResumableTaskStore for UnwritableTaskStore {
+    async fn open(&mut self) -> Result<(), ResumableTaskStoreError> {
+        ResumableTaskStore::open(&mut self.inner).await
     }
 
     async fn close(&mut self) {
-        crate::stores::ResumableTaskStore::close(&mut self.inner).await
+        ResumableTaskStore::close(&mut self.inner).await
     }
 
-    async fn register<
-        T: serde::Serialize + Send + Sync + serde::de::DeserializeOwned + std::fmt::Debug + 'static,
-    >(
+    async fn register<T: Serialize + Send + Sync + DeserializeOwned + Debug + 'static>(
         &self,
         _task: T,
         _timeout_in_seconds: u64,
-    ) -> Result<crate::stores::ManagedResumableTask<T>, crate::errors::ResumableTaskStoreError>
-    {
-        Err(crate::errors::ResumableTaskStoreError::StoreError(
-            crate::errors::StoreError::InternalException("task store unavailable".to_string()),
+    ) -> Result<ManagedResumableTask<T>, ResumableTaskStoreError> {
+        Err(ResumableTaskStoreError::StoreError(
+            StoreError::InternalException("task store unavailable".to_string()),
         ))
     }
 
-    async fn grab<
-        T: serde::Serialize + Send + Sync + serde::de::DeserializeOwned + std::fmt::Debug + Unpin,
-    >(
+    async fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
         &self,
         count: u64,
-    ) -> Result<Vec<crate::stores::ManagedResumableTask<T>>, crate::errors::ResumableTaskStoreError>
-    {
+    ) -> Result<Vec<ManagedResumableTask<T>>, ResumableTaskStoreError> {
         self.inner.grab(count).await
     }
 
@@ -498,10 +501,7 @@ impl crate::stores::ResumableTaskStore for UnwritableTaskStore {
     >(
         &self,
         task_id: &str,
-    ) -> Result<
-        Option<crate::stores::ManagedResumableTask<T>>,
-        crate::errors::ResumableTaskStoreError,
-    > {
+    ) -> Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError> {
         self.inner.read(task_id).await
     }
 
@@ -509,15 +509,15 @@ impl crate::stores::ResumableTaskStore for UnwritableTaskStore {
         &self,
         task_id: &str,
         timeout_in_seconds: u64,
-    ) -> Result<(), crate::errors::ResumableTaskStoreError> {
+    ) -> Result<(), ResumableTaskStoreError> {
         self.inner.extend(task_id, timeout_in_seconds).await
     }
 
-    async fn delete(&self, task_id: &str) -> Result<(), crate::errors::ResumableTaskStoreError> {
+    async fn delete(&self, task_id: &str) -> Result<(), ResumableTaskStoreError> {
         self.inner.delete(task_id).await
     }
 
-    async fn clear(&self) -> Result<(), crate::errors::ResumableTaskStoreError> {
+    async fn clear(&self) -> Result<(), ResumableTaskStoreError> {
         self.inner.clear().await
     }
 }
@@ -538,9 +538,7 @@ async fn a_configuration_is_refused_when_its_repair_cannot_be_enlisted() {
     let mut data_store = TestDataStore::default();
     data_store.open().await.unwrap();
     let mut tasks = UnwritableTaskStore::default();
-    crate::stores::ResumableTaskStore::open(&mut tasks)
-        .await
-        .unwrap();
+    ResumableTaskStore::open(&mut tasks).await.unwrap();
     let repairer = TaskControlRepairer::new(ResumableTaskManager::new(
         tasks,
         StorageController::new(fixture.message_store.clone(), data_store.clone()),

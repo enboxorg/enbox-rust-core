@@ -4,6 +4,8 @@
 //! `records::control`; the tests are split the same way, and everything they
 //! all need to build a tenant, a protocol and a control record lives here.
 
+use crate::auth::PrivateJwkSigner;
+
 use super::*;
 
 mod admission;
@@ -389,7 +391,7 @@ async fn issue_grant(
 /// than the tenant.
 async fn signed_request(
     mut request: serde_json::Value,
-    signer: crate::auth::PrivateJwkSigner,
+    signer: PrivateJwkSigner,
     grant_id: Option<&str>,
 ) -> serde_json::Value {
     if let Some(grant_id) = grant_id {
@@ -426,7 +428,7 @@ async fn admit_audience_signed(
     fixture: &ControlFixture,
     public_key: &JWK,
     author: &str,
-    signer: crate::auth::PrivateJwkSigner,
+    signer: PrivateJwkSigner,
     timestamp: &str,
     grant_id: Option<&str>,
 ) -> String {

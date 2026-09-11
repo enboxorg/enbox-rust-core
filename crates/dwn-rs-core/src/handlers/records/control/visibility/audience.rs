@@ -6,6 +6,8 @@
 //! the role itself.
 
 use super::super::authorization::actor_can_create_role;
+use crate::{Filter, Value};
+
 use super::super::*;
 use super::{grant_covers_role, request_timestamp};
 
@@ -40,7 +42,7 @@ pub(in crate::handlers::records::control) fn names_record(
 /// gesturing near it.
 pub(super) fn pinned_tag<'a>(filter: &'a RecordsFilter, tag: &str) -> Option<&'a str> {
     match filter.tags.as_ref()?.get(tag)? {
-        crate::Filter::Equal(crate::Value::String(value)) => Some(value.as_str()),
+        Filter::Equal(Value::String(value)) => Some(value.as_str()),
         _ => None,
     }
 }

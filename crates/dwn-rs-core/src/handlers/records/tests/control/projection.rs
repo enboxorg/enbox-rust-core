@@ -1,6 +1,11 @@
 //! One current audience per scope, across every collection surface.
 
+use crate::auth::PrivateJwkSigner;
+use crate::descriptors::records::records_write_descriptor;
+use crate::handlers::records::control::projection::projection_rank;
 use crate::handlers::records::subscribe::RecordsEventLogSubscribeHandler;
+use crate::replies::records::Query as QueryReply;
+use crate::Response;
 
 use super::*;
 
@@ -17,7 +22,7 @@ fn third_audience_key_jwk() -> JWK {
 /// its actual signer.
 async fn signed_as(
     mut message: serde_json::Value,
-    signer: crate::auth::PrivateJwkSigner,
+    signer: PrivateJwkSigner,
 ) -> Message<Descriptor> {
     let descriptor = message["descriptor"].clone();
     let signature = signature_for_descriptor(
@@ -80,10 +85,7 @@ async fn the_current_audience_is_the_same_whatever_order_candidates_arrive_in() 
     ];
     let ranks: Vec<_> = candidates
         .iter()
-        .map(|message| {
-            crate::handlers::records::control::projection::projection_rank(CONTROL_TENANT, message)
-                .expect("every candidate ranks")
-        })
+        .map(|message| projection_rank(CONTROL_TENANT, message).expect("every candidate ranks"))
         .collect();
 
     let winner = ranks
@@ -258,7 +260,7 @@ async fn a_query_page_refills_past_records_projection_removed() {
         1,
         "the page must refill past the record projection removed rather than come back empty"
     );
-    let returned = crate::descriptors::records::records_write_descriptor(
+    let returned = records_write_descriptor(
         &serde_json::from_value::<Message<Descriptor>>(serde_json::to_value(&entries[0]).unwrap())
             .unwrap(),
     )
@@ -420,7 +422,7 @@ async fn projection_never_injects_a_winner_the_caller_filtered_out() {
     );
 }
 
-fn returned_key_ids(reply: &crate::Response<crate::replies::records::Query>) -> Vec<String> {
+fn returned_key_ids(reply: &Response<QueryReply>) -> Vec<String> {
     reply
         .reply
         .entries
@@ -431,7 +433,7 @@ fn returned_key_ids(reply: &crate::Response<crate::replies::records::Query>) -> 
                 .filter_map(|entry| {
                     let message: Message<Descriptor> =
                         serde_json::from_value(serde_json::to_value(entry).ok()?).ok()?;
-                    match crate::descriptors::records::records_write_descriptor(&message)
+                    match records_write_descriptor(&message)
                         .ok()?
                         .tags
                         .as_ref()?
@@ -526,7 +528,7 @@ async fn query_pages_refill_past_deliveries_the_requester_cannot_see() {
             let message: Message<Descriptor> =
                 serde_json::from_value(serde_json::to_value(entry).unwrap()).unwrap();
             seen.push(
-                crate::descriptors::records::records_write_descriptor(&message)
+                records_write_descriptor(&message)
                     .unwrap()
                     .recipient
                     .clone(),
@@ -835,7 +837,7 @@ async fn the_event_log_snapshot_refills_like_every_other_collection_page() {
     let returned: Message<Descriptor> =
         serde_json::from_value(serde_json::to_value(&entries[0]).unwrap()).unwrap();
     assert_eq!(
-        crate::descriptors::records::records_write_descriptor(&returned)
+        records_write_descriptor(&returned)
             .unwrap()
             .tags
             .as_ref()

@@ -1,6 +1,8 @@
 //! Who may write a control record, and how a role that cannot be resolved is
 //! classified.
 
+use crate::errors::DwnErrorCode;
+
 use super::*;
 
 // Covers: DWN-AUTH-001, ENBOX-ENC-001
@@ -296,7 +298,7 @@ async fn a_missing_protocol_is_not_reported_as_an_invalid_role() {
         reply.status.detail
     );
     assert!(
-        !crate::errors::DwnErrorCode::try_from(reply.status.error_code.as_deref().unwrap())
+        !DwnErrorCode::try_from(reply.status.error_code.as_deref().unwrap())
             .unwrap()
             .is_control_invalidity(),
         "a missing protocol must never license destroying the record"

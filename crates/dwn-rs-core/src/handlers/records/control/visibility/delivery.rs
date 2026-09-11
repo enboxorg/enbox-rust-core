@@ -4,6 +4,8 @@
 //! it. Beyond its own parties, only a grant that joins the reader to this
 //! recipient and covers the delivered role opens it.
 
+use crate::protocols::parse_cross_protocol_ref;
+
 use super::super::*;
 use super::{grant_covers_role, request_timestamp};
 
@@ -97,7 +99,7 @@ pub(crate) fn read_roles_under(definition: &Definition, scope_path: &str) -> BTr
         for action in &rule_set.actions {
             if let Action::Role(role_action) = action {
                 if role_action.can.contains(&Can::Read)
-                    && crate::protocols::parse_cross_protocol_ref(&role_action.role).is_none()
+                    && parse_cross_protocol_ref(&role_action.role).is_none()
                     // The role must still be keyed at the request timestamp.
                     // A configuration that keeps a role but drops its
                     // `$keyAgreement` stops it conveying key material, and a

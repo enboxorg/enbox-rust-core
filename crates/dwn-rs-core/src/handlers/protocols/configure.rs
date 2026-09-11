@@ -17,6 +17,7 @@ use crate::interfaces::messages::protocols::{self as protocol_types, Definition}
 use crate::replies::protocols::Configure;
 use crate::stores::{LatestStateMutation, LatestStateTransition, ManagedResumableTask};
 use crate::tasks::manager::ResumableTask;
+use crate::Descriptor;
 use crate::{canonical_rfc3339, permissions, Handler, Message, Pagination, Response};
 use crate::{MessageSort, SortDirection};
 
@@ -300,7 +301,7 @@ where
         tenant: &str,
         incoming: &Definition,
         incoming_timestamp: &str,
-        existing: &[Message<crate::Descriptor>],
+        existing: &[Message<Descriptor>],
     ) -> Result<(), Response<Configure>> {
         if existing.is_empty() {
             return Ok(());
@@ -505,10 +506,10 @@ where
 }
 
 fn plan_configure_transition(
-    incoming: Message<crate::Descriptor>,
+    incoming: Message<Descriptor>,
     incoming_cid: &str,
     incoming_author: &str,
-    existing: Vec<Message<crate::Descriptor>>,
+    existing: Vec<Message<Descriptor>>,
 ) -> Result<Option<LatestStateTransition>, String> {
     let mut comparable = Vec::with_capacity(existing.len());
     for message in &existing {

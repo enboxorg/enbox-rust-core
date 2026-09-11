@@ -1,3 +1,5 @@
+use crate::canonical_rfc3339;
+
 use super::*;
 
 /// Upper bound on control record data, matching the inline-encodable limit:
@@ -59,7 +61,7 @@ where
     let descriptor =
         records_write_descriptor(message).map_err(|error| unexpected(error.to_string()))?;
     let id = AudienceId::from_message(message, kind)?;
-    let timestamp = crate::canonical_rfc3339(descriptor.message_timestamp);
+    let timestamp = canonical_rfc3339(descriptor.message_timestamp);
     resolve_role_audience_definition(tenant, &id, &timestamp, message_store).await?;
 
     let fields = write_fields(message).map_err(|error| unexpected(error.to_string()))?;
@@ -214,7 +216,7 @@ where
     }
     payload.verify_key_id()?;
 
-    let timestamp = crate::canonical_rfc3339(descriptor.message_timestamp);
+    let timestamp = canonical_rfc3339(descriptor.message_timestamp);
     let role = resolve_role_audience_definition(tenant, &id, &timestamp, message_store).await?;
     let role_key = role
         .rule_set
