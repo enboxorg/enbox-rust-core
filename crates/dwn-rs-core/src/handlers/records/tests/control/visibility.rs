@@ -1,11 +1,14 @@
 //! Who may read a control record once it is stored.
 
-use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
 use crate::auth::PrivateJwkSigner;
 use crate::descriptors::records::records_write_descriptor;
 use crate::encryption::grant_key::read_roles_under;
-use crate::permissions::{AuthorizationContext, VerifiedAuthorizationPayload};
+use crate::handlers::records::subscribe::RecordsEventLogSubscribeHandler;
 use crate::protocols::{Action, ActionRole, Can};
+use crate::stores::durable_event_log::DurableEventLog;
+use crate::stores::memory::MemoryMessageStore;
+use crate::stores::wake::InProcessWakeBus;
+use crate::stores::{SubscriptionErrorCode, SubscriptionMessage};
 
 use super::*;
 
@@ -622,10 +625,8 @@ async fn a_record_id_reaches_an_audience_only_through_direct_read() {
 // declares — the answer is always no, so a perfectly valid grant over the keyed
 // role would close the subscription at its first event.
 //
-// Checked at the authorization-context boundary, where the guard actually makes
-// the decision: a Records Subscribe descriptor carries no `permissionGrantId`,
-// so this context cannot currently be produced from the wire at all. See the
-// note on `descriptor_permission_grant_invocation`.
+// The opening context is admitted from a signed wire message, so this proves
+// the control read-grant path end to end rather than at the context boundary.
 #[tokio::test]
 async fn a_valid_control_grant_is_not_terminated_at_delivery() {
     const READER: &str = "did:example:bob";
@@ -645,24 +646,39 @@ async fn a_valid_control_grant_is_not_terminated_at_delivery() {
         protocol_path: Some(AUDIENCE_PATH.to_string()),
         ..Default::default()
     };
-    let request =
-        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
+    // The invocation travels the wire in both the descriptor and the signed
+    // payload, exactly like any direct Records operation.
+    let request = signed_request(
+        json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Subscribe",
+                "messageTimestamp": "2025-01-01T00:10:00.000000Z",
+                "filter": serde_json::to_value(&filter).unwrap(),
+            },
+        }),
+        crate::testing::bob_signer(),
+        Some(&grant_id),
+    )
+    .await;
+    assert_eq!(
+        request["descriptor"]["permissionGrantId"].as_str(),
+        Some(grant_id.as_str()),
+        "descriptor must carry the invocation for schema validation"
+    );
     let message: Message<Descriptor> =
         serde_json::from_value(request).expect("subscribe request must deserialize");
-    let auth_ctx = AuthorizationContext {
-        signer: READER.to_string(),
-        author: READER.to_string(),
-        payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
-            descriptor_cid: String::new(),
-            delegated_grant_id: None,
-            permission_grant_id: Some(grant_id.clone()),
-            permission_grant_ids: None,
-            protocol_role: None,
-        }),
-        permission_grant_invocation: PermissionGrantInvocation::Single(grant_id.clone()),
-        author_delegated_grant: None,
-        owner: None,
-    };
+    let resolver = crate::testing::test_resolver();
+    let auth_ctx =
+        crate::permissions::validate_authorization_signature(&message, Some(&resolver), true)
+            .await
+            .expect("wire grant invocation must validate")
+            .expect("subscribe requires authorization");
+    assert_eq!(
+        auth_ctx.permission_grant_id(),
+        Some(grant_id.as_str()),
+        "wire context must carry the invoked grant"
+    );
     let auth = DeliveryAuthorization {
         message,
         filter,
@@ -676,4 +692,181 @@ async fn a_valid_control_grant_is_not_terminated_at_delivery() {
     authorize_records_delivery(CONTROL_TENANT, &auth, &fixture.message_store)
         .await
         .expect("a grant that opened the control subscription must not fail at delivery");
+}
+
+// Covers: ENBOX-ENC-003, DWN-AUTH-005
+// A live control subscription opened by grant delivers matching delivery
+// events, then terminates with the defined error once the grant is revoked.
+// Unlike the recheck test above, this drives admission, candidate selection,
+// and the live stream rather than invoking the delivery helper directly.
+//
+// Deliveries carry the live events rather than audiences: same-tuple
+// audiences after the first are superseded by current-audience projection by
+// design, while each delivery is its own record. The deliveries address the
+// tenant, so Bob — neither recipient, author, nor tenant — reaches them by
+// his grant alone.
+#[tokio::test]
+async fn live_control_subscription_terminates_when_grant_revoked() {
+    const READER: &str = "did:example:bob";
+
+    let wake_bus = InProcessWakeBus::new();
+    let store = MemoryMessageStore::default().with_waker_publisher(wake_bus.clone());
+    let fixture = control_fixture_on(store).await;
+
+    let key_id = fixture.audience_key_id.clone();
+    admit_audience(&fixture, &key_id, "2025-01-01T00:01:00.000000Z").await;
+    grant_member_role(
+        &fixture.message_store,
+        READER,
+        "2025-01-01T00:02:00.000000Z",
+    )
+    .await;
+    // The tenant holds the role too, so deliveries can address the tenant
+    // while remaining admissible: Bob is then neither recipient, author, nor
+    // tenant, and only his grant connects him to the delivery.
+    grant_member_role(
+        &fixture.message_store,
+        CONTROL_TENANT,
+        "2025-01-01T00:02:00.000000Z",
+    )
+    .await;
+    let grant_id = issue_grant(
+        &fixture,
+        "Read",
+        READER,
+        "member",
+        "2025-01-01T00:00:30.000000Z",
+    )
+    .await;
+
+    let filter = RecordsFilter {
+        protocol: Some(CONTROL_PROTOCOL.to_string()),
+        protocol_path: Some(DELIVERY_PATH.to_string()),
+        ..Default::default()
+    };
+    let request = signed_request(
+        json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Subscribe",
+                "messageTimestamp": "2025-01-01T00:10:00.000000Z",
+                "filter": serde_json::to_value(&filter).unwrap(),
+            },
+        }),
+        crate::testing::bob_signer(),
+        Some(&grant_id),
+    )
+    .await;
+
+    let event_log = DurableEventLog::new(fixture.message_store.clone(), wake_bus, None, None);
+    let subscribe_handler = RecordsEventLogSubscribeHandler::new(
+        fixture.message_store.clone(),
+        event_log,
+        Some(Arc::new(crate::testing::test_resolver())),
+    );
+    let delivered = Arc::new(std::sync::RwLock::new(Vec::new()));
+    let result = subscribe_handler
+        .handle_subscribe(CONTROL_TENANT, &request, {
+            let delivered = delivered.clone();
+            Box::new(move |message| delivered.write().unwrap().push(message))
+        })
+        .await;
+    assert_eq!(
+        result.reply.status.code, 200,
+        "{}",
+        result.reply.status.detail
+    );
+    assert!(
+        result.subscription.is_some(),
+        "grant-opened control stream must stay open"
+    );
+
+    async fn await_messages(
+        delivered: &Arc<std::sync::RwLock<Vec<SubscriptionMessage>>>,
+        count: usize,
+    ) -> Vec<SubscriptionMessage> {
+        for _ in 0..500 {
+            {
+                let guard = delivered.read().unwrap();
+                if guard.len() >= count {
+                    return guard.clone();
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        delivered.read().unwrap().clone()
+    }
+
+    async fn admit_delivery(fixture: &ControlFixture, timestamp: &str) {
+        let ciphertext = Bytes::from_static(b"sealed key material, never opened here");
+        let write = control_write(
+            DELIVERY_PATH,
+            delivery_tags("member", "", &fixture.audience_key_id, "roleHolder"),
+            &ciphertext,
+            timestamp,
+            |spec| {
+                spec.recipient = Some(CONTROL_TENANT.to_string());
+                spec.encryption = Some(delivery_envelope());
+            },
+        )
+        .await;
+        let reply = fixture
+            .handler
+            .run(CONTROL_TENANT, &write, Some(ciphertext))
+            .await;
+        assert_eq!(
+            reply.status.code, 202,
+            "delivery must admit: {}",
+            reply.status.detail
+        );
+    }
+
+    admit_delivery(&fixture, "2025-01-01T00:11:00.000000Z").await;
+    let messages = await_messages(&delivered, 1).await;
+    assert!(
+        matches!(messages.first(), Some(SubscriptionMessage::Event { .. })),
+        "grant-visible delivery must arrive live, got {messages:?}"
+    );
+
+    let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
+    let revocation = signed_write_message(WriteSpec {
+        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        parent_id: Some(grant_id.clone()),
+        parent_context_id: Some(grant_id.clone()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String(CONTROL_PROTOCOL.to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
+        data_size: revoke_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new("2025-06-01T00:00:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        fixture
+            .handler
+            .run(CONTROL_TENANT, &revocation, Some(revoke_data))
+            .await
+            .status
+            .code,
+        202,
+        "revocation must store"
+    );
+
+    admit_delivery(&fixture, "2025-01-01T00:12:00.000000Z").await;
+    let messages = await_messages(&delivered, 2).await;
+    assert!(
+        messages.len() >= 2,
+        "revocation must terminate the control stream, got {messages:?}"
+    );
+    assert!(
+        matches!(
+            messages.get(1),
+            Some(SubscriptionMessage::Error { error, .. })
+                if error.code == SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
+        ),
+        "termination must carry the defined error, got {messages:?}"
+    );
 }

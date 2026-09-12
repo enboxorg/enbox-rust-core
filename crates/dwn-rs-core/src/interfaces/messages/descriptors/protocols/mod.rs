@@ -22,7 +22,8 @@ mod inner {
         variant = Configure,
         schema_id = PROTOCOLS_CONFIGURE_SCHEMA,
         fields = crate::auth::Authorization,
-        parameters = super::ConfigureParameters
+        parameters = super::ConfigureParameters,
+        grant = single
     )]
     pub struct ConfigureDescriptor {
         #[serde(
@@ -41,7 +42,8 @@ mod inner {
         variant = Query,
         schema_id = PROTOCOLS_QUERY_SCHEMA,
         fields = crate::auth::Authorization,
-        parameters = super::QueryParameters
+        parameters = super::QueryParameters,
+        grant = single
     )]
     pub struct QueryDescriptor {
         #[serde(

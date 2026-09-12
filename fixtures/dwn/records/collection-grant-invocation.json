@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "functions": [
+      "RecordsQuery.create",
+      "RecordsCount.create",
+      "RecordsSubscribe.create",
+      "RecordsDelete.create",
+      "RecordsRead.create"
+    ],
+    "cidFunction": "Cid.computeCid"
+  },
+  "cases": [
+    {
+      "id": "records-query-permission-grant",
+      "description": "Current TypeScript RecordsQuery includes permissionGrantId in the descriptor when provided.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreiak7mjvf5baytrhbuymtebakt4e24dru2xcp6e65tyqja2efkorku",
+      "messageCid": "bafyreih3xo2hp6bb45wroblkstpszyiqiicq53722lz4lke323jrgikwea",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Query",
+          "messageTimestamp": "2025-01-01T00:00:12.000000Z",
+          "filter": {
+            "protocol": "https://example.com/protocol"
+          },
+          "permissionGrantId": "grant-query-123"
+        }
+      }
+    },
+    {
+      "id": "records-count-permission-grant",
+      "description": "Current TypeScript RecordsCount includes permissionGrantId in the descriptor when provided.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreictbun6jd6v3t37bwebpq6m6akwuyldqq52hxuwqfgzwb77z4o6fe",
+      "messageCid": "bafyreihzzr4swe7abn7c2p56vvuuk2l4uwbmru5zg37tblcrhw6yjac42y",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Count",
+          "messageTimestamp": "2025-01-01T00:00:13.000000Z",
+          "filter": {
+            "protocol": "https://example.com/protocol"
+          },
+          "permissionGrantId": "grant-count-123"
+        }
+      }
+    },
+    {
+      "id": "records-subscribe-permission-grant",
+      "description": "Current TypeScript RecordsSubscribe includes permissionGrantId in the descriptor when provided.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreihufdxc4dh37f35dkbjgvftx54rsnpxsxvukxojvkpw5ez5fvm5ae",
+      "messageCid": "bafyreie2cy6pcaypnoknr45uuwetbvl4p7jwzy26qkv3aesxp6t6pdtxji",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Subscribe",
+          "messageTimestamp": "2025-01-01T00:00:14.000000Z",
+          "filter": {
+            "protocol": "https://example.com/protocol"
+          },
+          "permissionGrantId": "grant-subscribe-123"
+        }
+      }
+    },
+    {
+      "id": "records-delete-permission-grant",
+      "description": "Current TypeScript RecordsDelete includes permissionGrantId in the descriptor when provided.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreihlvtefed2kcozesghwekn3tkzat2z74zozfyxy4t6js7pnoofe7m",
+      "messageCid": "bafyreigvqczaiun2bjj55b3amwmr2xttzc4g3idaq2ih45vdltky42ey6q",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Delete",
+          "messageTimestamp": "2025-01-01T00:00:15.000000Z",
+          "recordId": "record-1",
+          "prune": false,
+          "permissionGrantId": "grant-delete-123"
+        },
+        "authorization": {
+          "signature": {
+            "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWhsdnRlZmVkMmtjb3plc2dod2VrbjN0a3phdDJ6NzR6b3pmeXh5NHQ2anM3cG5vb2ZlN20iLCJwZXJtaXNzaW9uR3JhbnRJZCI6ImdyYW50LWRlbGV0ZS0xMjMifQ",
+            "signatures": [
+              {
+                "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
+                "signature": "XCC369ipv-KJ6FSp5vSg3gz2X8u19YqgvLMgIO-reXGyEmfUfE4ulnp9U5vMGeMLD9bv9DojNC0tEtd1yeIHAg"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "records-read-permission-grant",
+      "description": "Current TypeScript RecordsRead includes permissionGrantId in the descriptor when provided.",
+      "rustStatus": "supported",
+      "descriptorCid": "bafyreigh3f3ru3vsy5rq2zailqksqzsu6yl75tcjo2v37dxc4wdtktcaeu",
+      "messageCid": "bafyreieuke3mied3x4lq7xzewl5nrcrikil6tm246hjfnl5albxzt2gs64",
+      "message": {
+        "descriptor": {
+          "interface": "Records",
+          "method": "Read",
+          "filter": {
+            "recordId": "record-2"
+          },
+          "messageTimestamp": "2025-01-01T00:00:16.000000Z",
+          "permissionGrantId": "grant-read-123"
+        }
+      }
+    }
+  ]
+}

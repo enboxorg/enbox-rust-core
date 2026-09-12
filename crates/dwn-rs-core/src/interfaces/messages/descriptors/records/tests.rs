@@ -51,6 +51,7 @@ async fn test_query_descriptor() {
     let qd = QueryDescriptor {
         message_timestamp,
         filter: Default::default(),
+        permission_grant_id: None,
         pagination: Some(Pagination::default()),
         date_sort: Some(DateSort::CreatedAscending),
     };
@@ -76,6 +77,7 @@ async fn test_count_descriptor() {
 
     let cd = CountDescriptor {
         message_timestamp,
+        permission_grant_id: None,
         filter: Default::default(),
     };
 
@@ -198,6 +200,7 @@ fn test_subscribe_descriptor() {
     let sd = SubscribeDescriptor {
         message_timestamp,
         filter: Default::default(),
+        permission_grant_id: None,
         date_sort: None,
         pagination: None,
         cursor: None,
@@ -215,6 +218,7 @@ fn test_delete_descriptor() {
 
     let dd = DeleteDescriptor {
         message_timestamp,
+        permission_grant_id: None,
         record_id: "test".to_string(),
         prune: false,
     };

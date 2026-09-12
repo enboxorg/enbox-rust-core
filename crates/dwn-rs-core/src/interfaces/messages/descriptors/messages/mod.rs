@@ -33,7 +33,8 @@ mod inner {
         variant = Read,
         schema_id = MESSAGES_READ_SCHEMA,
         fields = crate::auth::Authorization,
-        parameters = super::ReadParameters
+        parameters = super::ReadParameters,
+        grant = multi
     )]
     pub struct ReadDescriptor {
         #[serde(
@@ -58,7 +59,8 @@ mod inner {
         variant = Query,
         schema_id = MESSAGES_QUERY_SCHEMA,
         fields = crate::auth::Authorization,
-        parameters = super::QueryParameters
+        parameters = super::QueryParameters,
+        grant = multi
     )]
     pub struct QueryDescriptor {
         #[serde(
@@ -85,7 +87,8 @@ mod inner {
         variant = Subscribe,
         schema_id = MESSAGES_SUBSCRIBE_SCHEMA,
         fields = crate::auth::Authorization,
-        parameters = super::SubscribeParameters
+        parameters = super::SubscribeParameters,
+        grant = multi
     )]
     pub struct SubscribeDescriptor {
         #[serde(
@@ -102,12 +105,14 @@ mod inner {
     }
 
     /// SyncDescriptor represents the MessagesSync interface method for synchronizing message state.
+    // Legacy sync carries no grant invocation even though the field is present.
     #[descriptor(
         method = SYNC,
         variant = Sync,
         schema_id = MESSAGES_SYNC_SCHEMA,
         fields = crate::auth::Authorization,
-        parameters = super::SyncParameters
+        parameters = super::SyncParameters,
+        grant = none
     )]
     pub struct SyncDescriptor {
         #[serde(

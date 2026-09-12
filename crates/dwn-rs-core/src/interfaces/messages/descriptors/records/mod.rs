@@ -129,7 +129,8 @@ mod inner {
         schema_id = RECORDS_READ_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::ReadParameters
+        parameters = super::ReadParameters,
+        grant = single
     )]
     pub struct ReadDescriptor {
         #[serde(
@@ -151,7 +152,8 @@ mod inner {
         schema_id = RECORDS_COUNT_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::CountParameters
+        parameters = super::CountParameters,
+        grant = single
     )]
     pub struct CountDescriptor {
         #[serde(
@@ -159,6 +161,8 @@ mod inner {
             serialize_with = "crate::ser::serialize_datetime"
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         pub filter: RecordsFilter,
     }
 
@@ -169,7 +173,8 @@ mod inner {
         schema_id = RECORDS_QUERY_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::QueryParameters
+        parameters = super::QueryParameters,
+        grant = single
     )]
     pub struct QueryDescriptor {
         #[serde(
@@ -180,6 +185,8 @@ mod inner {
         pub filter: RecordsFilter,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub pagination: Option<Pagination>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
         pub date_sort: Option<DateSort>,
     }
@@ -193,7 +200,8 @@ mod inner {
         schema_id = RECORDS_WRITE_SCHEMA,
         boxed,
         fields = crate::fields::WriteFields,
-        parameters = super::WriteParameters
+        parameters = super::WriteParameters,
+        grant = single
     )]
     pub struct WriteDescriptor {
         pub protocol: String,
@@ -239,7 +247,8 @@ mod inner {
         schema_id = RECORDS_SUBSCRIBE_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::SubscribeParameters
+        parameters = super::SubscribeParameters,
+        grant = single
     )]
     pub struct SubscribeDescriptor {
         #[serde(
@@ -250,6 +259,8 @@ mod inner {
         pub filter: RecordsFilter,
         #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
         pub date_sort: Option<DateSort>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub pagination: Option<Pagination>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -263,7 +274,8 @@ mod inner {
         schema_id = RECORDS_DELETE_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::DeleteParameters
+        parameters = super::DeleteParameters,
+        grant = single
     )]
     pub struct DeleteDescriptor {
         #[serde(
@@ -271,6 +283,8 @@ mod inner {
             serialize_with = "crate::ser::serialize_datetime"
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         #[serde(rename = "recordId")]
         pub record_id: String,
         pub prune: bool,

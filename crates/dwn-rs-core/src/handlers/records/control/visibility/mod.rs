@@ -96,9 +96,7 @@ where
 /// grant validity are resolved as of the request, never blindly the newest
 /// configuration.
 fn request_timestamp(read_message: &Message<Descriptor>) -> Result<String, ControlValidationError> {
-    message_timestamp(read_message)
-        .map(canonical_rfc3339)
-        .map_err(&unexpected)
+    Ok(canonical_rfc3339(read_message.message_timestamp()))
 }
 
 /// Whether a request targets control records exclusively.

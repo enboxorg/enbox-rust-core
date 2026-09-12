@@ -733,6 +733,7 @@ mod tests {
             descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(
                 DeleteDescriptor {
                     message_timestamp: parse_time("2025-01-02T00:00:00.000000Z"),
+                    permission_grant_id: None,
                     record_id: record_id.to_string(),
                     prune: false,
                 },

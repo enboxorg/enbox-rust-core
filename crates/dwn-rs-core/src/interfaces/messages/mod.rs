@@ -4,13 +4,17 @@ pub mod protocols;
 
 use std::collections::TryReserveError;
 
+use crate::auth::jws::PermissionGrantInvocation;
 use crate::auth::{jws, Jws};
 use crate::cid::generate_message_cid_from_json;
 use crate::fields::MessageFields;
 use crate::{auth::Authorization, interfaces::messages::descriptors::MessageParameters};
 use cid::Cid;
 pub use descriptors::Descriptor;
-use descriptors::{MessageDescriptor, MessageValidator, RecordsWriteDescriptor, ValidationError};
+use descriptors::{
+    HasMessageTimestamp, HasPermissionGrantInvocation, MessageDescriptor, MessageValidator,
+    RecordsWriteDescriptor, ValidationError,
+};
 pub use fields::Fields;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -73,6 +77,26 @@ where
         let value =
             serde_json::to_value(self).map_err(|error| EncodeError::Msg(error.to_string()))?;
         generate_message_cid_from_json(&value)
+    }
+}
+
+impl<D> Message<D>
+where
+    D: MessageDescriptor + HasPermissionGrantInvocation,
+{
+    /// The permission-grant invocation carried by this message's descriptor.
+    pub fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        self.descriptor.permission_grant_invocation()
+    }
+}
+
+impl<D> Message<D>
+where
+    D: MessageDescriptor + HasMessageTimestamp,
+{
+    /// The `messageTimestamp` carried by this message's descriptor.
+    pub fn message_timestamp(&self) -> chrono::DateTime<chrono::Utc> {
+        self.descriptor.message_timestamp()
     }
 }
 
@@ -279,9 +303,16 @@ mod test {
 
     const INTERFACE: &str = "interface";
     const METHOD: &str = "method";
-    #[descriptor(interface = INTERFACE, method = METHOD, fields = TestFields, parameters = TestParameters)]
+
+    fn parse_timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .to_utc()
+    }
+    #[descriptor(interface = INTERFACE, method = METHOD, fields = TestFields, parameters = TestParameters, grant = none)]
     struct TestDescriptor {
         data: String,
+        message_timestamp: chrono::DateTime<chrono::Utc>,
     }
 
     impl MessageValidator for TestDescriptor {
@@ -305,6 +336,7 @@ mod test {
     #[test]
     fn test_message_serialize() {
         let desc = TestDescriptor {
+            message_timestamp: parse_timestamp("2025-01-01T00:00:00.000000Z"),
             data: "test".to_string(),
         };
         let fields = TestFields {
@@ -314,8 +346,8 @@ mod test {
 
         let message = Message::new(desc, fields).unwrap();
 
-        let serialized = serde_json::to_string(&message).unwrap();
-        let expected = r#"{"descriptor":{"data":"test","interface":"interface","method":"method"},"field1":"test","field2":42}"#;
+        let serialized = serde_json::to_value(&message).unwrap();
+        let expected = json!({"descriptor":{"data":"test","message_timestamp":"2025-01-01T00:00:00Z","interface":"interface","method":"method"},"field1":"test","field2":42});
 
         assert_eq!(serialized, expected);
 
@@ -348,11 +380,12 @@ mod test {
 
     #[test]
     fn test_message_deserialize() {
-        let serialized = r#"{"descriptor":{"data":"test","interface":"interface","method":"method"},"field1":"test","field2":42}"#;
+        let serialized = r#"{"descriptor":{"data":"test","message_timestamp":"2025-01-01T00:00:00Z","interface":"interface","method":"method"},"field1":"test","field2":42}"#;
 
         let message: Message<TestDescriptor> = serde_json::from_str(serialized).unwrap();
 
         let descriptor = TestDescriptor {
+            message_timestamp: parse_timestamp("2025-01-01T00:00:00.000000Z"),
             data: "test".to_string(),
         };
 
@@ -386,6 +419,7 @@ mod test {
     #[test]
     fn typed_message_from_value_round_trips() {
         let descriptor = TestDescriptor {
+            message_timestamp: chrono::Utc::now(),
             data: "round-trip".to_string(),
         };
         let fields = TestFields {

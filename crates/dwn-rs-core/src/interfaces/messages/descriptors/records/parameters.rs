@@ -75,6 +75,8 @@ pub struct CountParameters {
     pub protocol_role: Option<String>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
+    #[serde(rename = "permissionGrantId")]
+    pub permission_grant_id: Option<String>,
 }
 
 impl MessageValidator for CountParameters {
@@ -91,6 +93,7 @@ impl MessageParameters for CountParameters {
         let descriptor = CountDescriptor {
             message_timestamp: self.message_timestamp.unwrap_or_else(chrono::Utc::now),
             filter: self.filter.clone(),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -102,6 +105,10 @@ impl MessageParameters for CountParameters {
 
     fn protocol_rule(&self) -> Option<String> {
         self.protocol_role.clone()
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
     }
 }
 
@@ -117,6 +124,8 @@ pub struct QueryParameters {
     pub protocol_role: Option<String>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
+    #[serde(rename = "permissionGrantId")]
+    pub permission_grant_id: Option<String>,
 }
 
 impl MessageValidator for QueryParameters {
@@ -151,6 +160,7 @@ impl MessageParameters for QueryParameters {
             filter: self.filter.clone().unwrap_or_default(),
             date_sort: self.date_sort.clone(),
             pagination: self.pagination.clone(),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -162,6 +172,10 @@ impl MessageParameters for QueryParameters {
 
     fn protocol_rule(&self) -> Option<String> {
         self.protocol_role.clone()
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
     }
 }
 
@@ -442,6 +456,8 @@ pub struct SubscribeParameters {
     pub cursor: Option<ProgressToken>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
+    #[serde(rename = "permissionGrantId")]
+    pub permission_grant_id: Option<String>,
 }
 
 impl MessageValidator for SubscribeParameters {
@@ -461,6 +477,7 @@ impl MessageParameters for SubscribeParameters {
             date_sort: self.date_sort.clone(),
             pagination: self.pagination.clone(),
             cursor: self.cursor.clone(),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
@@ -472,6 +489,10 @@ impl MessageParameters for SubscribeParameters {
 
     fn protocol_rule(&self) -> Option<String> {
         self.protocol_role.clone()
+    }
+
+    fn permission_grant_id(&self) -> Option<String> {
+        self.permission_grant_id.clone()
     }
 }
 
@@ -512,6 +533,7 @@ impl MessageParameters for DeleteParameters {
             message_timestamp: self.message_timestamp.unwrap_or_else(chrono::Utc::now),
             record_id: self.record_id.clone(),
             prune: self.prune.unwrap_or(false),
+            permission_grant_id: self.permission_grant_id.clone(),
         };
 
         Ok((descriptor, None))
