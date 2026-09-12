@@ -53,7 +53,7 @@ use crate::{Descriptor, Message, Pagination};
 
 use super::common::{
     bool_filter, check_actor, construct_record_chain, extract_author, fetch_newest_write,
-    filter_map, message_timestamp, role_record_exists, string_filter,
+    filter_map, role_record_exists, string_filter,
 };
 use super::{RECORDS_INTERFACE, WRITE_METHOD};
 use crate::handlers::protocols::configure::{

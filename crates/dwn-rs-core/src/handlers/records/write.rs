@@ -31,7 +31,7 @@ use crate::handlers::records::common::{
     authorize_against_protocol, bool_filter, compare_messages, context_id,
     core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
     fetch_newest_write, filter_map, find_initial_write, governing_timestamp, message_cid,
-    message_record_id, message_timestamp, newest_message, parent_context_id, purge_record_messages,
+    message_record_id, newest_message, parent_context_id, purge_record_messages,
     records_write_indexes, set_encoded_data, store_error_reply, string_filter,
     validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
     GoverningTimestampError,
@@ -927,7 +927,7 @@ where
         let Some(newest_squash) = result.messages.first() else {
             return Ok(());
         };
-        let newest_timestamp = message_timestamp(newest_squash)?;
+        let newest_timestamp = newest_squash.message_timestamp();
         if descriptor.message_timestamp <= newest_timestamp {
             let squash_floor_timestamp = canonical_rfc3339(newest_timestamp);
             return Err(DwnError::new(
@@ -1049,7 +1049,7 @@ where
         let Some(newest) = newest_message(&messages) else {
             continue;
         };
-        if message_timestamp(&newest)? < descriptor.message_timestamp {
+        if newest.message_timestamp() < descriptor.message_timestamp {
             purge_record_messages(tenant, &messages, message_store, data_store).await?;
         }
     }

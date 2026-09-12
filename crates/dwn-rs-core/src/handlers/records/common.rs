@@ -1497,7 +1497,7 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     if is_initial_write(message, author)? {
-        return Ok(canonical_rfc3339(message_timestamp(message)?));
+        return Ok(canonical_rfc3339(message.message_timestamp()));
     }
     let record_id = record_id(message)
         .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
@@ -1509,7 +1509,7 @@ where
                 "Initial write is not found.",
             )
         })?;
-    Ok(canonical_rfc3339(message_timestamp(&initial)?))
+    Ok(canonical_rfc3339(initial.message_timestamp()))
 }
 
 pub(crate) async fn construct_record_chain<MessageStore>(
@@ -1639,27 +1639,11 @@ pub(crate) fn compare_messages(
     left: &Message<Descriptor>,
     right: &Message<Descriptor>,
 ) -> Ordering {
-    let left_timestamp = message_timestamp(left).ok();
-    let right_timestamp = message_timestamp(right).ok();
-    left_timestamp
-        .cmp(&right_timestamp)
+    // Every descriptor carries a timestamp, so comparison is total; callers
+    // only ever pass record messages.
+    left.message_timestamp()
+        .cmp(&right.message_timestamp())
         .then_with(|| message_cid(left).ok().cmp(&message_cid(right).ok()))
-}
-
-pub(crate) fn message_timestamp(
-    message: &Message<Descriptor>,
-) -> Result<chrono::DateTime<chrono::Utc>, String> {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Read(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Count(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Query(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Write(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Delete(descriptor) => Ok(descriptor.message_timestamp),
-            Records::Subscribe(descriptor) => Ok(descriptor.message_timestamp),
-        },
-        _ => Err("MessageTimestampExpected: message timestamp is required".to_string()),
-    }
 }
 
 pub(crate) fn message_cid(message: &Message<Descriptor>) -> Result<String, String> {

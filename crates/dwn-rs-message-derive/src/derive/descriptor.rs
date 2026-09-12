@@ -175,6 +175,12 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
     if let Some(error) = field_error {
         return error.to_compile_error();
     }
+    // Every DWN descriptor carries `messageTimestamp`: generate its accessor
+    // unconditionally. A struct without the field fails here with a named
+    // error instead of silently falling back.
+    if let Some(error) = require_named_field(&items, "message_timestamp").err() {
+        return error.to_compile_error();
+    }
     let grant_invocation_impl = match attrs.grant {
         GrantKind::Single => {
             quote_spanned! { ast.span() =>
@@ -322,6 +328,13 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
 
         #grant_invocation_impl
 
+        impl #generics crate::interfaces::messages::descriptors::HasMessageTimestamp for #ident #generics #where_clause
+        {
+            fn message_timestamp(&self) -> chrono::DateTime<chrono::Utc> {
+                self.message_timestamp
+            }
+        }
+
         #[derive(serde::Deserialize)]
         struct #deserialize_message_ident<D>
         where
@@ -413,6 +426,7 @@ mod tests {
             pub struct Example {
                 pub name: String,
                 pub id: u32,
+                pub message_timestamp: chrono::DateTime<chrono::Utc>,
             }
         };
 
@@ -441,6 +455,9 @@ mod tests {
         assert!(output
             .to_string()
             .contains("HasPermissionGrantInvocation for Example"));
+        assert!(output
+            .to_string()
+            .contains("HasMessageTimestamp for Example"));
     }
 
     #[test]
@@ -474,6 +491,7 @@ mod tests {
         let input: TokenStream = quote! {
             pub struct Example {
                 pub name: String,
+                pub message_timestamp: chrono::DateTime<chrono::Utc>,
             }
         };
         let attrs = DescriptorAttr {

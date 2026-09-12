@@ -38,6 +38,12 @@ pub(crate) fn multi_permission_grant_invocation(
         .unwrap_or(PermissionGrantInvocation::None)
 }
 
+/// Every DWN descriptor carries `messageTimestamp`, generated per struct by
+/// `#[descriptor]` and dispatched per union by `#[interface]`.
+pub trait HasMessageTimestamp {
+    fn message_timestamp(&self) -> chrono::DateTime<chrono::Utc>;
+}
+
 pub trait MessageParameters {
     type Descriptor: MessageDescriptor;
     type Fields: MessageFields;

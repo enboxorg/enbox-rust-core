@@ -1069,7 +1069,7 @@ where
         )
         .await?;
     for authorized_message in result.messages {
-        if message_timestamp(&authorized_message) < revoke_timestamp {
+        if authorized_message.message_timestamp() < revoke_timestamp {
             continue;
         }
 
@@ -1576,7 +1576,7 @@ where
         )
         .into());
     }
-    let incoming_timestamp = message_timestamp(incoming_message);
+    let incoming_timestamp = incoming_message.message_timestamp();
     if incoming_timestamp < permission_grant.date_granted {
         return Err(GrantError::NotActive.into());
     }
@@ -1634,7 +1634,7 @@ where
     if result
         .messages
         .iter()
-        .any(|message| message_timestamp(message) <= incoming_timestamp)
+        .any(|message| message.message_timestamp() <= incoming_timestamp)
     {
         return Err(GrantError::Revoked.into());
     }
@@ -1842,29 +1842,6 @@ where
         .into_iter()
         .next()
         .ok_or_else(|| GrantError::NotFound(record_id.to_string()).into())
-}
-
-fn message_timestamp(message: &Message<Descriptor>) -> chrono::DateTime<chrono::Utc> {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Read(descriptor) => descriptor.message_timestamp,
-            Records::Count(descriptor) => descriptor.message_timestamp,
-            Records::Query(descriptor) => descriptor.message_timestamp,
-            Records::Write(descriptor) => descriptor.message_timestamp,
-            Records::Delete(descriptor) => descriptor.message_timestamp,
-            Records::Subscribe(descriptor) => descriptor.message_timestamp,
-        },
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            crate::descriptors::Protocols::Configure(descriptor) => descriptor.message_timestamp,
-            crate::descriptors::Protocols::Query(descriptor) => descriptor.message_timestamp,
-        },
-        Descriptor::Messages(messages) => match messages.as_ref() {
-            crate::descriptors::Messages::Read(descriptor) => descriptor.message_timestamp,
-            crate::descriptors::Messages::Query(descriptor) => descriptor.message_timestamp,
-            crate::descriptors::Messages::Subscribe(descriptor) => descriptor.message_timestamp,
-            crate::descriptors::Messages::Sync(descriptor) => descriptor.message_timestamp,
-        },
-    }
 }
 
 fn message_cid(message: &Message<Descriptor>) -> Result<String, AuthorizationValidationError> {
