@@ -47,6 +47,7 @@ pub enum DwnErrorCode {
     EncryptionProtocolValidateGrantKeyAuthorMismatch,
     EncryptionProtocolValidateGrantKeyRecipientMismatch,
     EncryptionProtocolValidateGrantKeyGrantScopeMismatch,
+    EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid,
     EncryptionProtocolValidateSchemaUnexpectedRecord,
     RecordsWriteMissingDataInPrevious,
     RecordsWriteMissingEncodedDataInPrevious,
@@ -168,6 +169,9 @@ impl DwnErrorCode {
             }
             Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch => {
                 "EncryptionProtocolValidateGrantKeyGrantScopeMismatch"
+            }
+            Self::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid => {
+                "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid"
             }
             Self::EncryptionProtocolValidateSchemaUnexpectedRecord => {
                 "EncryptionProtocolValidateSchemaUnexpectedRecord"
@@ -355,6 +359,9 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "EncryptionProtocolValidateGrantKeyGrantScopeMismatch" => {
                 Ok(Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch)
+            }
+            "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid)
             }
             "EncryptionProtocolValidateSchemaUnexpectedRecord" => {
                 Ok(Self::EncryptionProtocolValidateSchemaUnexpectedRecord)

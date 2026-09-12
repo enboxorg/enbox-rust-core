@@ -856,3 +856,140 @@ async fn exact_replay_of_an_accepted_delivery_is_duplicate() {
     let replay = fixture.handler.run(TENANT, &write, Some(data)).await;
     assert_eq!(replay.status.code, 409, "{}", replay.status.detail);
 }
+
+fn wrapped_envelope() -> serde_json::Value {
+    json!({
+        "format": "enbox/wrapped-grant-key@1",
+        "keyEncryption": {
+            "algorithm": "X25519-HKDF-SHA256+A256KW",
+            "keyId": KEY_ID,
+            "ephemeralPublicKey": {
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": KEY_ID,
+            },
+            "encryptedKey": "a2V5",
+        },
+        "contentEncryption": {
+            "algorithm": "A256CTR",
+            "initializationVector": "aXY",
+        },
+        "ciphertext": "Y2lwaGVy",
+    })
+}
+
+async fn deliver_wrapped(
+    fixture: &DeliveryFixture,
+    grant_id: &str,
+    data: Bytes,
+) -> Response<Write> {
+    let write = signed_write_message(WriteSpec {
+        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
+        protocol_path: ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+        recipient: Some(GRANTEE.to_string()),
+        tags: Some(delivery_tags(grant_id, None)),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new(DELIVERY_TIME)
+    })
+    .await;
+    fixture.handler.run(TENANT, &write, Some(data)).await
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn accepts_valid_wrapped_delivery() {
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    let data = Bytes::from(serde_json::to_vec(&wrapped_envelope()).unwrap());
+    let reply = deliver_wrapped(&fixture, &grant_id, data).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn rejects_schema_invalid_wrapped_delivery() {
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    let mut envelope = wrapped_envelope();
+    envelope["keyEncryption"]["algorithm"] = json!("ECDH-ES");
+    let data = Bytes::from(serde_json::to_vec(&envelope).unwrap());
+    let reply = deliver_wrapped(&fixture, &grant_id, data).await;
+    assert_code(
+        &reply,
+        400,
+        "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid",
+    );
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn rejects_unparseable_wrapped_delivery() {
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    // Malformed JSON shares the missing-encryption identity upstream; the
+    // packet reproduces that misnomer rather than inventing a code.
+    let data = Bytes::from_static(b"not json{{{");
+    let reply = deliver_wrapped(&fixture, &grant_id, data).await;
+    assert_code(
+        &reply,
+        400,
+        "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption",
+    );
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn accepts_wrapped_delivery_without_a_data_stream() {
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    // No data stream at all: the envelope is never schema-checked, yet the
+    // message is retained. Upstream parity, asserted deliberately so a later
+    // change to require data is visible.
+    let empty = Bytes::from_static(b"");
+    let write = signed_write_message(WriteSpec {
+        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
+        protocol_path: ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+        recipient: Some(GRANTEE.to_string()),
+        tags: Some(delivery_tags(&grant_id, None)),
+        data_cid: generate_dag_pb_cid_from_bytes(&empty).to_string(),
+        data_size: 0,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new(DELIVERY_TIME)
+    })
+    .await;
+    let record_id = write["recordId"].as_str().unwrap().to_string();
+    let reply = fixture.handler.run(TENANT, &write, None).await;
+    // 204, like upstream: accepted without data, retained but not latest.
+    assert_eq!(reply.status.code, 204, "{}", reply.status.detail);
+    let stored =
+        super::super::common::fetch_record_messages(TENANT, &record_id, &fixture.message_store)
+            .await
+            .expect("store query must succeed");
+    assert_eq!(stored.len(), 1, "delivery retained as a message");
+}

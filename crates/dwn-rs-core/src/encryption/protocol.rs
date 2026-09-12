@@ -171,6 +171,8 @@ pub enum GrantKeyError {
     #[error("{0}")]
     ProtocolNotFound(String),
     #[error("{0}")]
+    WrappedDeliveryInvalid(String),
+    #[error("{0}")]
     SchemaUnexpectedRecord(String),
     #[error("grant-key admission failed: {0}")]
     Internal(String),
@@ -205,6 +207,9 @@ impl GrantKeyError {
             Self::GrantRevoked(_) => Some(DwnErrorCode::GrantAuthorizationGrantRevoked),
             Self::GrantMissing(_) => Some(DwnErrorCode::GrantAuthorizationGrantMissing),
             Self::ProtocolNotFound(_) => Some(DwnErrorCode::ProtocolAuthorizationProtocolNotFound),
+            Self::WrappedDeliveryInvalid(_) => {
+                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid)
+            }
             Self::SchemaUnexpectedRecord(_) => {
                 Some(DwnErrorCode::EncryptionProtocolValidateSchemaUnexpectedRecord)
             }
@@ -212,7 +217,7 @@ impl GrantKeyError {
         }
     }
 
-    fn detail(&self) -> &str {
+    pub(crate) fn detail(&self) -> &str {
         match self {
             Self::MissingEncryption(detail)
             | Self::EncryptionNotAllowed(detail)
@@ -225,6 +230,7 @@ impl GrantKeyError {
             | Self::GrantRevoked(detail)
             | Self::GrantMissing(detail)
             | Self::ProtocolNotFound(detail)
+            | Self::WrappedDeliveryInvalid(detail)
             | Self::SchemaUnexpectedRecord(detail)
             | Self::Internal(detail) => detail,
         }
@@ -430,6 +436,30 @@ fn tag_str(value: &Value) -> Option<String> {
         _ => None,
     }
 }
+/// Validates wrapped delivery bytes once data is present. `grantKey`
+/// records pass through: the node never inspects their plaintext. Anything
+/// else under this protocol is owned by record validation, not payloads.
+pub fn validate_encryption_delivery(
+    message: &Message<Descriptor>,
+    data: &[u8],
+) -> Result<(), GrantKeyError> {
+    let descriptor = records_write_descriptor(message)
+        .map_err(|error| GrantKeyError::Internal(error.to_string()))?;
+    if descriptor.protocol.as_str() != ENCRYPTION_PROTOCOL_URI
+        || descriptor.protocol_path.as_str() != ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH
+    {
+        return Ok(());
+    }
+    let envelope: serde_json::Value = serde_json::from_slice(data).map_err(|error| {
+        GrantKeyError::MissingEncryption(format!(
+            "wrappedGrantKey records must carry a valid wrapped grantKey envelope: {error}"
+        ))
+    })?;
+    crate::validation::validate_against_schema(WRAPPED_GRANT_KEY_ENVELOPE_SCHEMA_URI, &envelope)
+        .map_err(|error| GrantKeyError::WrappedDeliveryInvalid(error.to_string()))?;
+    Ok(())
+}
+
 /// Rejects records under the encryption protocol at any path other than the
 /// two delivery roots. Payload validation needs the data bytes and lands
 /// separately; this runs on descriptor metadata alone.

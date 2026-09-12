@@ -19,6 +19,7 @@ use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::core_protocol::{CoreProtocolError, CoreProtocolRegistry};
 use crate::dwn::{Handler, HandlerContext};
 use crate::encryption::control::ControlKind;
+use crate::encryption::protocol::validate_encryption_delivery;
 use crate::encryption::{
     KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
@@ -483,6 +484,21 @@ where
         }
 
         if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
+            // Grant-key payload validation runs where the bytes are in hand;
+            // the post-processing hook below re-runs the descriptor half with
+            // no data, which is what lets dataless initial writes through.
+            // Only the encryption check runs here: the permissions check
+            // reads back the encoded data set below, so it stays post-hoc.
+            if descriptor.protocol.as_str() == ENCRYPTION_PROTOCOL_URI {
+                validate_encryption_delivery(message, &data).map_err(|error| {
+                    match error.code() {
+                        Some(code) => {
+                            RecordsWriteValidationError::Dwn(DwnError::new(code, error.detail()))
+                        }
+                        None => RecordsWriteValidationError::Internal(error.to_string()),
+                    }
+                })?;
+            }
             set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))
                 .map_err(RecordsWriteValidationError::from)?;
             return Ok(());
