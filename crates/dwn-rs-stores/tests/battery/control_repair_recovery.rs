@@ -15,8 +15,6 @@
 //!
 //! Covers: DWN-PROTO-004, DWN-REC-006
 
-mod common;
-
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
@@ -32,7 +30,7 @@ use dwn_rs_core::{Descriptor, Filter, FilterKey, Filters, MapValue, Message, Val
 use futures_util::{stream, TryStreamExt};
 use serde_json::json;
 
-use common::TempDb;
+use crate::common::TempDb;
 use dwn_rs_stores::{SqliteResumableTaskStore, SqliteStore};
 
 const TENANT: &str = "did:example:alice";
@@ -249,7 +247,7 @@ async fn data_present(store: &SqliteStore, record: &Seeded) -> bool {
 
 /// Opens the file with fresh handles, as a restarting node would.
 async fn reopen(db: &TempDb) -> (SqliteStore, SqliteResumableTaskStore) {
-    let mut store = SqliteStore::new(db.path(), common::noop_waker());
+    let mut store = SqliteStore::new(db.path(), crate::common::noop_waker());
     MessageStore::open(&mut store).await.expect("reopen store");
     let mut tasks = SqliteResumableTaskStore::new(&store);
     ResumableTaskStore::open(&mut tasks)

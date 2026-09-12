@@ -12,8 +12,6 @@ use dwn_rs_core::stores::MessageStore;
 
 use dwn_rs_stores::SqliteStore;
 
-mod common;
-
 const TENANT: &str = "did:example:alice";
 
 fn record_limit() -> dwn_rs_core::stores::RecordLimitOccupancy {
@@ -46,7 +44,7 @@ async fn record_limit_population_survives_close_and_reopen() {
     let path = dir.path().join("record-limit.sqlite");
 
     let expected = {
-        let mut store = SqliteStore::new(&path, common::noop_waker());
+        let mut store = SqliteStore::new(&path, crate::common::noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         for (record_id, day) in [("r1", 1), ("r2", 2), ("r3", 3), ("r4", 4)] {
             let row = limit_row(record_id, None, None, day, "thread");
@@ -61,7 +59,7 @@ async fn record_limit_population_survives_close_and_reopen() {
         ids
     };
 
-    let mut reopened = SqliteStore::new(&path, common::noop_waker());
+    let mut reopened = SqliteStore::new(&path, crate::common::noop_waker());
     MessageStore::open(&mut reopened).await.unwrap();
     let (actual, count) = query_occupants(&reopened).await;
     assert_eq!(count, 2);

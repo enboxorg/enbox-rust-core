@@ -9,8 +9,6 @@
 //! Covers: DWN-REC-006 (no split-brain), DWN-SYNC-001 (resume without
 //! omission/duplication).
 
-mod common;
-
 use std::collections::BTreeSet;
 
 use dwn_rs_core::stores::concurrent_conformance::run_concurrent;
@@ -18,8 +16,8 @@ use dwn_rs_core::stores::{MessageStore, ReplicationFeedReader};
 use dwn_rs_core::{Descriptor, Message};
 use dwn_rs_stores::SqliteStore;
 
-use common::fixtures::{delete_message, feed_indexes, full_read, message_cid};
-use common::{TempDb, TENANT};
+use crate::common::fixtures::{delete_message, feed_indexes, full_read, message_cid};
+use crate::common::{TempDb, TENANT};
 
 #[tokio::test]
 async fn sqlite_mem_conforms_to_concurrency_contract() {
@@ -35,7 +33,7 @@ async fn sqlite_disk_conforms_to_concurrency_contract() {
         let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SqliteStore::new(
             dir.path().join(format!("concurrent-{n}.sqlite")),
-            common::noop_waker(),
+            crate::common::noop_waker(),
         )
     })
     .await;
@@ -57,7 +55,7 @@ async fn wal_deleted_after_unclean_drop_still_reopens() {
     // Serialize file-backed tests process-wide.
     let db = TempDb::new("wal-deleted");
     {
-        let mut store = SqliteStore::new(db.path(), common::noop_waker());
+        let mut store = SqliteStore::new(db.path(), crate::common::noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         for (index, message) in messages(4).into_iter().enumerate() {
             MessageStore::put(
@@ -79,7 +77,7 @@ async fn wal_deleted_after_unclean_drop_still_reopens() {
         let _ = std::fs::remove_file(std::path::Path::new(&sidecar));
     }
 
-    let mut reopened = SqliteStore::new(db.path(), common::noop_waker());
+    let mut reopened = SqliteStore::new(db.path(), crate::common::noop_waker());
     MessageStore::open(&mut reopened)
         .await
         .expect("reopen after WAL loss succeeds");

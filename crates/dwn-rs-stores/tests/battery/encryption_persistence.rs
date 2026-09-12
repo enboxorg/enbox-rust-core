@@ -10,8 +10,6 @@
 //!
 //! Covers: ENBOX-ENC-001, DWN-REC-006
 
-mod common;
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -29,7 +27,7 @@ use futures_util::{stream, TryStreamExt};
 use rusqlite::Connection;
 use serde_json::json;
 
-use common::TempDb;
+use crate::common::TempDb;
 use dwn_rs_stores::SqliteStore;
 
 const TENANT: &str = "did:example:alice";

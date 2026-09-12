@@ -10,8 +10,6 @@
 //!
 //! Covers: DWN-REC-004, ENBOX-REC-001, DWN-REC-006, DWN-AUTH-006.
 
-mod common;
-
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::stores::ReplicationFeedReader;
@@ -22,7 +20,7 @@ use dwn_rs_core::testing::{
 use dwn_rs_core::Reply;
 use serde_json::{json, Value as JsonValue};
 
-use common::TempDb;
+use crate::common::TempDb;
 use dwn_rs_stores::SqliteNativeDwn;
 
 const TENANT: &str = "did:example:alice";

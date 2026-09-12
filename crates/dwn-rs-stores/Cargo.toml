@@ -86,3 +86,7 @@ required-features = ["sqlite"]
 name = "store_injection_server"
 path = "examples/store_injection_server.rs"
 required-features = ["sqlite"]
+
+[[test]]
+name = "battery"
+path = "tests/battery/main.rs"

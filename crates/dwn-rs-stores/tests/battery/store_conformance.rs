@@ -3,8 +3,6 @@
 //! Bodies live once in `dwn_rs_core::stores::store_conformance` (memory
 //! runs in core); here the same suites run on sqlite-mem and sqlite-disk.
 
-mod common;
-
 use dwn_rs_core::stores::store_conformance::{
     run_data_stores, run_message_stores, run_record_limit_stores, run_sort_property_stores,
     run_sort_tie_break_stores,
@@ -25,7 +23,7 @@ async fn sqlite_disk_conforms_to_message_store_contract() {
         let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SqliteStore::new(
             dir.path().join(format!("messages-{n}.sqlite")),
-            common::noop_waker(),
+            crate::common::noop_waker(),
         )
     })
     .await;
@@ -54,7 +52,7 @@ async fn sqlite_disk_orders_ties_by_cid() {
         let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SqliteStore::new(
             dir.path().join(format!("tie-break-{n}.sqlite")),
-            common::noop_waker(),
+            crate::common::noop_waker(),
         )
     })
     .await;
@@ -68,7 +66,7 @@ async fn sqlite_disk_conforms_to_record_limit() {
         let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SqliteStore::new(
             dir.path().join(format!("record-limit-{n}.sqlite")),
-            common::noop_waker(),
+            crate::common::noop_waker(),
         )
     })
     .await;
@@ -83,7 +81,7 @@ async fn sqlite_disk_conforms_to_data_store_contract() {
         let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SqliteStore::new(
             dir.path().join(format!("data-{n}.sqlite")),
-            common::noop_waker(),
+            crate::common::noop_waker(),
         )
     })
     .await;
@@ -103,7 +101,7 @@ async fn sqlite_disk_excludes_rows_missing_the_sort_property() {
         let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SqliteStore::new(
             dir.path().join(format!("sort-property-{n}.sqlite")),
-            common::noop_waker(),
+            crate::common::noop_waker(),
         )
     })
     .await;

@@ -11,8 +11,6 @@
 //!
 //! Covers: DWN-REC-005, DWN-AUTH-006, DWN-REC-004.
 
-mod common;
-
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::testing::{
@@ -23,7 +21,7 @@ use dwn_rs_core::testing::{
 use dwn_rs_core::Reply;
 use serde_json::{json, Value as JsonValue};
 
-use common::TempDb;
+use crate::common::TempDb;
 use dwn_rs_stores::SqliteNativeDwn;
 
 const TENANT: &str = "did:example:alice";
