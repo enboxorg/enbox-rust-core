@@ -11,6 +11,19 @@ use syn::{Fields, FieldsNamed, Ident, ItemStruct, Path};
 
 // parse the attribtutes (`interface`, `method`) from DeriveInput and return them
 // as their Interface and related enum Method type
+/// Which wire shape of permission-grant invocation a descriptor carries.
+/// Required on every `#[descriptor]`: each new descriptor author must decide
+/// explicitly rather than silently inheriting `none`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GrantKind {
+    /// Singular `permissionGrantId` for direct Records/Protocols operations.
+    Single,
+    /// Plural `permissionGrantIds` for Messages operations.
+    Multi,
+    /// No grant invocation (e.g. legacy sync).
+    None,
+}
+
 pub struct DescriptorAttr {
     pub(crate) interface: Option<syn::Path>,
     pub(crate) method: Ident,
@@ -19,6 +32,7 @@ pub struct DescriptorAttr {
     pub(crate) schema_id: Option<Path>,
     pub(crate) variant: Option<Ident>,
     pub(crate) boxed: bool,
+    pub(crate) grant: GrantKind,
 }
 
 impl Parse for DescriptorAttr {
@@ -31,7 +45,8 @@ impl Parse for DescriptorAttr {
             mut schema_id,
             mut variant,
             mut boxed,
-        ) = (None, None, None, None, None, None, false);
+            mut grant,
+        ) = (None, None, None, None, None, None, false, None);
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -58,6 +73,20 @@ impl Parse for DescriptorAttr {
                     "variant" => {
                         variant = Some(input.parse()?);
                     }
+                    "grant" => {
+                        let kind: syn::Ident = input.parse()?;
+                        grant = Some(match kind.to_string().as_str() {
+                            "single" => GrantKind::Single,
+                            "multi" => GrantKind::Multi,
+                            "none" => GrantKind::None,
+                            _ => {
+                                return Err(syn::Error::new(
+                                    kind.span(),
+                                    "unknown grant kind, expected `single`, `multi`, or `none`",
+                                ));
+                            }
+                        });
+                    }
                     _ => return Err(syn::Error::new(key.span(), "unknown attribute")),
                 }
             }
@@ -74,7 +103,28 @@ impl Parse for DescriptorAttr {
             schema_id,
             variant,
             boxed,
+            grant: grant.ok_or_else(|| {
+                syn::Error::new(input.span(), "missing `grant = single | multi | none`")
+            })?,
         })
+    }
+}
+
+fn require_named_field(items: &ItemStruct, name: &str) -> Result<()> {
+    let has_field = match &items.fields {
+        Fields::Named(fields) => fields
+            .named
+            .iter()
+            .any(|field| field.ident.as_ref().is_some_and(|ident| ident == name)),
+        _ => false,
+    };
+    if has_field {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            items.ident.span(),
+            format!("`grant` declaration requires a `{name}` struct field"),
+        ))
     }
 }
 
@@ -110,6 +160,52 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
     let schema_id = match attrs.schema_id {
         Some(path) => quote!(Some(#path)),
         None => quote!(None),
+    };
+
+    // The grant invocation impl is derived from the declared `grant = …`
+    // attribute, and the struct field it names must actually exist: a
+    // declaration without its wire field would silently report `none`.
+    // Field errors surface as compile errors since this macro returns
+    // tokens, not a `Result`.
+    let field_error = match attrs.grant {
+        GrantKind::Single => require_named_field(&items, "permission_grant_id").err(),
+        GrantKind::Multi => require_named_field(&items, "permission_grant_ids").err(),
+        GrantKind::None => None,
+    };
+    if let Some(error) = field_error {
+        return error.to_compile_error();
+    }
+    let grant_invocation_impl = match attrs.grant {
+        GrantKind::Single => {
+            quote_spanned! { ast.span() =>
+                impl #generics crate::interfaces::messages::descriptors::HasPermissionGrantInvocation for #ident #generics #where_clause
+                {
+                    fn permission_grant_invocation(&self) -> crate::auth::jws::PermissionGrantInvocation {
+                        crate::interfaces::messages::descriptors::single_permission_grant_invocation(&self.permission_grant_id)
+                    }
+                }
+            }
+        }
+        GrantKind::Multi => {
+            quote_spanned! { ast.span() =>
+                impl #generics crate::interfaces::messages::descriptors::HasPermissionGrantInvocation for #ident #generics #where_clause
+                {
+                    fn permission_grant_invocation(&self) -> crate::auth::jws::PermissionGrantInvocation {
+                        crate::interfaces::messages::descriptors::multi_permission_grant_invocation(&self.permission_grant_ids)
+                    }
+                }
+            }
+        }
+        GrantKind::None => {
+            quote_spanned! { ast.span() =>
+                impl #generics crate::interfaces::messages::descriptors::HasPermissionGrantInvocation for #ident #generics #where_clause
+                {
+                    fn permission_grant_invocation(&self) -> crate::auth::jws::PermissionGrantInvocation {
+                        crate::auth::jws::PermissionGrantInvocation::None
+                    }
+                }
+            }
+        }
     };
 
     let deserialize_message_ident = format_ident!("{}MessageInternal", ident);
@@ -224,6 +320,8 @@ pub(crate) fn impl_descriptor_macro_attr(attrs: DescriptorAttr, input: TokenStre
             }
         }
 
+        #grant_invocation_impl
+
         #[derive(serde::Deserialize)]
         struct #deserialize_message_ident<D>
         where
@@ -291,10 +389,12 @@ mod tests {
             method = READ,
             fields = alloc::vec::Vec<u32>,
             parameters = alloc::vec::Vec<u32>,
+            grant = single,
         };
 
         let attr: DescriptorAttr = parse2(input).unwrap();
 
+        assert_eq!(attr.grant, GrantKind::Single);
         assert_eq!(attr.method.to_token_stream().to_string(), READ);
         assert_eq!(
             attr.fields.to_token_stream().to_string(),
@@ -325,6 +425,7 @@ mod tests {
             variant: None,
             boxed: false,
             schema_id: None,
+            grant: GrantKind::None,
         };
 
         // Apply the macro
@@ -337,5 +438,57 @@ mod tests {
         assert!(output
             .to_string()
             .contains("ConcreteDescriptor for Example"));
+        assert!(output
+            .to_string()
+            .contains("HasPermissionGrantInvocation for Example"));
+    }
+
+    #[test]
+    fn test_grant_attr_missing_is_rejected() {
+        let input = quote! {
+            interface = RECORDS,
+            method = READ,
+            fields = alloc::vec::Vec<u32>,
+        };
+        let error = parse2::<DescriptorAttr>(input)
+            .err()
+            .expect("missing grant must fail");
+        assert!(error.to_string().contains("missing `grant"));
+    }
+
+    #[test]
+    fn test_grant_attr_unknown_kind_is_rejected() {
+        let input = quote! {
+            method = READ,
+            fields = alloc::vec::Vec<u32>,
+            grant = many,
+        };
+        let error = parse2::<DescriptorAttr>(input)
+            .err()
+            .expect("unknown grant kind must fail");
+        assert!(error.to_string().contains("unknown grant kind"));
+    }
+
+    #[test]
+    fn test_grant_single_requires_wire_field() {
+        let input: TokenStream = quote! {
+            pub struct Example {
+                pub name: String,
+            }
+        };
+        let attrs = DescriptorAttr {
+            interface: Some(parse_quote! { Records }),
+            method: format_ident!("ExampleMethod"),
+            fields: parse_quote! { FieldsNamed },
+            parameters: Some(parse_quote! { FieldsNamed }),
+            variant: None,
+            boxed: false,
+            schema_id: None,
+            grant: GrantKind::Single,
+        };
+        let output = impl_descriptor_macro_attr(attrs, input);
+        assert!(output
+            .to_string()
+            .contains("requires a `permission_grant_id` struct field"));
     }
 }

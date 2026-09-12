@@ -624,8 +624,8 @@ async fn a_record_id_reaches_an_audience_only_through_direct_read() {
 //
 // Checked at the authorization-context boundary, where the guard actually makes
 // the decision: a Records Subscribe descriptor carries no `permissionGrantId`,
-// so this context cannot currently be produced from the wire at all. See the
-// note on `descriptor_permission_grant_invocation`.
+// so this context cannot currently be produced from the wire at all. See
+// `HasPermissionGrantInvocation` and issue #283.
 #[tokio::test]
 async fn a_valid_control_grant_is_not_terminated_at_delivery() {
     const READER: &str = "did:example:bob";

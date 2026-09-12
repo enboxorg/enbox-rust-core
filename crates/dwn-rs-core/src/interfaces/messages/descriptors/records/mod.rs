@@ -129,7 +129,8 @@ mod inner {
         schema_id = RECORDS_READ_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::ReadParameters
+        parameters = super::ReadParameters,
+        grant = single
     )]
     pub struct ReadDescriptor {
         #[serde(
@@ -151,7 +152,8 @@ mod inner {
         schema_id = RECORDS_COUNT_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::CountParameters
+        parameters = super::CountParameters,
+        grant = single
     )]
     pub struct CountDescriptor {
         #[serde(
@@ -171,7 +173,8 @@ mod inner {
         schema_id = RECORDS_QUERY_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::QueryParameters
+        parameters = super::QueryParameters,
+        grant = single
     )]
     pub struct QueryDescriptor {
         #[serde(
@@ -197,7 +200,8 @@ mod inner {
         schema_id = RECORDS_WRITE_SCHEMA,
         boxed,
         fields = crate::fields::WriteFields,
-        parameters = super::WriteParameters
+        parameters = super::WriteParameters,
+        grant = single
     )]
     pub struct WriteDescriptor {
         pub protocol: String,
@@ -243,7 +247,8 @@ mod inner {
         schema_id = RECORDS_SUBSCRIBE_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::SubscribeParameters
+        parameters = super::SubscribeParameters,
+        grant = single
     )]
     pub struct SubscribeDescriptor {
         #[serde(
@@ -269,7 +274,8 @@ mod inner {
         schema_id = RECORDS_DELETE_SCHEMA,
         boxed,
         fields = crate::auth::Authorization,
-        parameters = super::DeleteParameters
+        parameters = super::DeleteParameters,
+        grant = single
     )]
     pub struct DeleteDescriptor {
         #[serde(

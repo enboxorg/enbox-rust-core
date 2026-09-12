@@ -4,13 +4,17 @@ pub mod protocols;
 
 use std::collections::TryReserveError;
 
+use crate::auth::jws::PermissionGrantInvocation;
 use crate::auth::{jws, Jws};
 use crate::cid::generate_message_cid_from_json;
 use crate::fields::MessageFields;
 use crate::{auth::Authorization, interfaces::messages::descriptors::MessageParameters};
 use cid::Cid;
 pub use descriptors::Descriptor;
-use descriptors::{MessageDescriptor, MessageValidator, RecordsWriteDescriptor, ValidationError};
+use descriptors::{
+    HasPermissionGrantInvocation, MessageDescriptor, MessageValidator, RecordsWriteDescriptor,
+    ValidationError,
+};
 pub use fields::Fields;
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -73,6 +77,16 @@ where
         let value =
             serde_json::to_value(self).map_err(|error| EncodeError::Msg(error.to_string()))?;
         generate_message_cid_from_json(&value)
+    }
+}
+
+impl<D> Message<D>
+where
+    D: MessageDescriptor + HasPermissionGrantInvocation,
+{
+    /// The permission-grant invocation carried by this message's descriptor.
+    pub fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        self.descriptor.permission_grant_invocation()
     }
 }
 
@@ -279,7 +293,7 @@ mod test {
 
     const INTERFACE: &str = "interface";
     const METHOD: &str = "method";
-    #[descriptor(interface = INTERFACE, method = METHOD, fields = TestFields, parameters = TestParameters)]
+    #[descriptor(interface = INTERFACE, method = METHOD, fields = TestFields, parameters = TestParameters, grant = none)]
     struct TestDescriptor {
         data: String,
     }

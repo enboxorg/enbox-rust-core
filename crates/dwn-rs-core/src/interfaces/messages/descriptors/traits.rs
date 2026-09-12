@@ -16,6 +16,28 @@ pub struct ValidationError {
     pub message: String,
 }
 
+/// Wire shape for the permission-grant invocation carried by a descriptor:
+/// singular `permissionGrantId` for direct Records/Protocols operations,
+/// plural `permissionGrantIds` for Messages operations.
+/// Implemented once per interface union; `Message<D>` exposes it generically.
+pub trait HasPermissionGrantInvocation {
+    fn permission_grant_invocation(&self) -> PermissionGrantInvocation;
+}
+
+pub(crate) fn single_permission_grant_invocation(id: &Option<String>) -> PermissionGrantInvocation {
+    id.clone()
+        .map(PermissionGrantInvocation::Single)
+        .unwrap_or(PermissionGrantInvocation::None)
+}
+
+pub(crate) fn multi_permission_grant_invocation(
+    ids: &Option<Vec<String>>,
+) -> PermissionGrantInvocation {
+    ids.clone()
+        .map(PermissionGrantInvocation::Multi)
+        .unwrap_or(PermissionGrantInvocation::None)
+}
+
 pub trait MessageParameters {
     type Descriptor: MessageDescriptor;
     type Fields: MessageFields;

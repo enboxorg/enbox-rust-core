@@ -146,6 +146,14 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
         let (vn, ty) = (&v.variant, &v.ty);
         quote!(#name::#vn(_) => <#ty as crate::interfaces::messages::descriptors::ConcreteDescriptor>::METHOD)
     });
+
+    // Union-level grant dispatch: every variant's struct already implements
+    // `HasPermissionGrantInvocation` via `#[descriptor(grant = …)]`, so the
+    // union just forwards. Match ergonomics plus deref handles boxed payloads.
+    let grant_invocation_arms = variants.iter().map(|v| {
+        let (vn, ty) = (&v.variant, &v.ty);
+        quote!(#name::#vn(inner) => <#ty as crate::interfaces::messages::descriptors::HasPermissionGrantInvocation>::permission_grant_invocation(inner))
+    });
     let validate_arms = variants.iter().map(|v| {
         let vn = &v.variant;
         quote!(#name::#vn(_) => Ok(()))
@@ -389,6 +397,12 @@ fn build_union(args: &InterfaceArgs, variants: &[VariantEntry]) -> TokenStream {
             }
         }
 
+        impl crate::interfaces::messages::descriptors::HasPermissionGrantInvocation for #name {
+            fn permission_grant_invocation(&self) -> crate::auth::jws::PermissionGrantInvocation {
+                match self { #(#grant_invocation_arms),* }
+            }
+        }
+
         impl crate::interfaces::messages::descriptors::InterfaceUnion for #name {
             const INTERFACE: &'static str = #iface;
             const KINDS: &'static [(&'static str, &'static str)] = &[
@@ -442,11 +456,14 @@ mod tests {
         let m = module(quote! {
             mod records_inner {
                 #[descriptor(method = READ, variant = Read, boxed,
-                             fields = Authorization, parameters = ReadParameters)]
-                pub struct ReadDescriptor { pub a: u32 }
+                             fields = Authorization, parameters = ReadParameters, grant = single)]
+                pub struct ReadDescriptor {
+                    pub a: u32,
+                    pub permission_grant_id: Option<String>,
+                }
 
                 #[descriptor(method = WRITE, variant = Write,
-                             fields = Authorization, parameters = WriteParameters)]
+                             fields = Authorization, parameters = WriteParameters, grant = none)]
                 pub struct WriteDescriptor { pub b: u32 }
             }
         });
@@ -483,6 +500,10 @@ mod tests {
         assert!(out.contains("fn from_str_opt"));
         assert!(out.contains("fn key"));
         assert!(out.contains("fn schema_id"));
+        // grant dispatch is generated for the union and each struct
+        assert!(out.contains("HasPermissionGrantInvocation for Records"));
+        assert!(out.contains("HasPermissionGrantInvocation for ReadDescriptor"));
+        assert!(out.contains("single_permission_grant_invocation"));
     }
 
     #[test]
@@ -493,7 +514,7 @@ mod tests {
                 pub struct Helper { pub x: u32 }
 
                 #[descriptor(method = READ, variant = Read, boxed,
-                             fields = Authorization, parameters = ReadParameters)]
+                             fields = Authorization, parameters = ReadParameters, grant = none)]
                 pub struct ReadDescriptor { pub a: u32 }
             }
         });

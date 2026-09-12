@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+use crate::auth::jws::PermissionGrantInvocation;
 use crate::Fields;
 
 use super::{
-    messages::Messages, protocols::Protocols, records::Records, MessageDescriptor,
-    MessageValidator, ValidationError, MESSAGES, PROTOCOLS, RECORDS,
+    messages::Messages, protocols::Protocols, records::Records, HasPermissionGrantInvocation,
+    MessageDescriptor, MessageValidator, ValidationError, MESSAGES, PROTOCOLS, RECORDS,
 };
 
 /// Interfaces represent the different Decentralized Web Node message interface types.
@@ -23,6 +24,16 @@ impl MessageValidator for Descriptor {
             Descriptor::Records(_) => Ok(()),
             Descriptor::Protocols(_) => Ok(()),
             Descriptor::Messages(_) => Ok(()),
+        }
+    }
+}
+
+impl HasPermissionGrantInvocation for Descriptor {
+    fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
+        match self {
+            Descriptor::Records(records) => records.permission_grant_invocation(),
+            Descriptor::Protocols(protocols) => protocols.permission_grant_invocation(),
+            Descriptor::Messages(messages) => messages.permission_grant_invocation(),
         }
     }
 }

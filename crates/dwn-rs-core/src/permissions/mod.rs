@@ -449,58 +449,6 @@ pub enum AuthorizationPayloadKind {
     NoGrant,
 }
 
-fn descriptor_permission_grant_invocation(
-    message: &Message<Descriptor>,
-) -> PermissionGrantInvocation {
-    match &message.descriptor {
-        Descriptor::Records(records) => match records.as_ref() {
-            Records::Read(read) => read
-                .permission_grant_id
-                .clone()
-                .map(PermissionGrantInvocation::Single)
-                .unwrap_or(PermissionGrantInvocation::None),
-            Records::Write(write) => write
-                .permission_grant_id
-                .clone()
-                .map(PermissionGrantInvocation::Single)
-                .unwrap_or(PermissionGrantInvocation::None),
-            Records::Count(_) | Records::Delete(_) | Records::Query(_) | Records::Subscribe(_) => {
-                PermissionGrantInvocation::None
-            }
-        },
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            Protocols::Configure(configure) => configure
-                .permission_grant_id
-                .clone()
-                .map(PermissionGrantInvocation::Single)
-                .unwrap_or(PermissionGrantInvocation::None),
-            Protocols::Query(query) => query
-                .permission_grant_id
-                .clone()
-                .map(PermissionGrantInvocation::Single)
-                .unwrap_or(PermissionGrantInvocation::None),
-        },
-        Descriptor::Messages(messages) => match messages.as_ref() {
-            crate::descriptors::Messages::Read(read) => read
-                .permission_grant_ids
-                .clone()
-                .map(PermissionGrantInvocation::Multi)
-                .unwrap_or(PermissionGrantInvocation::None),
-            crate::descriptors::Messages::Query(query) => query
-                .permission_grant_ids
-                .clone()
-                .map(PermissionGrantInvocation::Multi)
-                .unwrap_or(PermissionGrantInvocation::None),
-            crate::descriptors::Messages::Subscribe(subscribe) => subscribe
-                .permission_grant_ids
-                .clone()
-                .map(PermissionGrantInvocation::Multi)
-                .unwrap_or(PermissionGrantInvocation::None),
-            crate::descriptors::Messages::Sync(_) => PermissionGrantInvocation::None,
-        },
-    }
-}
-
 fn authorization_payload_kind(message: &Message<Descriptor>) -> AuthorizationPayloadKind {
     match &message.descriptor {
         Descriptor::Records(records) => match records.as_ref() {
@@ -525,7 +473,7 @@ fn validate_invocation_and_kind(
     message: &Message<Descriptor>,
     payload: &VerifiedAuthorizationPayload,
 ) -> Result<PermissionGrantInvocation, GrantError> {
-    let descriptor_invocation = descriptor_permission_grant_invocation(message);
+    let descriptor_invocation = message.permission_grant_invocation();
     let payload_invocation = payload.permission_grant_invocation()?;
 
     if descriptor_invocation != payload_invocation {
@@ -938,7 +886,7 @@ fn validate_permission_grant(
         ))
     })?;
 
-    let descriptor_invocation = descriptor_permission_grant_invocation(message);
+    let descriptor_invocation = message.permission_grant_invocation();
 
     if payload_invocation != descriptor_invocation {
         return Err(AuthorizationValidationError::BadRequest(
