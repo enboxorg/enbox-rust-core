@@ -79,6 +79,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 
 | Job | Command | Purpose |
 |-----|---------|---------|
+| `rust-lint` | `cargo fmt --check` + `cargo clippy --workspace --all-targets` | Lint gate (aggregated into `Native Rust workspace`) |
 | `rust-tests` | `cargo test --workspace` | Execute all Rust tests including `conformance_fixtures.rs` |
 | `typescript-conformance` | `bun test tools/conformance/typescript-*.test.ts` | Shared JSON fixtures via TS adapters at pinned Enbox |
 | `dwn-sdk-js-reference` | `bun run --filter @enbox/dwn-sdk-js test:node` | Full SDK regression at pinned Enbox |
