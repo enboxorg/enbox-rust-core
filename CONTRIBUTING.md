@@ -14,6 +14,22 @@ cargo +1.98.1 test --workspace --features dwn-rs-core/test-utils
 
 CI runs the same format, lint, and test checks as local development, including `cargo test --workspace --features dwn-rs-core/test-utils`. The `test-utils` feature enables the `conformance_fixtures` integration target. Run the full test command locally when changing Rust behavior.
 
+### Targeted runs while iterating
+
+`cargo test` wall time here is compile/link, not execution, so scope each
+run to what the change touches and keep the full workspace run as the
+pre-push gate:
+
+```bash
+cargo test -p dwn-rs-core --lib --features dwn-rs-core/test-utils
+cargo test -p dwn-rs-stores --tests --features dwn-rs-core/test-utils
+cargo test -p dwn-rs-stores --test store_conformance message_store
+```
+
+`--tests` skips example binaries, `-p` skips unrelated crates (notably the
+UniFFI stack in `enbox-ffi`), and `--test <target> <filter>` runs a slice of
+one integration binary. Full-workspace runs are for the gate, not the loop.
+
 ## Repository Policy
 
 - Preserve the original `enmand/dwn-rs` history and attribution.
