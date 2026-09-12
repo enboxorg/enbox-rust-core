@@ -20,5 +20,8 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      actions:
+      actions-minor-patch:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
