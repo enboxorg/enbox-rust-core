@@ -60,6 +60,7 @@ use super::*;
 use crate::handlers::configure::ProtocolsConfigureHandler;
 
 mod control;
+mod grant_invocation;
 
 /// Drives a resumable delete the way a resume actually does: through the
 /// controller that owns the stores, not a free function taking them.

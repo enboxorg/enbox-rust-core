@@ -18,6 +18,7 @@ pub fn delete_message(record_id: &str, timestamp: &str) -> Message<Descriptor> {
             message_timestamp: timestamp.parse().expect("valid fixture timestamp"),
             record_id: record_id.to_string(),
             prune: false,
+            permission_grant_id: None,
         })))),
         fields: Fields::Authorization(Default::default()),
     }

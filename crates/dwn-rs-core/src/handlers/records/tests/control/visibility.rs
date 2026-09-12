@@ -1,10 +1,8 @@
 //! Who may read a control record once it is stored.
 
-use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
 use crate::auth::PrivateJwkSigner;
 use crate::descriptors::records::records_write_descriptor;
 use crate::encryption::grant_key::read_roles_under;
-use crate::permissions::{AuthorizationContext, VerifiedAuthorizationPayload};
 use crate::protocols::{Action, ActionRole, Can};
 
 use super::*;
@@ -622,10 +620,8 @@ async fn a_record_id_reaches_an_audience_only_through_direct_read() {
 // declares — the answer is always no, so a perfectly valid grant over the keyed
 // role would close the subscription at its first event.
 //
-// Checked at the authorization-context boundary, where the guard actually makes
-// the decision: a Records Subscribe descriptor carries no `permissionGrantId`,
-// so this context cannot currently be produced from the wire at all. See
-// `HasPermissionGrantInvocation` and issue #283.
+// The opening context is admitted from a signed wire message, so this proves
+// the control read-grant path end to end rather than at the context boundary.
 #[tokio::test]
 async fn a_valid_control_grant_is_not_terminated_at_delivery() {
     const READER: &str = "did:example:bob";
@@ -645,24 +641,39 @@ async fn a_valid_control_grant_is_not_terminated_at_delivery() {
         protocol_path: Some(AUDIENCE_PATH.to_string()),
         ..Default::default()
     };
-    let request =
-        signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
+    // The invocation travels the wire in both the descriptor and the signed
+    // payload, exactly like any direct Records operation.
+    let request = signed_request(
+        json!({
+            "descriptor": {
+                "interface": "Records",
+                "method": "Subscribe",
+                "messageTimestamp": "2025-01-01T00:10:00.000000Z",
+                "filter": serde_json::to_value(&filter).unwrap(),
+            },
+        }),
+        crate::testing::bob_signer(),
+        Some(&grant_id),
+    )
+    .await;
+    assert_eq!(
+        request["descriptor"]["permissionGrantId"].as_str(),
+        Some(grant_id.as_str()),
+        "descriptor must carry the invocation for schema validation"
+    );
     let message: Message<Descriptor> =
         serde_json::from_value(request).expect("subscribe request must deserialize");
-    let auth_ctx = AuthorizationContext {
-        signer: READER.to_string(),
-        author: READER.to_string(),
-        payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
-            descriptor_cid: String::new(),
-            delegated_grant_id: None,
-            permission_grant_id: Some(grant_id.clone()),
-            permission_grant_ids: None,
-            protocol_role: None,
-        }),
-        permission_grant_invocation: PermissionGrantInvocation::Single(grant_id.clone()),
-        author_delegated_grant: None,
-        owner: None,
-    };
+    let resolver = crate::testing::test_resolver();
+    let auth_ctx =
+        crate::permissions::validate_authorization_signature(&message, Some(&resolver), true)
+            .await
+            .expect("wire grant invocation must validate")
+            .expect("subscribe requires authorization");
+    assert_eq!(
+        auth_ctx.permission_grant_id(),
+        Some(grant_id.as_str()),
+        "wire context must carry the invoked grant"
+    );
     let auth = DeliveryAuthorization {
         message,
         filter,

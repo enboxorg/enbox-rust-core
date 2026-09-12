@@ -453,6 +453,7 @@ mod tests {
                     message_timestamp: timestamp.parse().expect("valid timestamp"),
                     record_id: record_id.to_string(),
                     prune: false,
+                    permission_grant_id: None,
                 },
             )))),
             fields: Fields::Authorization(Default::default()),
