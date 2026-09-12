@@ -2406,7 +2406,7 @@ fn configure_message_with_raw_definition(definition: serde_json::Value) -> serde
 }
 
 // Covers: ENBOX-ENC-001
-// Packet requirement 1, parsing route. `$encryption` is reserved for control
+// The parsing route. `$encryption` is reserved for control
 // records, so a definition may never declare it — as a type, as a root
 // structure entry, or nested at any depth.
 #[test]
@@ -2442,7 +2442,7 @@ fn reserved_encryption_namespace_is_named_before_schema_validation() {
 }
 
 // Covers: ENBOX-ENC-001
-// Packet requirement 1, construction route. `RuleSet` absorbs unknown keys via
+// The construction route. `RuleSet` absorbs unknown keys via
 // `#[serde(flatten)]`, so a locally built definition can carry the reserved
 // namespace without ever being parsed from the wire.
 #[tokio::test]

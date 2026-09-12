@@ -298,7 +298,7 @@ pub(crate) fn admit_message(raw_message: &Value) -> Result<MessageKind, DwnError
 /// interface that owns the rule. Most kinds have nothing to add.
 fn validate_before_schema(kind: &MessageKind, raw_message: &Value) -> Result<(), DwnError> {
     match kind {
-        // Packet requirement 1, parsing route. The construction route is
+        // The parsing route. The construction route is
         // checked in `ConfigureParameters::build`.
         MessageKind::Protocols(ProtocolsMethod::Configure) => {
             validate_reserved_control_namespace(descriptor_field(raw_message, "definition"))

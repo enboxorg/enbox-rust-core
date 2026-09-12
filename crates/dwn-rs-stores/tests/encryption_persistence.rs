@@ -1,9 +1,9 @@
 //! Current-format encryption survives a real-disk reopen; obsolete JWE shapes
 //! are rejected outright.
 //!
-//! Replaces the deleted `legacy_encryption_upgrade.rs`. #272 removes legacy JWE
-//! read/decrypt compatibility (packet requirements 26-27), but the same packet
-//! keeps "reject obsolete; current crypto/reopen succeeds" in its test matrix:
+//! Replaces the deleted `legacy_encryption_upgrade.rs`. Legacy JWE
+//! read/decrypt compatibility is gone, but "reject obsolete; current
+//! crypto/reopen succeeds" is still owed:
 //! removing the compatibility branch must not also remove the evidence that
 //! current-format custody material is durable. There is deliberately no
 //! conversion, dual-read fallback, or old-ciphertext migration path here.

@@ -1,0 +1,397 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@enbox/dwn-sdk-js",
+    "repository": "enboxorg/enbox",
+    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "functions": [
+      "grantKeyScopeCoversDeliveredScope",
+      "isGrantKeyEligibleRecordsScope"
+    ]
+  },
+  "definitions": {
+    "threads": {
+      "protocol": "http://example.com/threads",
+      "published": true,
+      "types": {
+        "member": {},
+        "archivist": {},
+        "unkeyed": {},
+        "thread": {},
+        "notes": {},
+        "plain": {},
+        "leaf": {}
+      },
+      "structure": {
+        "member": {
+          "$role": true,
+          "$keyAgreement": {
+            "publicKeyJwk": {
+              "kty": "OKP",
+              "crv": "X25519",
+              "x": "Xf7dO2vUf2-ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI"
+            }
+          }
+        },
+        "archivist": {
+          "$role": true,
+          "$keyAgreement": {
+            "publicKeyJwk": {
+              "kty": "OKP",
+              "crv": "X25519",
+              "x": "Xf7dO2vUf2-ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI"
+            }
+          }
+        },
+        "unkeyed": {
+          "$role": true
+        },
+        "plain": {},
+        "thread": {
+          "$actions": [
+            {
+              "role": "member",
+              "can": [
+                "read"
+              ]
+            }
+          ],
+          "notes": {
+            "$actions": [
+              {
+                "role": "archivist",
+                "can": [
+                  "read"
+                ]
+              },
+              {
+                "role": "unkeyed",
+                "can": [
+                  "read"
+                ]
+              },
+              {
+                "role": "other:reader",
+                "can": [
+                  "read"
+                ]
+              }
+            ],
+            "leaf": {}
+          }
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "protocol-grant-covers-protocol-key",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads"
+        },
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "protocol-grant-covers-path",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "member"
+        },
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "protocol-grant-covers-nested-path",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread/notes"
+        },
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "path-grant-covers-itself",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "path-grant-covers-descendant",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread/notes"
+        },
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "path-grant-covers-deep-descendant",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread/notes/leaf"
+        },
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "path-grant-excludes-protocol-key",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads"
+        },
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "path-grant-excludes-protocol-key-with-definition",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "path-boundary-is-respected",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "threading"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "subtree-reaches-role-it-reads-through",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "member"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "role-exception-undecidable-without-definition",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "member"
+        },
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "role-reached-from-deeper-in-subtree",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "archivist"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": true
+      }
+    },
+    {
+      "id": "subtree-without-read-actions-reaches-nothing",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "plain"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "member"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "unkeyed-role-is-not-reachable",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "unkeyed"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "cross-protocol-role-ref-excluded",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "other:reader"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "referenced-role-is-not-a-subtree",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "member/child"
+        },
+        "definition": "threads",
+        "expectedEligible": true,
+        "expectedCovers": false
+      }
+    },
+    {
+      "id": "context-scoped-grant-is-ineligible",
+      "rustStatus": "supported",
+      "grantKeyCoverage": {
+        "grantScope": {
+          "interface": "Records",
+          "method": "Read",
+          "protocol": "http://example.com/threads",
+          "contextId": "thread-1"
+        },
+        "deliveredScope": {
+          "protocol": "http://example.com/threads",
+          "protocolPath": "thread"
+        },
+        "definition": "threads",
+        "expectedEligible": false,
+        "expectedCovers": false
+      }
+    }
+  ]
+}

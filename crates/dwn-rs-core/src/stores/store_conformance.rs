@@ -677,7 +677,7 @@ where
 /// Runs the sort-property battery: a record whose indexes lack the property a
 /// query sorts by is excluded from that query's results.
 ///
-/// Upstream drops such items rather than ordering them among the rest
+/// Such items are dropped rather than ordered among the rest
 /// (`index-level.ts` skips any item whose `sortProperty` is undefined), so a
 /// backend that returns them answers a differently-populated query than another
 /// backend would — the divergence `DWN-REC-001` exists to prevent.

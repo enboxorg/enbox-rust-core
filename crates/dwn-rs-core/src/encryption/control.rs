@@ -211,7 +211,7 @@ impl AudiencePayload {
     /// Schema first, then typed: the schema owns constraints the types cannot
     /// express (base64url shapes, key-id patterns), which is the same order
     /// admission applies to whole messages. A schema failure is reported as
-    /// itself rather than re-badged as a control error, matching upstream.
+    /// itself rather than re-badged as a control error, matching the TypeScript.
     pub fn parse(bytes: &[u8]) -> Result<Self, DwnError> {
         let raw: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
             DwnError::new(

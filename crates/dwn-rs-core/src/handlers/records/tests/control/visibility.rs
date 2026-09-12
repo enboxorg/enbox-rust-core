@@ -3,7 +3,7 @@
 use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
 use crate::auth::PrivateJwkSigner;
 use crate::descriptors::records::records_write_descriptor;
-use crate::handlers::records::control::visibility::delivery::read_roles_under;
+use crate::encryption::grant_key::read_roles_under;
 use crate::permissions::{AuthorizationContext, VerifiedAuthorizationPayload};
 use crate::protocols::{Action, ActionRole, Can};
 

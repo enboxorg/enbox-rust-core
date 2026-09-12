@@ -110,7 +110,7 @@ where
 /// Pairs the ordinary grant gate — grantor and grantee, the
 /// `dateGranted <= messageTimestamp < dateExpires` window, revocation at or
 /// before that timestamp, and interface/method scope — with the publication
-/// conditions, which are separate upstream and easy to invoke one without the
+/// conditions, which are separate in the TypeScript and easy to invoke one without the
 /// other. Control records are never published, so a grant requiring
 /// publication cannot authorize one.
 pub(crate) async fn validate_control_grant<MessageStore>(

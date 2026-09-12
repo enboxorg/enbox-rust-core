@@ -34,7 +34,7 @@ impl MessageParameters for ConfigureParameters {
             None => chrono::Utc::now(),
         };
 
-        // Construction half of packet requirement 1. `RuleSet` collects unknown
+        // The construction half. `RuleSet` collects unknown
         // keys through `#[serde(flatten)]`, so a programmatically built
         // definition can carry `$encryption` just as a parsed one can.
         self.definition

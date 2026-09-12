@@ -4,10 +4,12 @@
 //! it. Beyond its own parties, only a grant that joins the reader to this
 //! recipient and covers the delivered role opens it.
 
-use crate::protocols::parse_cross_protocol_ref;
+use crate::encryption::grant_key::{
+    eligible_grant_scope, read_grant_covers_delivered_scope, DeliveredScope,
+};
 
 use super::super::*;
-use super::{grant_covers_role, request_timestamp};
+use super::request_timestamp;
 
 /// Whether a grant connects the delivery's recipient to the reader and covers
 /// the delivered role.
@@ -38,31 +40,29 @@ where
     let Some(recipient) = recipient else {
         return Ok(false);
     };
+    // The grant must join the recipient — as either party — to the requester.
     if recipient != grant.grantor && recipient != grant.grantee {
         return Ok(false);
     }
-    let PermissionScope::Records(scope) = &grant.scope else {
+    let Some(scope) = eligible_grant_scope(&grant.scope) else {
         return Ok(false);
     };
-    if scope.method != RecordsMethod::Read || scope.protocol != id.scope.protocol {
+    if scope.method != RecordsMethod::Read {
         return Ok(false);
     }
-    let scope_path = match &scope.selector {
-        Some(RecordsSelector::ProtocolPath(path)) => path.0.as_str(),
-        // A context-scoped grant has no bearing on a role-addressed delivery.
-        Some(RecordsSelector::ContextId(_)) => return Ok(false),
-        // No path at all covers the whole protocol.
-        None => return Ok(true),
-    };
 
-    // The delivered role inside the granted subtree.
-    if grant_covers_role(&grant.scope, id, RecordsMethod::Read) {
+    let delivered = DeliveredScope {
+        protocol: &id.scope.protocol,
+        protocol_path: Some(&id.scope.role_path),
+    };
+    // Whole-protocol and direct-subtree coverage are decidable without a
+    // definition, so they are answered before paying for a lookup.
+    if read_grant_covers_delivered_scope(&scope, &delivered, None) {
         return Ok(true);
     }
 
-    // Or a keyed role the granted subtree itself grants read on: a reader
-    // given a subtree implicitly reaches the roles that subtree reads through,
-    // wherever in the protocol those roles are declared.
+    // What remains is the keyed-role exception, which needs the configuration
+    // governing this request.
     let timestamp = request_timestamp(read_message)?;
     let definition = match fetch_protocol_definition(
         tenant,
@@ -76,45 +76,13 @@ where
         Err(ProtocolDefinitionLookupError::Store(detail)) => {
             return Err(ControlValidationError::Internal(detail))
         }
-        // Without a definition the role exception is undecidable, and
-        // undecidable is not reachable.
+        // Without a definition the exception is undecidable, and undecidable
+        // is not reachable.
         Err(_) => return Ok(false),
     };
-    Ok(read_roles_under(&definition, scope_path).contains(&id.scope.role_path))
-}
-
-/// Local role paths that the rule set at `scope_path`, or anything beneath it,
-/// grants read through. Cross-protocol role references are excluded: they name
-/// membership this protocol does not define.
-pub(crate) fn read_roles_under(definition: &Definition, scope_path: &str) -> BTreeSet<String> {
-    fn collect(definition: &Definition, rule_set: &RuleSet, found: &mut BTreeSet<String>) {
-        for action in &rule_set.actions {
-            if let Action::Role(role_action) = action {
-                if role_action.can.contains(&Can::Read)
-                    && parse_cross_protocol_ref(&role_action.role).is_none()
-                    // The role must still be keyed at the request timestamp.
-                    // A configuration that keeps a role but drops its
-                    // `$keyAgreement` stops it conveying key material, and a
-                    // subtree delegate must lose that reach with it — otherwise
-                    // removing the key agreement would silently leave retained
-                    // deliveries reachable through a role that no longer keys
-                    // anything.
-                    && definition.rule_at(&role_action.role).is_some_and(|rule_set| {
-                        rule_set.role == Some(true) && rule_set.key_agreement.is_some()
-                    })
-                {
-                    found.insert(role_action.role.clone());
-                }
-            }
-        }
-        for child in rule_set.rules.values() {
-            collect(definition, child, found);
-        }
-    }
-
-    let mut found = BTreeSet::new();
-    if let Some(rule_set) = definition.rule_at(scope_path) {
-        collect(definition, rule_set, &mut found);
-    }
-    found
+    Ok(read_grant_covers_delivered_scope(
+        &scope,
+        &delivered,
+        Some(&definition),
+    ))
 }

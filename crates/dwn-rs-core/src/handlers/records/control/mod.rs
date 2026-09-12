@@ -47,7 +47,7 @@ use crate::permissions::control::{resolve_control_actor, ControlActor};
 use crate::permissions::scopes::ProtocolScopeTarget;
 use crate::permissions::{
     fetch_grant, perform_base_validation, AuthorizationContext, PermissionGrant, PermissionScope,
-    RecordsMethod, RecordsSelector,
+    RecordsMethod,
 };
 use crate::{Descriptor, Message, Pagination};
 

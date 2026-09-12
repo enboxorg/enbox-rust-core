@@ -31,6 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 
+const GRANT_KEY_COVERAGE_ASSERTION: &str = "encryption.grant-key-coverage";
 const CID_MESSAGE_ASSERTION: &str = "cid.message";
 const CID_DESCRIPTOR_ASSERTION: &str = "cid.descriptor";
 const CID_JSON_ASSERTION: &str = "cid.json";
@@ -81,6 +82,7 @@ struct LoadedFixtureSuite {
 struct FixtureSet {
     schema_version: u64,
     keys: Option<BTreeMap<String, FixtureJwsKey>>,
+    definitions: Option<BTreeMap<String, Value>>,
     seed_sets: Option<BTreeMap<String, Vec<MessagesSyncSeedEntry>>>,
     cases: Vec<FixtureCase>,
 }
@@ -127,6 +129,7 @@ struct FixtureCase {
     query: Option<Value>,
     protocol_authorization: Option<ProtocolAuthorizationFixture>,
     grant_authorization: Option<GrantAuthorizationFixture>,
+    grant_key_coverage: Option<GrantKeyCoverageFixture>,
     sync: Option<MessagesSyncFixture>,
     value: Option<Value>,
 }
@@ -192,6 +195,27 @@ struct MessagesSyncSeedEntry {
     message: Value,
     encoded_data: Option<String>,
     data: Option<FixtureData>,
+}
+
+/// One row of the grant-key coverage truth table: does this grant scope reach
+/// this delivered key, with or without the governing definition in hand?
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantKeyCoverageFixture {
+    grant_scope: Value,
+    delivered_scope: DeliveredScopeFixture,
+    /// Names an entry in the suite's `definitions`, or is absent for the cases
+    /// that must stay decidable without one.
+    definition: Option<String>,
+    expected_eligible: bool,
+    expected_covers: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeliveredScopeFixture {
+    protocol: String,
+    protocol_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3895,5 +3919,80 @@ fn ledger_divergences_still_hold() {
     assert!(
         executable_checked > 0,
         "at least one executable divergence proof must be exercised"
+    );
+}
+
+// Covers: ENBOX-ENC-003
+// Whether a grant reaches a delivered encryption key is the same question in
+// both implementations, and it is the most security-sensitive rule in the
+// encryption work. The expected values in this fixture were produced by
+// running the TypeScript `grantKeyScopeCoversDeliveredScope`, so this is
+// parity against the implementation rather than against a reading of it.
+#[test]
+fn grant_key_coverage_matches_typescript() {
+    use dwn_rs_core::encryption::grant_key::{
+        eligible_grant_scope, read_grant_covers_delivered_scope, DeliveredScope,
+    };
+    use dwn_rs_core::permissions::PermissionScope;
+    use dwn_rs_core::protocols::Definition;
+
+    let mut checked = 0;
+    for suite in load_fixture_suites() {
+        if !suite.has_assertion(GRANT_KEY_COVERAGE_ASSERTION) {
+            continue;
+        }
+        let definitions = suite
+            .fixture_set
+            .definitions
+            .as_ref()
+            .expect("a coverage suite must carry the definitions its cases name");
+
+        for case in &suite.fixture_set.cases {
+            let Some(coverage) = &case.grant_key_coverage else {
+                continue;
+            };
+            let label = format!("{}/{}", suite.suite_ref.id, case.id);
+
+            let scope: PermissionScope = serde_json::from_value(coverage.grant_scope.clone())
+                .unwrap_or_else(|error| panic!("{label}: grant scope must parse: {error}"));
+            let eligible = eligible_grant_scope(&scope);
+            assert_eq!(
+                eligible.is_some(),
+                coverage.expected_eligible,
+                "{label}: eligibility must agree with the TypeScript"
+            );
+
+            let covers = match &eligible {
+                None => false,
+                Some(eligible) => {
+                    let definition = coverage.definition.as_ref().map(|name| {
+                        let raw = definitions
+                            .get(name)
+                            .unwrap_or_else(|| panic!("{label}: no definition named {name}"));
+                        serde_json::from_value::<Definition>(raw.clone()).unwrap_or_else(|error| {
+                            panic!("{label}: definition {name} must parse: {error}")
+                        })
+                    });
+                    read_grant_covers_delivered_scope(
+                        eligible,
+                        &DeliveredScope {
+                            protocol: &coverage.delivered_scope.protocol,
+                            protocol_path: coverage.delivered_scope.protocol_path.as_deref(),
+                        },
+                        definition.as_ref(),
+                    )
+                }
+            };
+            assert_eq!(
+                covers, coverage.expected_covers,
+                "{label}: coverage must agree with the TypeScript"
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "the coverage suite must be reached, or this test proves nothing"
     );
 }

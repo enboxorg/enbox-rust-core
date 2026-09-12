@@ -82,7 +82,7 @@ where
                     return Ok(true);
                 }
                 // Author/recipient selectors resolve against the role's parent
-                // chain. Upstream leaves these conservative rather than
+                // chain. The TypeScript leaves these conservative rather than
                 // resolving parents that may not be reachable.
                 if check_actor(
                     &actor.did,
