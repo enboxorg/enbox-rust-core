@@ -4,8 +4,6 @@
 //! sqlite-disk through [`run_live_suite`]; the tests below keep the
 //! SQLite-specific coverage (restart bounds, clear gap, empty anchor).
 
-mod common;
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -25,8 +23,8 @@ use dwn_rs_core::stores::{
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use common::fixtures::{delete_message, feed_indexes};
-use common::{noop_waker, TempDb, TENANT};
+use crate::common::fixtures::{delete_message, feed_indexes};
+use crate::common::{noop_waker, TempDb, TENANT};
 use dwn_rs_stores::SqliteStore;
 
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -34,7 +32,7 @@ const RECEIVE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Builds a SQLite store whose commits publish wakes onto `bus`.
 async fn harness(bus: &InProcessWakeBus) -> SqliteStore {
     let mut store = SqliteStore::new(
-        common::unique_memory_uri("dwn-durable"),
+        crate::common::unique_memory_uri("dwn-durable"),
         WakePublishHandler::new(Arc::new(bus.clone())),
     );
     MessageStore::open(&mut store)
@@ -86,7 +84,7 @@ async fn sqlite_mem_conforms_to_live_durable_event_log_contract() {
     run_live_suite(|options| async move {
         sqlite_live_pair(
             options,
-            PathBuf::from(common::unique_memory_uri("dwn-live")),
+            PathBuf::from(crate::common::unique_memory_uri("dwn-live")),
         )
         .await
     })

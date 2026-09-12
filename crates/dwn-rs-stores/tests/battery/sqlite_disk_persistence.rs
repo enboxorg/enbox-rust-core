@@ -8,8 +8,6 @@
 //! Covers: DWN-REC-006 (no split-brain across restart), DWN-SYNC-001/005
 //! (resume from durable cursors/checkpoints).
 
-mod common;
-
 use std::collections::BTreeMap;
 
 use chrono::Utc;
@@ -23,10 +21,10 @@ use dwn_rs_core::Value;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use common::fixtures::{
+use crate::common::fixtures::{
     delete_message, feed_indexes as indexes, full_read, message_cid, test_resolver,
 };
-use common::{noop_waker, TempDb};
+use crate::common::{noop_waker, TempDb};
 use dwn_rs_stores::{
     SqliteNativeDwn, SqliteResumableTaskStore, SqliteStateIndex, SqliteStore, SqliteSyncLedger,
 };
@@ -303,7 +301,9 @@ async fn legacy_v1_database_migrates_forward_on_open() {
     {
         let connection = Connection::open(db.path()).expect("raw open");
         connection
-            .execute_batch(include_str!("../src/sqlite/migrations/sql/V1__initial.sql"))
+            .execute_batch(include_str!(
+                "../../src/sqlite/migrations/sql/V1__initial.sql"
+            ))
             .expect("apply V1 baseline");
     }
 

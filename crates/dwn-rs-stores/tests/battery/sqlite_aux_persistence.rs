@@ -1,11 +1,9 @@
 //! Persistence tests for SQLite auxiliary stores.
 
-mod common;
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use common::TempDb;
+use crate::common::TempDb;
 
 use dwn_rs_core::events::MessageEvent;
 use dwn_rs_core::stores::wake::WakePublishHandler;

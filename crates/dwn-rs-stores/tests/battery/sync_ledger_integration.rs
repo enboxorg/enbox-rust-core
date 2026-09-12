@@ -1,7 +1,5 @@
 //! Integration tests for durable sync ledger + engine persistence.
 
-mod common;
-
 use std::sync::Arc;
 
 use dwn_rs_core::stores::wake::WakePublishHandler;

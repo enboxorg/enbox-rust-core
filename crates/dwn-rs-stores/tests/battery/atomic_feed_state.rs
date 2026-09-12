@@ -10,8 +10,6 @@
 //!
 //! Covers: DWN-REC-006, DWN-SYNC-001.
 
-mod common;
-
 use std::collections::BTreeSet;
 
 use dwn_rs_core::stores::memory::MemoryMessageStore;
@@ -21,8 +19,8 @@ use dwn_rs_core::stores::{
 };
 use dwn_rs_core::{Descriptor, Message};
 
-use common::fixtures::{delete_message, feed_indexes, full_read, message_cid};
-use common::{TempDb, TENANT};
+use crate::common::fixtures::{delete_message, feed_indexes, full_read, message_cid};
+use crate::common::{TempDb, TENANT};
 use dwn_rs_stores::SqliteStore;
 
 /// How the pre-restart handle goes away.
@@ -139,7 +137,7 @@ async fn puts_survive_drop_without_close() {
     let db = TempDb::new("puts-drop-no-close");
     let log = op_log();
     let epoch = {
-        let mut store = SqliteStore::new(db.path(), common::noop_waker());
+        let mut store = SqliteStore::new(db.path(), crate::common::noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         apply_op_log(&store, &log).await;
         let epoch = store.epoch().await.expect("epoch");
@@ -147,7 +145,7 @@ async fn puts_survive_drop_without_close() {
         epoch
     };
 
-    let mut reopened = SqliteStore::new(db.path(), common::noop_waker());
+    let mut reopened = SqliteStore::new(db.path(), crate::common::noop_waker());
     MessageStore::open(&mut reopened).await.unwrap();
     assert_eq!(reopened.epoch().await.expect("epoch"), epoch);
     assert_no_split_brain(&reopened, &log.cids).await;
@@ -192,7 +190,7 @@ async fn atomic_grid_close_vs_drop_matches_uninterrupted_run() {
         // Durable run with a restart in the shutdown mode under test.
         let db = TempDb::new("atomic-grid");
         let (epoch, bounds) = {
-            let mut store = SqliteStore::new(db.path(), common::noop_waker());
+            let mut store = SqliteStore::new(db.path(), crate::common::noop_waker());
             MessageStore::open(&mut store).await.unwrap();
             apply_op_log(&store, &log).await;
             let epoch = store.epoch().await.expect("epoch");
@@ -200,7 +198,7 @@ async fn atomic_grid_close_vs_drop_matches_uninterrupted_run() {
             shutdown.shutdown(&mut store).await;
             (epoch, bounds)
         };
-        let mut reopened = SqliteStore::new(db.path(), common::noop_waker());
+        let mut reopened = SqliteStore::new(db.path(), crate::common::noop_waker());
         MessageStore::open(&mut reopened).await.unwrap();
         let actual = snapshot(&reopened, &log.cids).await;
 
@@ -244,7 +242,7 @@ async fn mid_sequence_restart_converges_with_uninterrupted_run() {
     // Durable run: restart (drop, no close) between puts and deletes.
     let db = TempDb::new("mid-sequence-restart");
     {
-        let mut store = SqliteStore::new(db.path(), common::noop_waker());
+        let mut store = SqliteStore::new(db.path(), crate::common::noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         for (index, msg) in log.messages.iter().enumerate() {
             MessageStore::put(
@@ -258,7 +256,7 @@ async fn mid_sequence_restart_converges_with_uninterrupted_run() {
         }
         // No close: kill-style interrupt mid-sequence.
     }
-    let mut reopened = SqliteStore::new(db.path(), common::noop_waker());
+    let mut reopened = SqliteStore::new(db.path(), crate::common::noop_waker());
     MessageStore::open(&mut reopened).await.unwrap();
     MessageStore::put(
         &reopened,
@@ -289,7 +287,7 @@ async fn clear_then_drop_without_close_reopens_clean() {
     // Serialize file-backed tests process-wide.
     let db = TempDb::new("clear-drop-reopen");
     let old_cursor = {
-        let mut store = SqliteStore::new(db.path(), common::noop_waker());
+        let mut store = SqliteStore::new(db.path(), crate::common::noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         let msg = delete_message("clear-me", "2025-01-01T00:00:00Z");
         MessageStore::put(&store, TENANT, msg, feed_indexes(None, None, "c"))
@@ -305,7 +303,7 @@ async fn clear_then_drop_without_close_reopens_clean() {
         cursor
     };
 
-    let mut reopened = SqliteStore::new(db.path(), common::noop_waker());
+    let mut reopened = SqliteStore::new(db.path(), crate::common::noop_waker());
     MessageStore::open(&mut reopened).await.unwrap();
     let page = reopened
         .log_read(TENANT, EventLogReadOptions::default())
