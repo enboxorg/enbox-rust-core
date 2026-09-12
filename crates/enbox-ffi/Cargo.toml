@@ -30,6 +30,9 @@ uniffi = { version = "0.32.0", features = ["cli"] }
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+# Not a test target: `cargo test` must not spend a link on it (it carries
+# zero tests; bindings are generated via `cargo run --bin uniffi-bindgen`).
+test = false
 
 
 [dev-dependencies]
