@@ -287,7 +287,7 @@ pub(crate) async fn signed_delete(
 // not just Read and Write: a signed descriptor cannot be paired with a
 // substituted grant.
 #[tokio::test]
-// Covers: DWN-AUTH-008 (pending enboxorg/knowledge#15; DWN-AUTH-003 for the grant capability itself)
+// Covers: DWN-AUTH-008, DWN-AUTH-003
 async fn collection_and_delete_reject_descriptor_payload_grant_substitution() {
     const BOGUS_GRANT: &str = "bogus-grant-id";
     let fixture = collection_fixture().await;

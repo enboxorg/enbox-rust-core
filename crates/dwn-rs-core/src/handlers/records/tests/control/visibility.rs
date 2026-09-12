@@ -702,7 +702,9 @@ async fn a_valid_control_grant_is_not_terminated_at_delivery() {
 //
 // Deliveries carry the live events rather than audiences: same-tuple
 // audiences after the first are superseded by current-audience projection by
-// design, while each delivery is its own record.
+// design, while each delivery is its own record. The deliveries address the
+// tenant, so Bob — neither recipient, author, nor tenant — reaches them by
+// his grant alone.
 #[tokio::test]
 async fn live_control_subscription_terminates_when_grant_revoked() {
     const READER: &str = "did:example:bob";
@@ -716,6 +718,15 @@ async fn live_control_subscription_terminates_when_grant_revoked() {
     grant_member_role(
         &fixture.message_store,
         READER,
+        "2025-01-01T00:02:00.000000Z",
+    )
+    .await;
+    // The tenant holds the role too, so deliveries can address the tenant
+    // while remaining admissible: Bob is then neither recipient, author, nor
+    // tenant, and only his grant connects him to the delivery.
+    grant_member_role(
+        &fixture.message_store,
+        CONTROL_TENANT,
         "2025-01-01T00:02:00.000000Z",
     )
     .await;
@@ -794,7 +805,7 @@ async fn live_control_subscription_terminates_when_grant_revoked() {
             &ciphertext,
             timestamp,
             |spec| {
-                spec.recipient = Some("did:example:bob".to_string());
+                spec.recipient = Some(CONTROL_TENANT.to_string());
                 spec.encryption = Some(delivery_envelope());
             },
         )

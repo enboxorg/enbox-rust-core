@@ -119,11 +119,10 @@ async fn not_yet_active_and_missing_grants_rejected() {
     );
 }
 
-// Replaying a historically valid granted Delete after revocation fails
-// closed on the revoked grant: Deletes evaluate authorization before the
-// exact-duplicate shortcut, so the replay is refused rather than re-applied.
-// Either way the logical state is unchanged — the tombstone stands and
-// nothing resurrects.
+// Replaying a historically valid granted Delete after the grant is revoked
+// returns the exact duplicate without fresh authorization: the settled
+// tombstone is classified before mutable grant state is consulted, so the
+// later revocation neither reauthorizes nor disturbs it.
 #[tokio::test]
 // Covers: DWN-AUTH-004, DWN-REC-003
 async fn historical_granted_delete_replay_after_revocation() {
@@ -146,17 +145,14 @@ async fn historical_granted_delete_replay_after_revocation() {
     let reply = delete_handler.run(TENANT, &delete, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    revoke_grant(&fixture, &grant_id, "2025-01-01T00:04:00.000000Z").await;
+    // Revocation lands after the Delete's signed time, so the original
+    // admission stays valid and only the replay classification can answer.
+    revoke_grant(&fixture, &grant_id, "2025-01-01T00:15:00.000000Z").await;
     let reply = delete_handler.run(TENANT, &delete, None).await;
     assert_eq!(
-        reply.status.code, 401,
-        "replay under a revoked grant must fail closed, got {} {}",
+        reply.status.code, 409,
+        "exact replay must stay idempotent after revocation, got {} {}",
         reply.status.code, reply.status.detail
-    );
-    assert!(
-        reply.status.detail.contains("grant is revoked"),
-        "revocation must name the cause, got: {}",
-        reply.status.detail
     );
 
     let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
@@ -329,7 +325,7 @@ where
 // The public typed builders thread a grant id into both the descriptor and
 // the signed payload for every collection method and Delete.
 #[tokio::test]
-// Covers: DWN-AUTH-008 (pending enboxorg/knowledge#15)
+// Covers: DWN-AUTH-008
 async fn typed_builders_carry_grant_invocation() {
     let fixture = collection_fixture().await;
     let read_grant =
