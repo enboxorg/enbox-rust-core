@@ -14,7 +14,7 @@ This repository validates DWN behavior through **three independent layers**. The
 
 | Layer | Runner | CI job | Validates Rust? | Validates TS reference? |
 |-------|--------|--------|-----------------|-------------------------|
-| 1 — Rust native | `cargo test --workspace` | `rust-tests` | Yes | Indirect (shared fixtures) |
+| 1 — Rust native | `cargo test -p <crate>` per-crate matrix | `rust-tests` | Yes | Indirect (shared fixtures) |
 | 2 — Shared fixtures (TS) | `bun test tools/conformance/typescript-*.test.ts` | `typescript-conformance` | No | Partial (adapter subset) |
 | 3 — dwn-sdk-js native | `bun run --filter @enbox/dwn-sdk-js test:node` | `dwn-sdk-js-reference` | No | Yes (full SDK suite) |
 | 4 — Loopback RPC interop | `bun test tools/interop/loopback-interop.test.ts` | `loopback-interop` | Cross-runtime | Client ↔ Rust server |
@@ -79,7 +79,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 
 | Job | Command | Purpose |
 |-----|---------|---------|
-| `rust-tests` | `cargo test --workspace` | Execute all Rust tests including `conformance_fixtures.rs` |
+| `rust-tests` | `cargo test -p <crate>` per-crate matrix | Execute all Rust tests including `conformance_fixtures.rs` |
 | `typescript-conformance` | `bun test tools/conformance/typescript-*.test.ts` | Shared JSON fixtures via TS adapters at pinned Enbox |
 | `dwn-sdk-js-reference` | `bun run --filter @enbox/dwn-sdk-js test:node` | Full SDK regression at pinned Enbox |
 | `loopback-interop` | build server + `bun test tools/interop/loopback-interop.test.ts` | TS HTTP + WebSocket clients against Rust `LoopbackDwnServer` |
