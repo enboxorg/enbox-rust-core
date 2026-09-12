@@ -195,27 +195,30 @@ where
         Ok(())
     }
 
-    /// Re-examines this protocol's control records and removes the ones the
-    /// configuration contradicts.
+    /// Which of this protocol's control records the configuration contradicts,
+    /// with everything their removal will need.
     ///
-    /// Idempotent by construction: each record is judged afresh, and a record
-    /// already purged is simply no longer there to judge. That is what lets an
-    /// interrupted repair resume by re-running rather than by remembering
-    /// where it stopped.
+    /// Judging and removing are separate steps because the removal has to be
+    /// recorded before it starts. Deleting a record's messages destroys the
+    /// only account of which data belonged to it, so the data CIDs are read
+    /// here, while the record is still there to read them from, and handed to
+    /// the caller to make durable.
     ///
-    /// A record that cannot be judged is kept, so a store failure mid-scan
-    /// aborts the pass with the obligation intact rather than continuing past
-    /// records it never really examined.
-    pub async fn perform_control_repair(
+    /// Fails rather than reports a short list when a record cannot be
+    /// examined. A list that silently omitted the records a store outage hid
+    /// would look exactly like a list that found nothing wrong, and the repair
+    /// obligation would retire having never looked at them.
+    pub async fn control_records_to_purge(
         &self,
-        data: ResumableControlRepairData,
-    ) -> Result<(), String> {
+        data: &ResumableControlRepairData,
+    ) -> Result<Vec<ResumableControlPurgeData>, String> {
         let tenant = data.tenant.as_str();
+        let mut condemned = Vec::new();
         for control in self
             .stored_control_initial_writes(tenant, &data.protocol)
             .await?
         {
-            if control_config_validity(tenant, &control, &self.message_store).await
+            if control_config_validity(tenant, &control, &self.message_store).await?
                 != ControlConfigValidity::Invalid
             {
                 continue;
@@ -223,20 +226,16 @@ where
             let Some(record_id) = record_id(&control) else {
                 continue;
             };
-            // Read before the purge starts: removing the messages destroys the
-            // only record of which data belonged here.
-            let data_cids = vec![records_write_descriptor(&control)
-                .map_err(|error| error.to_string())?
-                .data_cid
-                .clone()];
-            self.perform_control_purge(ResumableControlPurgeData {
+            condemned.push(ResumableControlPurgeData {
                 tenant: data.tenant.clone(),
                 record_id,
-                data_cids,
-            })
-            .await?;
+                data_cids: vec![records_write_descriptor(&control)
+                    .map_err(|error| error.to_string())?
+                    .data_cid
+                    .clone()],
+            });
         }
-        Ok(())
+        Ok(condemned)
     }
 
     /// The control records this protocol holds, one entry per record.

@@ -109,16 +109,13 @@ pub(super) async fn can_enumerate_audience<MessageStore>(
     signature: &AuthorizationContext,
     requester: &str,
     id: &AudienceId,
-    grants: &[PermissionGrant],
+    grant: Option<&PermissionGrant>,
     message_store: &MessageStore,
 ) -> Result<bool, ControlValidationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    if grants
-        .iter()
-        .any(|grant| grant_covers_role(&grant.scope, id, RecordsMethod::Read))
-    {
+    if grant.is_some_and(|grant| grant_covers_role(&grant.scope, id, RecordsMethod::Read)) {
         return Ok(true);
     }
 

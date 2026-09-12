@@ -22,12 +22,15 @@ pub(super) async fn delivery_reachable_by_grant<MessageStore>(
     read_message: &Message<Descriptor>,
     control: &Message<Descriptor>,
     id: &AudienceId,
-    grants: &[PermissionGrant],
+    grant: Option<&PermissionGrant>,
     message_store: &MessageStore,
 ) -> Result<bool, ControlValidationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
+    let Some(grant) = grant else {
+        return Ok(false);
+    };
     let recipient = records_write_descriptor(control)
         .map_err(|error| unexpected(error.to_string()))?
         .recipient
@@ -35,60 +38,49 @@ where
     let Some(recipient) = recipient else {
         return Ok(false);
     };
-
-    let mut definition = None;
-    for grant in grants {
-        if recipient != grant.grantor && recipient != grant.grantee {
-            continue;
-        }
-        let PermissionScope::Records(scope) = &grant.scope else {
-            continue;
-        };
-        if scope.method != RecordsMethod::Read || scope.protocol != id.scope.protocol {
-            continue;
-        }
-        let scope_path = match &scope.selector {
-            Some(RecordsSelector::ProtocolPath(path)) => Some(path.0.as_str()),
-            // A context-scoped grant has no bearing on a role-addressed delivery.
-            Some(RecordsSelector::ContextId(_)) => continue,
-            None => None,
-        };
-
-        // No path at all covers the whole protocol.
-        let Some(scope_path) = scope_path else {
-            return Ok(true);
-        };
-        // The delivered role inside the granted subtree.
-        if grant_covers_role(&grant.scope, id, RecordsMethod::Read) {
-            return Ok(true);
-        }
-        // Or a keyed role the granted subtree itself grants read on: a reader
-        // given a subtree implicitly reaches the roles that subtree reads
-        // through, wherever in the protocol those roles are declared.
-        let timestamp = request_timestamp(read_message)?;
-        if definition.is_none() {
-            definition = match fetch_protocol_definition(
-                tenant,
-                &id.scope.protocol,
-                message_store,
-                Some(&timestamp),
-            )
-            .await
-            {
-                Ok(definition) => Some(definition),
-                Err(ProtocolDefinitionLookupError::Store(detail)) => {
-                    return Err(ControlValidationError::Internal(detail))
-                }
-                Err(_) => return Ok(false),
-            };
-        }
-        if let Some(definition) = &definition {
-            if read_roles_under(definition, scope_path).contains(&id.scope.role_path) {
-                return Ok(true);
-            }
-        }
+    if recipient != grant.grantor && recipient != grant.grantee {
+        return Ok(false);
     }
-    Ok(false)
+    let PermissionScope::Records(scope) = &grant.scope else {
+        return Ok(false);
+    };
+    if scope.method != RecordsMethod::Read || scope.protocol != id.scope.protocol {
+        return Ok(false);
+    }
+    let scope_path = match &scope.selector {
+        Some(RecordsSelector::ProtocolPath(path)) => path.0.as_str(),
+        // A context-scoped grant has no bearing on a role-addressed delivery.
+        Some(RecordsSelector::ContextId(_)) => return Ok(false),
+        // No path at all covers the whole protocol.
+        None => return Ok(true),
+    };
+
+    // The delivered role inside the granted subtree.
+    if grant_covers_role(&grant.scope, id, RecordsMethod::Read) {
+        return Ok(true);
+    }
+
+    // Or a keyed role the granted subtree itself grants read on: a reader
+    // given a subtree implicitly reaches the roles that subtree reads through,
+    // wherever in the protocol those roles are declared.
+    let timestamp = request_timestamp(read_message)?;
+    let definition = match fetch_protocol_definition(
+        tenant,
+        &id.scope.protocol,
+        message_store,
+        Some(&timestamp),
+    )
+    .await
+    {
+        Ok(definition) => definition,
+        Err(ProtocolDefinitionLookupError::Store(detail)) => {
+            return Err(ControlValidationError::Internal(detail))
+        }
+        // Without a definition the role exception is undecidable, and
+        // undecidable is not reachable.
+        Err(_) => return Ok(false),
+    };
+    Ok(read_roles_under(&definition, scope_path).contains(&id.scope.role_path))
 }
 
 /// Local role paths that the rule set at `scope_path`, or anything beneath it,

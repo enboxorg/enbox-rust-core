@@ -11,56 +11,23 @@
 //! this pass cannot determine is kept, and only a contradiction the
 //! configuration itself owns licenses removal.
 //!
+//! The capability belongs to the resumable task manager rather than to a
+//! wrapper around it: a repair obligation *is* a task, and the manager is what
+//! makes tasks durable.
+//!
 //! Scoped to control records. Repairing ordinary application records against
 //! configuration changes is separate work.
 
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::stores::ManagedResumableTask;
 use crate::tasks::controller::ResumableControlRepairData;
 use crate::tasks::manager::{ResumableTask, ResumableTaskManager, ResumableTaskName};
 
 use super::configure::{ControlRepairer, EnlistedRepair};
 
-/// Repairs control records through the resumable task machinery, so a removal
-/// interrupted partway is finished rather than lost.
-#[derive(Clone)]
-pub struct TaskControlRepairer<MessageStore, DataStore, TaskStore> {
-    task_manager: ResumableTaskManager<MessageStore, DataStore, TaskStore>,
-}
-
-impl<MessageStore, DataStore, TaskStore> TaskControlRepairer<MessageStore, DataStore, TaskStore>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-    TaskStore: crate::stores::ResumableTaskStore + Clone + Send + Sync + 'static,
-{
-    pub fn new(task_manager: ResumableTaskManager<MessageStore, DataStore, TaskStore>) -> Self {
-        Self { task_manager }
-    }
-
-    async fn enlist_protocol_repair(
-        &self,
-        tenant: &str,
-        protocol: &str,
-    ) -> Result<ManagedResumableTask<ResumableTask>, String> {
-        self.task_manager
-            .enlist(ResumableTask {
-                name: ResumableTaskName::ControlRepair,
-                data: serde_json::to_value(ResumableControlRepairData {
-                    tenant: tenant.to_string(),
-                    protocol: protocol.to_string(),
-                })
-                .map_err(|error| error.to_string())?,
-            })
-            .await
-            .map_err(|error| error.to_string())
-    }
-}
-
 impl<MessageStore, DataStore, TaskStore> ControlRepairer
-    for TaskControlRepairer<MessageStore, DataStore, TaskStore>
+    for ResumableTaskManager<MessageStore, DataStore, TaskStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
     DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
@@ -72,9 +39,18 @@ where
         protocol: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<EnlistedRepair, String>> + Send + 'a>> {
         Box::pin(async move {
-            self.enlist_protocol_repair(tenant, protocol)
+            let task = ResumableTask {
+                name: ResumableTaskName::ControlRepair,
+                data: serde_json::to_value(ResumableControlRepairData {
+                    tenant: tenant.to_string(),
+                    protocol: protocol.to_string(),
+                })
+                .map_err(|error| error.to_string())?,
+            };
+            ResumableTaskManager::enlist(self, task)
                 .await
                 .map(EnlistedRepair)
+                .map_err(|error| error.to_string())
         })
     }
 
@@ -83,8 +59,7 @@ where
         enlisted: EnlistedRepair,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
         Box::pin(async move {
-            self.task_manager
-                .fulfil(enlisted.0)
+            ResumableTaskManager::fulfil(self, enlisted.0)
                 .await
                 .map_err(|error| error.to_string())
         })

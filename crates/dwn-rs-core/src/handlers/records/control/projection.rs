@@ -2,6 +2,9 @@ use super::visibility::{names_record, pins_audience_key};
 use crate::canonical_rfc3339;
 use crate::permissions::message_signer;
 
+use crate::stores::RecordLimitOccupancy;
+use crate::MessageSort;
+
 use super::*;
 
 /// Where a candidate ranks as the current audience for its scope.
@@ -150,35 +153,46 @@ where
 ///
 /// The returned cursor is the last storage page's, so a caller resumes after
 /// everything actually examined rather than re-reading what was filtered out.
-pub(crate) async fn collect_visible_page<MessageStore, Fetch, Fut>(
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn collect_visible_page<MessageStore>(
     tenant: &str,
     request: &Message<Descriptor>,
     signature: Option<&AuthorizationContext>,
     filter: &RecordsFilter,
-    limit: Option<u64>,
+    filters: Filters,
+    sort: Option<MessageSort>,
+    pagination: Option<Pagination>,
+    record_limit: Option<RecordLimitOccupancy>,
     message_store: &MessageStore,
-    mut fetch: Fetch,
 ) -> Result<(Vec<Message<Descriptor>>, Option<Cursor>), ControlValidationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
-    // The remaining visible capacity, so each refill asks for what it still
-    // needs rather than for the whole page again.
-    Fetch: FnMut(Option<Cursor>, Option<u64>) -> Fut,
-    Fut: std::future::Future<Output = Result<(Vec<Message<Descriptor>>, Option<Cursor>), String>>,
 {
+    let limit = pagination.as_ref().and_then(|page| page.limit);
+    let mut cursor = pagination.and_then(|page| page.cursor);
     let mut visible: Vec<Message<Descriptor>> = Vec::new();
-    let mut cursor = None;
 
     loop {
-        let remaining = limit.map(|limit| limit.saturating_sub(visible.len() as u64));
-        let (page, next) = fetch(cursor.clone(), remaining)
+        let page = message_store
+            .query(
+                tenant,
+                filters.clone(),
+                sort,
+                Some(Pagination {
+                    cursor: cursor.clone(),
+                    // Only the capacity still unfilled, never the whole limit
+                    // again: see above.
+                    limit: limit.map(|limit| limit.saturating_sub(visible.len() as u64)),
+                }),
+                record_limit.clone(),
+            )
             .await
-            .map_err(ControlValidationError::Internal)?;
-        let exhausted = page.is_empty() || next.is_none();
-        cursor = next;
+            .map_err(|error| ControlValidationError::Internal(error.to_string()))?;
+        let exhausted = page.messages.is_empty() || page.cursor.is_none();
+        cursor = page.cursor;
 
         let projected =
-            project_current_audiences(tenant, Some(filter), page, message_store).await?;
+            project_current_audiences(tenant, Some(filter), page.messages, message_store).await?;
         visible.extend(
             filter_visible_controls(
                 tenant,
@@ -192,12 +206,8 @@ where
         );
 
         match limit {
-            // Never overshoots: each fetch asked for exactly the capacity left,
-            // and projection and visibility only remove.
             Some(limit) if (visible.len() as u64) < limit && !exhausted => continue,
-            Some(_) => return Ok((visible, cursor)),
-            None if exhausted => return Ok((visible, cursor)),
-            None => continue,
+            _ => return Ok((visible, cursor)),
         }
     }
 }

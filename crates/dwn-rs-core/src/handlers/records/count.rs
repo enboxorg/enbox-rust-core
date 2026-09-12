@@ -11,7 +11,6 @@ use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self};
 use crate::replies::records::Count;
-use crate::Pagination;
 use crate::Response;
 
 use super::RecordsAuthorizationKind;
@@ -103,41 +102,16 @@ where
             // ponytail: materialises whenever controls are possible; narrow it
             // with a cheap control-path probe if broad counts become hot.
             if control::filter_may_match_controls(&descriptor.filter) {
-                let mut first_page = true;
                 let counted = match control::collect_visible_page(
                     tenant,
                     &message,
                     signature.as_ref(),
                     &descriptor.filter,
+                    filters,
                     None,
+                    None,
+                    record_limit,
                     &self.message_store,
-                    |cursor, remaining| {
-                        let filters = filters.clone();
-                        let record_limit = record_limit.clone();
-                        let cursor = if first_page {
-                            first_page = false;
-                            None
-                        } else {
-                            cursor
-                        };
-                        async move {
-                            let result = self
-                                .message_store
-                                .query(
-                                    tenant,
-                                    filters,
-                                    None,
-                                    Some(Pagination {
-                                        cursor,
-                                        limit: remaining,
-                                    }),
-                                    record_limit,
-                                )
-                                .await
-                                .map_err(|err| err.to_string())?;
-                            Ok((result.messages, result.cursor))
-                        }
-                    },
                 )
                 .await
                 {

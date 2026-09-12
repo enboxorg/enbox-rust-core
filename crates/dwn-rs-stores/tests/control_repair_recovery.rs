@@ -23,7 +23,9 @@ use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::stores::{DataStore, MessageStore, ResumableTaskStore};
-use dwn_rs_core::tasks::controller::{ResumableControlRepairData, StorageController};
+use dwn_rs_core::tasks::controller::{
+    ResumableControlPurgeData, ResumableControlRepairData, StorageController,
+};
 use dwn_rs_core::tasks::manager::{ResumableTask, ResumableTaskManager, ResumableTaskName};
 use dwn_rs_core::testing::{put_protocol_definition, signed_write_message, WriteSpec};
 use dwn_rs_core::{Descriptor, Filter, FilterKey, Filters, MapValue, Message, Value};
@@ -413,4 +415,56 @@ async fn repeated_recovery_is_safe() {
         .await
         .expect("a repeated pass must be safe");
     assert_eq!(retained(&store, &seeded).await, vec!["kept"]);
+}
+
+#[tokio::test]
+async fn cleanup_intent_outlives_the_messages_that_described_it() {
+    // Serialize file-backed tests process-wide.
+    let db = TempDb::new("control-repair-cleanup-intent");
+    let payload = Bytes::from_static(b"audience payload");
+
+    let seeded = {
+        let (store, tasks) = reopen(&db).await;
+        let seeded = seed(&store, &payload).await;
+        let first = &seeded["first"];
+
+        // The state a crash between the two halves of a removal leaves: the
+        // record's messages are gone, so no scan can ever rediscover which
+        // data belonged to it, and its data is still on disk. Only the intent
+        // enlisted before the removal began can finish this.
+        tasks
+            .register(
+                ResumableTask {
+                    name: ResumableTaskName::ControlPurge,
+                    data: serde_json::to_value(ResumableControlPurgeData {
+                        tenant: TENANT.to_string(),
+                        record_id: first.record_id.clone(),
+                        data_cids: vec![first.data_cid.clone()],
+                    })
+                    .expect("purge intent must serialize"),
+                },
+                LAPSED_LEASE,
+            )
+            .await
+            .expect("enlist cleanup intent");
+        let cid = first.message.cid().expect("cid").to_string();
+        MessageStore::delete(&store, TENANT, &cid)
+            .await
+            .expect("remove first record");
+        assert!(
+            data_present(&store, first).await,
+            "data outlives its messages until cleanup runs"
+        );
+        seeded
+    };
+
+    let (store, tasks) = reopen(&db).await;
+    manager(&store, &tasks)
+        .resume_tasks_and_wait_for_completion()
+        .await
+        .expect("recovery must succeed");
+    assert!(
+        !data_present(&store, &seeded["first"]).await,
+        "orphaned data must be reclaimed through the intent that outlived its record"
+    );
 }

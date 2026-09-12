@@ -37,7 +37,6 @@ use crate::stores::{
 };
 use crate::validation::{ingest_message, ingress_rejection};
 use crate::Message;
-use crate::Pagination;
 use crate::Response;
 
 use super::{RecordsAuthorizationKind, RECORDS_INTERFACE, WRITE_METHOD};
@@ -161,46 +160,16 @@ where
             // and visibility both remove records, so one storage page is not
             // one reply page.
             let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), false);
-            let limit = descriptor.pagination.as_ref().and_then(|page| page.limit);
-            let start_cursor = descriptor
-                .pagination
-                .as_ref()
-                .and_then(|page| page.cursor.clone());
-            let mut first_page = true;
             let (messages, cursor) = match control::collect_visible_page(
                 tenant,
                 &message,
                 signature.as_ref(),
                 &descriptor.filter,
-                limit,
+                filters,
+                Some(sort),
+                descriptor.pagination.clone(),
+                record_limit,
                 self.message_store.as_ref(),
-                |cursor, remaining| {
-                    let filters = filters.clone();
-                    let record_limit = record_limit.clone();
-                    let cursor = if first_page {
-                        first_page = false;
-                        start_cursor.clone()
-                    } else {
-                        cursor
-                    };
-                    async move {
-                        let result = self
-                            .message_store
-                            .query(
-                                tenant,
-                                filters,
-                                Some(sort),
-                                Some(Pagination {
-                                    cursor,
-                                    limit: remaining.or(limit),
-                                }),
-                                record_limit,
-                            )
-                            .await
-                            .map_err(|err| err.to_string())?;
-                        Ok((result.messages, result.cursor))
-                    }
-                },
             )
             .await
             {
@@ -685,47 +654,19 @@ where
         // one. Filtering a single storage page here would let the native and
         // WebSocket snapshot come back short — or empty — while Query at the
         // same head returns a full visible page.
-        let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), false);
-        let limit = descriptor.pagination.as_ref().and_then(|page| page.limit);
-        let start_cursor = descriptor
-            .pagination
-            .as_ref()
-            .and_then(|page| page.cursor.clone());
-        let mut first_page = true;
         let (messages, snapshot_cursor) = match control::collect_visible_page(
             tenant,
             &message,
             signature.as_ref(),
             &descriptor.filter,
-            limit,
+            query_filters,
+            Some(date_sort_to_message_sort(
+                descriptor.date_sort.as_ref(),
+                false,
+            )),
+            descriptor.pagination.clone(),
+            record_limit,
             self.message_store.as_ref(),
-            |cursor, remaining| {
-                let query_filters = query_filters.clone();
-                let record_limit = record_limit.clone();
-                let cursor = if first_page {
-                    first_page = false;
-                    start_cursor.clone()
-                } else {
-                    cursor
-                };
-                async move {
-                    let result = self
-                        .message_store
-                        .query(
-                            tenant,
-                            query_filters,
-                            Some(sort),
-                            Some(Pagination {
-                                cursor,
-                                limit: remaining.or(limit),
-                            }),
-                            record_limit,
-                        )
-                        .await
-                        .map_err(|err| err.to_string())?;
-                    Ok((result.messages, result.cursor))
-                }
-            },
         )
         .await
         {

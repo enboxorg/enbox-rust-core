@@ -2,20 +2,23 @@
 //! ones it contradicts.
 
 use std::fmt::Debug;
+use std::sync::atomic::AtomicI64;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use crate::descriptors::messages::record_id;
 use crate::descriptors::{ConfigureDescriptor, MessageDescriptor};
 use crate::errors::{ResumableTaskStoreError, StoreError};
-use crate::handlers::protocols::TaskControlRepairer;
 use crate::handlers::records::control::ControlValidationError;
 use crate::permissions::message_author;
 use crate::protocols::{Action, ActionWho, Can, Who};
 use crate::stores::memory::MemoryResumableTaskStore;
 use crate::stores::{ManagedResumableTask, ResumableTaskStore};
-use crate::tasks::controller::StorageController;
-use crate::tasks::manager::ResumableTaskManager;
+use crate::tasks::controller::{
+    ResumableControlPurgeData, ResumableControlRepairData, StorageController,
+};
+use crate::tasks::manager::{ResumableTask, ResumableTaskManager, ResumableTaskName};
 
 use super::*;
 
@@ -56,7 +59,7 @@ async fn repair_removes_only_records_the_configuration_contradicts() {
     // Unchanged configuration: nothing to answer for.
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
-        ControlConfigValidity::Valid,
+        Ok(ControlConfigValidity::Valid),
         "an unchanged configuration invalidates nothing"
     );
 
@@ -68,7 +71,7 @@ async fn repair_removes_only_records_the_configuration_contradicts() {
     reconfigure(&fixture, unkeyed, "2025-01-02T00:00:00.000000Z").await;
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
-        ControlConfigValidity::Valid,
+        Ok(ControlConfigValidity::Valid),
         "a role that loses its key agreement must not cost custody of what it already sealed"
     );
 
@@ -79,7 +82,7 @@ async fn repair_removes_only_records_the_configuration_contradicts() {
     reconfigure(&fixture, demoted, "2025-01-03T00:00:00.000000Z").await;
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
-        ControlConfigValidity::Invalid,
+        Ok(ControlConfigValidity::Invalid),
         "a role that is no longer a role leaves the record contradicted"
     );
 }
@@ -106,7 +109,7 @@ async fn repair_retains_records_it_cannot_judge() {
     let empty_store = MemoryMessageStore::default();
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &empty_store).await,
-        ControlConfigValidity::Unknown,
+        Ok(ControlConfigValidity::Unknown),
         "a missing configuration is undetermined, never proof the record is wrong"
     );
 }
@@ -243,7 +246,7 @@ async fn a_late_historical_configuration_invalidates_a_record_it_governs() {
     let audience = stored_audience(&fixture).await;
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
-        ControlConfigValidity::Valid,
+        Ok(ControlConfigValidity::Valid),
         "under the history as first known, the record is sound"
     );
 
@@ -257,7 +260,7 @@ async fn a_late_historical_configuration_invalidates_a_record_it_governs() {
     .await;
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &fixture.message_store).await,
-        ControlConfigValidity::Invalid,
+        Ok(ControlConfigValidity::Invalid),
         "a late historical configuration governs the record written after it"
     );
 }
@@ -286,10 +289,10 @@ async fn configuring_a_protocol_purges_the_controls_it_invalidates() {
     data_store.open().await.unwrap();
     let mut tasks = MemoryResumableTaskStore::default();
     ResumableTaskStore::open(&mut tasks).await.unwrap();
-    let repairer = TaskControlRepairer::new(ResumableTaskManager::new(
+    let repairer = ResumableTaskManager::new(
         tasks,
         StorageController::new(fixture.message_store.clone(), data_store.clone()),
-    ));
+    );
 
     // A configuration in which `member` is no longer a role at all.
     let mut demoted = control_definition();
@@ -344,10 +347,24 @@ async fn signed_configure_with_definition(
 
 /// A message store whose queries can be made to fail, standing in for a store
 /// that is unavailable rather than one that answers "no".
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct FlakyMessageStore {
     inner: MemoryMessageStore,
     fail_query: Arc<AtomicBool>,
+    /// Queries to answer before the store starts failing, so a failure can be
+    /// placed *after* a scan has listed its candidates. Negative leaves the
+    /// count out of play.
+    healthy_queries: Arc<AtomicI64>,
+}
+
+impl Default for FlakyMessageStore {
+    fn default() -> Self {
+        Self {
+            inner: MemoryMessageStore::default(),
+            fail_query: Arc::new(AtomicBool::new(false)),
+            healthy_queries: Arc::new(AtomicI64::new(-1)),
+        }
+    }
 }
 
 impl MessageStore for FlakyMessageStore {
@@ -391,7 +408,9 @@ impl MessageStore for FlakyMessageStore {
         pagination: Option<Pagination>,
         record_limit: Option<RecordLimitOccupancy>,
     ) -> Result<MessageQueryResult, MessageStoreError> {
-        if self.fail_query.load(Ordering::SeqCst) {
+        let counted_out = self.healthy_queries.load(Ordering::SeqCst) >= 0
+            && self.healthy_queries.fetch_sub(1, Ordering::SeqCst) <= 0;
+        if self.fail_query.load(Ordering::SeqCst) || counted_out {
             return Err(MessageStoreError::StoreError(
                 StoreError::InternalException("store unavailable".to_string()),
             ));
@@ -448,29 +467,39 @@ async fn a_transient_store_failure_never_reads_as_proof_the_record_is_invalid() 
     .await;
     flaky.fail_query.store(true, Ordering::SeqCst);
 
-    assert_eq!(
-        control_config_validity(CONTROL_TENANT, &audience, &flaky).await,
-        ControlConfigValidity::Unknown,
-        "an unavailable store is undetermined, never grounds to destroy the record"
+    assert!(
+        control_config_validity(CONTROL_TENANT, &audience, &flaky)
+            .await
+            .is_err(),
+        "an unavailable store leaves the record unexamined — never grounds to \
+         destroy it, and never a verdict a repair can retire on"
     );
 
     // And once it recovers, the same record is judged on its merits.
     flaky.fail_query.store(false, Ordering::SeqCst);
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &flaky).await,
-        ControlConfigValidity::Valid,
+        Ok(ControlConfigValidity::Valid),
         "the record was always sound; only the store was not"
     );
 }
 
-/// A task store that cannot record anything, standing in for one that is
-/// unavailable at exactly the wrong moment.
+/// A task store that keeps a log of what was enlisted, and can be made unable
+/// to enlist anything.
+///
+/// Enlisting is the step both of these tests turn on — one that it happened
+/// before the work it describes, one that a node which cannot do it refuses to
+/// proceed — and neither is observable through the store's own API: a freshly
+/// enlisted task holds a live lease, so `grab` will not return it, and `read`
+/// needs an id the caller never sees.
 #[derive(Clone, Default)]
-struct UnwritableTaskStore {
+struct ProbeTaskStore {
     inner: MemoryResumableTaskStore,
+    fail_register: Arc<AtomicBool>,
+    enlisted: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
-impl ResumableTaskStore for UnwritableTaskStore {
+impl ResumableTaskStore for ProbeTaskStore {
     async fn open(&mut self) -> Result<(), ResumableTaskStoreError> {
         ResumableTaskStore::open(&mut self.inner).await
     }
@@ -481,12 +510,19 @@ impl ResumableTaskStore for UnwritableTaskStore {
 
     async fn register<T: Serialize + Send + Sync + DeserializeOwned + Debug + 'static>(
         &self,
-        _task: T,
-        _timeout_in_seconds: u64,
+        task: T,
+        timeout_in_seconds: u64,
     ) -> Result<ManagedResumableTask<T>, ResumableTaskStoreError> {
-        Err(ResumableTaskStoreError::StoreError(
-            StoreError::InternalException("task store unavailable".to_string()),
-        ))
+        if self.fail_register.load(Ordering::SeqCst) {
+            return Err(ResumableTaskStoreError::StoreError(
+                StoreError::InternalException("task store unavailable".to_string()),
+            ));
+        }
+        self.enlisted
+            .lock()
+            .unwrap()
+            .push(serde_json::to_value(&task).expect("an enlisted task must serialize"));
+        self.inner.register(task, timeout_in_seconds).await
     }
 
     async fn grab<T: Serialize + Send + Sync + DeserializeOwned + Debug + Unpin>(
@@ -496,9 +532,7 @@ impl ResumableTaskStore for UnwritableTaskStore {
         self.inner.grab(count).await
     }
 
-    async fn read<
-        T: serde::Serialize + Send + Sync + serde::de::DeserializeOwned + std::fmt::Debug,
-    >(
+    async fn read<T: Serialize + Send + Sync + DeserializeOwned + Debug>(
         &self,
         task_id: &str,
     ) -> Result<Option<ManagedResumableTask<T>>, ResumableTaskStoreError> {
@@ -537,12 +571,13 @@ async fn a_configuration_is_refused_when_its_repair_cannot_be_enlisted() {
 
     let mut data_store = TestDataStore::default();
     data_store.open().await.unwrap();
-    let mut tasks = UnwritableTaskStore::default();
+    let mut tasks = ProbeTaskStore::default();
     ResumableTaskStore::open(&mut tasks).await.unwrap();
-    let repairer = TaskControlRepairer::new(ResumableTaskManager::new(
+    tasks.fail_register.store(true, Ordering::SeqCst);
+    let repairer = ResumableTaskManager::new(
         tasks,
         StorageController::new(fixture.message_store.clone(), data_store.clone()),
-    ));
+    );
 
     let mut demoted = control_definition();
     demoted.structure.get_mut("member").unwrap().role = None;
@@ -592,5 +627,186 @@ async fn a_configuration_is_refused_when_its_repair_cannot_be_enlisted() {
     assert!(
         !stored_control_records(&fixture).await.is_empty(),
         "and the control record it would have contradicted must still be there"
+    );
+}
+
+// Covers: DWN-PROTO-004, DWN-REC-006
+// A repair that could not examine every record has not finished, and must not
+// retire as though it had. The store answers the scan's listing queries and
+// then goes away, so the records are found but never judged — the shape a
+// passing outage takes. Skipping them and reporting success would discharge the
+// obligation while leaving the accepted configuration unchecked against them.
+#[tokio::test]
+async fn a_repair_that_could_not_judge_a_record_keeps_its_obligation() {
+    let flaky = FlakyMessageStore::default();
+    put_protocol_definition(
+        CONTROL_TENANT,
+        &flaky,
+        control_definition(),
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+
+    let mut write_data_store = TestDataStore::default();
+    write_data_store.open().await.unwrap();
+    let key_id = audience_key_jwk().thumbprint().unwrap();
+    let data = audience_payload("member", "", &key_id, &role_key_jwk().thumbprint().unwrap());
+    let write = control_write(
+        AUDIENCE_PATH,
+        audience_tags("member", "", &key_id),
+        &data,
+        "2025-01-01T00:01:00.000000Z",
+        |_| {},
+    )
+    .await;
+    assert_eq!(
+        RecordsWriteHandler::new(
+            flaky.clone(),
+            write_data_store,
+            Some(Arc::new(test_resolver()))
+        )
+        .run(CONTROL_TENANT, &write, Some(data))
+        .await
+        .status
+        .code,
+        202,
+        "the audience must be stored, or the scan has nothing to fail on"
+    );
+
+    let mut data_store = TestDataStore::default();
+    data_store.open().await.unwrap();
+    let mut tasks = MemoryResumableTaskStore::default();
+    ResumableTaskStore::open(&mut tasks).await.unwrap();
+    let manager = ResumableTaskManager::new(
+        tasks.clone(),
+        StorageController::new(flaky.clone(), data_store),
+    );
+    // Registered with a lapsed lease, the way a crashed process leaves one:
+    // recovery only reclaims work nobody is still holding.
+    let enlisted = tasks
+        .register(
+            ResumableTask {
+                name: ResumableTaskName::ControlRepair,
+                data: serde_json::to_value(ResumableControlRepairData {
+                    tenant: CONTROL_TENANT.to_string(),
+                    protocol: CONTROL_PROTOCOL.to_string(),
+                })
+                .unwrap(),
+            },
+            0,
+        )
+        .await
+        .unwrap();
+
+    // Two queries: one per control path the listing walks. Nothing left for
+    // judging what it found.
+    flaky.healthy_queries.store(2, Ordering::SeqCst);
+    assert!(
+        manager
+            .resume_tasks_and_wait_for_completion()
+            .await
+            .is_err(),
+        "a repair that could not judge its records must report failure"
+    );
+
+    // And the obligation outlived the pass that could not discharge it: still
+    // enlisted, waiting for its lease to lapse again rather than retired.
+    let still_enlisted = tasks
+        .read::<ResumableTask>(&enlisted.id)
+        .await
+        .expect("reading the task store must succeed");
+    assert_eq!(
+        still_enlisted.map(|managed| managed.task.name),
+        Some(ResumableTaskName::ControlRepair),
+        "the repair obligation must survive a pass that could not complete it"
+    );
+}
+
+// Covers: DWN-PROTO-004, DWN-REC-006
+// Each removal is enlisted before it starts, because the first thing it does is
+// delete the messages that say which data belonged to the record. Once those
+// are gone no scan can rediscover the cleanup — the scan derives its victims
+// from retained messages — so the intent has to outlive them.
+//
+// Data cleanup is made to fail here, which is the observable stand-in for
+// crashing between the two halves: the messages are gone, the data is not, and
+// what remains is the enlisted intent that can still finish it.
+#[tokio::test]
+async fn each_removal_is_enlisted_before_the_messages_that_describe_it_are_gone() {
+    let fixture = control_fixture().await;
+    let key_id = fixture.audience_key_id.clone();
+    admit_audience(&fixture, &key_id, "2025-01-01T00:01:00.000000Z").await;
+    let condemned = stored_control_records(&fixture)
+        .await
+        .first()
+        .and_then(record_id)
+        .expect("the audience must be stored");
+
+    let mut data_store = TestDataStore::default();
+    data_store.open().await.unwrap();
+    data_store.fail_delete.store(true, Ordering::SeqCst);
+    let mut tasks = ProbeTaskStore::default();
+    ResumableTaskStore::open(&mut tasks).await.unwrap();
+    let manager = ResumableTaskManager::new(
+        tasks.clone(),
+        StorageController::new(fixture.message_store.clone(), data_store),
+    );
+
+    // A configuration in which `member` is no longer a role, so the stored
+    // audience is contradicted and the scan condemns it.
+    let mut demoted = control_definition();
+    demoted.structure.get_mut("member").unwrap().role = None;
+    reconfigure(&fixture, demoted, "2025-01-02T00:00:00.000000Z").await;
+
+    let enlisted = tasks
+        .register(
+            ResumableTask {
+                name: ResumableTaskName::ControlRepair,
+                data: serde_json::to_value(ResumableControlRepairData {
+                    tenant: CONTROL_TENANT.to_string(),
+                    protocol: CONTROL_PROTOCOL.to_string(),
+                })
+                .unwrap(),
+            },
+            0,
+        )
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .resume_tasks_and_wait_for_completion()
+            .await
+            .is_err(),
+        "a repair whose cleanup failed has not finished"
+    );
+
+    // The messages are gone, so nothing can be re-derived from them.
+    assert!(
+        stored_control_records(&fixture).await.is_empty(),
+        "the condemned record's messages must have been removed"
+    );
+
+    // What survives is the cleanup intent, naming the record and its data.
+    let enlisted_purge = tasks
+        .enlisted
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|task| serde_json::from_value::<ResumableTask>(task.clone()).ok())
+        .find(|task| task.name == ResumableTaskName::ControlPurge)
+        .expect("the removal must have been enlisted before it started");
+    let data: ResumableControlPurgeData =
+        serde_json::from_value(enlisted_purge.data.clone()).unwrap();
+    assert_eq!(data.record_id, condemned);
+    assert_eq!(data.data_cids.len(), 1, "the data to reclaim is named");
+
+    // And the scan's own obligation is still there too, undischarged.
+    assert!(
+        tasks
+            .read::<ResumableTask>(&enlisted.id)
+            .await
+            .unwrap()
+            .is_some(),
+        "the scan obligation must outlive a pass that could not complete it"
     );
 }

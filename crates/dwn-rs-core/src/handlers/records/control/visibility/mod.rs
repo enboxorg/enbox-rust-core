@@ -26,8 +26,8 @@ pub(crate) fn read_requester(signature: &AuthorizationContext) -> &str {
     }
 }
 
-/// The grants a read request invokes, validated before any of them is allowed
-/// to confer visibility.
+/// The grant a read request invokes, validated before it is allowed to confer
+/// visibility.
 ///
 /// Validation happens here rather than at the point of use so that an invalid
 /// grant fails the request instead of silently falling through to whatever
@@ -44,16 +44,18 @@ where
     if read_requester(signature) == tenant {
         return Ok(());
     }
-    invoked_read_grants(tenant, read_message, signature, message_store).await?;
+    invoked_read_grant(tenant, read_message, signature, message_store).await?;
     Ok(())
 }
 
-async fn invoked_read_grants<MessageStore>(
+/// At most one: a request either embeds an author-delegated grant or names a
+/// single grant id, and the two are alternatives rather than a set.
+async fn invoked_read_grant<MessageStore>(
     tenant: &str,
     read_message: &Message<Descriptor>,
     signature: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<Vec<PermissionGrant>, ControlValidationError>
+) -> Result<Option<PermissionGrant>, ControlValidationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -75,11 +77,11 @@ where
         )
         .await
         .map_err(unauthorized)?;
-        return Ok(vec![grant.clone()]);
+        return Ok(Some(grant.clone()));
     }
 
     let Some(grant_id) = signature.permission_grant_id() else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let grant = fetch_grant(tenant, message_store, grant_id)
         .await
@@ -87,7 +89,7 @@ where
     perform_base_validation(read_message, tenant, requester, &grant, message_store)
         .await
         .map_err(unauthorized)?;
-    Ok(vec![grant])
+    Ok(Some(grant))
 }
 
 /// The timestamp a read request's authority is evaluated at. Role policy and
@@ -156,9 +158,9 @@ where
         return Ok(true);
     }
 
-    // Invoked grants are validated up front, including on requests that would
-    // otherwise be answered without them.
-    let grants = invoked_read_grants(tenant, read_message, signature, message_store).await?;
+    // An invoked grant is validated up front, including on requests that would
+    // otherwise be answered without it.
+    let grant = invoked_read_grant(tenant, read_message, signature, message_store).await?;
     let id = AudienceId::from_message(control, kind)?;
 
     match kind {
@@ -170,8 +172,15 @@ where
             {
                 return Ok(true);
             }
-            delivery_reachable_by_grant(tenant, read_message, control, &id, &grants, message_store)
-                .await
+            delivery_reachable_by_grant(
+                tenant,
+                read_message,
+                control,
+                &id,
+                grant.as_ref(),
+                message_store,
+            )
+            .await
         }
         ControlKind::Audience => {
             if filter.is_some_and(|filter| exact_audience_request_matches(filter, &id, control)) {
@@ -183,7 +192,7 @@ where
                 signature,
                 &requester,
                 &id,
-                &grants,
+                grant.as_ref(),
                 message_store,
             )
             .await

@@ -222,16 +222,23 @@ fn action_can(action: &Action) -> &[Can] {
 }
 
 /// Classifies a stored control record against the configuration now in force.
+///
+/// `Err` is not a fourth verdict: it means the record was never examined,
+/// because something the examination needed was unavailable. The distinction
+/// matters to the caller, not to the record. A verdict of `Unknown` is a
+/// finished judgement — this record is kept, and nothing more will be learned
+/// by asking again now — while an error leaves the question open and the
+/// repair obligation it belongs to undischarged.
 pub(crate) async fn control_config_validity<MessageStore>(
     tenant: &str,
     control: &Message<Descriptor>,
     message_store: &MessageStore,
-) -> ControlConfigValidity
+) -> Result<ControlConfigValidity, String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let Some(kind) = ControlKind::of(control) else {
-        return ControlConfigValidity::Valid;
+        return Ok(ControlConfigValidity::Valid);
     };
 
     let outcome = match validate_stored_control_record(tenant, control, kind, message_store).await {
@@ -240,14 +247,20 @@ where
     };
 
     match outcome {
-        Ok(()) => ControlConfigValidity::Valid,
-        // Only a configuration-owned contradiction licenses removal. Anything
-        // else — a store that was unavailable, a payload that would not parse,
-        // a dependency that has moved — is something we could not determine,
-        // and an undetermined record is kept.
+        Ok(()) => Ok(ControlConfigValidity::Valid),
+        // Only a configuration-owned contradiction licenses removal.
         Err(ControlValidationError::Dwn(error)) if error.code.is_control_invalidity() => {
-            ControlConfigValidity::Invalid
+            Ok(ControlConfigValidity::Invalid)
         }
-        Err(_) => ControlConfigValidity::Unknown,
+        // The store was unavailable, so this record was not judged at all.
+        // Reporting that as a verdict would let a passing outage look like a
+        // completed examination, and the repair that contained it would retire
+        // having skipped whatever it could not reach.
+        Err(ControlValidationError::Internal(detail)) => Err(detail),
+        // Judged, and not invalid: a payload that would not parse, a
+        // dependency that has moved, a configuration that has not arrived.
+        // Asking again now would learn nothing, and an undetermined record is
+        // kept.
+        Err(_) => Ok(ControlConfigValidity::Unknown),
     }
 }

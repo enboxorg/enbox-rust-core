@@ -20,7 +20,6 @@ use crate::replies::records::Query;
 use crate::stores::write_resolver::InitialWriteResolver;
 use crate::stores::write_resolver::MessageStoreInitialWriteResolver;
 use crate::Message;
-use crate::Pagination;
 use crate::Response;
 
 #[derive(Clone)]
@@ -104,46 +103,16 @@ where
             // page is not one reply page. Keep fetching until the requested
             // limit is met or the store runs out.
             let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), false);
-            let limit = descriptor.pagination.as_ref().and_then(|page| page.limit);
-            let start_cursor = descriptor
-                .pagination
-                .as_ref()
-                .and_then(|page| page.cursor.clone());
-            let mut first_page = true;
             let (messages, cursor) = match control::collect_visible_page(
                 tenant,
                 &message,
                 signature.as_ref(),
                 &descriptor.filter,
-                limit,
+                filters,
+                Some(sort),
+                descriptor.pagination.clone(),
+                record_limit,
                 self.message_store.as_ref(),
-                |cursor, remaining| {
-                    let filters = filters.clone();
-                    let record_limit = record_limit.clone();
-                    let cursor = if first_page {
-                        first_page = false;
-                        start_cursor.clone()
-                    } else {
-                        cursor
-                    };
-                    async move {
-                        let result = self
-                            .message_store
-                            .query(
-                                tenant,
-                                filters,
-                                Some(sort),
-                                Some(Pagination {
-                                    cursor,
-                                    limit: remaining.or(limit),
-                                }),
-                                record_limit,
-                            )
-                            .await
-                            .map_err(|err| err.to_string())?;
-                        Ok((result.messages, result.cursor))
-                    }
-                },
             )
             .await
             {
