@@ -131,6 +131,15 @@
       "assertions": [
         "encryption.grant-key-coverage"
       ]
+    },
+    {
+      "id": "dwn.records.collection-grant-invocation",
+      "path": "dwn/records/collection-grant-invocation.json",
+      "assertions": [
+        "cid.message",
+        "cid.descriptor",
+        "descriptor.roundtrip"
+      ]
     }
   ]
 }
