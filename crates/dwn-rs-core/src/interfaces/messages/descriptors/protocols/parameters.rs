@@ -6,7 +6,8 @@ use crate::auth::Authorization;
 use crate::descriptors::{
     MessageParameters, MessageValidator, RecordsWriteDescriptor, ValidationError,
 };
-use crate::{protocols, Message};
+use crate::protocols;
+use crate::Message;
 
 use super::{ConfigureDescriptor, QueryDescriptor};
 
@@ -32,6 +33,15 @@ impl MessageParameters for ConfigureParameters {
             Some(ts) => ts,
             None => chrono::Utc::now(),
         };
+
+        // The construction half. `RuleSet` collects unknown
+        // keys through `#[serde(flatten)]`, so a programmatically built
+        // definition can carry `$encryption` just as a parsed one can.
+        self.definition
+            .validate_reserved_control_namespace()
+            .map_err(|error| ValidationError {
+                message: error.to_string(),
+            })?;
 
         let descriptor = ConfigureDescriptor {
             message_timestamp,

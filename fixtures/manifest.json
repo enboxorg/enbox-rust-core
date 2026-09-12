@@ -4,52 +4,87 @@
     {
       "id": "crypto.cid-json-values",
       "path": "crypto/cid-json-values.json",
-      "assertions": ["cid.json"]
+      "assertions": [
+        "cid.json"
+      ]
     },
     {
       "id": "crypto.cid-dag-pb-values",
       "path": "crypto/cid-dag-pb-values.json",
-      "assertions": ["cid.dagpb.bytes", "cid.dagpb.stream"]
+      "assertions": [
+        "cid.dagpb.bytes",
+        "cid.dagpb.stream"
+      ]
     },
     {
       "id": "crypto.jws-general",
       "path": "crypto/jws-general.json",
-      "assertions": ["jws.general.sign", "jws.general.verify", "jws.general.payload"]
+      "assertions": [
+        "jws.general.sign",
+        "jws.general.verify",
+        "jws.general.payload"
+      ]
     },
     {
       "id": "crypto.jwe-encryption",
       "path": "crypto/jwe-encryption.json",
-      "assertions": ["jwe.envelope", "jwe.aead", "jwe.keywrap", "jwe.decrypt", "jwe.seal"]
+      "assertions": [
+        "jwe.envelope",
+        "jwe.aead",
+        "jwe.keywrap",
+        "jwe.decrypt",
+        "jwe.seal"
+      ]
     },
     {
       "id": "dwn.messages.basic-interface-messages",
       "path": "dwn/messages/basic-interface-messages.json",
-      "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
+      "assertions": [
+        "cid.message",
+        "cid.descriptor",
+        "descriptor.roundtrip"
+      ]
     },
     {
       "id": "dwn.messages.sync-descriptors",
       "path": "dwn/messages/sync-descriptors.json",
-      "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
+      "assertions": [
+        "cid.message",
+        "cid.descriptor",
+        "descriptor.roundtrip"
+      ]
     },
     {
       "id": "dwn.messages.sync-replies",
       "path": "dwn/messages/sync-replies.json",
-      "assertions": ["messages-sync.replies"]
+      "assertions": [
+        "messages-sync.replies"
+      ]
     },
     {
       "id": "dwn.messages.query-replies",
       "path": "dwn/messages/query-replies.json",
-      "assertions": ["messages-query.replies"]
+      "assertions": [
+        "messages-query.replies"
+      ]
     },
     {
       "id": "dwn.messages.process-replies",
       "path": "dwn/messages/process-replies.json",
-      "assertions": ["cid.message", "cid.descriptor", "message.process"]
+      "assertions": [
+        "cid.message",
+        "cid.descriptor",
+        "message.process"
+      ]
     },
     {
       "id": "dwn.protocols.configure-definitions",
       "path": "dwn/protocols/configure-definitions.json",
-      "assertions": ["cid.message", "cid.descriptor", "descriptor.roundtrip"]
+      "assertions": [
+        "cid.message",
+        "cid.descriptor",
+        "descriptor.roundtrip"
+      ]
     },
     {
       "id": "dwn.protocols.permissions-records",
@@ -65,22 +100,37 @@
     {
       "id": "dwn.protocols.authorization-corpus",
       "path": "dwn/protocols/authorization-corpus.json",
-      "assertions": ["protocol.authorization-corpus"]
+      "assertions": [
+        "protocol.authorization-corpus"
+      ]
     },
     {
       "id": "dwn.state-index.operations",
       "path": "dwn/state-index/operations.json",
-      "assertions": ["state-index.operations"]
+      "assertions": [
+        "state-index.operations"
+      ]
     },
     {
       "id": "dwn.records.tag-query-filters",
       "path": "dwn/records/tag-query-filters.json",
-      "assertions": ["records.tags.query"]
+      "assertions": [
+        "records.tags.query"
+      ]
     },
     {
       "id": "dwn.protocols.permissions-grant-query",
       "path": "dwn/protocols/permissions-grant-query.json",
-      "assertions": ["permissions.grant-query"]
+      "assertions": [
+        "permissions.grant-query"
+      ]
+    },
+    {
+      "id": "dwn.records.grant-key-coverage",
+      "path": "dwn/records/grant-key-coverage.json",
+      "assertions": [
+        "encryption.grant-key-coverage"
+      ]
     }
   ]
 }

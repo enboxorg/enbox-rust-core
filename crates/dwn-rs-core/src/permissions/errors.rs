@@ -9,6 +9,24 @@ use crate::{
     errors::{DataStoreError, MessageStoreError, StoreError},
 };
 
+/// Which signature a delegated grant hangs off. Author and owner delegation
+/// are the same mechanism applied to different signatures, so they share one
+/// validator and differ only in what they report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DelegationSide {
+    Author,
+    Owner,
+}
+
+impl std::fmt::Display for DelegationSide {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Author => "author",
+            Self::Owner => "owner",
+        })
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum GrantError {
     #[error("Invalid Read descriptor type for grant")]
@@ -178,14 +196,19 @@ pub enum AuthorizationRequestError {
     #[error("invalid request: {0}")]
     ValidationError(String),
 
-    #[error("delegateGrantID requires authorDelegatedGrant")]
-    MissingAuthorDelegateGrant,
+    #[error(
+        "{0} delegated grant and its signed delegatedGrantId must both be present or both absent"
+    )]
+    DelegatedGrantIdExistenceMismatch(DelegationSide),
 
-    #[error("delegateGrantID is required")]
-    DelegateGrantIDRequired,
+    #[error("{0} delegated grant CID does not match the signed delegatedGrantId")]
+    DelegatedGrantCidMismatch(DelegationSide),
 
-    #[error("delegateGrantID does not match authorDelegatedGrant")]
-    DelegateAuthorMismatch,
+    #[error("{0} delegated grant is not marked as delegated")]
+    NotADelegatedGrant(DelegationSide),
+
+    #[error("{0} delegated grant was issued to someone other than the signer")]
+    DelegatedGrantGranteeMismatch(DelegationSide),
 
     #[error("unable to find message CID")]
     MissingCid,

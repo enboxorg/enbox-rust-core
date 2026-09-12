@@ -20,8 +20,8 @@ use crate::handlers::records::common::{
     date_sort_to_message_sort, event_log_error_reply, filter_map, message_record_id,
     message_record_limit_policy, records_subscribe_descriptor, records_subscribe_reply,
     resolve_record_limit_policy, should_protocol_authorize, store_error_reply, string_filter,
-    IdentityProjector, RecordsProjector,
 };
+use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{
     self,
@@ -52,6 +52,9 @@ pub(crate) struct DeliveryAuthorization {
     pub(crate) grant_valid_at_open: bool,
     pub(crate) role_invoked: bool,
     pub(crate) request_timestamp: String,
+    /// Whether the request was authorized through the control gate rather than
+    /// the ordinary protocol ladder, and so must be rechecked through it.
+    pub(crate) control_only: bool,
 }
 
 #[derive(Clone)]
@@ -153,29 +156,30 @@ where
                 Ok(policy) => policy,
                 Err(detail) => return store_error_reply(detail),
             };
-            let result = match self
-                .message_store
-                .query(
-                    tenant,
-                    filters,
-                    Some(date_sort_to_message_sort(
-                        descriptor.date_sort.as_ref(),
-                        false,
-                    )),
-                    descriptor.pagination.clone(),
-                    record_limit,
-                )
-                .await
+            // A snapshot is a collection page and refills like one: projection
+            // and visibility both remove records, so one storage page is not
+            // one reply page.
+            let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), false);
+            let (messages, cursor) = match control::collect_visible_page(
+                tenant,
+                &message,
+                signature.as_ref(),
+                &descriptor.filter,
+                filters,
+                Some(sort),
+                descriptor.pagination.clone(),
+                record_limit,
+                self.message_store.as_ref(),
+            )
+            .await
             {
-                Ok(result) => result,
-                Err(err) => return store_error_reply(err.to_string()),
-            };
-            let messages = match IdentityProjector.project_writes(result.messages).await {
-                Ok(messages) => messages,
-                Err(detail) => {
-                    return store_error_reply(format!("failed to project records: {detail}"))
+                Ok(page) => page,
+                Err(control::ControlValidationError::Internal(detail)) => {
+                    return store_error_reply(detail)
                 }
+                Err(error) => return Response::unauthorized(error.to_string()),
             };
+
             let entries =
                 match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
                     Ok(entries) => entries,
@@ -188,7 +192,7 @@ where
             Response::ok().with_reply(Subscribe {
                 subscription_id: None,
                 entries: Some(entries.clone()),
-                cursor: result.cursor,
+                cursor,
                 error: None,
             })
         }
@@ -285,6 +289,26 @@ where
             code: SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed,
             detail,
         })?;
+
+    // A control-only subscription was opened through the control gate and is
+    // rechecked through it. The ordinary path would ask whether the invoked
+    // grant's scope covers `$encryption/audience` or `$encryption/delivery` —
+    // paths no protocol declares and no grant can name — so a perfectly valid
+    // grant over the keyed role would be read as out of scope and close the
+    // subscription at its first event. The gate re-runs on the restamped
+    // message, so expiry and revocation since open are still what terminate it,
+    // and per-record control scope is rechecked alongside the projection.
+    if auth.control_only {
+        return control::authorize_control_read_request(
+            tenant,
+            &delivery_message,
+            &auth.auth_ctx,
+            message_store,
+        )
+        .await
+        .map_err(|error| authorize_failed(&error.to_string()));
+    }
+
     match permissions::authorize_records_query_or_subscribe_with_grant(
         tenant,
         &delivery_message,
@@ -379,6 +403,14 @@ fn create_records_delivery_guard<MessageStore>(
     tenant: String,
     request_timestamp: String,
     delivery_auth: Option<DeliveryAuthorization>,
+    // The subscribe request and its requester, so live events answer to the
+    // same control visibility the snapshot applied. Without them a subscriber
+    // would receive, as it arrives, exactly what its own snapshot hid.
+    request: Message<Descriptor>,
+    signature: Option<AuthorizationContext>,
+    // The caller's own filter, so a subscriber that pinned one stored key keeps
+    // receiving that key rather than whichever becomes current.
+    records_filter: RecordsFilter,
     message_store: Arc<MessageStore>,
 ) -> (SubscriptionListener, GuardedSubscription)
 where
@@ -388,6 +420,9 @@ where
         let tenant = tenant.clone();
         let request_timestamp = request_timestamp.clone();
         let delivery_auth = delivery_auth.clone();
+        let request = request.clone();
+        let signature = signature.clone();
+        let records_filter = records_filter.clone();
         let message_store = message_store.clone();
         async move {
             let SubscriptionMessage::Event { cursor, event, .. } = &message else {
@@ -405,16 +440,55 @@ where
 
             if let Descriptor::Records(records) = &event.message.descriptor {
                 if matches!(records.as_ref(), Records::Write(_)) {
-                    let projected = match IdentityProjector
-                        .project_writes(vec![event.message.clone()])
-                        .await
+                    // Events are re-projected at delivery, not at open: an
+                    // audience that has since stopped being current must stop
+                    // being delivered.
+                    // A projection or visibility lookup that *fails* is not a
+                    // record the subscriber may not see. Suppressing it would
+                    // present a store outage as a successfully filtered event
+                    // and leave the stream running as though nothing were
+                    // wrong, so it ends the subscription instead.
+                    let control_failed = |detail: String| DeliveryDecision::Fail {
+                        cursor: cursor.clone(),
+                        error: SubscriptionError {
+                            code: SubscriptionErrorCode::RecordsDeliveryFailed,
+                            detail,
+                        },
+                    };
+
+                    let projected = match control::project_current_audiences(
+                        &tenant,
+                        Some(&records_filter),
+                        vec![event.message.clone()],
+                        message_store.as_ref(),
+                    )
+                    .await
                     {
                         Ok(projected) => projected,
-                        Err(_) => return DeliveryDecision::Suppress,
+                        Err(error) => return control_failed(error.to_string()),
                     };
+                    // Superseded: no longer the current audience for its scope.
                     let Some(write) = projected.into_iter().next() else {
                         return DeliveryDecision::Suppress;
                     };
+
+                    // Live events answer to the same control visibility as the
+                    // snapshot, so a subscriber cannot receive as it arrives
+                    // what a query would have hidden.
+                    match control::filter_visible_controls(
+                        &tenant,
+                        &request,
+                        signature.as_ref(),
+                        Some(&records_filter),
+                        vec![write.clone()],
+                        message_store.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(visible) if visible.is_empty() => return DeliveryDecision::Suppress,
+                        Ok(_) => {}
+                        Err(error) => return control_failed(error.to_string()),
+                    }
                     match project_write_occupancy(
                         &tenant,
                         &write,
@@ -526,6 +600,9 @@ where
             tenant.to_string(),
             canonical_rfc3339(descriptor.message_timestamp),
             delivery_auth,
+            message.clone(),
+            signature.clone(),
+            descriptor.filter.clone(),
             self.message_store.clone(),
         );
         let subscription = match self
@@ -573,34 +650,30 @@ where
                 return records_subscribe_reply(store_error_reply(detail), None);
             }
         };
-        let result = match self
-            .message_store
-            .query(
-                tenant,
-                query_filters,
-                Some(date_sort_to_message_sort(
-                    descriptor.date_sort.as_ref(),
-                    false,
-                )),
-                descriptor.pagination.clone(),
-                record_limit,
-            )
-            .await
+        // This snapshot is a collection page like any other, and refills like
+        // one. Filtering a single storage page here would let the native and
+        // WebSocket snapshot come back short — or empty — while Query at the
+        // same head returns a full visible page.
+        let (messages, snapshot_cursor) = match control::collect_visible_page(
+            tenant,
+            &message,
+            signature.as_ref(),
+            &descriptor.filter,
+            query_filters,
+            Some(date_sort_to_message_sort(
+                descriptor.date_sort.as_ref(),
+                false,
+            )),
+            descriptor.pagination.clone(),
+            record_limit,
+            self.message_store.as_ref(),
+        )
+        .await
         {
-            Ok(result) => result,
-            Err(err) => {
+            Ok(page) => page,
+            Err(error) => {
                 let _ = (subscription.close)().await;
-                return records_subscribe_reply(store_error_reply(err.to_string()), None);
-            }
-        };
-        let messages = match IdentityProjector.project_writes(result.messages).await {
-            Ok(messages) => messages,
-            Err(detail) => {
-                let _ = (subscription.close)().await;
-                return records_subscribe_reply(
-                    store_error_reply(format!("failed to project records: {detail}")),
-                    None,
-                );
+                return records_subscribe_reply(store_error_reply(error.to_string()), None);
             }
         };
         let entries =
@@ -617,7 +690,7 @@ where
         let reply = Response::ok().with_reply(Subscribe {
             subscription_id: Some(subscription.id.clone()),
             entries: Some(entries.clone()),
-            cursor: result.cursor.clone(),
+            cursor: snapshot_cursor,
             error: None,
         });
 
@@ -669,6 +742,7 @@ where
                 grant_valid_at_open: auth.grant_authorized,
                 role_invoked: should_protocol_authorize(signature),
                 request_timestamp,
+                control_only: control::filter_targets_only_controls(&descriptor.filter),
             }),
             _ => None,
         };
@@ -688,6 +762,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::testing::parse_time;
+
     use super::*;
     use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
     use crate::permissions::{
@@ -713,6 +789,7 @@ mod tests {
                 .map(PermissionGrantInvocation::Single)
                 .unwrap_or(PermissionGrantInvocation::None),
             author_delegated_grant: delegated_grant,
+            owner: None,
         }
     }
 
@@ -721,8 +798,8 @@ mod tests {
             id: "delegated-grant-1".to_string(),
             grantor: "did:example:alice".to_string(),
             grantee: "did:example:bob".to_string(),
-            date_granted: crate::testing::parse_time("2025-01-01T00:00:00.000000Z"),
-            date_expires: crate::testing::parse_time("2030-01-01T00:00:00.000000Z"),
+            date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
+            date_expires: parse_time("2030-01-01T00:00:00.000000Z"),
             delegated: Some(true),
             scope: PermissionScope::Records(RecordsScope {
                 method: RecordsMethod::Read,

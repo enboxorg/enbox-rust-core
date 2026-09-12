@@ -18,8 +18,9 @@ use crate::descriptors::{
 use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::{Handler, HandlerContext};
+use crate::encryption::control::ControlKind;
 use crate::encryption::{
-    Encryption, KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
+    KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::filters::{Filter, FilterKey, Filters};
@@ -35,6 +36,7 @@ use crate::handlers::records::common::{
     validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
     GoverningTimestampError,
 };
+use crate::handlers::records::control;
 use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Write;
@@ -63,6 +65,19 @@ enum RecordsWriteValidationError {
     Detail(String),
     #[error("{0}")]
     Internal(String),
+}
+
+impl From<control::ControlValidationError> for RecordsWriteValidationError {
+    /// Control admission distinguishes the same three outcomes this handler
+    /// does, so the mapping is one-to-one: a record defect stays a bad request,
+    /// an unavailable store stays an internal failure.
+    fn from(error: control::ControlValidationError) -> Self {
+        match error {
+            control::ControlValidationError::Dwn(error) => Self::Dwn(error),
+            control::ControlValidationError::Detail(detail) => Self::Detail(detail),
+            control::ControlValidationError::Internal(detail) => Self::Internal(detail),
+        }
+    }
 }
 
 impl From<String> for RecordsWriteValidationError {
@@ -114,6 +129,34 @@ where
                 ..
             } = ctx;
 
+            // Covers: DWN-REC-003
+            // Exact replay is classified from the parsed message alone, before
+            // authentication and before mutable protocol, role, grant, parent,
+            // record-limit, or state-relative admission can reinterpret it. An
+            // identical retained CID is the same bytes the store already
+            // admitted, so re-resolving its signer proves nothing and must not
+            // be able to turn a settled replay into a different reply when the
+            // resolver is unreachable.
+            let record_id = match record_id(&message) {
+                Some(record_id) => record_id,
+                None => {
+                    return Response::bad_request(
+                        "RecordsWriteMissingRecordId: recordId is required".to_string(),
+                    )
+                }
+            };
+            let existing_messages = match self.existing_record_messages(tenant, &record_id).await {
+                Ok(messages) => messages,
+                Err(reply) => return reply,
+            };
+            let transition_plan = match plan_records_transition(&message, &existing_messages) {
+                Ok(plan) => plan,
+                Err(detail) => return Response::bad_request(detail),
+            };
+            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. }) {
+                return Response::conflict();
+            }
+
             let signature = match permissions::validate_authorization_signature(
                 &message,
                 self.did_resolver.as_deref(),
@@ -138,29 +181,6 @@ where
 
             if let Err(detail) = validate_records_write_integrity(&message, &signature) {
                 return Response::bad_request(detail);
-            }
-
-            let record_id = match record_id(&message) {
-                Some(record_id) => record_id,
-                None => {
-                    return Response::bad_request(
-                        "RecordsWriteMissingRecordId: recordId is required".to_string(),
-                    )
-                }
-            };
-            let existing_messages = match self.existing_record_messages(tenant, &record_id).await {
-                Ok(messages) => messages,
-                Err(reply) => return reply,
-            };
-            let transition_plan = match plan_records_transition(&message, &existing_messages) {
-                Ok(plan) => plan,
-                Err(detail) => return Response::bad_request(detail),
-            };
-            // Covers: DWN-REC-003
-            // Exact replay is classified before mutable protocol, role, grant, parent,
-            // record-limit, or state-relative admission can reinterpret it.
-            if matches!(transition_plan, RecordsTransitionPlan::Duplicate { .. }) {
-                return Response::conflict();
             }
 
             if let Err(error) = self
@@ -231,7 +251,22 @@ where
             }
 
             let mut is_latest_base_state = false;
-            if let Some(data) = data.or_else(|| encoded_data_bytes(&message).ok().flatten()) {
+            let supplied_data = data.or_else(|| encoded_data_bytes(&message).ok().flatten());
+
+            // A control record's data *is* its content: an audience without a
+            // payload publishes no key, and a delivery without one delivers
+            // nothing. Admitting it dataless would also be unrepairable —
+            // resubmitting the same message with its data attached is an exact
+            // replay and answers 409 — so the record would be permanently
+            // stuck describing nothing.
+            if supplied_data.is_none() && ControlKind::of(&message).is_some() {
+                return Response::bad_request_error(DwnError::new(
+                    DwnErrorCode::EncryptionControlValidateUnexpectedRecord,
+                    "encryption control records must be written with their data",
+                ));
+            }
+
+            if let Some(data) = supplied_data {
                 if let Err(error) = self
                     .process_message_with_data_stream(tenant, &mut message, data)
                     .await
@@ -428,6 +463,15 @@ where
             data.len() as u64,
         )?;
 
+        // An audience record's payload is part of its admission contract: the
+        // key it publishes and the seal over that key are checked here, once
+        // the bytes the descriptor commits to are actually in hand.
+        if let Some(kind) = ControlKind::from_protocol_path(&descriptor.protocol_path) {
+            control::validate_payload(tenant, message, kind, &data, &self.message_store)
+                .await
+                .map_err(RecordsWriteValidationError::from)?;
+        }
+
         if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
             set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))
                 .map_err(RecordsWriteValidationError::from)?;
@@ -555,6 +599,24 @@ where
     ) -> Result<(), RecordsWriteValidationError> {
         let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
         let protocol_path = descriptor.protocol_path.clone();
+
+        // Control records live at virtual paths the protocol never declares, so
+        // there is no type or rule set to validate them against. They are
+        // admitted on their own fixed contract instead, and the application
+        // encryption-policy checks below deliberately do not apply: a control
+        // record's representation is fixed by its kind, not by the protocol.
+        if let Some(kind) = ControlKind::from_protocol_path(&protocol_path) {
+            return control::validate_referential_integrity(
+                tenant,
+                message,
+                kind,
+                author,
+                &self.message_store,
+            )
+            .await
+            .map_err(RecordsWriteValidationError::from);
+        }
+
         let governing_timestamp =
             governing_timestamp(tenant, message, &self.message_store, author).await?;
 
@@ -653,17 +715,14 @@ where
                     let key_id = agreement.public_key_jwk.thumbprint().map_err(|error| {
                         RecordsWriteValidationError::Internal(error.to_string())
                     })?;
-                    let envelope = match fields.encryption.as_ref() {
-                        Some(Encryption::Envelope(envelope)) => envelope,
-                        _ => {
-                            return Err(DwnError::new(
-                                DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
-                                format!(
-                                    "type '{type_name}' requires encryption but message has no encryption metadata"
-                                ),
-                            )
-                            .into());
-                        }
+                    let Some(envelope) = fields.encryption.as_ref() else {
+                        return Err(DwnError::new(
+                            DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
+                            format!(
+                                "type '{type_name}' requires encryption but message has no encryption metadata"
+                            ),
+                        )
+                        .into());
                     };
                     let has_protocol_path_entry = envelope.key_encryption.iter().any(|entry| {
                         matches!(entry, KeyEncryption::ProtocolPath { key_id: id, .. } if id == &key_id)
@@ -762,6 +821,14 @@ where
         message: &Message<Descriptor>,
         auth: &AuthorizationContext,
     ) -> Result<(), String> {
+        // Control writes carry their own authority question — may this actor
+        // mint this role's key material — so they do not fall through to the
+        // ordinary grant and protocol-action ladder.
+        if let Some(kind) = ControlKind::of(message) {
+            return control::authorize_write(tenant, message, kind, auth, &self.message_store)
+                .await
+                .map_err(|error| error.to_string());
+        }
         if permissions::authorize_delegated_records_write(message, auth, &self.message_store)
             .await
             .map_err(|error| error.to_string())?

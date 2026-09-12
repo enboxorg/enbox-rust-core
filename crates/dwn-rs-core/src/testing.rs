@@ -21,7 +21,7 @@ use crate::descriptors::{
     RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::{Dwn, MessageKind, MethodHandler, MethodHandlerRequest, TenantGate};
-use crate::encryption::{Encryption, EncryptionEnvelope};
+use crate::encryption::EncryptionEnvelope;
 use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::handlers::records::common::message_cid;
@@ -112,8 +112,7 @@ pub async fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
     let mut signature_payload =
         payload_with_permission_grant(&record_id, &context_id, spec.permission_grant_id.as_deref());
     if let Some(envelope) = &spec.encryption {
-        let encryption_cid =
-            generate_cid_from_serialized(Encryption::Envelope(envelope.clone())).unwrap();
+        let encryption_cid = generate_cid_from_serialized(envelope.clone()).unwrap();
         signature_payload
             .as_object_mut()
             .expect("signature payload must be an object")

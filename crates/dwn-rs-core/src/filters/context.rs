@@ -49,6 +49,13 @@ pub fn validate_nested_protocol_path_scope(
     if !protocol_path.contains('/') {
         return Ok(());
     }
+    // Encryption-control paths only look nested. They are virtual, declared by
+    // no protocol, and carry their context in tags rather than in a record
+    // hierarchy, so demanding a parent or ancestor context of them would rule
+    // out every well-formed control query.
+    if crate::encryption::control::is_encryption_control_path(protocol_path) {
+        return Ok(());
+    }
 
     if filter.parent_id.is_some() && filter.context_id.is_none() {
         return Ok(());

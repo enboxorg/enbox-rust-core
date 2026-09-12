@@ -1,11 +1,16 @@
 use std::collections::BTreeMap;
 
+use serde_json::Value as JsonValue;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Number;
 use serde_with::skip_serializing_none;
 use ssi_jwk::JWK;
 use thiserror::Error;
 use url::Url;
+
+use crate::encryption::ENCRYPTION_CONTROL_ROOT_PATH;
+use crate::errors::{DwnError, DwnErrorCode};
 
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -976,6 +981,91 @@ fn child_protocol_path(parent: &str, child: &str) -> String {
     } else {
         format!("{parent}/{child}")
     }
+}
+
+impl Definition {
+    /// Rejects the reserved `$encryption` namespace in an already-typed
+    /// definition, for callers building one locally rather than parsing it.
+    ///
+    /// Delegates to [`validate_reserved_control_namespace`] so the rule has one
+    /// implementation. The round-trip is what buys that: a second typed walk
+    /// would be cheaper but free to drift, and a `Definition` cannot represent
+    /// every input the raw scan must reject anyway.
+    pub fn validate_reserved_control_namespace(&self) -> Result<(), DwnError> {
+        // A `Definition` has string keys and no non-finite numbers, so this
+        // cannot fail; it is mapped rather than unwrapped to keep the panic out
+        // of a validation path.
+        let definition = serde_json::to_value(self)
+            .map_err(|error| DwnError::new(DwnErrorCode::MessageParseFailed, error.to_string()))?;
+        validate_reserved_control_namespace(&definition)
+    }
+}
+
+/// Rejects the reserved `$encryption` namespace in a *raw* protocol definition.
+///
+/// Takes unvalidated JSON and runs before JSON Schema validation, which is the
+/// whole point: `types`, `structure` and nested rule sets already exclude every
+/// `$`-prefixed key, so the schema alone refuses a reserved entry — but only as
+/// an anonymous `SchemaValidatorFailure`. Diagnosing the reservation first is
+/// what lets it name itself. The schema remains an independent backstop; this
+/// check adds specificity, not coverage.
+///
+/// Malformed shapes pass through untouched: reporting that a definition is not
+/// an object belongs to schema validation, not here.
+///
+/// This is the raw counterpart to [`validate_definition`], which validates the
+/// typed [`Definition`] once a message has been parsed.
+pub fn validate_reserved_control_namespace(definition: &JsonValue) -> Result<(), DwnError> {
+    let Some(definition) = definition.as_object() else {
+        return Ok(());
+    };
+    if let Some(types) = definition.get("types").and_then(JsonValue::as_object) {
+        if types.contains_key(ENCRYPTION_CONTROL_ROOT_PATH) {
+            return Err(reserved_namespace_error(format!(
+                "protocol type '{ENCRYPTION_CONTROL_ROOT_PATH}' is reserved for DWN encryption control records."
+            )));
+        }
+    }
+    scan_reserved_namespace(definition.get("structure"), "")
+}
+
+/// Walks every record type in `structure`, naming a reserved entry wherever it
+/// appears. Recursion is bounded by the depth of the already-parsed JSON, so
+/// this carries no nesting limit of its own — `validate_definition` owns the
+/// protocol's actual depth rule, and duplicating the constant here would just
+/// create two places to disagree.
+fn scan_reserved_namespace(
+    rule_set: Option<&JsonValue>,
+    protocol_path: &str,
+) -> Result<(), DwnError> {
+    let Some(rule_set) = rule_set.and_then(JsonValue::as_object) else {
+        return Ok(());
+    };
+    for (record_type, child) in rule_set {
+        if record_type == ENCRYPTION_CONTROL_ROOT_PATH {
+            let child_path = child_protocol_path(protocol_path, record_type);
+            return Err(reserved_namespace_error(format!(
+                "protocol structure path '{child_path}' is reserved for DWN encryption control records."
+            )));
+        }
+        // Every other `$` key is a rule-set keyword (`$actions`, `$role`, …),
+        // not a child record type, so it holds no nested structure to scan.
+        if record_type.starts_with('$') {
+            continue;
+        }
+        scan_reserved_namespace(
+            Some(child),
+            &child_protocol_path(protocol_path, record_type),
+        )?;
+    }
+    Ok(())
+}
+
+fn reserved_namespace_error(detail: String) -> DwnError {
+    DwnError::new(
+        DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath,
+        detail,
+    )
 }
 
 fn protocol_error(code: &'static str, message: impl Into<String>) -> ProtocolDefinitionError {

@@ -6,7 +6,8 @@
 mod common;
 
 use dwn_rs_core::stores::store_conformance::{
-    run_data_stores, run_message_stores, run_record_limit_stores, run_sort_tie_break_stores,
+    run_data_stores, run_message_stores, run_record_limit_stores, run_sort_property_stores,
+    run_sort_tie_break_stores,
 };
 use dwn_rs_stores::SqliteStore;
 
@@ -82,6 +83,26 @@ async fn sqlite_disk_conforms_to_data_store_contract() {
         let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SqliteStore::new(
             dir.path().join(format!("data-{n}.sqlite")),
+            common::noop_waker(),
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sqlite_mem_excludes_rows_missing_the_sort_property() {
+    run_sort_property_stores(|| async { SqliteStore::in_memory(None) }).await;
+}
+
+#[tokio::test]
+async fn sqlite_disk_excludes_rows_missing_the_sort_property() {
+    // Serialize file-backed tests process-wide.
+    let dir = tempfile::tempdir().expect("battery tempdir");
+    let seq = std::sync::atomic::AtomicU64::new(0);
+    run_sort_property_stores(|| async {
+        let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SqliteStore::new(
+            dir.path().join(format!("sort-property-{n}.sqlite")),
             common::noop_waker(),
         )
     })

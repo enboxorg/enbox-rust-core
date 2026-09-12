@@ -27,6 +27,8 @@ use crate::stores::{
     ReplicationFeedReader, ResumableTaskStore as ResumableTaskStoreTrait,
     StateIndex as StateIndexTrait,
 };
+use crate::tasks::controller::StorageController;
+use crate::tasks::manager::ResumableTaskManager;
 
 /// Bundled store dependencies required by the native handler set.
 #[derive(Clone)]
@@ -200,7 +202,7 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
         data_store,
         state_index,
         event_log,
-        resumable_task_store: _,
+        resumable_task_store,
         replication_feed_reader: _,
     } = stores;
 
@@ -226,10 +228,17 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
         state_index.clone(),
         resolver.clone(),
     ));
-    dwn.register(ProtocolsConfigureHandler::new(
-        message_store.clone(),
-        resolver.clone(),
-    ));
+    // A native node has the stores repair needs, so configuration changes
+    // re-examine stored control records rather than leaving them to contradict
+    // the configuration silently.
+    dwn.register(
+        ProtocolsConfigureHandler::new(message_store.clone(), resolver.clone()).with_repairer(
+            std::sync::Arc::new(ResumableTaskManager::new(
+                resumable_task_store.clone(),
+                StorageController::new(message_store.clone(), data_store.clone()),
+            )),
+        ),
+    );
     dwn.register(ProtocolsQueryHandler::new(
         message_store.clone(),
         resolver.clone(),

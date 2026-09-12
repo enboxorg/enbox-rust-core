@@ -7,19 +7,24 @@
 //! removed upstream.
 //!
 //! Primitive implementations live in [`ctr`], [`aes_kw`], [`kdf`], and
-//! [`x25519`]; this module owns the wire types and the `Encryption` facade.
+//! [`x25519`]; this module owns the wire types and the `EncryptionEnvelope`.
 //! The agent encryption-control seal key wrap is modeled separately ([`SealKeyWrap`])
 //! because upstream keeps it distinct from `DwnEncryption.keyEncryption`.
 
 pub mod aes_kw;
+pub mod control;
 pub mod ctr;
 pub mod error;
+pub mod grant_key;
 pub mod kdf;
-pub mod legacy_jwe;
 pub mod x25519;
 
 use std::collections::BTreeMap;
 
+pub use control::{
+    is_encryption_control_path, is_reserved_control_namespace, AudienceId, AudiencePayload,
+    AudienceScope, ControlKind, ENCRYPTION_AUDIENCE_SCHEMA,
+};
 pub use error::EncryptionError;
 pub use kdf::derive_private_key_bytes;
 
@@ -34,20 +39,14 @@ pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
 pub const SEAL_DERIVATION_SCHEME: &str = "seal";
 pub const ENCRYPTION_PROTOCOL_URI: &str = "https://identity.foundation/dwn/protocols/encryption";
 pub const ENCRYPTION_PROTOCOL_GRANT_KEY_PATH: &str = "grantKey";
+/// Reserved virtual protocol-path root owning the control record paths
+/// below. A protocol definition may never declare it; enforcement lives with
+/// the rest of protocol-definition validation in
+/// [`crate::protocols::validate_reserved_control_namespace`].
+pub const ENCRYPTION_CONTROL_ROOT_PATH: &str = "$encryption";
 pub const ENCRYPTION_CONTROL_AUDIENCE_PATH: &str = "$encryption/audience";
 pub const ENCRYPTION_CONTROL_DELIVERY_PATH: &str = "$encryption/delivery";
 
-/// Whether a protocol path is a reserved encryption-control path whose
-/// records never participate in representation-policy checks.
-pub fn is_encryption_control_path(protocol_path: &str) -> bool {
-    matches!(
-        protocol_path,
-        ENCRYPTION_CONTROL_AUDIENCE_PATH | ENCRYPTION_CONTROL_DELIVERY_PATH
-    )
-}
-
-/// RecordsWrite `keyEncryption` derivation schemes. Upstream only admits
-/// `protocolPath` and `roleAudience` here; seal wrapping is a separate type.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum DerivationScheme {
     #[serde(rename = "protocolPath")]
@@ -170,30 +169,6 @@ impl KeyEncryption {
             KeyEncryption::ProtocolPath { algorithm, .. } => *algorithm,
             KeyEncryption::RoleAudience { algorithm, .. } => *algorithm,
         }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-#[serde(untagged)]
-pub enum Encryption {
-    Envelope(EncryptionEnvelope),
-    LegacyJwe(legacy_jwe::LegacyJweEncryption),
-}
-
-impl Encryption {
-    pub fn decrypt(
-        &self,
-        private_jwk: &JWK,
-        ciphertext: &[u8],
-    ) -> Result<Vec<u8>, EncryptionError> {
-        match self {
-            Encryption::Envelope(envelope) => envelope.decrypt(private_jwk, ciphertext),
-            Encryption::LegacyJwe(jwe) => jwe.decrypt(private_jwk, ciphertext),
-        }
-    }
-
-    pub fn is_legacy_jwe(&self) -> bool {
-        matches!(self, Encryption::LegacyJwe(_))
     }
 }
 

@@ -59,7 +59,4 @@ pub enum EncryptionError {
 
     #[error("diffie-hellman weak secret")]
     WeakSecret,
-
-    #[error("legacy JWE: {0}")]
-    LegacyJwe(String),
 }

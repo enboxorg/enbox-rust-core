@@ -11,9 +11,9 @@ use crate::filters::context::validate_nested_protocol_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, date_sort_to_message_sort, published_sort_name,
-    resolve_record_limit_policy, store_error_reply, IdentityProjector, QueryAuthorizationResult,
-    RecordsProjector,
+    resolve_record_limit_policy, store_error_reply, QueryAuthorizationResult,
 };
+use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Query;
@@ -99,30 +99,30 @@ where
                 Ok(policy) => policy,
                 Err(detail) => return store_error_reply(detail),
             };
-            let result = match self
-                .message_store
-                .query(
-                    tenant,
-                    filters,
-                    Some(date_sort_to_message_sort(
-                        descriptor.date_sort.as_ref(),
-                        false,
-                    )),
-                    descriptor.pagination.clone(),
-                    record_limit,
-                )
-                .await
+            // Projection and visibility both remove records, so one storage
+            // page is not one reply page. Keep fetching until the requested
+            // limit is met or the store runs out.
+            let sort = date_sort_to_message_sort(descriptor.date_sort.as_ref(), false);
+            let (messages, cursor) = match control::collect_visible_page(
+                tenant,
+                &message,
+                signature.as_ref(),
+                &descriptor.filter,
+                filters,
+                Some(sort),
+                descriptor.pagination.clone(),
+                record_limit,
+                self.message_store.as_ref(),
+            )
+            .await
             {
-                Ok(result) => result,
-                Err(err) => return store_error_reply(err.to_string()),
+                Ok(page) => page,
+                Err(control::ControlValidationError::Internal(detail)) => {
+                    return store_error_reply(detail)
+                }
+                Err(error) => return Response::unauthorized(error.to_string()),
             };
 
-            let messages = match IdentityProjector.project_writes(result.messages).await {
-                Ok(messages) => messages,
-                Err(detail) => {
-                    return store_error_reply(format!("failed to project records: {detail}"))
-                }
-            };
             let entries =
                 match attach_initial_writes(tenant, messages, self.write_resolver.as_ref()).await {
                     Ok(entries) => entries,
@@ -133,7 +133,7 @@ where
 
             Response::ok().with_reply(Query {
                 entries: Some(entries),
-                cursor: result.cursor,
+                cursor,
                 error: None,
             })
         }

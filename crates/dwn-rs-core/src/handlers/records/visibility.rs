@@ -25,6 +25,7 @@ use super::common::{
     owner_records_filter, published_records_event_filter, published_records_filter,
     should_protocol_authorize,
 };
+use super::control;
 use super::RecordsAuthorizationKind;
 
 /// Which projection of visible state a filter set selects.
@@ -82,6 +83,30 @@ where
     }
     let signature = signature
         .ok_or_else(|| "AuthenticateJwsMissing: authorization signature is required".to_string())?;
+
+    let control_only = control::filter_targets_only_controls(filter);
+    if control_only {
+        control::authorize_control_read_request(tenant, message, signature, message_store)
+            .await
+            .map_err(|error| error.to_string())?;
+        // The invoked role or grant was just validated above, so it carries
+        // the same candidate weight it would on any other request. Discarding
+        // it here would leave a legitimately grant-bearing requester with no
+        // branch at all.
+        let invoked =
+            should_protocol_authorize(signature) || signature.permission_grant_id().is_some();
+        return Ok(CollectionAuthorization {
+            visibility: if signature.author == tenant {
+                VisibilityClass::Owner
+            } else {
+                VisibilityClass::NonOwner
+            },
+            author: Some(signature.author.clone()),
+            protocol_authorized: invoked,
+            grant_authorized: invoked,
+        });
+    }
+
     let grant_authorized = permissions::authorize_records_query_or_subscribe_with_grant(
         tenant,
         message,
@@ -150,6 +175,7 @@ pub(crate) fn collection_filters(
                 date_sort,
                 author,
                 auth.protocol_authorized,
+                control::filter_pins_an_audience_scope(filter),
             ))
         }
         (VisibilityClass::NonOwner, PlanMode::Event) => {
@@ -161,6 +187,7 @@ pub(crate) fn collection_filters(
                 filter,
                 author,
                 auth.protocol_authorized,
+                control::filter_pins_an_audience_scope(filter),
             ))
         }
     }
@@ -195,6 +222,7 @@ mod tests {
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: None,
+            owner: None,
         }
     }
 

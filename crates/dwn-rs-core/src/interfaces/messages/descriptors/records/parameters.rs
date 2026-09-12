@@ -4,7 +4,7 @@ use crate::auth::jws::{
 use crate::auth::Authorization;
 use crate::cid::generate_cid_from_serialized;
 use crate::descriptors::{MessageParameters, MessageValidator, ValidationError};
-use crate::encryption::{DerivationScheme, Encryption, EncryptionEnvelope, EncryptionInput};
+use crate::encryption::{DerivationScheme, EncryptionEnvelope, EncryptionInput};
 use crate::fields::WriteFields;
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::{normalize_url, MapValue, Message, Pagination, ProgressToken};
@@ -401,13 +401,13 @@ impl MessageParameters for WriteParameters {
         };
 
         if let Some(encryption_input) = &self.encryption_input {
-            fields.encryption = Some(Encryption::Envelope(
+            fields.encryption = Some(
                 EncryptionEnvelope::build_encryption(encryption_input).map_err(|e| {
                     ValidationError {
                         message: e.to_string(),
                     }
                 })?,
-            ));
+            );
         }
         fields.record_id = self.record_id.clone();
 

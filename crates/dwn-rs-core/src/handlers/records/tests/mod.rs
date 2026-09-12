@@ -10,29 +10,71 @@ use bytes::Bytes;
 use futures_util::{stream, Stream, StreamExt};
 use serde_json::json;
 
+use crate::auth::jws::{AuthorizationPayloadData, PermissionGrantInvocation};
+use crate::auth::resolver::{DidResolver, Resolution, ResolverError, ResolverFuture};
+use crate::auth::Jws;
 use crate::cid::generate_dag_pb_cid_from_bytes;
+use crate::descriptors::MessageDescriptor;
 use crate::descriptors::{records::write_fields, Records};
 use crate::dwn::Handler;
+use crate::errors::EventLogError;
 use crate::errors::{DataStoreError, MessageStoreError, StoreError};
 use crate::filters::Records as RecordsFilter;
+use crate::permissions::{
+    AuthorizationContext, PermissionGrant, PermissionScope, RecordsMethod, RecordsScope,
+    VerifiedAuthorizationPayload,
+};
+use crate::replies::records::Write as WriteReply;
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::occupancy::{is_occupant, occupant_ids_for_rows};
 use crate::stores::replication_feed_reader::build_token;
+use crate::stores::replication_feed_reader::{Fingerprint, ReplicationBounds};
 use crate::stores::wake::{InProcessWakeBus, Wake, WakeError, WakePublisher};
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
     LatestStateTransition, LatestStateTransitionResult, MessageQueryResult, MessageStore,
-    RecordLimitOccupancy, ReplicationFeedReader, SubscriptionMessage,
+    RecordLimitOccupancy, ReplicationFeedReader, SubscriptionErrorCode, SubscriptionMessage,
 };
+use crate::stores::{EventLogReadResult, ProgressGapCode, ProgressGapReason};
+use crate::sync::endpoint::{classify_apply_reply, ReplicationApplyOutcome};
+use crate::tasks::controller::{ResumableRecordsDeleteData, StorageController};
+use crate::validation::admit_message;
 use crate::{
     permissions, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
     RangeFilter, SortDirection,
 };
 use crate::{Descriptor, Value};
+use crate::{Dwn, Response};
+use put_limited_threads_protocol;
 
 use super::common::*;
+use super::control::repair::{
+    control_config_validity, verify_stored_create_action, ControlConfigValidity,
+};
+use super::subscribe::{
+    authorize_records_delivery, DeliveryAuthorization, RecordsEventLogSubscribeHandler,
+    RecordsSubscribeHandler,
+};
 use super::*;
+use crate::handlers::configure::ProtocolsConfigureHandler;
+
+mod control;
+
+/// Drives a resumable delete the way a resume actually does: through the
+/// controller that owns the stores, not a free function taking them.
+async fn resume_delete(
+    message_store: &TestMessageStore,
+    data_store: &TestDataStore,
+    message: &Message<Descriptor>,
+) -> Result<(), String> {
+    StorageController::new(message_store.clone(), data_store.clone())
+        .perform_records_delete(ResumableRecordsDeleteData {
+            tenant: "did:example:alice".to_string(),
+            message: message.clone(),
+        })
+        .await
+}
 
 #[derive(Clone, Default)]
 struct RecordingWakePublisher {
@@ -415,6 +457,222 @@ async fn records_write_data_bearing_exact_replay_is_non_mutating() {
             .unwrap()
             .encoded_data
             .is_none()
+    );
+}
+
+/// Resolver whose every lookup fails, standing in for a signer DID whose
+/// document has become unreachable since the message was first admitted.
+struct UnavailableResolver;
+
+impl DidResolver for UnavailableResolver {
+    fn resolve<'a>(
+        &'a self,
+        _did: &'a str,
+    ) -> ResolverFuture<'a, Result<Resolution, ResolverError>> {
+        Box::pin(async { Err(ResolverError::NotFound) })
+    }
+}
+
+#[tokio::test]
+async fn exact_replay_returns_conflict_without_resolving_the_signer() {
+    // Covers: DWN-REC-003
+    // An identical retained CID is classified from the parsed message alone.
+    // Re-resolving the signer of bytes the store already admitted proves
+    // nothing, so an unreachable resolver must not turn a settled replay into
+    // a 401, nor produce any storage or feed effect.
+    const TENANT: &str = "did:example:alice";
+
+    let publisher = RecordingWakePublisher::default();
+    let mut message_store = MemoryMessageStore::default().with_waker_publisher(publisher.clone());
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+
+    let write = signed_write_message(WriteSpec {
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+
+    let admitted = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let reply = admitted.run(TENANT, &write, None).await;
+    assert_eq!(reply.status.code, 204, "{}", reply.status.detail);
+
+    let feed_after_admit = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    let wakes_after_admit = publisher.positions();
+
+    // Same tenant and stores, but the signer's DID no longer resolves.
+    let degraded = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(UnavailableResolver)),
+    );
+    let reply = degraded.run(TENANT, &write, None).await;
+    assert_eq!(
+        reply.status.code, 409,
+        "replay must be settled before resolution: {}",
+        reply.status.detail
+    );
+
+    let feed_after_replay = message_store
+        .log_read(TENANT, EventLogReadOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        feed_after_replay.events.len(),
+        feed_after_admit.events.len(),
+        "replay must not append a feed entry"
+    );
+    assert_eq!(
+        feed_after_replay.cursor.map(|cursor| cursor.position),
+        feed_after_admit.cursor.map(|cursor| cursor.position),
+        "replay must not advance the feed cursor"
+    );
+    assert_eq!(
+        publisher.positions(),
+        wakes_after_admit,
+        "replay must not publish a wake"
+    );
+
+    // A non-identical write from the same unresolvable signer still needs
+    // authentication: the shortcut covers retained identical messages only.
+    let different = signed_write_message(WriteSpec {
+        published: Some(true),
+        ..WriteSpec::new("2025-01-02T00:00:00.000000Z")
+    })
+    .await;
+    let reply = degraded.run(TENANT, &different, None).await;
+    assert_ne!(
+        reply.status.code, 409,
+        "only retained identical messages bypass authentication"
+    );
+}
+
+// Covers: DWN-AUTH-001, DWN-PROTO-003
+// An owner countersignature used to be carried along unexamined, so anyone
+// could append one and claim the tenant had endorsed their write. It is now
+// verified in the same place as the author signature, which is what keeps
+// signer, author and owner distinct rather than merely declared.
+//
+// Both forgeries are signed by a DID the resolver actually knows, so neither
+// can be turned away at resolution before the checks under test run, and each
+// breaks exactly one commitment: the first is genuinely signed but endorses a
+// different descriptor, the second endorses this descriptor but is not really
+// signed. Either alone would still pass if the other check were the only one
+// working.
+#[tokio::test]
+async fn a_forged_owner_countersignature_is_rejected() {
+    const TENANT: &str = "did:example:alice";
+
+    async fn admit(message: &serde_json::Value) -> Response<WriteReply> {
+        let mut message_store = MemoryMessageStore::default();
+        let mut data_store = TestDataStore::default();
+        message_store.open().await.unwrap();
+        data_store.open().await.unwrap();
+        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        RecordsWriteHandler::<_, _>::new(message_store, data_store, Some(Arc::new(test_resolver())))
+            .run(TENANT, message, None)
+            .await
+    }
+
+    /// Countersigns `write` as Bob — a resolvable signer — over `descriptor_cid`.
+    async fn counter_signed(write: &serde_json::Value, descriptor_cid: &str) -> serde_json::Value {
+        let payload = serde_json::to_vec(&json!({ "descriptorCid": descriptor_cid })).unwrap();
+        let signature = Jws::create(payload.as_slice(), &[bob_signer()])
+            .await
+            .unwrap();
+        let mut counter_signed = write.clone();
+        counter_signed["authorization"]["ownerSignature"] =
+            serde_json::to_value(signature).unwrap();
+        counter_signed
+    }
+
+    let write = signed_write_message(WriteSpec {
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+
+    // The descriptor commitment the author already signed.
+    let author_payload: serde_json::Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(
+                write["authorization"]["signature"]["payload"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let descriptor_cid = author_payload["descriptorCid"].as_str().unwrap();
+
+    // Genuinely signed, but endorsing some other descriptor.
+    let wrong_commitment =
+        counter_signed(&write, "bafkreiforgeddescriptorcidthatmatchesnothing").await;
+
+    // Endorses this descriptor, but the signature bytes are not Bob's.
+    let mut bad_signature = counter_signed(&write, descriptor_cid).await;
+    bad_signature["authorization"]["ownerSignature"]["signatures"][0]["signature"] =
+        json!(URL_SAFE_NO_PAD.encode([0u8; 64]));
+
+    // Each submission runs against its own store, so none can be a replay of
+    // another and the countersignature is the only difference from the baseline.
+    let baseline = admit(&write).await;
+    assert_eq!(
+        baseline.status.code, 204,
+        "the same write without a countersignature must be admissible: {}",
+        baseline.status.detail
+    );
+
+    // The expected reason is asserted, not just the rejection: each forgery
+    // must be caught by the check it actually defeats, so neither check can
+    // silently stop working behind the other.
+    for (label, message, expected_reason) in [
+        (
+            "endorses a different descriptor",
+            wrong_commitment,
+            "cid mismatch",
+        ),
+        (
+            "is not really signed",
+            bad_signature,
+            "Signature verification failed",
+        ),
+    ] {
+        let reply = admit(&message).await;
+        assert!(
+            reply.status.code >= 400,
+            "owner countersignature that {label} must not be admitted, got {} {}",
+            reply.status.code,
+            reply.status.detail
+        );
+        assert!(
+            reply.status.detail.contains(expected_reason),
+            "{label} must be rejected with '{expected_reason}', got: {}",
+            reply.status.detail
+        );
+    }
+
+    // An owner-delegated grant with nothing countersigning it delegates
+    // nothing. This is the owner side of the same binding the author side
+    // enforces, so it also confirms the shared validator is reached with the
+    // owner's signature rather than the author's.
+    let mut dangling_grant = write.clone();
+    dangling_grant["authorization"]["ownerDelegatedGrant"] = write.clone();
+    let reply = admit(&dangling_grant).await;
+    assert!(
+        reply.status.code >= 400,
+        "an ownerDelegatedGrant without an ownerSignature must not be admitted, got {} {}",
+        reply.status.code,
+        reply.status.detail
     );
 }
 
@@ -933,8 +1191,8 @@ async fn records_delete_exact_replay_is_classified_before_mutable_protocol_valid
     assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
     let delete_message: Message<Descriptor> = serde_json::from_value(delete).unwrap();
     assert_eq!(
-        crate::sync::endpoint::classify_apply_reply(&reply.status, &delete_message, true),
-        crate::sync::endpoint::ReplicationApplyOutcome::Duplicate
+        classify_apply_reply(&reply.status, &delete_message, true),
+        ReplicationApplyOutcome::Duplicate
     );
     assert_eq!(
         message_store
@@ -1123,7 +1381,7 @@ async fn records_delete_cleanup_failure_is_safe_and_resumable() {
         .is_some());
 
     data_store.fail_delete.store(false, Ordering::SeqCst);
-    resume_records_delete_from_task(&message_store, &data_store, TENANT, &delete_message)
+    resume_delete(&message_store, &data_store, &delete_message)
         .await
         .unwrap();
     assert!(data_store
@@ -1215,7 +1473,7 @@ async fn superseded_prune_task_rechecks_winner_and_does_not_purge_descendants() 
         .unwrap();
 
     let losing_prune: Message<Descriptor> = serde_json::from_value(losing_prune).unwrap();
-    resume_records_delete_from_task(&message_store, &data_store, TENANT, &losing_prune)
+    resume_delete(&message_store, &data_store, &losing_prune)
         .await
         .unwrap();
     assert!(
@@ -1579,6 +1837,133 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
+// Covers: DWN-AUTH-001, DWN-AUTH-004
+// A signature over a delegated grant commits to *that* grant's CID. Without
+// binding the embedded grant back to the signed id, a perfectly valid
+// signature can be paired with an unsigned choice of grant — the signer
+// approved some delegation, never this one. The later lifetime, scope and
+// grantee checks all run against whichever grant was substituted in, so none
+// of them can recover the missing commitment.
+#[tokio::test]
+async fn an_embedded_delegated_grant_must_be_the_one_that_was_signed() {
+    const TENANT: &str = "did:example:alice";
+
+    async fn grant_with(
+        handler: &RecordsWriteHandler<TestMessageStore, TestDataStore>,
+        data: &'static [u8],
+        timestamp: &str,
+    ) -> serde_json::Value {
+        let data = Bytes::from_static(data);
+        let grant = signed_write_message(WriteSpec {
+            protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+            protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+            recipient: Some("did:example:bob".to_string()),
+            tags: Some(MapValue::from([(
+                "protocol".to_string(),
+                Value::String("http://example.com/notes".to_string()),
+            )])),
+            data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_size: data.len() as u64,
+            data_format: "application/json".to_string(),
+            ..WriteSpec::new(timestamp)
+        })
+        .await;
+        assert_eq!(
+            handler
+                .run(TENANT, &grant, Some(data.clone()))
+                .await
+                .status
+                .code,
+            202
+        );
+        let mut embedded = grant;
+        embedded["encodedData"] = serde_json::Value::String(URL_SAFE_NO_PAD.encode(&data));
+        embedded
+    }
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let signed_grant = grant_with(
+        &handler,
+        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#,
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+    // A second, equally valid grant to the same grantee — the one a writer
+    // would rather have been given.
+    let substituted = grant_with(
+        &handler,
+        br#"{"dateExpires":"2025-03-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#,
+        "2025-01-01T00:00:30.000000Z",
+    )
+    .await;
+    let undelegated = grant_with(
+        &handler,
+        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":false}"#,
+        "2025-01-01T00:00:45.000000Z",
+    )
+    .await;
+
+    let note_data = Bytes::from_static(b"delegated note");
+    let note = || async {
+        signed_write_message(WriteSpec {
+            author: TENANT.to_string(),
+            signer: bob_signer(),
+            protocol: "http://example.com/notes".to_string(),
+            protocol_path: "note".to_string(),
+            data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
+            data_size: note_data.len() as u64,
+            ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+        })
+        .await
+    };
+
+    // Baseline: signed over the grant that is actually attached.
+    let honest = with_author_delegated_grant(note().await, &signed_grant, bob_signer()).await;
+    assert_eq!(
+        handler
+            .run(TENANT, &honest, Some(note_data.clone()))
+            .await
+            .status
+            .code,
+        202,
+        "the grant that was signed must be accepted"
+    );
+
+    // Signature still commits to `signed_grant`; a different grant is attached.
+    let mut swapped = with_author_delegated_grant(note().await, &signed_grant, bob_signer()).await;
+    swapped["authorization"]["authorDelegatedGrant"] = substituted;
+    let reply = handler.run(TENANT, &swapped, Some(note_data.clone())).await;
+    assert!(
+        reply.status.code >= 400,
+        "an unsigned choice of grant must not be honoured, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+
+    // A grant that was never delegable cannot be delegated with, even when it
+    // is the grant that was signed.
+    let not_delegated = with_author_delegated_grant(note().await, &undelegated, bob_signer()).await;
+    let reply = handler
+        .run(TENANT, &not_delegated, Some(note_data.clone()))
+        .await;
+    assert!(
+        reply.status.code >= 400,
+        "a non-delegated grant must not authorize a delegate, got {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+}
+
 #[tokio::test]
 async fn permissions_revocation_cleans_grant_authorized_messages() {
     let mut message_store = TestMessageStore::default();
@@ -1777,7 +2162,7 @@ async fn records_event_log_subscribe_rejects_through_the_shared_ingress() {
         event_log,
         Some(Arc::new(test_resolver())),
     );
-    let dwn = crate::Dwn::default();
+    let dwn = Dwn::default();
 
     for raw in [
         serde_json::json!({ "descriptor": { "interface": "Records" } }),
@@ -1809,7 +2194,7 @@ async fn records_event_log_subscribe_rejects_through_the_shared_ingress() {
     )
     .await;
 
-    assert!(crate::validation::admit_message(&admitted).is_ok());
+    assert!(admit_message(&admitted).is_ok());
     let subscribed = handler
         .handle_subscribe(TENANT, &admitted, Box::new(|_| {}))
         .await;
@@ -1860,11 +2245,8 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
         .await;
     assert_eq!(result.reply.status.code, 410);
     let error = result.reply.reply.error.as_ref().unwrap();
-    assert_eq!(error.code, crate::stores::ProgressGapCode::ProgressGap);
-    assert_eq!(
-        error.reason,
-        crate::stores::ProgressGapReason::EpochMismatch
-    );
+    assert_eq!(error.code, ProgressGapCode::ProgressGap);
+    assert_eq!(error.reason, ProgressGapReason::EpochMismatch);
     assert!(result.subscription.is_none());
 }
 
@@ -1985,7 +2367,7 @@ impl MessageStore for TestMessageStore {
 
     async fn close(&mut self) {}
 
-    fn put<D: crate::descriptors::MessageDescriptor + Send>(
+    fn put<D: MessageDescriptor + Send>(
         &self,
         tenant: &str,
         message: Message<D>,
@@ -2334,9 +2716,6 @@ fn test_store_error(error: String) -> MessageStoreError {
 // Covers: DWN-AUTH-005
 #[tokio::test]
 async fn subscribe_delivery_grant_revoked_is_terminal() {
-    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
-    use crate::stores::SubscriptionErrorCode;
-
     const TENANT: &str = "did:example:alice";
     const BOB: &str = "did:example:bob";
 
@@ -2389,22 +2768,19 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
         signed_records_subscribe_message(filter.clone(), None, "2025-01-01T00:10:00.000000Z").await;
     let message: Message<Descriptor> =
         serde_json::from_value(request).expect("subscribe request must deserialize");
-    let auth_ctx = crate::permissions::AuthorizationContext {
+    let auth_ctx = AuthorizationContext {
         signer: BOB.to_string(),
         author: BOB.to_string(),
-        payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
-            crate::auth::jws::AuthorizationPayloadData {
-                descriptor_cid: String::new(),
-                delegated_grant_id: None,
-                permission_grant_id: Some(grant_id.clone()),
-                permission_grant_ids: None,
-                protocol_role: None,
-            },
-        ),
-        permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::Single(
-            grant_id.clone(),
-        ),
+        payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+            descriptor_cid: String::new(),
+            delegated_grant_id: None,
+            permission_grant_id: Some(grant_id.clone()),
+            permission_grant_ids: None,
+            protocol_role: None,
+        }),
+        permission_grant_invocation: PermissionGrantInvocation::Single(grant_id.clone()),
         author_delegated_grant: None,
+        owner: None,
     };
     let auth = DeliveryAuthorization {
         message,
@@ -2413,6 +2789,7 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
         grant_valid_at_open: true,
         role_invoked: false,
         request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+        control_only: false,
     };
 
     authorize_records_delivery(TENANT, &auth, &message_store)
@@ -2456,9 +2833,6 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
 // Covers: DWN-AUTH-005
 #[tokio::test]
 async fn subscribe_delivery_expired_grant_is_terminal() {
-    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
-    use crate::stores::SubscriptionErrorCode;
-
     const TENANT: &str = "did:example:alice";
     const BOB: &str = "did:example:bob";
 
@@ -2513,26 +2887,24 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
     let auth = DeliveryAuthorization {
         message,
         filter,
-        auth_ctx: crate::permissions::AuthorizationContext {
+        auth_ctx: AuthorizationContext {
             signer: BOB.to_string(),
             author: BOB.to_string(),
-            payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
-                crate::auth::jws::AuthorizationPayloadData {
-                    descriptor_cid: String::new(),
-                    delegated_grant_id: None,
-                    permission_grant_id: Some(grant_id.clone()),
-                    permission_grant_ids: None,
-                    protocol_role: None,
-                },
-            ),
-            permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::Single(
-                grant_id,
-            ),
+            payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: None,
+                permission_grant_id: Some(grant_id.clone()),
+                permission_grant_ids: None,
+                protocol_role: None,
+            }),
+            permission_grant_invocation: PermissionGrantInvocation::Single(grant_id),
             author_delegated_grant: None,
+            owner: None,
         },
         grant_valid_at_open: true,
         role_invoked: false,
         request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+        control_only: false,
     };
 
     let error = authorize_records_delivery(TENANT, &auth, &message_store)
@@ -2547,8 +2919,6 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
 // Covers: DWN-AUTH-005, DWN-REC-004
 #[tokio::test]
 async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
-    use super::subscribe::RecordsEventLogSubscribeHandler;
-
     const TENANT: &str = "did:example:alice";
     const LIMITED: &str = "http://example.com/limited";
 
@@ -2557,7 +2927,7 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
     message_store.open().await.unwrap();
     let mut data_store = TestDataStore::default();
     data_store.open().await.unwrap();
-    crate::testing::put_limited_threads_protocol(TENANT, &message_store).await;
+    put_limited_threads_protocol(TENANT, &message_store).await;
 
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -2675,8 +3045,6 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
 // Covers: DWN-PROTO-001, DWN-PROTO-002
 #[tokio::test]
 async fn subscribe_nested_without_scope_rejected_unless_bounded() {
-    use super::subscribe::RecordsSubscribeHandler;
-
     const TENANT: &str = "did:example:alice";
     const NESTED: &str = "thread/message";
 
@@ -2813,7 +3181,7 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
             indexes: KeyValues,
         ) -> Result<(), MessageStoreError>
         where
-            D: crate::descriptors::MessageDescriptor + Send,
+            D: MessageDescriptor + Send,
             Message<Descriptor>: From<Message<D>>,
         {
             self.inner.put(tenant, message, indexes).await
@@ -2863,22 +3231,19 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
         }
     }
 
-    impl crate::stores::ReplicationFeedReader for GatedMessageStore {
+    impl ReplicationFeedReader for GatedMessageStore {
         async fn log_read(
             &self,
             tenant: &str,
             options: EventLogReadOptions,
-        ) -> Result<crate::stores::EventLogReadResult, crate::errors::EventLogError> {
+        ) -> Result<EventLogReadResult, EventLogError> {
             self.inner.log_read(tenant, options).await
         }
 
         async fn log_bounds(
             &self,
             tenant: &str,
-        ) -> Result<
-            Option<crate::stores::replication_feed_reader::ReplicationBounds>,
-            crate::errors::EventLogError,
-        > {
+        ) -> Result<Option<ReplicationBounds>, EventLogError> {
             self.inner.log_bounds(tenant).await
         }
 
@@ -2886,12 +3251,11 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
             &self,
             tenant: &str,
             scopes: &[String],
-        ) -> Result<crate::stores::replication_feed_reader::Fingerprint, crate::errors::EventLogError>
-        {
+        ) -> Result<Fingerprint, EventLogError> {
             self.inner.fingerprint(tenant, scopes).await
         }
 
-        async fn epoch(&self) -> Result<String, crate::errors::EventLogError> {
+        async fn epoch(&self) -> Result<String, EventLogError> {
             self.inner.epoch().await
         }
     }
@@ -2988,9 +3352,6 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
 // Covers: DWN-AUTH-002, DWN-AUTH-005
 #[tokio::test]
 async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
-    use super::subscribe::{authorize_records_delivery, DeliveryAuthorization};
-    use crate::stores::SubscriptionErrorCode;
-
     const TENANT: &str = "did:example:alice";
     const BOB: &str = "did:example:bob";
 
@@ -3000,15 +3361,15 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
     // Delegated grant covering notes reads, expired after the request but
     // before delivery: valid at open (request time), terminal at now.
     // Fixed past dates keep this deterministic.
-    let grant = crate::permissions::PermissionGrant {
+    let grant = PermissionGrant {
         id: "delegated-grant-1".to_string(),
         grantor: TENANT.to_string(),
         grantee: BOB.to_string(),
         date_granted: parse_time("2025-01-01T00:00:00.000000Z"),
         date_expires: parse_time("2025-06-01T00:00:00.000000Z"),
         delegated: Some(true),
-        scope: crate::permissions::PermissionScope::Records(crate::permissions::RecordsScope {
-            method: crate::permissions::RecordsMethod::Read,
+        scope: PermissionScope::Records(RecordsScope {
+            method: RecordsMethod::Read,
             protocol: "http://example.com/notes".to_string(),
             selector: None,
         }),
@@ -3027,24 +3388,24 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
     let auth = DeliveryAuthorization {
         message,
         filter,
-        auth_ctx: crate::permissions::AuthorizationContext {
+        auth_ctx: AuthorizationContext {
             signer: BOB.to_string(),
             author: TENANT.to_string(),
-            payload: crate::permissions::VerifiedAuthorizationPayload::Generic(
-                crate::auth::jws::AuthorizationPayloadData {
-                    descriptor_cid: String::new(),
-                    delegated_grant_id: Some("delegated-grant-1".to_string()),
-                    permission_grant_id: None,
-                    permission_grant_ids: None,
-                    protocol_role: None,
-                },
-            ),
-            permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
+            payload: VerifiedAuthorizationPayload::Generic(AuthorizationPayloadData {
+                descriptor_cid: String::new(),
+                delegated_grant_id: Some("delegated-grant-1".to_string()),
+                permission_grant_id: None,
+                permission_grant_ids: None,
+                protocol_role: None,
+            }),
+            permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: Some(grant),
+            owner: None,
         },
         grant_valid_at_open: true,
         role_invoked: false,
         request_timestamp: "2025-01-01T00:10:00.000000Z".to_string(),
+        control_only: false,
     };
 
     let error = authorize_records_delivery(TENANT, &auth, &message_store)

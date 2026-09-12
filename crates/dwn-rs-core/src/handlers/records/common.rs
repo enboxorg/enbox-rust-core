@@ -1,8 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::ops::Bound;
-use std::pin::Pin;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -16,7 +14,6 @@ use crate::descriptors::{
     DeleteDescriptor, Descriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
-use crate::encryption::Encryption;
 use crate::errors::{DwnError, DwnErrorCode, EventLogError};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
@@ -94,30 +91,21 @@ pub(crate) fn validate_records_write_integrity(
         .encryption
         .as_ref()
     {
-        match encryption {
-            Encryption::Envelope(envelope) => {
-                envelope.validate().map_err(|error| match error {
-                    crate::encryption::EncryptionError::InvalidInitializationVectorLength { found } => {
-                        format!(
-                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: A256CTR initializationVector must decode to 16 bytes, got {found}"
-                        )
-                    }
-                    crate::encryption::EncryptionError::InvalidBase64Url { label, error } => {
-                        format!(
-                            "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: {label} must be valid base64url: {error}"
-                        )
-                    }
-                    other => format!(
-                        "RecordsWriteValidateIntegrityEncryptionEphemeralPublicKeyInvalid: {other}"
-                    ),
-                })?;
+        encryption.validate().map_err(|error| match error {
+            crate::encryption::EncryptionError::InvalidInitializationVectorLength { found } => {
+                format!(
+                    "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: A256CTR initializationVector must decode to 16 bytes, got {found}"
+                )
             }
-            Encryption::LegacyJwe(_) => {
-                // Legacy JWE is deprecated. It's only valid for decryption of existing records, not
-                // for new writes. Reject any new writes with a legacy JWE.
-                return Err("RecordsWriteValidateIntegrityEncryptionLegacyJweInvalid: Legacy JWE is deprecated and not allowed for new writes".to_string());
+            crate::encryption::EncryptionError::InvalidBase64Url { label, error } => {
+                format!(
+                    "RecordsWriteValidateIntegrityEncryptionInitializationVectorInvalid: {label} must be valid base64url: {error}"
+                )
             }
-        }
+            other => format!(
+                "RecordsWriteValidateIntegrityEncryptionEphemeralPublicKeyInvalid: {other}"
+            ),
+        })?;
     }
 
     // `contextId` is a protocol-only surface: per DWN spec.md:1028 a record NOT
@@ -596,12 +584,25 @@ pub(crate) fn non_owner_records_filters(
     date_sort: Option<&crate::descriptors::records::DateSort>,
     author: &str,
     protocol_authorized: bool,
+    exact_audience: bool,
 ) -> Vec<BTreeMap<FilterKey, Filter<Value>>> {
     let mut filters = Vec::new();
     if filter_includes_published_records(filter) {
         filters.push(published_records_filter(filter, date_sort));
     }
     if filter_includes_unpublished_records(filter) {
+        // An exactly pinned audience tuple names one role's directory, which
+        // any authenticated requester may reach. It is its own candidate
+        // branch rather than a relaxation of the others, so it widens nothing
+        // else the requester could not already see.
+        if exact_audience {
+            let mut map = owner_records_filter(filter, date_sort);
+            map.insert(
+                FilterKey::Index("published".to_string()),
+                bool_filter(false),
+            );
+            filters.push(map);
+        }
         if should_build_author_filter(filter, author) {
             let mut map = owner_records_filter(filter, date_sort);
             map.insert(
@@ -642,12 +643,21 @@ pub(crate) fn non_owner_records_event_filters(
     filter: &RecordsFilter,
     author: &str,
     protocol_authorized: bool,
+    exact_audience: bool,
 ) -> Vec<BTreeMap<FilterKey, Filter<Value>>> {
     let mut filters = Vec::new();
     if filter_includes_published_records(filter) {
         filters.push(published_records_event_filter(filter));
     }
     if filter_includes_unpublished_records(filter) {
+        if exact_audience {
+            let mut map = owner_records_event_filter(filter);
+            map.insert(
+                FilterKey::Index("published".to_string()),
+                bool_filter(false),
+            );
+            filters.push(map);
+        }
         if should_build_author_filter(filter, author) {
             let mut map = owner_records_event_filter(filter);
             map.insert(
@@ -1300,6 +1310,70 @@ where
     }))
 }
 
+/// Whether `recipient` holds `role_path` in `protocol`, within the context
+/// named by `context_id`.
+///
+/// The context dimension follows role depth: a root role has none, and a
+/// nested role is scoped by the ancestor context at its parent's depth. A
+/// nested role with no usable ancestor context is unaddressable, and no record
+/// can satisfy it — that is a negative answer, not an unscoped search that
+/// would match role holders in unrelated contexts.
+///
+/// Callers arrive with the role addressed two different ways — derived from a
+/// record chain during ordinary protocol authorization, or carried as explicit
+/// tags on a control record — so this takes the resolved address and leaves
+/// resolution to them.
+pub(crate) async fn role_record_exists<MessageStore>(
+    tenant: &str,
+    recipient: &str,
+    protocol: &str,
+    role_path: &str,
+    context_id: Option<&str>,
+    message_store: &MessageStore,
+) -> Result<bool, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let mut filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("method", string_filter(WRITE_METHOD)),
+        ("protocol", string_filter(protocol)),
+        ("protocolPath", string_filter(role_path)),
+        ("recipient", string_filter(recipient)),
+        ("isLatestBaseState", bool_filter(true)),
+    ]);
+    let ancestor_count = role_path.split('/').count().saturating_sub(1);
+    if ancestor_count > 0 {
+        // A nested role is addressed by the ancestor context at its parent's
+        // depth. A context shallower than that does not merely under-specify
+        // the search — it names a different, wider region, and truncating to
+        // whatever segments happen to exist would match role holders in
+        // unrelated sibling contexts. Such a role is unaddressable, which is a
+        // negative answer rather than a broader query.
+        let segments: Vec<&str> = context_id.unwrap_or_default().split('/').collect();
+        if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
+            return Ok(false);
+        }
+        filter.insert(
+            FilterKey::Index("contextId".to_string()),
+            Filter::Subtree(SubtreeFilter {
+                subtree: segments[..ancestor_count].join("/"),
+            }),
+        );
+    }
+    let result = message_store
+        .query(
+            tenant,
+            Filters::from(filter),
+            None,
+            Some(Pagination::with_limit(1)),
+            None,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(!result.messages.is_empty())
+}
+
 pub(crate) async fn matching_role_record_exists<MessageStore>(
     tenant: &str,
     author: &str,
@@ -1328,41 +1402,15 @@ where
             })?;
         protocol_path = parsed.protocol_path.to_string();
     }
-    let mut filter = filter_map([
-        ("interface", string_filter(RECORDS_INTERFACE)),
-        ("method", string_filter(WRITE_METHOD)),
-        ("protocol", string_filter(&protocol)),
-        ("protocolPath", string_filter(&protocol_path)),
-        ("recipient", string_filter(author)),
-        ("isLatestBaseState", bool_filter(true)),
-    ]);
-    if let Some(context) = record_chain.last().and_then(context_id) {
-        let ancestor_count = protocol_path.split('/').count().saturating_sub(1);
-        if ancestor_count > 0 {
-            let context_prefix = context
-                .split('/')
-                .take(ancestor_count)
-                .collect::<Vec<_>>()
-                .join("/");
-            filter.insert(
-                FilterKey::Index("contextId".to_string()),
-                Filter::Subtree(SubtreeFilter {
-                    subtree: context_prefix,
-                }),
-            );
-        }
-    }
-    let result = message_store
-        .query(
-            tenant,
-            Filters::from(filter),
-            None,
-            Some(Pagination::with_limit(1)),
-            None,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
-    Ok(!result.messages.is_empty())
+    role_record_exists(
+        tenant,
+        author,
+        &protocol,
+        &protocol_path,
+        record_chain.last().and_then(context_id).as_deref(),
+        message_store,
+    )
+    .await
 }
 
 pub(crate) async fn actions_for_message_kind<MessageStore>(
@@ -1487,34 +1535,6 @@ where
 }
 
 /// Per-message projection capability for read surfaces. Query, Subscribe,
-/// and Read route matched writes through this seam before authorization,
-/// data retrieval, and delivery decisions; the encryption-control
-/// current-audience projection plugs in here by replacing the identity
-/// implementation. Kept deliberately narrow: projection maps populations,
-/// it never re-authorizes.
-pub(crate) trait RecordsProjector: Send + Sync {
-    fn project_writes<'a>(
-        &'a self,
-        messages: Vec<Message<Descriptor>>,
-    ) -> ProjectedWritesFuture<'a>;
-}
-
-pub(crate) type ProjectedWritesFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<Message<Descriptor>>, String>> + Send + 'a>>;
-
-/// Identity projection: every matched write stays visible. All read surfaces
-/// use this until the encryption-control projection lands.
-pub(crate) struct IdentityProjector;
-
-impl RecordsProjector for IdentityProjector {
-    fn project_writes<'a>(
-        &'a self,
-        messages: Vec<Message<Descriptor>>,
-    ) -> ProjectedWritesFuture<'a> {
-        Box::pin(async move { Ok(messages) })
-    }
-}
-
 pub(crate) async fn attach_initial_writes(
     tenant: &str,
     messages: Vec<Message<Descriptor>>,
@@ -2174,6 +2194,7 @@ mod tests {
             ),
             permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
             author_delegated_grant: None,
+            owner: None,
         };
         validate_records_write_integrity(&ok, &signature).expect("16-byte IV must validate");
 
@@ -2283,6 +2304,7 @@ mod tests {
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: None,
+            owner: None,
         }
     }
 
@@ -2852,6 +2874,7 @@ mod tests {
             grant_valid_at_open: false,
             role_invoked: true,
             request_timestamp: HISTORY_MID.to_string(),
+            control_only: false,
         };
 
         authorize_records_delivery(ROLE_TEST_TENANT, &auth, &store)
@@ -2872,23 +2895,4 @@ mod tests {
     }
 
     // Covers: DWN-REC-001
-    #[tokio::test]
-    async fn identity_projection_preserves_population() {
-        let messages = vec![
-            limit_write_message("thread/message", Some("thread-1/message-1")),
-            limit_write_message("post", None),
-        ];
-        let projected = IdentityProjector
-            .project_writes(messages.clone())
-            .await
-            .expect("identity projection cannot fail");
-        assert_eq!(projected.len(), messages.len());
-        for (before, after) in messages.iter().zip(projected.iter()) {
-            assert_eq!(
-                message_cid(before).expect("cid"),
-                message_cid(after).expect("cid"),
-                "identity projection preserves every message"
-            );
-        }
-    }
 }

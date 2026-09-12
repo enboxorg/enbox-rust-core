@@ -10,8 +10,10 @@ use jsonschema::{Draft, Registry, Resource, Validator};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::descriptors::protocols::ProtocolsMethod;
 use crate::descriptors::MESSAGES_QUERY_SCHEMA;
 use crate::dwn::MessageKind;
+use crate::encryption::ENCRYPTION_AUDIENCE_SCHEMA;
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::interfaces::messages::descriptors::{
     MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA,
@@ -19,6 +21,7 @@ use crate::interfaces::messages::descriptors::{
     RECORDS_DELETE_SCHEMA, RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA,
     RECORDS_WRITE_SCHEMA,
 };
+use crate::protocols::validate_reserved_control_namespace;
 use crate::{Descriptor, Message, Response};
 
 // Test-only tally of `validate_message` calls on the current thread, so "schema validation
@@ -48,6 +51,10 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
         "https://identity.foundation/dwn/json-schemas/authorization-owner.json",
         include_str!("../../schemas/authorization-owner.json"),
+    ),
+    (
+        ENCRYPTION_AUDIENCE_SCHEMA,
+        include_str!("../../schemas/encryption/audience.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/defs.json",
@@ -234,7 +241,7 @@ pub fn validate_message(raw_message: &Value) -> Result<(), DwnError> {
     VALIDATE_MESSAGE_CALLS.with(|calls| calls.set(calls.get() + 1));
 
     let kind = MessageKind::from_message(raw_message)?;
-    let schema_not_found = || {
+    let schema_id = kind.schema_id().ok_or_else(|| {
         DwnError::new(
             DwnErrorCode::SchemaValidatorSchemaNotFound,
             format!(
@@ -243,13 +250,28 @@ pub fn validate_message(raw_message: &Value) -> Result<(), DwnError> {
                 kind.method(),
             ),
         )
-    };
-    let schema_id = kind.schema_id().ok_or_else(schema_not_found)?;
-    let validator = validators()?.get(schema_id).ok_or_else(schema_not_found)?;
-    if let Some(error) = validator.iter_errors(raw_message).next() {
-        return Err(schema_error(error.to_string()));
+    })?;
+    validate_against_schema(schema_id, raw_message)
+}
+
+/// Validate any JSON against one embedded schema by `$id`.
+///
+/// Messages reach this through [`validate_message`]; record *payloads* whose
+/// shape a protocol fixes — the encryption-control audience document — call it
+/// directly. Both share the one compiled registry, so a payload schema
+/// resolves `public-jwk.json` and `defs.json` the same way a message schema
+/// does.
+pub(crate) fn validate_against_schema(schema_id: &str, value: &Value) -> Result<(), DwnError> {
+    let validator = validators()?.get(schema_id).ok_or_else(|| {
+        DwnError::new(
+            DwnErrorCode::SchemaValidatorSchemaNotFound,
+            format!("schema {schema_id} not found"),
+        )
+    })?;
+    match validator.iter_errors(value).next() {
+        Some(error) => Err(schema_error(error.to_string())),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Recognize and schema-validate, before dispatch picks a handler.
@@ -259,8 +281,40 @@ pub fn validate_message(raw_message: &Value) -> Result<(), DwnError> {
 /// No such path exists yet (#188), so nothing here proves that invariant.
 pub(crate) fn admit_message(raw_message: &Value) -> Result<MessageKind, DwnError> {
     let kind = MessageKind::from_message(raw_message)?;
+    validate_before_schema(&kind, raw_message)?;
     validate_message(raw_message)?;
     Ok(kind)
+}
+
+/// Per-kind checks that must beat JSON Schema to the message.
+///
+/// Schema validation reports one anonymous `SchemaValidatorFailure` for every
+/// structural problem. A few DWN rules are stricter than "this shape is wrong"
+/// and owe the caller a specific code, so they are diagnosed here first; the
+/// schema still rejects the same input independently, making these checks a
+/// matter of specificity rather than coverage.
+///
+/// Dispatch mirrors [`MessageKind::schema_id`]: match the kind, delegate to the
+/// interface that owns the rule. Most kinds have nothing to add.
+fn validate_before_schema(kind: &MessageKind, raw_message: &Value) -> Result<(), DwnError> {
+    match kind {
+        // The parsing route. The construction route is
+        // checked in `ConfigureParameters::build`.
+        MessageKind::Protocols(ProtocolsMethod::Configure) => {
+            validate_reserved_control_namespace(descriptor_field(raw_message, "definition"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Borrows a descriptor field from an unvalidated message, yielding `Null` when
+/// the message is not shaped the way the caller hoped. Pre-schema checks run
+/// before anything guarantees a descriptor exists.
+fn descriptor_field<'a>(raw_message: &'a Value, field: &str) -> &'a Value {
+    raw_message
+        .get("descriptor")
+        .and_then(|descriptor| descriptor.get(field))
+        .unwrap_or(&Value::Null)
 }
 
 /// Deserialize an admitted message into the typed envelope.
@@ -292,7 +346,9 @@ pub fn ingest_message(raw_message: &Value) -> Result<(MessageKind, Message<Descr
 /// are preserved; the code is on the [`DwnError`] regardless.
 pub fn ingress_rejection<R: Default>(error: DwnError) -> Response<R> {
     match error.code {
-        DwnErrorCode::SchemaValidatorFailure | DwnErrorCode::SchemaValidatorSchemaNotFound => {
+        DwnErrorCode::SchemaValidatorFailure
+        | DwnErrorCode::SchemaValidatorSchemaNotFound
+        | DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath => {
             Response::bad_request_error(error)
         }
         _ => Response::bad_request(error.detail),

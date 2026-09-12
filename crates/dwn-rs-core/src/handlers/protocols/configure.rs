@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
@@ -14,16 +15,61 @@ use crate::handlers::records::common::{filter_map, string_filter};
 use crate::handlers::records::{RECORDS_INTERFACE, WRITE_METHOD};
 use crate::interfaces::messages::protocols::{self as protocol_types, Definition};
 use crate::replies::protocols::Configure;
-use crate::stores::{LatestStateMutation, LatestStateTransition};
+use crate::stores::{LatestStateMutation, LatestStateTransition, ManagedResumableTask};
+use crate::tasks::manager::ResumableTask;
+use crate::Descriptor;
 use crate::{canonical_rfc3339, permissions, Handler, Message, Pagination, Response};
 use crate::{MessageSort, SortDirection};
 
 use super::common::*;
 
+/// Re-examines stored control records after a configuration is accepted.
+///
+/// Type-erased deliberately. Repair needs a data store and a task store that
+/// configuration handling otherwise has no use for, and threading both through
+/// as generic parameters would put them on every construction of this handler —
+/// including the many that never repair anything. Erasing them keeps the cost
+/// where the capability is used.
+/// A repair obligation that has been durably recorded but not yet discharged.
+///
+/// Opaque here on purpose: configuration handling needs to hand the token back,
+/// not to know what a task store made of it.
+pub struct EnlistedRepair(pub(crate) ManagedResumableTask<ResumableTask>);
+
+pub trait ControlRepairer: Send + Sync {
+    /// Records the obligation to re-examine this protocol's control records.
+    ///
+    /// Called *before* the configuration commits. The obligation has to outlive
+    /// the crash that could happen immediately after the commit, and a task
+    /// registered after the commit cannot: there is a window in which the new
+    /// history is durable and nothing remembers it needs answering. Enlisting
+    /// first inverts the window into a harmless one — an obligation recorded
+    /// for a configuration that never landed resumes, re-asks the question
+    /// against the history as it actually stands, finds nothing contradicted
+    /// and retires.
+    fn enlist<'a>(
+        &'a self,
+        tenant: &'a str,
+        protocol: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<EnlistedRepair, String>> + Send + 'a>>;
+
+    /// Discharges an enlisted obligation, retiring it only once the scan
+    /// completes. A scan that fails leaves the obligation in place for the
+    /// recovery pass to pick up.
+    fn fulfil<'a>(
+        &'a self,
+        enlisted: EnlistedRepair,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+}
+
 #[derive(Clone)]
 pub struct ProtocolsConfigureHandler<MessageStore> {
     message_store: MessageStore,
     did_resolver: Option<Arc<dyn DidResolver>>,
+    /// Absent on a node that cannot finish what repair would start. Such a node
+    /// still accepts configurations and simply never repairs, rather than
+    /// half-removing records it cannot durably see through.
+    repairer: Option<Arc<dyn ControlRepairer>>,
 }
 
 impl<MessageStore> ProtocolsConfigureHandler<MessageStore> {
@@ -31,7 +77,16 @@ impl<MessageStore> ProtocolsConfigureHandler<MessageStore> {
         Self {
             message_store,
             did_resolver,
+            repairer: None,
         }
+    }
+
+    /// Gives this handler the ability to repair control records after a
+    /// configuration lands. Without it, configurations are accepted and nothing
+    /// is re-examined.
+    pub fn with_repairer(mut self, repairer: Arc<dyn ControlRepairer>) -> Self {
+        self.repairer = Some(repairer);
+        self
     }
 }
 
@@ -150,12 +205,48 @@ where
                     Ok(None) => return Response::conflict(),
                     Err(detail) => return Response::bad_request(detail),
                 };
+            // Covers: DWN-PROTO-004
+            // The obligation to re-examine records is recorded before the
+            // configuration it answers for is committed, so no crash can leave
+            // an accepted history with nothing remembering to check it. If the
+            // obligation cannot even be recorded, the configuration is refused:
+            // nothing is durable yet, so a retry still changes something —
+            // which is exactly what makes refusing better than accepting a
+            // history this node could never repair against.
+            let enlisted = match &self.repairer {
+                Some(repairer) => {
+                    match repairer
+                        .enlist(tenant, &descriptor.definition.protocol)
+                        .await
+                    {
+                        Ok(enlisted) => Some((repairer, enlisted)),
+                        Err(detail) => return store_error_reply(detail),
+                    }
+                }
+                None => None,
+            };
+
             if let Err(err) = self
                 .message_store
                 .commit_latest_state(tenant, transition)
                 .await
             {
                 return store_error_reply(err.to_string());
+            }
+
+            // Only now, with the configuration durably accepted, are records
+            // judged against it. Running before the commit would judge them
+            // against a configuration that might never land.
+            if let Some((repairer, enlisted)) = enlisted {
+                if let Err(detail) = repairer.fulfil(enlisted).await {
+                    // The configuration is accepted either way: it is durable,
+                    // and a repair that could not run leaves records in place
+                    // rather than half-removed. Reporting it as a failed
+                    // configure would invite a retry that changes nothing —
+                    // the obligation is still enlisted, and the recovery pass
+                    // is what picks it up.
+                    tracing::warn!(%tenant, detail, "control repair did not complete");
+                }
             }
 
             Response::accepted()
@@ -210,7 +301,7 @@ where
         tenant: &str,
         incoming: &Definition,
         incoming_timestamp: &str,
-        existing: &[Message<crate::Descriptor>],
+        existing: &[Message<Descriptor>],
     ) -> Result<(), Response<Configure>> {
         if existing.is_empty() {
             return Ok(());
@@ -415,10 +506,10 @@ where
 }
 
 fn plan_configure_transition(
-    incoming: Message<crate::Descriptor>,
+    incoming: Message<Descriptor>,
     incoming_cid: &str,
     incoming_author: &str,
-    existing: Vec<Message<crate::Descriptor>>,
+    existing: Vec<Message<Descriptor>>,
 ) -> Result<Option<LatestStateTransition>, String> {
     let mut comparable = Vec::with_capacity(existing.len());
     for message in &existing {
