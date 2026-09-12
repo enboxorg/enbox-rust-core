@@ -22,7 +22,7 @@ must not be restated, summarized, or forked here.
 - **Input:** the issue number, issue URL, bug report, feature request, failing
   test, or free-form task supplied by the caller. Ask if none was given.
 - **Output path:** write the packet to `.agent/contracts/<slug>.md` — a
-  meaningful slug such as `issue-189.md` or `records-delete-convergence.md`.
+  meaningful slug such as `records-delete-convergence.md`.
   `.agent/` is gitignored; packets are task artefacts, not knowledge.
 - **Also print the completed packet in full** in your reply, not just the path.
 - **The packet is the only file this workflow writes.** Production code is off

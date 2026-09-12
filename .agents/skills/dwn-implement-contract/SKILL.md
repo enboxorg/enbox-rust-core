@@ -14,9 +14,9 @@ must not be restated, summarized, or forked here.
 2. Read `<knowledge>/agents/implement-contract.md` and execute it in full,
    including its completion-report shape.
 3. Apply this repository's `AGENTS.md` — source hierarchy, sibling checkouts,
-   invariant contract classes, the `// Covers: <ID>` test convention, and
-   architecture constraints. Where the playbook and this adapter disagree, the
-   playbook wins.
+   invariant contract classes, the `// Covers: <ID>` test convention, comment
+   hygiene, and architecture constraints. Where the playbook and this adapter
+   disagree, the playbook wins.
 
 ## Repository bindings
 

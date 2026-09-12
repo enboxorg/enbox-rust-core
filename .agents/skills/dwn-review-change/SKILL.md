@@ -17,9 +17,10 @@ must not be restated, summarized, or forked here.
    `NOTE`), its edge-case checklist, and its single closing verdict (`PASS`,
    `PASS WITH FOLLOW-UP`, or `CHANGES REQUIRED`).
 3. Apply this repository's `AGENTS.md` — source hierarchy, invariant contract
-   classes, and architecture constraints, including the prohibition on
-   reintroducing `MessagesSync`, `StateIndex`, or SMT reconciliation. Where the
-   playbook and this adapter disagree, the playbook wins.
+   classes, comment hygiene, and architecture constraints, including the
+   prohibition on reintroducing `MessagesSync`, `StateIndex`, or SMT
+   reconciliation. Where the playbook and this adapter disagree, the playbook
+   wins.
 
 ## Repository bindings
 

@@ -53,8 +53,8 @@ explicitly ask to move into remediation.
 ### Claude Code
 
 ```text
-/dwn-contract-discovery 189
-/dwn-implement-contract .agent/contracts/issue-189.md
+/dwn-contract-discovery records delete convergence
+/dwn-implement-contract .agent/contracts/records-delete-convergence.md
 /dwn-review-change
 ```
 
@@ -66,8 +66,8 @@ a `name`/`description` pair the model can also select implicitly.
 ### Codex
 
 ```text
-$dwn-contract-discovery 189
-$dwn-implement-contract .agent/contracts/issue-189.md
+$dwn-contract-discovery records delete convergence
+$dwn-implement-contract .agent/contracts/records-delete-convergence.md
 $dwn-review-change
 ```
 
@@ -82,13 +82,13 @@ are the supported repository-local mechanism.
 ### OpenCode
 
 ```text
-/dwn-contract-discovery 189
-/dwn-implement-contract .agent/contracts/issue-189.md
+/dwn-contract-discovery records delete convergence
+/dwn-implement-contract .agent/contracts/records-delete-convergence.md
 /dwn-review-change
 ```
 
 Project commands, discovered from `.opencode/commands/`. Headless equivalent:
-`opencode run --command dwn-contract-discovery "189"`.
+`opencode run --command dwn-contract-discovery "records delete convergence"`.
 
 ## How the wrappers avoid duplication
 
@@ -166,7 +166,6 @@ sibling paths.
 Contract Packets are **task artefacts, not knowledge**. They live in:
 
 ```text
-.agent/contracts/issue-189.md
 .agent/contracts/records-delete-convergence.md
 ```
 
@@ -178,6 +177,10 @@ description instead:
 - spec/parity classification;
 - conformance cases added;
 - knowledge impact.
+
+Reference related issues where useful, but cite no packet paths, review
+severities, or other ephemeral artefacts — packets are gitignored, so those
+references would be dead on arrival.
 
 > `.agent/` (task artefacts, ignored) and `.agents/` (Codex skills, committed)
 > are different directories. The `.gitignore` rule is anchored as `/.agent/` so

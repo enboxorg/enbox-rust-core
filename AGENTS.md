@@ -116,7 +116,17 @@ Do not annotate every unit test mechanically. Use invariant IDs where a test
 exists to prove a stable behavioural contract. Prefer table-driven, permutation,
 or property-style tests for replay, arrival-order, and convergence invariants.
 
-The invariant-linked test direction is tracked by `enbox-rust-core#249`.
+## Code comments
+
+Comments describe what the code does, in terms of the code itself.
+
+- The `// Covers: <ID>` tag above is the only process reference permitted in a
+  comment.
+- Never put issue numbers or URLs, Contract Packet references, review severities
+  or findings (`BLOCK`, `GAP`, `RISK`, `NOTE`), commit or milestone markers, or
+  agent-enumerated (`A.`/`B.`) lists in comments. Issue linkage lives in the
+  packet, the review report, and the PR description. Ephemeral artefacts stay in
+  the artefact that produced them and never move into code or PRs.
 
 ## Architecture constraints
 
