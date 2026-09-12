@@ -1,5 +1,6 @@
 pub mod control;
 pub mod errors;
+pub mod grant_key_coverage;
 pub mod scopes;
 
 use crate::auth::jws::{

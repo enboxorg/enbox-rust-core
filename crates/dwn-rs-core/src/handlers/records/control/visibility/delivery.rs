@@ -4,7 +4,7 @@
 //! it. Beyond its own parties, only a grant that joins the reader to this
 //! recipient and covers the delivered role opens it.
 
-use crate::encryption::grant_key::{
+use crate::permissions::grant_key_coverage::{
     eligible_grant_scope, read_grant_covers_delivered_scope, DeliveredScope,
 };
 

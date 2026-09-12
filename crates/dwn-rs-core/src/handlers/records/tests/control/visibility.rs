@@ -2,8 +2,8 @@
 
 use crate::auth::PrivateJwkSigner;
 use crate::descriptors::records::records_write_descriptor;
-use crate::encryption::grant_key::read_roles_under;
 use crate::handlers::records::subscribe::RecordsEventLogSubscribeHandler;
+use crate::permissions::grant_key_coverage::read_roles_under;
 use crate::protocols::{Action, ActionRole, Can};
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;

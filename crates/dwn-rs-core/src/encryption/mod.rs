@@ -15,7 +15,6 @@ pub mod aes_kw;
 pub mod control;
 pub mod ctr;
 pub mod error;
-pub mod grant_key;
 pub mod kdf;
 pub mod x25519;
 
