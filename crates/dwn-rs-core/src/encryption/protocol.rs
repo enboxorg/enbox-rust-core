@@ -14,10 +14,12 @@ use crate::encryption::{
     ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
     ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH,
 };
+use crate::errors::{DwnError, DwnErrorCode};
 use crate::handlers::configure::{fetch_protocol_definition, ProtocolDefinitionLookupError};
 use crate::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, ProvidedTags, RuleSet, TagType, Tags, Type, Who,
 };
+use crate::interfaces::replies::{Response, Status};
 use crate::permissions::errors::{GrantError, PermissionError};
 use crate::permissions::grant_key_coverage::{
     eligible_grant_scope, grant_covers_delivered_scope, DeliveredScope,
@@ -141,34 +143,109 @@ pub fn encryption_protocol_definition() -> Definition {
     }
 }
 
-/// Admission failures for a grant-key delivery, each carrying the upstream
-/// error identity it preserves. Commit 4 maps reply status off these variants.
+/// Admission failures for a grant-key delivery, each naming the upstream
+/// error identity it preserves. Reply status is classified off these variants
+/// (see [`GrantKeyError::reply`]), never off a string prefix.
 #[derive(Error, Debug)]
 pub enum GrantKeyError {
-    #[error("EncryptionProtocolValidateEncryptedDeliveryMissingEncryption: {0}")]
+    #[error("{0}")]
     MissingEncryption(String),
-    #[error("ProtocolAuthorizationEncryptionNotAllowed: {0}")]
+    #[error("{0}")]
     EncryptionNotAllowed(String),
-    #[error("EncryptionProtocolValidateGrantKeyMissingRequiredTag: {0}")]
+    #[error("{0}")]
     MissingTag(String),
-    #[error("EncryptionProtocolValidateGrantKeyAuthorMismatch: {0}")]
+    #[error("{0}")]
     AuthorMismatch(String),
-    #[error("EncryptionProtocolValidateGrantKeyRecipientMismatch: {0}")]
+    #[error("{0}")]
     RecipientMismatch(String),
-    #[error("EncryptionProtocolValidateGrantKeyGrantScopeMismatch: {0}")]
+    #[error("{0}")]
     ScopeMismatch(String),
-    #[error("GrantAuthorizationGrantNotYetActive: {0}")]
+    #[error("{0}")]
     NotYetActive(String),
-    #[error("GrantAuthorizationGrantExpired: {0}")]
+    #[error("{0}")]
     GrantExpired(String),
-    #[error("GrantAuthorizationGrantRevoked: {0}")]
+    #[error("{0}")]
     GrantRevoked(String),
-    #[error("GrantAuthorizationGrantMissing: {0}")]
+    #[error("{0}")]
     GrantMissing(String),
-    #[error("ProtocolAuthorizationProtocolNotFound: {0}")]
+    #[error("{0}")]
     ProtocolNotFound(String),
+    #[error("{0}")]
+    SchemaUnexpectedRecord(String),
     #[error("grant-key admission failed: {0}")]
     Internal(String),
+}
+
+impl GrantKeyError {
+    /// The stable wire identity, if the failure has an upstream one. Storage
+    /// and lookup failures stay unmapped: they are retryable transport state,
+    /// not scope denial.
+    pub fn code(&self) -> Option<DwnErrorCode> {
+        match self {
+            Self::MissingEncryption(_) => {
+                Some(DwnErrorCode::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption)
+            }
+            Self::EncryptionNotAllowed(_) => {
+                Some(DwnErrorCode::ProtocolAuthorizationEncryptionNotAllowed)
+            }
+            Self::MissingTag(_) => {
+                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyMissingRequiredTag)
+            }
+            Self::AuthorMismatch(_) => {
+                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyAuthorMismatch)
+            }
+            Self::RecipientMismatch(_) => {
+                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyRecipientMismatch)
+            }
+            Self::ScopeMismatch(_) => {
+                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyGrantScopeMismatch)
+            }
+            Self::NotYetActive(_) => Some(DwnErrorCode::GrantAuthorizationGrantNotYetActive),
+            Self::GrantExpired(_) => Some(DwnErrorCode::GrantAuthorizationGrantExpired),
+            Self::GrantRevoked(_) => Some(DwnErrorCode::GrantAuthorizationGrantRevoked),
+            Self::GrantMissing(_) => Some(DwnErrorCode::GrantAuthorizationGrantMissing),
+            Self::ProtocolNotFound(_) => Some(DwnErrorCode::ProtocolAuthorizationProtocolNotFound),
+            Self::SchemaUnexpectedRecord(_) => {
+                Some(DwnErrorCode::EncryptionProtocolValidateSchemaUnexpectedRecord)
+            }
+            Self::Internal(_) => None,
+        }
+    }
+
+    fn detail(&self) -> &str {
+        match self {
+            Self::MissingEncryption(detail)
+            | Self::EncryptionNotAllowed(detail)
+            | Self::MissingTag(detail)
+            | Self::AuthorMismatch(detail)
+            | Self::RecipientMismatch(detail)
+            | Self::ScopeMismatch(detail)
+            | Self::NotYetActive(detail)
+            | Self::GrantExpired(detail)
+            | Self::GrantRevoked(detail)
+            | Self::GrantMissing(detail)
+            | Self::ProtocolNotFound(detail)
+            | Self::SchemaUnexpectedRecord(detail)
+            | Self::Internal(detail) => detail,
+        }
+    }
+
+    /// Reply classified by variant: writer-authorization failures are 401,
+    /// every other identified failure is 400, unmapped transport failures
+    /// are 500.
+    pub fn reply<R: Default>(&self) -> Response<R> {
+        let Some(code) = self.code() else {
+            return Response::internal_error(self.to_string());
+        };
+        let error = DwnError::new(code, self.detail());
+        match self {
+            Self::AuthorMismatch(_) | Self::RecipientMismatch(_) => Response {
+                status: Status::from_error(401, error),
+                reply: R::default(),
+            },
+            _ => Response::bad_request_error(error),
+        }
+    }
 }
 
 fn grant_error(error: PermissionError) -> GrantKeyError {
@@ -356,16 +433,19 @@ fn tag_str(value: &Value) -> Option<String> {
 /// Rejects records under the encryption protocol at any path other than the
 /// two delivery roots. Payload validation needs the data bytes and lands
 /// separately; this runs on descriptor metadata alone.
-pub fn validate_encryption_record_schema(message: &Message<Descriptor>) -> Result<(), String> {
-    let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
+pub fn validate_encryption_record_schema(
+    message: &Message<Descriptor>,
+) -> Result<(), GrantKeyError> {
+    let descriptor = records_write_descriptor(message)
+        .map_err(|error| GrantKeyError::Internal(error.to_string()))?;
     if descriptor.protocol.as_str() != ENCRYPTION_PROTOCOL_URI {
         return Ok(());
     }
     match descriptor.protocol_path.as_str() {
         ENCRYPTION_PROTOCOL_GRANT_KEY_PATH | ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH => Ok(()),
-        protocol_path => Err(format!(
-            "EncryptionProtocolValidateSchemaUnexpectedRecord: unexpected encryption record: {protocol_path}"
-        )),
+        protocol_path => Err(GrantKeyError::SchemaUnexpectedRecord(format!(
+            "unexpected encryption record: {protocol_path}"
+        ))),
     }
 }
 
@@ -468,9 +548,10 @@ mod tests {
         }
         let message = delivery_message("epochKey");
         let error = validate_encryption_record_schema(&message).expect_err("third path rejected");
-        assert!(
-            error.starts_with("EncryptionProtocolValidateSchemaUnexpectedRecord"),
-            "unexpected identity: {error}"
+        assert_eq!(
+            error.code(),
+            Some(DwnErrorCode::EncryptionProtocolValidateSchemaUnexpectedRecord),
+            "unexpected identity: {error:?}"
         );
     }
 

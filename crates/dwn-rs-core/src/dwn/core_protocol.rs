@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 
 use crate::encryption::protocol::{
-    encryption_protocol_definition, pre_process_encryption_write, validate_encryption_record_schema,
+    encryption_protocol_definition, pre_process_encryption_write,
+    validate_encryption_record_schema, GrantKeyError,
 };
 use crate::encryption::ENCRYPTION_PROTOCOL_URI;
 use crate::interfaces::messages::protocols::Definition;
@@ -25,6 +26,30 @@ pub struct CoreProtocolStores<'a, MessageStore, DataStore> {
 enum RegisteredCoreProtocol {
     Permissions,
     Encryption,
+}
+
+/// Failure from a core protocol hook. The permissions protocol reports
+/// unstructured details; the encryption protocol reports typed failures so
+/// reply status is classified by variant, never by string prefix.
+#[derive(Debug)]
+pub enum CoreProtocolError {
+    Detail(String),
+    GrantKey(GrantKeyError),
+}
+
+impl std::fmt::Display for CoreProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Detail(detail) => formatter.write_str(detail),
+            Self::GrantKey(error) => std::fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl From<GrantKeyError> for CoreProtocolError {
+    fn from(error: GrantKeyError) -> Self {
+        Self::GrantKey(error)
+    }
 }
 
 /// Registry of core protocols owned by a DWN instance.
@@ -87,9 +112,10 @@ impl CoreProtocolRegistry {
         &self,
         message: &Message<Descriptor>,
         _data: Option<&[u8]>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CoreProtocolError> {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
-            validate_permissions_record_schema(message).map_err(|error| error.to_string())?;
+            validate_permissions_record_schema(message)
+                .map_err(|error| CoreProtocolError::Detail(error.to_string()))?;
         }
         if self.has(ENCRYPTION_PROTOCOL_URI) {
             validate_encryption_record_schema(message)?;
@@ -102,19 +128,17 @@ impl CoreProtocolRegistry {
         tenant: &str,
         message: &Message<Descriptor>,
         message_store: &MessageStore,
-    ) -> Result<(), String>
+    ) -> Result<(), CoreProtocolError>
     where
         MessageStore: crate::stores::MessageStore + Sync,
     {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
             pre_process_permissions_write(tenant, message, message_store)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| CoreProtocolError::Detail(error.to_string()))?;
         }
         if self.has(ENCRYPTION_PROTOCOL_URI) {
-            pre_process_encryption_write(tenant, message, message_store)
-                .await
-                .map_err(|error| error.to_string())?;
+            pre_process_encryption_write(tenant, message, message_store).await?;
         }
         Ok(())
     }

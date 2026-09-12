@@ -15,8 +15,8 @@ use crate::descriptors::{
     records::{records_write_descriptor, write_fields},
     Descriptor, Records, RecordsWriteDescriptor,
 };
-use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
+use crate::dwn::core_protocol::{CoreProtocolError, CoreProtocolRegistry};
 use crate::dwn::{Handler, HandlerContext};
 use crate::encryption::control::ControlKind;
 use crate::encryption::{
@@ -317,15 +317,25 @@ where
                 is_latest_base_state = true;
             }
 
-            if let Err(detail) = self.core_protocol_registry.validate_record(&message, None) {
-                return core_protocol_error_reply(&self.core_protocol_registry, detail);
+            if let Err(error) = self.core_protocol_registry.validate_record(&message, None) {
+                return match error {
+                    CoreProtocolError::GrantKey(error) => error.reply(),
+                    CoreProtocolError::Detail(detail) => {
+                        core_protocol_error_reply(&self.core_protocol_registry, detail)
+                    }
+                };
             }
-            if let Err(detail) = self
+            if let Err(error) = self
                 .core_protocol_registry
                 .pre_process_write(tenant, &message, &self.message_store)
                 .await
             {
-                return core_protocol_error_reply(&self.core_protocol_registry, detail);
+                return match error {
+                    CoreProtocolError::GrantKey(error) => error.reply(),
+                    CoreProtocolError::Detail(detail) => {
+                        core_protocol_error_reply(&self.core_protocol_registry, detail)
+                    }
+                };
             }
 
             let indexes =

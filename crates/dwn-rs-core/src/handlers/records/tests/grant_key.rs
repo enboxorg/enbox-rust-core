@@ -247,16 +247,10 @@ fn grant_key_envelope() -> EncryptionEnvelope {
     super::envelope_with_entries(vec![super::protocol_path_entry("recipient-kid")])
 }
 
-/// Asserts rejection identity through the string boundary: code plus the
-/// `CODE: detail` prefix. Commit 4 upgrades these to typed `error_code`
-/// assertions once the codes exist in `DwnErrorCode`.
+/// Asserts rejection identity through the typed error code.
 fn assert_code(reply: &Response<Write>, code: i32, error: &str) {
     assert_eq!(reply.status.code, code, "{}", reply.status.detail);
-    assert!(
-        reply.status.detail.starts_with(&format!("{error}:")),
-        "expected {error} identity, got: {}",
-        reply.status.detail
-    );
+    assert_eq!(reply.status.error_code.as_deref(), Some(error));
 }
 
 // Covers: ENBOX-ENC-002
@@ -406,15 +400,36 @@ async fn rejects_malformed_tags() {
         )
         .await;
         assert_eq!(reply.status.code, 400, "{why}: {}", reply.status.detail);
-        assert!(
-            reply
-                .status
-                .detail
-                .starts_with("EncryptionProtocolValidateGrantKeyMissingRequiredTag:"),
-            "{why}: {}",
-            reply.status.detail
+        assert_eq!(
+            reply.status.error_code.as_deref(),
+            Some("EncryptionProtocolValidateGrantKeyMissingRequiredTag"),
+            "{why}"
         );
     }
+}
+
+// Covers: ENBOX-ENC-002, DWN-AUTH-006
+#[tokio::test]
+async fn missing_grant_is_not_a_scope_denial() {
+    let fixture = fixture().await;
+    // A delivery naming an unknown grant fails closed, and stays
+    // distinguishable from an established scope denial so dependency repair
+    // can retry once the grant arrives.
+    let reply = deliver(
+        &fixture,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        delivery_tags(
+            "bafyreibsau7v7ewevad2flcgvuxet2fvpidnt5kabzb2urerpg2oa2qlmu",
+            None,
+        ),
+        false,
+        Some(GRANTEE),
+        None,
+        DELIVERY_TIME,
+        Some(grant_key_envelope()),
+    )
+    .await;
+    assert_code(&reply, 400, "GrantAuthorizationGrantMissing");
 }
 
 // Covers: DWN-AUTH-004, ENBOX-ENC-002
@@ -532,11 +547,10 @@ async fn rejects_wrong_author_and_recipient() {
         Some(grant_key_envelope()),
     )
     .await;
-    // 400 through the string boundary; Commit 4 re-maps writer-authorization
-    // failures to 401 off the typed variant.
+    // Writer-authorization failures are 401, classified by variant.
     assert_code(
         &reply,
-        400,
+        401,
         "EncryptionProtocolValidateGrantKeyAuthorMismatch",
     );
 
@@ -553,7 +567,7 @@ async fn rejects_wrong_author_and_recipient() {
     .await;
     assert_code(
         &reply,
-        400,
+        401,
         "EncryptionProtocolValidateGrantKeyRecipientMismatch",
     );
 }

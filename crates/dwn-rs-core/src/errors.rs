@@ -18,6 +18,9 @@ pub enum DwnErrorCode {
     ProtocolAuthorizationParentNotFoundConstructingRecordChain,
     RecordsWriteGetInitialWriteNotFound,
     GrantAuthorizationGrantMissing,
+    GrantAuthorizationGrantNotYetActive,
+    GrantAuthorizationGrantExpired,
+    GrantAuthorizationGrantRevoked,
     ProtocolAuthorizationMatchingRoleRecordNotFound,
     ProtocolAuthorizationEncryptionRequired,
     ProtocolAuthorizationEncryptionNotAllowed,
@@ -39,6 +42,12 @@ pub enum DwnErrorCode {
     EncryptionControlValidateDeliveryTagsMismatch,
     EncryptionControlValidateUnexpectedRecord,
     EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
+    EncryptionProtocolValidateEncryptedDeliveryMissingEncryption,
+    EncryptionProtocolValidateGrantKeyMissingRequiredTag,
+    EncryptionProtocolValidateGrantKeyAuthorMismatch,
+    EncryptionProtocolValidateGrantKeyRecipientMismatch,
+    EncryptionProtocolValidateGrantKeyGrantScopeMismatch,
+    EncryptionProtocolValidateSchemaUnexpectedRecord,
     RecordsWriteMissingDataInPrevious,
     RecordsWriteMissingEncodedDataInPrevious,
     RecordsWriteNotAllowedAfterDelete,
@@ -81,6 +90,9 @@ impl DwnErrorCode {
             }
             Self::RecordsWriteGetInitialWriteNotFound => "RecordsWriteGetInitialWriteNotFound",
             Self::GrantAuthorizationGrantMissing => "GrantAuthorizationGrantMissing",
+            Self::GrantAuthorizationGrantNotYetActive => "GrantAuthorizationGrantNotYetActive",
+            Self::GrantAuthorizationGrantExpired => "GrantAuthorizationGrantExpired",
+            Self::GrantAuthorizationGrantRevoked => "GrantAuthorizationGrantRevoked",
             Self::ProtocolAuthorizationMatchingRoleRecordNotFound => {
                 "ProtocolAuthorizationMatchingRoleRecordNotFound"
             }
@@ -141,6 +153,24 @@ impl DwnErrorCode {
             }
             Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing => {
                 "EncryptionControlValidateDeliveryRecipientRoleRecordMissing"
+            }
+            Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption => {
+                "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption"
+            }
+            Self::EncryptionProtocolValidateGrantKeyMissingRequiredTag => {
+                "EncryptionProtocolValidateGrantKeyMissingRequiredTag"
+            }
+            Self::EncryptionProtocolValidateGrantKeyAuthorMismatch => {
+                "EncryptionProtocolValidateGrantKeyAuthorMismatch"
+            }
+            Self::EncryptionProtocolValidateGrantKeyRecipientMismatch => {
+                "EncryptionProtocolValidateGrantKeyRecipientMismatch"
+            }
+            Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch => {
+                "EncryptionProtocolValidateGrantKeyGrantScopeMismatch"
+            }
+            Self::EncryptionProtocolValidateSchemaUnexpectedRecord => {
+                "EncryptionProtocolValidateSchemaUnexpectedRecord"
             }
             Self::RecordsWriteMissingDataInPrevious => "RecordsWriteMissingDataInPrevious",
             Self::RecordsWriteMissingEncodedDataInPrevious => {
@@ -247,6 +277,9 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "RecordsWriteGetInitialWriteNotFound" => Ok(Self::RecordsWriteGetInitialWriteNotFound),
             "GrantAuthorizationGrantMissing" => Ok(Self::GrantAuthorizationGrantMissing),
+            "GrantAuthorizationGrantNotYetActive" => Ok(Self::GrantAuthorizationGrantNotYetActive),
+            "GrantAuthorizationGrantExpired" => Ok(Self::GrantAuthorizationGrantExpired),
+            "GrantAuthorizationGrantRevoked" => Ok(Self::GrantAuthorizationGrantRevoked),
             "ProtocolAuthorizationMatchingRoleRecordNotFound" => {
                 Ok(Self::ProtocolAuthorizationMatchingRoleRecordNotFound)
             }
@@ -307,6 +340,24 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "EncryptionControlValidateDeliveryRecipientRoleRecordMissing" => {
                 Ok(Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing)
+            }
+            "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption" => {
+                Ok(Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption)
+            }
+            "EncryptionProtocolValidateGrantKeyMissingRequiredTag" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyMissingRequiredTag)
+            }
+            "EncryptionProtocolValidateGrantKeyAuthorMismatch" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyAuthorMismatch)
+            }
+            "EncryptionProtocolValidateGrantKeyRecipientMismatch" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyRecipientMismatch)
+            }
+            "EncryptionProtocolValidateGrantKeyGrantScopeMismatch" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch)
+            }
+            "EncryptionProtocolValidateSchemaUnexpectedRecord" => {
+                Ok(Self::EncryptionProtocolValidateSchemaUnexpectedRecord)
             }
             "RecordsWriteMissingDataInPrevious" => Ok(Self::RecordsWriteMissingDataInPrevious),
             "RecordsWriteMissingEncodedDataInPrevious" => {
