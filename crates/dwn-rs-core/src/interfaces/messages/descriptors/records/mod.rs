@@ -159,6 +159,8 @@ mod inner {
             serialize_with = "crate::ser::serialize_datetime"
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         pub filter: RecordsFilter,
     }
 
@@ -180,6 +182,8 @@ mod inner {
         pub filter: RecordsFilter,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub pagination: Option<Pagination>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
         pub date_sort: Option<DateSort>,
     }
@@ -250,6 +254,8 @@ mod inner {
         pub filter: RecordsFilter,
         #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
         pub date_sort: Option<DateSort>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub pagination: Option<Pagination>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -271,6 +277,8 @@ mod inner {
             serialize_with = "crate::ser::serialize_datetime"
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
+        #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
+        pub permission_grant_id: Option<String>,
         #[serde(rename = "recordId")]
         pub record_id: String,
         pub prune: bool,

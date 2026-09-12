@@ -202,6 +202,7 @@ mod tests {
             descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(
                 DeleteDescriptor {
                     message_timestamp: timestamp.parse().expect("valid timestamp"),
+                    permission_grant_id: None,
                     record_id: RECORD_ID.to_string(),
                     prune,
                 },

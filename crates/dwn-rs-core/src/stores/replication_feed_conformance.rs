@@ -255,6 +255,7 @@ fn delete_message(record_id: &str, timestamp: &str) -> Message<Descriptor> {
     Message {
         descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(DeleteDescriptor {
             message_timestamp: timestamp.parse().expect("valid fixture timestamp"),
+            permission_grant_id: None,
             record_id: record_id.to_string(),
             prune: false,
         })))),

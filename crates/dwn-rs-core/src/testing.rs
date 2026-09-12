@@ -167,6 +167,7 @@ pub async fn signed_delete_message(
 ) -> serde_json::Value {
     let descriptor = DeleteDescriptor {
         message_timestamp: parse_time(timestamp),
+        permission_grant_id: None,
         record_id: record_id.to_string(),
         prune,
     };
@@ -209,6 +210,7 @@ pub async fn signed_records_subscribe_with_pagination(
     let descriptor = SubscribeDescriptor {
         message_timestamp: parse_time(timestamp),
         filter,
+        permission_grant_id: None,
         date_sort: None,
         pagination,
         cursor,

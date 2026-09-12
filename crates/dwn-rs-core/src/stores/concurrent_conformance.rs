@@ -51,6 +51,7 @@ fn message(index: usize) -> Message<Descriptor> {
     Message {
         descriptor: Descriptor::Records(Box::new(Records::Delete(Box::new(DeleteDescriptor {
             message_timestamp: "2025-01-01T00:00:00.000000Z".parse().expect("timestamp"),
+            permission_grant_id: None,
             record_id: format!("concurrent-{index}"),
             prune: false,
         })))),
