@@ -54,7 +54,7 @@ pub const PERMISSIONS_REQUEST_PATH: &str = "request";
 pub const PERMISSIONS_GRANT_PATH: &str = "grant";
 pub const PERMISSIONS_REVOCATION_PATH: &str = "grant/revocation";
 
-const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
+pub(crate) const MAX_ENCODED_DATA_SIZE: u64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum VerifiedAuthorizationPayload {
@@ -1610,7 +1610,7 @@ where
     Ok(())
 }
 
-async fn verify_grant_not_revoked<MessageStore>(
+pub(crate) async fn verify_grant_not_revoked<MessageStore>(
     tenant: &str,
     incoming_timestamp: chrono::DateTime<chrono::Utc>,
     permission_grant: &PermissionGrant,
@@ -1852,7 +1852,7 @@ fn message_cid(message: &Message<Descriptor>) -> Result<String, AuthorizationVal
         .map(|cid| cid.to_string())
 }
 
-fn index_value_as_str(value: &Value) -> Option<&str> {
+pub(crate) fn index_value_as_str(value: &Value) -> Option<&str> {
     match value {
         Value::String(value) => Some(value.as_str()),
         _ => None,

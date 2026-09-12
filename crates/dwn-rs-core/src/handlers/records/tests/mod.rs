@@ -62,6 +62,7 @@ use crate::handlers::configure::ProtocolsConfigureHandler;
 mod control;
 mod grant_invocation;
 mod grant_invocation_temporal;
+mod grant_key;
 
 /// Drives a resumable delete the way a resume actually does: through the
 /// controller that owns the stores, not a free function taking them.
@@ -3704,62 +3705,6 @@ async fn records_write_encrypted_path_with_extra_entries_is_accepted() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
-// Covers: DWN-PROTO-001
-#[tokio::test]
-async fn records_write_grant_key_path_bypasses_path_key_lookup() {
-    let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
-        "did:example:alice",
-        &message_store,
-        Definition {
-            protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-            published: true,
-            uses: None,
-            key_agreement: None,
-            types: BTreeMap::from([(
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
-                Type {
-                    schema: None,
-                    data_formats: None,
-                    encryption_required: Some(true),
-                },
-            )]),
-            structure: BTreeMap::from([(
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
-                RuleSet::default(),
-            )]),
-        },
-        ENC_T1,
-    )
-    .await;
-    let handler = enc_test_handler(message_store, data_store).await;
-
-    let envelope = envelope_with_entries(vec![protocol_path_entry("recipient-kid")]);
-    let write = enc_protocol_write(
-        ENCRYPTION_PROTOCOL_URI,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
-        ENC_WRITE_TIME,
-        Some(envelope),
-    )
-    .await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-
-    let bare = enc_protocol_write(
-        ENCRYPTION_PROTOCOL_URI,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
-        "2025-01-03T00:01:00.000000Z",
-        None,
-    )
-    .await;
-    let reply = handler.run("did:example:alice", &bare, write_data()).await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRequired")
-    );
-}
-
 // Covers: ENBOX-ENC-002
 #[tokio::test]
 async fn encryption_definition_resolves_without_installation() {
@@ -3781,19 +3726,6 @@ async fn encryption_definition_resolves_without_installation() {
         reply.status.error_code.as_deref(),
         Some("ProtocolAuthorizationEncryptionRequired")
     );
-
-    // ... while an enveloped grantKey still takes the grantKey exemption past
-    // the path key-agreement gate.
-    let envelope = envelope_with_entries(vec![protocol_path_entry("recipient-kid")]);
-    let write = enc_protocol_write(
-        ENCRYPTION_PROTOCOL_URI,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
-        ENC_WRITE_TIME,
-        Some(envelope),
-    )
-    .await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
 const REF_BLOG_PROTOCOL: &str = "http://example.com/blog";

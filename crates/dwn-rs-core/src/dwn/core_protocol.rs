@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::encryption::protocol::{
-    encryption_protocol_definition, validate_encryption_record_schema,
+    encryption_protocol_definition, pre_process_encryption_write, validate_encryption_record_schema,
 };
 use crate::encryption::ENCRYPTION_PROTOCOL_URI;
 use crate::interfaces::messages::protocols::Definition;
@@ -108,6 +108,11 @@ impl CoreProtocolRegistry {
     {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
             pre_process_permissions_write(tenant, message, message_store)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        if self.has(ENCRYPTION_PROTOCOL_URI) {
+            pre_process_encryption_write(tenant, message, message_store)
                 .await
                 .map_err(|error| error.to_string())?;
         }
