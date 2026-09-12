@@ -204,6 +204,12 @@
               cargo-deny
               cargo-outdated
 
+              # Opt-in shared compilation cache for cold builds and fresh
+              # worktrees: `export RUSTC_WRAPPER=sccache`. Deliberately NOT
+              # exported by default — sccache disables incremental
+              # compilation, so it wins cold builds and loses warm loops.
+              sccache
+
               # Documentation tools
               mdbook
 
@@ -221,6 +227,7 @@
               echo "Available commands:"
               echo "  cargo build                        # Build native version"
               echo "  cargo test                         # Run tests"
+              echo "  export RUSTC_WRAPPER=sccache      # Opt-in: cache cold builds"
               echo "  cargo ndk -t arm64-v8a build       # Cross-build FFI for Android"
               echo "  crates/enbox-ffi/generate-bindings.sh  # Generate Swift/Kotlin bindings"
               echo ""
