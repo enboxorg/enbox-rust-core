@@ -416,7 +416,7 @@ impl<MessageStore, DataStore> RecordsWriteHandler<MessageStore, DataStore> {
         Self {
             message_store,
             data_store,
-            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            core_protocol_registry: CoreProtocolRegistry::with_core_protocols(),
             did_resolver,
         }
     }

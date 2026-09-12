@@ -3760,6 +3760,42 @@ async fn records_write_grant_key_path_bypasses_path_key_lookup() {
     );
 }
 
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn encryption_definition_resolves_without_installation() {
+    let (message_store, data_store) = open_stores().await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    // No tenant ProtocolsConfigure: the core definition still governs, so a
+    // plaintext grantKey fails the encryption-required gate.
+    let bare = enc_protocol_write(
+        ENCRYPTION_PROTOCOL_URI,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        "2025-01-03T00:01:00.000000Z",
+        None,
+    )
+    .await;
+    let reply = handler.run("did:example:alice", &bare, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRequired")
+    );
+
+    // ... while an enveloped grantKey still takes the grantKey exemption past
+    // the path key-agreement gate.
+    let envelope = envelope_with_entries(vec![protocol_path_entry("recipient-kid")]);
+    let write = enc_protocol_write(
+        ENCRYPTION_PROTOCOL_URI,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENC_WRITE_TIME,
+        Some(envelope),
+    )
+    .await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
 const REF_BLOG_PROTOCOL: &str = "http://example.com/blog";
 const COMPOSED_PROTOCOL: &str = "http://example.com/composed";
 

@@ -4,6 +4,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::encryption::protocol::{
+    encryption_protocol_definition, validate_encryption_record_schema,
+};
+use crate::encryption::ENCRYPTION_PROTOCOL_URI;
 use crate::interfaces::messages::protocols::Definition;
 use crate::permissions::{
     permissions_protocol_definition, post_process_permissions_write, pre_process_permissions_write,
@@ -20,6 +24,7 @@ pub struct CoreProtocolStores<'a, MessageStore, DataStore> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RegisteredCoreProtocol {
     Permissions,
+    Encryption,
 }
 
 /// Registry of core protocols owned by a DWN instance.
@@ -37,11 +42,20 @@ impl CoreProtocolRegistry {
         );
     }
 
-    /// Create a registry with the permissions protocol pre-registered.
-    pub fn with_permissions() -> Self {
+    /// Create a registry with all core protocols pre-registered.
+    pub fn with_core_protocols() -> Self {
         let mut registry = Self::default();
         registry.register_permissions();
+        registry.register_encryption();
         registry
+    }
+
+    /// Register the encryption core protocol.
+    pub fn register_encryption(&mut self) {
+        self.protocols.insert(
+            ENCRYPTION_PROTOCOL_URI.to_string(),
+            RegisteredCoreProtocol::Encryption,
+        );
     }
 
     pub fn has(&self, uri: &str) -> bool {
@@ -51,6 +65,7 @@ impl CoreProtocolRegistry {
     pub fn get_definition(&self, uri: &str) -> Option<Definition> {
         match self.protocols.get(uri)? {
             RegisteredCoreProtocol::Permissions => Some(permissions_protocol_definition()),
+            RegisteredCoreProtocol::Encryption => Some(encryption_protocol_definition()),
         }
     }
 
@@ -75,6 +90,9 @@ impl CoreProtocolRegistry {
     ) -> Result<(), String> {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
             validate_permissions_record_schema(message).map_err(|error| error.to_string())?;
+        }
+        if self.has(ENCRYPTION_PROTOCOL_URI) {
+            validate_encryption_record_schema(message)?;
         }
         Ok(())
     }
