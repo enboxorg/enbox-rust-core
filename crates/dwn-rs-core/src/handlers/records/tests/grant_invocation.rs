@@ -7,22 +7,23 @@
 //! matching invocation authorizes like a Read grant does.
 
 use super::*;
+use crate::auth::PrivateJwkSigner;
 use crate::descriptors::{
     DeleteDescriptor as RecordsDeleteDescriptor, RecordsCountDescriptor, RecordsQueryDescriptor,
     SubscribeDescriptor as RecordsSubscribeDescriptor,
 };
 use crate::filters::Records as CollectionFilter;
 
-const TENANT: &str = "did:example:alice";
-const GRANTEE: &str = "did:example:bob";
-const PROTOCOL: &str = "http://example.com/notes";
-const NOTE_PATH: &str = "note";
+pub(crate) const TENANT: &str = "did:example:alice";
+pub(crate) const GRANTEE: &str = "did:example:bob";
+pub(crate) const PROTOCOL: &str = "http://example.com/notes";
+pub(crate) const NOTE_PATH: &str = "note";
 
-const TS_GRANT: &str = "2025-01-01T00:00:00.000000Z";
-const TS_NOTE: &str = "2025-01-01T00:01:00.000000Z";
-const TS_REQUEST: &str = "2025-01-01T00:10:00.000000Z";
+pub(crate) const TS_GRANT: &str = "2025-01-01T00:00:00.000000Z";
+pub(crate) const TS_NOTE: &str = "2025-01-01T00:01:00.000000Z";
+pub(crate) const TS_REQUEST: &str = "2025-01-01T00:10:00.000000Z";
 
-fn note_filter() -> CollectionFilter {
+pub(crate) fn note_filter() -> CollectionFilter {
     CollectionFilter {
         protocol: Some(PROTOCOL.to_string()),
         protocol_path: Some(NOTE_PATH.to_string()),
@@ -30,13 +31,13 @@ fn note_filter() -> CollectionFilter {
     }
 }
 
-struct CollectionFixture {
-    message_store: TestMessageStore,
-    data_store: TestDataStore,
-    note_record_id: String,
+pub(crate) struct CollectionFixture {
+    pub(crate) message_store: TestMessageStore,
+    pub(crate) data_store: TestDataStore,
+    pub(crate) note_record_id: String,
 }
 
-async fn collection_fixture() -> CollectionFixture {
+pub(crate) async fn collection_fixture() -> CollectionFixture {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
@@ -73,7 +74,7 @@ async fn collection_fixture() -> CollectionFixture {
 }
 
 /// Issues a tenant grant to Bob scoped to `method` over the notes protocol.
-async fn issue_collection_grant(
+pub(crate) async fn issue_collection_grant(
     fixture: &CollectionFixture,
     method: &str,
     grantee: &str,
@@ -84,6 +85,18 @@ async fn issue_collection_grant(
         fixture.data_store.clone(),
         Some(Arc::new(test_resolver())),
     );
+    issue_collection_grant_on(&handler, method, grantee, expires).await
+}
+
+pub(crate) async fn issue_collection_grant_on<S>(
+    handler: &RecordsWriteHandler<S, TestDataStore>,
+    method: &str,
+    grantee: &str,
+    expires: &str,
+) -> String
+where
+    S: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
     let grant_data = Bytes::from(
         serde_json::to_vec(&json!({
             "dateExpires": expires,
@@ -123,12 +136,22 @@ async fn issue_collection_grant(
     grant_id
 }
 
-async fn revoke_grant(fixture: &CollectionFixture, grant_id: &str, timestamp: &str) {
+pub(crate) async fn revoke_grant(fixture: &CollectionFixture, grant_id: &str, timestamp: &str) {
     let handler = RecordsWriteHandler::<_, _>::new(
         fixture.message_store.clone(),
         fixture.data_store.clone(),
         Some(Arc::new(test_resolver())),
     );
+    revoke_grant_on(&handler, grant_id, timestamp).await
+}
+
+pub(crate) async fn revoke_grant_on<S>(
+    handler: &RecordsWriteHandler<S, TestDataStore>,
+    grant_id: &str,
+    timestamp: &str,
+) where
+    S: crate::stores::MessageStore + Clone + Send + Sync + 'static,
+{
     let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
         protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
@@ -160,10 +183,11 @@ async fn revoke_grant(fixture: &CollectionFixture, grant_id: &str, timestamp: &s
 /// descriptor and `payload_grant_id` in the signature payload. Passing
 /// different ids builds the substitution forgery; passing the same id builds
 /// the honest TS-shaped wire message.
-async fn sign_collection_request<T: serde::Serialize>(
+pub(crate) async fn sign_collection_request<T: serde::Serialize>(
     descriptor: T,
     descriptor_grant_id: Option<&str>,
     payload_grant_id: Option<&str>,
+    signer: PrivateJwkSigner,
 ) -> serde_json::Value {
     let mut descriptor_json = serde_json::to_value(&descriptor).unwrap();
     if let Some(id) = descriptor_grant_id {
@@ -173,17 +197,17 @@ async fn sign_collection_request<T: serde::Serialize>(
         Some(id) => json!({ "permissionGrantId": id }),
         None => json!({}),
     };
-    let signature =
-        signature_for_descriptor(&descriptor_json, extra, crate::testing::bob_signer()).await;
+    let signature = signature_for_descriptor(&descriptor_json, extra, signer).await;
     json!({
         "descriptor": descriptor_json,
         "authorization": { "signature": signature }
     })
 }
 
-async fn signed_query(
+pub(crate) async fn signed_query(
     descriptor_grant_id: Option<&str>,
     payload_grant_id: Option<&str>,
+    signer: PrivateJwkSigner,
 ) -> serde_json::Value {
     sign_collection_request(
         RecordsQueryDescriptor {
@@ -195,13 +219,15 @@ async fn signed_query(
         },
         descriptor_grant_id,
         payload_grant_id,
+        signer,
     )
     .await
 }
 
-async fn signed_count(
+pub(crate) async fn signed_count(
     descriptor_grant_id: Option<&str>,
     payload_grant_id: Option<&str>,
+    signer: PrivateJwkSigner,
 ) -> serde_json::Value {
     sign_collection_request(
         RecordsCountDescriptor {
@@ -211,13 +237,15 @@ async fn signed_count(
         },
         descriptor_grant_id,
         payload_grant_id,
+        signer,
     )
     .await
 }
 
-async fn signed_subscribe(
+pub(crate) async fn signed_subscribe(
     descriptor_grant_id: Option<&str>,
     payload_grant_id: Option<&str>,
+    signer: PrivateJwkSigner,
 ) -> serde_json::Value {
     sign_collection_request(
         RecordsSubscribeDescriptor {
@@ -230,14 +258,16 @@ async fn signed_subscribe(
         },
         descriptor_grant_id,
         payload_grant_id,
+        signer,
     )
     .await
 }
 
-async fn signed_delete(
+pub(crate) async fn signed_delete(
     record_id: &str,
     descriptor_grant_id: Option<&str>,
     payload_grant_id: Option<&str>,
+    signer: PrivateJwkSigner,
 ) -> serde_json::Value {
     sign_collection_request(
         RecordsDeleteDescriptor {
@@ -248,6 +278,7 @@ async fn signed_delete(
         },
         descriptor_grant_id,
         payload_grant_id,
+        signer,
     )
     .await
 }
@@ -256,7 +287,7 @@ async fn signed_delete(
 // not just Read and Write: a signed descriptor cannot be paired with a
 // substituted grant.
 #[tokio::test]
-// Covers: DWN-AUTH-003
+// Covers: DWN-AUTH-008 (pending enboxorg/knowledge#15; DWN-AUTH-003 for the grant capability itself)
 async fn collection_and_delete_reject_descriptor_payload_grant_substitution() {
     const BOGUS_GRANT: &str = "bogus-grant-id";
     let fixture = collection_fixture().await;
@@ -281,7 +312,11 @@ async fn collection_and_delete_reject_descriptor_payload_grant_substitution() {
 
     for (label, descriptor_id, payload_id) in forgeries {
         let reply = query_handler
-            .run(TENANT, &signed_query(descriptor_id, payload_id).await, None)
+            .run(
+                TENANT,
+                &signed_query(descriptor_id, payload_id, crate::testing::bob_signer()).await,
+                None,
+            )
             .await;
         assert_eq!(reply.status.code, 400, "query {label} must reject");
         assert!(
@@ -294,7 +329,11 @@ async fn collection_and_delete_reject_descriptor_payload_grant_substitution() {
         );
 
         let reply = count_handler
-            .run(TENANT, &signed_count(descriptor_id, payload_id).await, None)
+            .run(
+                TENANT,
+                &signed_count(descriptor_id, payload_id, crate::testing::bob_signer()).await,
+                None,
+            )
             .await;
         assert_eq!(reply.status.code, 400, "count {label} must reject");
         assert!(
@@ -309,7 +348,7 @@ async fn collection_and_delete_reject_descriptor_payload_grant_substitution() {
         let reply = subscribe_handler
             .run(
                 TENANT,
-                &signed_subscribe(descriptor_id, payload_id).await,
+                &signed_subscribe(descriptor_id, payload_id, crate::testing::bob_signer()).await,
                 None,
             )
             .await;
@@ -326,7 +365,13 @@ async fn collection_and_delete_reject_descriptor_payload_grant_substitution() {
         let reply = delete_handler
             .run(
                 TENANT,
-                &signed_delete(&fixture.note_record_id, descriptor_id, payload_id).await,
+                &signed_delete(
+                    &fixture.note_record_id,
+                    descriptor_id,
+                    payload_id,
+                    crate::testing::bob_signer(),
+                )
+                .await,
                 None,
             )
             .await;
@@ -357,7 +402,12 @@ async fn grant_authorized_query_and_count_see_private_records() {
 
     // The wire message carries the id in both the descriptor (schema-visible)
     // and the signature payload (signature-covered), exactly like TS emits it.
-    let request = signed_query(Some(&read_grant), Some(&read_grant)).await;
+    let request = signed_query(
+        Some(&read_grant),
+        Some(&read_grant),
+        crate::testing::bob_signer(),
+    )
+    .await;
     assert_eq!(
         request["descriptor"]["permissionGrantId"].as_str(),
         Some(read_grant.as_str()),
@@ -374,7 +424,11 @@ async fn grant_authorized_query_and_count_see_private_records() {
     );
 
     let reply = query_handler
-        .run(TENANT, &signed_query(None, None).await, None)
+        .run(
+            TENANT,
+            &signed_query(None, None, crate::testing::bob_signer()).await,
+            None,
+        )
         .await;
     assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
     assert!(
@@ -385,7 +439,12 @@ async fn grant_authorized_query_and_count_see_private_records() {
     let reply = count_handler
         .run(
             TENANT,
-            &signed_count(Some(&read_grant), Some(&read_grant)).await,
+            &signed_count(
+                Some(&read_grant),
+                Some(&read_grant),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -397,7 +456,11 @@ async fn grant_authorized_query_and_count_see_private_records() {
     );
 
     let reply = count_handler
-        .run(TENANT, &signed_count(None, None).await, None)
+        .run(
+            TENANT,
+            &signed_count(None, None, crate::testing::bob_signer()).await,
+            None,
+        )
         .await;
     assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
     assert_eq!(
@@ -420,7 +483,12 @@ async fn grant_authorized_subscribe_snapshot_sees_private_records() {
     let reply = handler
         .run(
             TENANT,
-            &signed_subscribe(Some(&grant_id), Some(&grant_id)).await,
+            &signed_subscribe(
+                Some(&grant_id),
+                Some(&grant_id),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -446,7 +514,13 @@ async fn grant_authorized_delete_removes_record() {
     let reply = delete_handler
         .run(
             TENANT,
-            &signed_delete(&fixture.note_record_id, None, None).await,
+            &signed_delete(
+                &fixture.note_record_id,
+                None,
+                None,
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -455,31 +529,49 @@ async fn grant_authorized_delete_removes_record() {
         "delete without a grant must stay unauthorized"
     );
 
+    // The tenant sees its own private note, so its disappearance proves the
+    // tombstone applied rather than the filter hiding it.
+    async fn owner_sees_note(
+        query_handler: &RecordsQueryHandler<TestMessageStore>,
+        note_record_id: &str,
+    ) -> bool {
+        let reply = query_handler
+            .run(
+                TENANT,
+                &signed_query(None, None, crate::testing::test_signer()).await,
+                None,
+            )
+            .await;
+        assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+        reply.reply.entries.as_ref().unwrap().iter().any(|entry| {
+            serde_json::to_value(entry).unwrap()["recordId"].as_str() == Some(note_record_id)
+        })
+    }
+
+    let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
+    assert!(
+        owner_sees_note(&query_handler, &fixture.note_record_id).await,
+        "owner must see the private note before Delete"
+    );
+
     let reply = delete_handler
         .run(
             TENANT,
-            &signed_delete(&fixture.note_record_id, Some(&grant_id), Some(&grant_id)).await,
+            &signed_delete(
+                &fixture.note_record_id,
+                Some(&grant_id),
+                Some(&grant_id),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
-    let reply = query_handler
-        .run(
-            TENANT,
-            &unsigned_query_message(json!({ "published": true })),
-            None,
-        )
-        .await;
-    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
     assert!(
-        reply.reply.entries.as_ref().unwrap().is_empty()
-            || !reply.reply.entries.as_ref().unwrap().iter().any(|entry| {
-                serde_json::to_value(entry).unwrap()["recordId"].as_str()
-                    == Some(fixture.note_record_id.as_str())
-            }),
-        "deleted record must leave the visible population"
+        !owner_sees_note(&query_handler, &fixture.note_record_id).await,
+        "deleted record must leave the owner's visible population"
     );
 }
 
@@ -500,7 +592,12 @@ async fn grant_for_wrong_grantee_method_or_scope_is_rejected() {
     let reply = query_handler
         .run(
             TENANT,
-            &signed_query(Some(&carol_grant), Some(&carol_grant)).await,
+            &signed_query(
+                Some(&carol_grant),
+                Some(&carol_grant),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -519,7 +616,12 @@ async fn grant_for_wrong_grantee_method_or_scope_is_rejected() {
     let reply = query_handler
         .run(
             TENANT,
-            &signed_query(Some(&write_grant), Some(&write_grant)).await,
+            &signed_query(
+                Some(&write_grant),
+                Some(&write_grant),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -568,7 +670,12 @@ async fn grant_for_wrong_grantee_method_or_scope_is_rejected() {
     let reply = query_handler
         .run(
             TENANT,
-            &signed_query(Some(&other_grant_id), Some(&other_grant_id)).await,
+            &signed_query(
+                Some(&other_grant_id),
+                Some(&other_grant_id),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -592,7 +699,12 @@ async fn expired_and_revoked_grants_stop_collection_reads() {
     let reply = query_handler
         .run(
             TENANT,
-            &signed_query(Some(&expired_grant), Some(&expired_grant)).await,
+            &signed_query(
+                Some(&expired_grant),
+                Some(&expired_grant),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -612,7 +724,12 @@ async fn expired_and_revoked_grants_stop_collection_reads() {
     let reply = query_handler
         .run(
             TENANT,
-            &signed_query(Some(&grant_id), Some(&grant_id)).await,
+            &signed_query(
+                Some(&grant_id),
+                Some(&grant_id),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -622,7 +739,12 @@ async fn expired_and_revoked_grants_stop_collection_reads() {
     let reply = query_handler
         .run(
             TENANT,
-            &signed_query(Some(&grant_id), Some(&grant_id)).await,
+            &signed_query(
+                Some(&grant_id),
+                Some(&grant_id),
+                crate::testing::bob_signer(),
+            )
+            .await,
             None,
         )
         .await;
@@ -647,7 +769,12 @@ async fn wire_grant_context_fails_delivery_after_revocation() {
     let grant_id =
         issue_collection_grant(&fixture, "Read", GRANTEE, "2030-01-01T00:00:00.000000Z").await;
 
-    let request = signed_subscribe(Some(&grant_id), Some(&grant_id)).await;
+    let request = signed_subscribe(
+        Some(&grant_id),
+        Some(&grant_id),
+        crate::testing::bob_signer(),
+    )
+    .await;
     let message: Message<Descriptor> =
         serde_json::from_value(request).expect("subscribe request must deserialize");
     let resolver = test_resolver();
