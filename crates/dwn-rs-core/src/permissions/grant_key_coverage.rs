@@ -291,7 +291,7 @@ pub fn is_keyed_role(definition: &Definition, protocol_path: &str) -> bool {
 }
 
 /// Whether `path` is `scope` or lies beneath it, respecting path boundaries.
-fn matches_subtree(scope: &str, path: &str) -> bool {
+pub(crate) fn matches_subtree(scope: &str, path: &str) -> bool {
     path == scope || (path.starts_with(scope) && path.as_bytes().get(scope.len()) == Some(&b'/'))
 }
 

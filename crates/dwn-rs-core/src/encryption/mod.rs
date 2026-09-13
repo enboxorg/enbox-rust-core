@@ -17,6 +17,7 @@ pub mod ctr;
 pub mod error;
 pub mod kdf;
 pub mod protocol;
+pub mod resolution;
 pub mod x25519;
 
 use std::collections::BTreeMap;

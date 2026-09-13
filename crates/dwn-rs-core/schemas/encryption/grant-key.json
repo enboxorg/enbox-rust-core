@@ -1,0 +1,61 @@
+{
+  "$id": "https://identity.foundation/dwn/json-schemas/encryption/grant-key.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Rust-owned schema for decrypted grant-key payloads from either delivery representation. Not an upstream file: the SDK carries no grant-key.json and checks this shape in agent code (assertGrantKeyPayload, isProtocolPathKeyMaterial, isX25519KeyMaterial). Structural only — additional properties accepted; key correspondence, scope coverage, and tag agreement are runtime checks, never schema checks.",
+  "type": "object",
+  "required": ["grantId", "scope", "keyMaterial"],
+  "properties": {
+    "grantId": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "object",
+      "required": ["scheme", "protocol"],
+      "properties": {
+        "scheme": {
+          "const": "protocolPath"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "protocolPath": {
+          "type": "string"
+        }
+      }
+    },
+    "keyMaterial": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "derivationScheme",
+        "keyId",
+        "derivationPath",
+        "publicKeyJwk",
+        "privateKeyJwk"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "X25519-HKDF-SHA256+A256KW"
+        },
+        "derivationScheme": {
+          "const": "protocolPath"
+        },
+        "keyId": {
+          "type": "string"
+        },
+        "derivationPath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "publicKeyJwk": {
+          "type": "object"
+        },
+        "privateKeyJwk": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
