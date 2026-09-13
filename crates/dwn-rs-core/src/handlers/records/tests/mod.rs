@@ -37,7 +37,9 @@ use crate::stores::{
     RecordLimitOccupancy, ReplicationFeedReader, SubscriptionErrorCode, SubscriptionMessage,
 };
 use crate::stores::{EventLogReadResult, ProgressGapCode, ProgressGapReason};
-use crate::sync::endpoint::{classify_apply_reply, ReplicationApplyOutcome};
+use crate::sync::endpoint::{
+    classify_apply_reply, classify_apply_reply_with_parent_state, ReplicationApplyOutcome,
+};
 use crate::tasks::controller::{ResumableRecordsDeleteData, StorageController};
 use crate::validation::admit_message;
 use crate::{

@@ -49,6 +49,20 @@ pub fn classify_apply_reply(
     message: &Message<Descriptor>,
     already_stored: bool,
 ) -> ReplicationApplyOutcome {
+    classify_apply_reply_with_parent_state(status, message, already_stored, false)
+}
+
+/// Classifies a handler reply using the receiver's local knowledge of whether a
+/// missing parent was tombstoned. A tombstone is terminal, so the reply's
+/// generic missing-parent code classifies `Invalid` instead of the retryable
+/// `Incomplete`. Keeping this out of [`Status`] means the client-facing reply
+/// never distinguishes a tombstoned parent from one that has merely not arrived.
+pub fn classify_apply_reply_with_parent_state(
+    status: &Status,
+    message: &Message<Descriptor>,
+    already_stored: bool,
+    parent_deleted: bool,
+) -> ReplicationApplyOutcome {
     // A pre-existing CID only refines the handler's ordinary conflict response.
     // It must never turn a fresh validation or authorization failure into a duplicate.
     if already_stored && status.code == 409 {
@@ -70,10 +84,47 @@ pub fn classify_apply_reply(
             Some(DwnErrorCode::RecordsWriteNotAllowedAfterDelete) => {
                 ReplicationApplyOutcome::Superseded
             }
+            Some(
+                DwnErrorCode::ProtocolAuthorizationParentRecordNotFound
+                | DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound,
+            ) if parent_deleted => ReplicationApplyOutcome::Invalid,
             Some(code) if code.is_missing_dependency() => ReplicationApplyOutcome::Incomplete,
             _ => ReplicationApplyOutcome::Invalid,
         },
     }
+}
+
+/// Whether a parent-missing reply is locally known to be terminal because the
+/// referenced parent record carries a tombstone.
+async fn parent_reply_is_terminal<MessageStore>(
+    tenant: &str,
+    message: &Message<Descriptor>,
+    status: &Status,
+    message_store: &MessageStore,
+) -> bool
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let parent_missing = matches!(
+        status
+            .error_code
+            .as_deref()
+            .and_then(|code| DwnErrorCode::try_from(code).ok()),
+        Some(DwnErrorCode::ProtocolAuthorizationParentRecordNotFound)
+            | Some(DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound)
+    );
+    if !parent_missing {
+        return false;
+    }
+    let Ok(descriptor) = crate::descriptors::records::records_write_descriptor(message) else {
+        return false;
+    };
+    let Some(parent_id) = descriptor.parent_id.as_deref() else {
+        return false;
+    };
+    crate::handlers::records::common::record_has_tombstone(tenant, parent_id, message_store)
+        .await
+        .unwrap_or(false)
 }
 
 /// Builds signed MessagesSync requests for remote HTTP peers.
@@ -234,7 +285,15 @@ where
                     .process_message(&tenant, entry.message.clone())
                     .await
             };
-            match classify_apply_reply(&reply.status, &entry.message, already_stored) {
+            let parent_deleted =
+                parent_reply_is_terminal(&tenant, &entry.message, &reply.status, &message_store)
+                    .await;
+            match classify_apply_reply_with_parent_state(
+                &reply.status,
+                &entry.message,
+                already_stored,
+                parent_deleted,
+            ) {
                 ReplicationApplyOutcome::Applied
                 | ReplicationApplyOutcome::Duplicate
                 | ReplicationApplyOutcome::Superseded => Ok(()),
@@ -882,6 +941,45 @@ mod tests {
         assert_eq!(
             classify_apply_reply(&Status::new(404, "Not Found"), &write, false),
             ReplicationApplyOutcome::Invalid
+        );
+    }
+
+    #[test]
+    fn tombstoned_parent_missing_reply_classifies_terminal_with_local_state() {
+        // Covers: DWN-SYNC-003
+        let write = Message::new(
+            Descriptor::Records(Box::new(Records::Write(Default::default()))),
+            Fields::Write(Default::default()),
+        )
+        .unwrap();
+        let missing_parent = Status::from_error(
+            400,
+            DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationParentRecordNotFound,
+                "could not find parent record",
+            ),
+        );
+        // Without local tombstone knowledge the reply is a repairable dependency.
+        assert_eq!(
+            classify_apply_reply(&missing_parent, &write, false),
+            ReplicationApplyOutcome::Incomplete
+        );
+        // A receiver that can see the parent's tombstone classifies it terminal.
+        assert_eq!(
+            classify_apply_reply_with_parent_state(&missing_parent, &write, false, true),
+            ReplicationApplyOutcome::Invalid
+        );
+        // The terminal override is scoped to parent-missing replies.
+        let missing_initial = Status::from_error(
+            400,
+            DwnError::new(
+                DwnErrorCode::RecordsWriteGetInitialWriteNotFound,
+                "Initial write is not found.",
+            ),
+        );
+        assert_eq!(
+            classify_apply_reply_with_parent_state(&missing_initial, &write, false, true),
+            ReplicationApplyOutcome::Incomplete
         );
     }
 

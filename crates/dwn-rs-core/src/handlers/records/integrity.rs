@@ -15,9 +15,7 @@ use crate::encryption::{
     KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
 use crate::errors::{DwnError, DwnErrorCode};
-use crate::handlers::records::common::{
-    context_id, fetch_parent_record, message_record_id, ParentRecordLookup,
-};
+use crate::handlers::records::common::{context_id, fetch_parent_record, message_record_id};
 use crate::Message;
 
 use super::policy::EffectivePolicy;
@@ -159,34 +157,24 @@ where
         let parent_protocol = policy
             .definition
             .parent_protocol(descriptor.protocol_path.as_str());
-        let parent = match fetch_parent_record(tenant, parent_id, &parent_protocol, message_store)
+        let parent = fetch_parent_record(tenant, parent_id, &parent_protocol, message_store)
             .await?
-        {
-            ParentRecordLookup::Found(parent) => parent,
-            ParentRecordLookup::Missing => {
+            .ok_or_else(|| {
+                // A missing parent and a tombstoned parent are indistinguishable on the
+                // client-facing reply; the replication apply layer classifies a tombstone
+                // as terminal locally. See `record_has_tombstone`.
                 let code = if parent_protocol != descriptor.protocol {
                     DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound
                 } else {
                     DwnErrorCode::ProtocolAuthorizationParentRecordNotFound
                 };
-                return Err(DwnError::new(
+                DwnError::new(
                     code,
                     format!(
                         "could not find parent record '{parent_id}' in protocol '{parent_protocol}'"
                     ),
                 )
-                .into());
-            }
-            ParentRecordLookup::Deleted => {
-                return Err(DwnError::new(
-                    DwnErrorCode::ProtocolAuthorizationParentRecordDeleted,
-                    format!(
-                        "parent record '{parent_id}' in protocol '{parent_protocol}' was deleted and cannot be repaired"
-                    ),
-                )
-                .into());
-            }
-        };
+            })?;
         let parent_descriptor =
             records_write_descriptor(&parent).map_err(|error| error.to_string())?;
         let type_name = descriptor

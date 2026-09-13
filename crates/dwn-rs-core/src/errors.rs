@@ -15,7 +15,6 @@ pub enum DwnErrorCode {
     ProtocolsConfigureReservedEncryptionControlPath,
     ProtocolAuthorizationParentRecordNotFound,
     ProtocolAuthorizationCrossProtocolParentNotFound,
-    ProtocolAuthorizationParentRecordDeleted,
     ProtocolAuthorizationParentlessIncorrectProtocolPath,
     ProtocolAuthorizationIncorrectProtocolPath,
     ProtocolAuthorizationIncorrectContextId,
@@ -92,9 +91,6 @@ impl DwnErrorCode {
             }
             Self::ProtocolAuthorizationCrossProtocolParentNotFound => {
                 "ProtocolAuthorizationCrossProtocolParentNotFound"
-            }
-            Self::ProtocolAuthorizationParentRecordDeleted => {
-                "ProtocolAuthorizationParentRecordDeleted"
             }
             Self::ProtocolAuthorizationParentlessIncorrectProtocolPath => {
                 "ProtocolAuthorizationParentlessIncorrectProtocolPath"
@@ -297,9 +293,6 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "ProtocolAuthorizationCrossProtocolParentNotFound" => {
                 Ok(Self::ProtocolAuthorizationCrossProtocolParentNotFound)
-            }
-            "ProtocolAuthorizationParentRecordDeleted" => {
-                Ok(Self::ProtocolAuthorizationParentRecordDeleted)
             }
             "ProtocolAuthorizationParentlessIncorrectProtocolPath" => {
                 Ok(Self::ProtocolAuthorizationParentlessIncorrectProtocolPath)
