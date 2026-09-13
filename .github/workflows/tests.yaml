@@ -13,7 +13,7 @@ jobs:
     outputs:
       enbox_version: ${{ steps.filter.outputs.enbox_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dorny/paths-filter@v4
         id: filter
@@ -26,7 +26,7 @@ jobs:
     name: Rust lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -47,7 +47,7 @@ jobs:
     name: Native Rust tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -86,7 +86,7 @@ jobs:
     name: Fixture provenance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify fixture source.commit matches .enbox-version
         run: tools/conformance/check-fixture-provenance.sh
@@ -95,7 +95,7 @@ jobs:
     name: Embedded schema drift (pinned Enbox)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Read Enbox pin
         id: pin
@@ -107,7 +107,7 @@ jobs:
           fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: enboxorg/enbox
           ref: ${{ steps.pin.outputs.sha }}
@@ -132,7 +132,7 @@ jobs:
     name: TypeScript conformance (pinned Enbox)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Read Enbox pin
         id: pin
@@ -144,7 +144,7 @@ jobs:
           fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: enboxorg/enbox
           ref: ${{ steps.pin.outputs.sha }}
@@ -171,7 +171,7 @@ jobs:
     if: needs.changes.outputs.enbox_version == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Read Enbox pin
         id: pin
@@ -183,7 +183,7 @@ jobs:
           fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: enboxorg/enbox
           ref: ${{ steps.pin.outputs.sha }}
@@ -211,7 +211,7 @@ jobs:
     name: Loopback RPC interop (Rust server, TS client)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -230,7 +230,7 @@ jobs:
           fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: enboxorg/enbox
           ref: ${{ steps.pin.outputs.sha }}
@@ -263,7 +263,7 @@ jobs:
     name: Layer 5 store injection (Rust SQLite vs dwn-sdk-js specs)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -282,7 +282,7 @@ jobs:
           fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: enboxorg/enbox
           ref: ${{ steps.pin.outputs.sha }}
