@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use bytes::Bytes;
 use serde_json::json;
 
@@ -118,6 +119,7 @@ async fn install_app(fixture: &DeliveryFixture) {
 /// Issues a tenant grant to `GRANTEE`; `scope` is the grant scope JSON.
 async fn issue_grant(
     fixture: &DeliveryFixture,
+    grantee: &str,
     scope: serde_json::Value,
     granted: &str,
     expires: &str,
@@ -133,7 +135,7 @@ async fn issue_grant(
     let grant = signed_write_message(WriteSpec {
         protocol: crate::permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
         protocol_path: crate::permissions::PERMISSIONS_GRANT_PATH.to_string(),
-        recipient: Some(GRANTEE.to_string()),
+        recipient: Some(grantee.to_string()),
         tags: Some(MapValue::from([(
             "protocol".to_string(),
             Value::String(APP_PROTOCOL.to_string()),
@@ -259,6 +261,7 @@ async fn accepts_valid_read_delivery() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -284,6 +287,7 @@ async fn rejects_plaintext_grant_key() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -311,6 +315,7 @@ async fn rejects_encrypted_wrapped_delivery() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -336,6 +341,7 @@ async fn rejects_oversized_wrapped_delivery() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -367,6 +373,7 @@ async fn rejects_malformed_tags() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -441,6 +448,7 @@ async fn rejects_inactive_grant() {
     // Not yet active: delivery predates the grant.
     let future_grant = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         "2025-02-01T00:00:00.000000Z",
         FAR_FUTURE,
@@ -462,6 +470,7 @@ async fn rejects_inactive_grant() {
     // Expired: delivery at or past expiry.
     let short_grant = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         "2024-12-15T00:00:00.000000Z",
@@ -487,6 +496,7 @@ async fn revocation_is_not_retroactive() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -530,6 +540,7 @@ async fn rejects_wrong_author_and_recipient() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -594,7 +605,7 @@ async fn rejects_ineligible_grants() {
             }),
         ),
     ] {
-        let grant_id = issue_grant(&fixture, scope, GRANT_TIME, FAR_FUTURE).await;
+        let grant_id = issue_grant(&fixture, GRANTEE, scope, GRANT_TIME, FAR_FUTURE).await;
         let reply = deliver(
             &fixture,
             ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
@@ -615,6 +626,7 @@ async fn rejects_ineligible_grants() {
 
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -652,6 +664,7 @@ async fn read_coverage_follows_the_directional_table() {
     // Path grant covers its subtree without definition evidence.
     let team_grant = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", Some("team"), None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -715,6 +728,7 @@ async fn write_coverage_reaches_keyed_roles_only() {
 
     let write_grant = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Write", Some("team"), None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -755,6 +769,7 @@ async fn write_coverage_reaches_keyed_roles_only() {
     // A protocol-wide Write grant reaches any keyed role.
     let wide_grant = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Write", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -783,6 +798,7 @@ async fn missing_history_stays_distinguishable_from_scope_denial() {
     // can retry once the configuration arrives.
     let team_grant = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", Some("team"), None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -828,6 +844,7 @@ async fn exact_replay_of_an_accepted_delivery_is_duplicate() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -901,6 +918,7 @@ async fn accepts_valid_wrapped_delivery() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -917,6 +935,7 @@ async fn rejects_schema_invalid_wrapped_delivery() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -939,6 +958,7 @@ async fn rejects_unparseable_wrapped_delivery() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -961,6 +981,7 @@ async fn accepts_wrapped_delivery_without_a_data_stream() {
     let fixture = fixture().await;
     let grant_id = issue_grant(
         &fixture,
+        GRANTEE,
         scope_json("Read", None, None),
         GRANT_TIME,
         FAR_FUTURE,
@@ -990,4 +1011,315 @@ async fn accepts_wrapped_delivery_without_a_data_stream() {
             .await
             .expect("store query must succeed");
     assert_eq!(stored.len(), 1, "delivery retained as a message");
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn rejects_undefined_tags() {
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        GRANTEE,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    let mut tags = delivery_tags(&grant_id, None);
+    tags.insert(
+        "format".to_string(),
+        Value::String("enbox/wrapped-grant-key@1".to_string()),
+    );
+    let reply = deliver(
+        &fixture,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        tags,
+        false,
+        Some(GRANTEE),
+        None,
+        DELIVERY_TIME,
+        Some(grant_key_envelope()),
+    )
+    .await;
+    assert_code(&reply, 400, "ProtocolAuthorizationTagsInvalidSchema");
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn metadata_precedes_payload_validation() {
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        GRANTEE,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    // Garbage bytes with broken metadata: the tag failure must win, proving
+    // metadata validation runs before payload validation.
+    let mut tags = delivery_tags(&grant_id, None);
+    tags.remove("grantId");
+    let data = Bytes::from_static(b"not json{{{");
+    let write = signed_write_message(WriteSpec {
+        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
+        protocol_path: ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+        recipient: Some(GRANTEE.to_string()),
+        tags: Some(tags),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new(DELIVERY_TIME)
+    })
+    .await;
+    let reply = fixture.handler.run(TENANT, &write, Some(data)).await;
+    assert_code(&reply, 400, "ProtocolAuthorizationTagsInvalidSchema");
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn unexpected_path_falls_to_the_generic_gate() {
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        GRANTEE,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    // No rule set declares a third path, so generic referential integrity
+    // rejects before the protocol hook ever runs. The hook-level identity
+    // stays pinned by unit test; this pins the observable precedence.
+    let reply = deliver(
+        &fixture,
+        "epochKey",
+        delivery_tags(&grant_id, None),
+        false,
+        Some(GRANTEE),
+        None,
+        DELIVERY_TIME,
+        Some(grant_key_envelope()),
+    )
+    .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .starts_with("ProtocolAuthorizationInvalidProtocolPath:"),
+        "generic gate preempts, got: {}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-AUTH-001, DWN-AUTH-002
+#[tokio::test]
+async fn accepts_delegated_author() {
+    let fixture = fixture().await;
+    install_app(&fixture).await;
+
+    // The key grant itself: tenant alice to bob.
+    let grant_id = issue_grant(
+        &fixture,
+        GRANTEE,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+
+    // A delegation grant letting bob write grantKey deliveries.
+    let delegation_data = Bytes::from(
+        serde_json::to_vec(&json!({
+            "dateExpires": FAR_FUTURE,
+            "scope": {
+                "interface": "Records",
+                "method": "Write",
+                "protocol": ENCRYPTION_PROTOCOL_URI,
+                "protocolPath": ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+            },
+            "delegated": true,
+        }))
+        .unwrap(),
+    );
+    let delegation = signed_write_message(WriteSpec {
+        protocol: crate::permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
+        protocol_path: crate::permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        recipient: Some(GRANTEE.to_string()),
+        tags: Some(MapValue::from([(
+            "protocol".to_string(),
+            Value::String(ENCRYPTION_PROTOCOL_URI.to_string()),
+        )])),
+        data_cid: generate_dag_pb_cid_from_bytes(&delegation_data).to_string(),
+        data_size: delegation_data.len() as u64,
+        data_format: "application/json".to_string(),
+        ..WriteSpec::new(GRANT_TIME)
+    })
+    .await;
+    let reply = fixture
+        .handler
+        .run(TENANT, &delegation, Some(delegation_data.clone()))
+        .await;
+    assert_eq!(
+        reply.status.code, 202,
+        "delegation grant must admit: {}",
+        reply.status.detail
+    );
+    let mut delegation = delegation;
+    delegation["encodedData"] = serde_json::Value::String(URL_SAFE_NO_PAD.encode(&delegation_data));
+
+    // Bob signs the delivery; authorship resolves through the delegation to
+    // alice, the key grant's grantor. The record id derives from alice like
+    // every directly-authored write.
+    let data = Bytes::from_static(b"{\"wrapped\":true}");
+    let delivery = signed_write_message(WriteSpec {
+        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
+        protocol_path: ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
+        recipient: Some(GRANTEE.to_string()),
+        tags: Some(delivery_tags(&grant_id, None)),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        data_format: "application/json".to_string(),
+        author: TENANT.to_string(),
+        signer: bob_signer(),
+        encryption: Some(grant_key_envelope()),
+        ..WriteSpec::new(DELIVERY_TIME)
+    })
+    .await;
+    let delivery =
+        crate::testing::with_author_delegated_grant(delivery, &delegation, bob_signer()).await;
+    let reply = fixture.handler.run(TENANT, &delivery, Some(data)).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-AUTH-001, DWN-AUTH-003
+#[tokio::test]
+async fn accepts_self_grant_direct_delivery() {
+    let fixture = fixture().await;
+    // Grantor, grantee, author, and recipient coincide: no delegation, no
+    // confusion between the independently checked identities.
+    let grant_id = issue_grant(
+        &fixture,
+        TENANT,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    let reply = deliver(
+        &fixture,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        delivery_tags(&grant_id, None),
+        false,
+        Some(TENANT),
+        None,
+        DELIVERY_TIME,
+        Some(grant_key_envelope()),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-AUTH-004, DWN-AUTH-005, ENBOX-ENC-002
+#[tokio::test]
+async fn resolution_rechecks_what_admission_accepted() {
+    use crate::encryption::resolution::{
+        verify_grant_key_resolution, DeliveryTags, GrantKeyPayload, KeyMaterial, PayloadScope,
+        ResolutionError, ResolutionInput, ResolutionTarget,
+    };
+    use crate::encryption::x25519::public_jwk;
+    use crate::permissions::fetch_grant;
+    use ssi_jwk::{Base64urlUInt, OctetParams, Params, JWK};
+
+    let fixture = fixture().await;
+    let grant_id = issue_grant(
+        &fixture,
+        GRANTEE,
+        scope_json("Read", None, None),
+        GRANT_TIME,
+        FAR_FUTURE,
+    )
+    .await;
+    let reply = deliver(
+        &fixture,
+        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        delivery_tags(&grant_id, None),
+        false,
+        Some(GRANTEE),
+        None,
+        DELIVERY_TIME,
+        Some(grant_key_envelope()),
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // Same scenario, resolved after a later revocation: admission used the
+    // revocation-at-or-before-timestamp rule, resolution rejects on any.
+    revoke_grant(&fixture, &grant_id, "2025-03-01T00:00:00.000000Z").await;
+    let grant = fetch_grant(TENANT, &fixture.message_store, &grant_id)
+        .await
+        .expect("grant stored");
+
+    let secret = x25519_dalek::StaticSecret::random();
+    let public = x25519_dalek::PublicKey::from(&secret);
+    let private_jwk = JWK::from(Params::OKP(OctetParams {
+        curve: "X25519".to_string(),
+        public_key: Base64urlUInt(public.as_bytes().to_vec()),
+        private_key: Some(Base64urlUInt(secret.to_bytes().to_vec())),
+    }));
+    let public_jwk = public_jwk(public.as_bytes());
+    let key_id = public_jwk.thumbprint().expect("thumbprint");
+    let payload = GrantKeyPayload {
+        grant_id: grant_id.clone(),
+        scope: PayloadScope {
+            scheme: "protocolPath".to_string(),
+            protocol: APP_PROTOCOL.to_string(),
+            protocol_path: None,
+        },
+        key_material: KeyMaterial {
+            algorithm: crate::encryption::KEY_AGREEMENT_ALGORITHM.to_string(),
+            derivation_scheme: "protocolPath".to_string(),
+            key_id: key_id.clone(),
+            derivation_path: vec!["protocolPath".to_string(), APP_PROTOCOL.to_string()],
+            public_key_jwk: public_jwk,
+            private_key_jwk: private_jwk,
+        },
+    };
+    let tags = DeliveryTags {
+        grant_id: grant_id.clone(),
+        protocol: APP_PROTOCOL.to_string(),
+        protocol_path: None,
+        key_id: key_id.clone(),
+    };
+    let target = ResolutionTarget {
+        protocol: APP_PROTOCOL.to_string(),
+        protocol_path: Some("team/doc".to_string()),
+    };
+
+    let base = ResolutionInput {
+        grant: &grant,
+        grantor: TENANT,
+        grantee: GRANTEE,
+        delivery_path: ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        has_envelope: true,
+        tags: tags.clone(),
+        payload: &payload,
+        target: target.clone(),
+        definition: None,
+        revoked: false,
+        now: crate::testing::parse_time("2025-04-01T00:00:00.000000Z"),
+    };
+    verify_grant_key_resolution(base.clone()).expect("unrevoked resolves");
+
+    // Revoked after the delivery timestamp: still resolvable by admission
+    // rules, refused at resolution.
+    let revoked = ResolutionInput {
+        revoked: true,
+        ..base.clone()
+    };
+    assert_eq!(
+        verify_grant_key_resolution(revoked),
+        Err(ResolutionError::Revoked)
+    );
 }
