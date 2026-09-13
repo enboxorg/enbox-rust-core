@@ -151,15 +151,19 @@ pub(crate) fn message_record_id(message: &Message<Descriptor>) -> Option<String>
     })
 }
 
+/// Finds the record's initial write among `messages`. The initial write is
+/// identified by its own author, not by the caller, so a co-update by a
+/// different author still resolves the same initial write.
 pub(crate) fn find_initial_write(
     messages: &[Message<Descriptor>],
-    author: &str,
+    _author: &str,
 ) -> Option<Message<Descriptor>> {
     messages
         .iter()
         .find(|message| {
+            let own_author = extract_author(message).unwrap_or_default();
             records_write_descriptor(message).is_ok()
-                && is_initial_write(message, author).unwrap_or(false)
+                && is_initial_write(message, &own_author).unwrap_or(false)
         })
         .cloned()
 }
@@ -1039,6 +1043,7 @@ impl ProtocolAuthorizationError {
 /// context source must carry its ancestor depth, and `author` must hold an
 /// active role record. A role that fails any check is rejected before action
 /// rules are matched, so a `who` rule cannot mask a bad role invocation.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn verify_invoked_role<MessageStore>(
     tenant: &str,
     author: &str,
@@ -1046,6 +1051,7 @@ pub(crate) async fn verify_invoked_role<MessageStore>(
     protocol: &str,
     context_id: Option<&str>,
     definition: &Definition,
+    evaluation_timestamp: &str,
     message_store: &MessageStore,
 ) -> Result<Option<ResolvedProtocolRole>, DwnError>
 where
@@ -1076,17 +1082,43 @@ where
         None => (protocol.to_string(), invoked_role.to_string()),
     };
 
-    // A local role must name a `$role` node in the composing definition.
-    if parsed.is_none() {
-        let is_role = definition
-            .rule_at(&role_path)
-            .is_some_and(|rule_set| rule_set.role == Some(true));
-        if !is_role {
-            return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationNotARole,
-                format!("protocol path '{invoked_role}' does not match a role record type"),
-            ));
+    // The role path must be a `$role` node in the definition that governs it:
+    // the composing definition for a local role, the referenced definition at
+    // the same evaluation timestamp for an `alias:path` role.
+    let is_role = match &parsed {
+        Some(_) => {
+            let referenced = fetch_protocol_definition(
+                tenant,
+                &role_protocol,
+                message_store,
+                Some(evaluation_timestamp),
+            )
+            .await
+            .map_err(|error| match error {
+                ProtocolDefinitionLookupError::NotFound(_) => DwnError::new(
+                    DwnErrorCode::ProtocolAuthorizationProtocolNotFound,
+                    format!(
+                        "referenced protocol '{role_protocol}' is not defined at {evaluation_timestamp}"
+                    ),
+                ),
+                other => DwnError::new(
+                    DwnErrorCode::ProtocolAuthorizationNotARole,
+                    other.to_string(),
+                ),
+            })?;
+            referenced
+                .rule_at(&role_path)
+                .is_some_and(|rule_set| rule_set.role == Some(true))
         }
+        None => definition
+            .rule_at(&role_path)
+            .is_some_and(|rule_set| rule_set.role == Some(true)),
+    };
+    if !is_role {
+        return Err(DwnError::new(
+            DwnErrorCode::ProtocolAuthorizationNotARole,
+            format!("protocol path '{invoked_role}' does not match a role record type"),
+        ));
     }
 
     let ancestor_count = role_path.split('/').count().saturating_sub(1);
@@ -1186,6 +1218,7 @@ where
         can,
         rule_set,
         &definition,
+        request_timestamp,
         message_store,
     )
     .await
@@ -1201,6 +1234,7 @@ async fn resolve_query_or_subscribe_role<MessageStore>(
     can: Can,
     rule_set: &RuleSet,
     definition: &Definition,
+    evaluation_timestamp: &str,
     message_store: &MessageStore,
 ) -> Result<ResolvedProtocolRole, ProtocolAuthorizationError>
 where
@@ -1215,6 +1249,7 @@ where
         protocol,
         context_id_prefix,
         definition,
+        evaluation_timestamp,
         message_store,
     )
     .await?
@@ -1281,6 +1316,7 @@ where
             &protocol,
             context.as_deref(),
             &definition,
+            &evaluation_timestamp,
             message_store,
         )
         .await?;
@@ -1990,6 +2026,7 @@ mod tests {
     const ROLE_TEST_TENANT: &str = "did:example:tenant";
     const ROLE_TEST_AUTHOR: &str = "did:example:alice";
     const ROLE_TEST_PROTOCOL: &str = "https://example.com/protocol/chat";
+    const ROLE_TEST_TIME: &str = "2025-01-01T00:00:00.000000Z";
 
     fn role_rule(role: &str, can: Vec<Can>) -> RuleSet {
         RuleSet {
@@ -2106,6 +2143,7 @@ mod tests {
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
             &role_definition(None),
+            ROLE_TEST_TIME,
             &store,
         )
         .await
@@ -2134,6 +2172,7 @@ mod tests {
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
             &definition,
+            ROLE_TEST_TIME,
             &store,
         )
         .await;
@@ -2157,6 +2196,7 @@ mod tests {
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
             &definition,
+            ROLE_TEST_TIME,
             &store,
         )
         .await;
@@ -2171,6 +2211,7 @@ mod tests {
             Can::Read,
             &role_rule("thread/participant", vec![Can::Create]),
             &definition,
+            ROLE_TEST_TIME,
             &store,
         )
         .await;
@@ -2191,6 +2232,34 @@ mod tests {
         )
         .await;
 
+        let roles_definition = Definition {
+            protocol: ROLES_PROTOCOL.to_string(),
+            published: false,
+            uses: None,
+            key_agreement: None,
+            types: BTreeMap::new(),
+            structure: BTreeMap::from([(
+                "team".to_string(),
+                RuleSet {
+                    rules: BTreeMap::from([(
+                        "member".to_string(),
+                        RuleSet {
+                            role: Some(true),
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            )]),
+        };
+        crate::testing::put_protocol_definition(
+            ROLE_TEST_TENANT,
+            &store,
+            roles_definition,
+            ROLE_TEST_TIME,
+        )
+        .await;
+
         let definition = role_definition(Some(BTreeMap::from([(
             "roles".to_string(),
             ROLES_PROTOCOL.to_string(),
@@ -2204,6 +2273,7 @@ mod tests {
             Can::Read,
             &role_rule("roles:team/member", vec![Can::Read]),
             &definition,
+            ROLE_TEST_TIME,
             &store,
         )
         .await
@@ -2235,6 +2305,7 @@ mod tests {
             Can::Read,
             &role_rule("roles:team/member", vec![Can::Read]),
             &role_definition(None),
+            ROLE_TEST_TIME,
             &store,
         )
         .await;
@@ -2252,6 +2323,7 @@ mod tests {
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
             &role_definition(None),
+            ROLE_TEST_TIME,
             &store,
         )
         .await;
@@ -3028,6 +3100,77 @@ mod tests {
             error.code,
             SubscriptionErrorCode::RecordsDeliveryAuthorizationFailed
         );
+    }
+
+    // Covers: DWN-PROTO-005, DWN-PROTO-003
+    fn actor_chain_entry(message: serde_json::Value) -> Message<Descriptor> {
+        serde_json::from_value(message).expect("actor message must deserialize")
+    }
+
+    fn cross_of_definition(alias_protocol: &str) -> Definition {
+        Definition {
+            protocol: "https://example.com/composing".to_string(),
+            published: false,
+            uses: Some(BTreeMap::from([(
+                "threads".to_string(),
+                alias_protocol.to_string(),
+            )])),
+            key_agreement: None,
+            types: BTreeMap::new(),
+            structure: BTreeMap::new(),
+        }
+    }
+
+    // Covers: DWN-PROTO-005, DWN-PROTO-003
+    #[tokio::test]
+    async fn check_actor_cross_of_matches_protocol_and_path() {
+        use crate::testing::{signed_write_message, WriteSpec};
+
+        const THREADS_A: &str = "https://a.example/threads";
+        const THREADS_B: &str = "https://b.example/threads";
+
+        let chain_a = vec![actor_chain_entry(
+            signed_write_message(WriteSpec {
+                protocol: THREADS_A.to_string(),
+                protocol_path: "thread".to_string(),
+                ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+            })
+            .await,
+        )];
+        let chain_b = vec![actor_chain_entry(
+            signed_write_message(WriteSpec {
+                protocol: THREADS_B.to_string(),
+                protocol_path: "thread".to_string(),
+                ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+            })
+            .await,
+        )];
+
+        let definition = cross_of_definition(THREADS_A);
+        // A cross-protocol `of` matches both protocol URI and path.
+        assert!(check_actor(
+            ROLE_TEST_AUTHOR,
+            &Who::Author,
+            Some("threads:thread"),
+            &chain_a,
+            Some(&definition)
+        ));
+        // The same path in another protocol does not match.
+        assert!(!check_actor(
+            ROLE_TEST_AUTHOR,
+            &Who::Author,
+            Some("threads:thread"),
+            &chain_b,
+            Some(&definition)
+        ));
+        // A local `of` matches by path alone, even in a referenced protocol.
+        assert!(check_actor(
+            ROLE_TEST_AUTHOR,
+            &Who::Author,
+            Some("thread"),
+            &chain_b,
+            Some(&definition)
+        ));
     }
 
     // Covers: DWN-REC-001

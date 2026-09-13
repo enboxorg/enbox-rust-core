@@ -27,6 +27,7 @@ pub enum DwnErrorCode {
     ProtocolAuthorizationMatchingRoleRecordNotFound,
     ProtocolAuthorizationNotARole,
     ProtocolAuthorizationMissingContextId,
+    ProtocolAuthorizationInvalidType,
     ProtocolAuthorizationEncryptionRequired,
     ProtocolAuthorizationTagsInvalidSchema,
     ProtocolAuthorizationEncryptionNotAllowed,
@@ -113,6 +114,7 @@ impl DwnErrorCode {
             }
             Self::ProtocolAuthorizationNotARole => "ProtocolAuthorizationNotARole",
             Self::ProtocolAuthorizationMissingContextId => "ProtocolAuthorizationMissingContextId",
+            Self::ProtocolAuthorizationInvalidType => "ProtocolAuthorizationInvalidType",
             Self::ProtocolAuthorizationEncryptionRequired => {
                 "ProtocolAuthorizationEncryptionRequired"
             }
@@ -316,6 +318,7 @@ impl TryFrom<&str> for DwnErrorCode {
             "ProtocolAuthorizationMissingContextId" => {
                 Ok(Self::ProtocolAuthorizationMissingContextId)
             }
+            "ProtocolAuthorizationInvalidType" => Ok(Self::ProtocolAuthorizationInvalidType),
             "ProtocolAuthorizationEncryptionRequired" => {
                 Ok(Self::ProtocolAuthorizationEncryptionRequired)
             }
