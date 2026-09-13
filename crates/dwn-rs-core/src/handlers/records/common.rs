@@ -1609,6 +1609,85 @@ where
         .ok_or_else(|| "RecordsWriteGetNewestWriteRecordNotFound: record not found".to_string())
 }
 
+/// The retained, not-deleted Record that is the current parent for `record_id`
+/// in `protocol`.
+///
+/// The current latest-base-state write is preferred. When none exists the
+/// retained initial write still proves the parent, unless a tombstone has
+/// displaced it: a deleted record keeps its delete in the latest base state,
+/// which the initial-write lookup must not resurrect.
+pub(crate) async fn fetch_parent_record<MessageStore>(
+    tenant: &str,
+    record_id: &str,
+    protocol: &str,
+    message_store: &MessageStore,
+) -> Result<Option<Message<Descriptor>>, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let latest_filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("method", string_filter(WRITE_METHOD)),
+        ("isLatestBaseState", bool_filter(true)),
+        ("protocol", string_filter(protocol)),
+        ("recordId", string_filter(record_id)),
+    ]);
+    let latest = message_store
+        .query(
+            tenant,
+            Filters::from(latest_filter),
+            Some(MessageSort::Timestamp(SortDirection::Descending)),
+            Some(Pagination::with_limit(1)),
+            None,
+        )
+        .await
+        .map(|result| result.messages.into_iter().next())
+        .map_err(|err| err.to_string())?;
+    if latest.is_some() {
+        return Ok(latest);
+    }
+
+    let initial_filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("method", string_filter(WRITE_METHOD)),
+        ("protocol", string_filter(protocol)),
+        ("recordId", string_filter(record_id)),
+    ]);
+    let initial = message_store
+        .query(
+            tenant,
+            Filters::from(initial_filter),
+            Some(MessageSort::Timestamp(SortDirection::Ascending)),
+            Some(Pagination::with_limit(1)),
+            None,
+        )
+        .await
+        .map(|result| result.messages.into_iter().next())
+        .map_err(|err| err.to_string())?;
+    let Some(initial) = initial else {
+        return Ok(None);
+    };
+
+    let tombstone_filter = filter_map([
+        ("interface", string_filter(RECORDS_INTERFACE)),
+        ("method", string_filter(crate::descriptors::DELETE)),
+        ("recordId", string_filter(record_id)),
+    ]);
+    let tombstoned = message_store
+        .query(
+            tenant,
+            Filters::from(tombstone_filter),
+            None,
+            Some(Pagination::with_limit(1)),
+            None,
+        )
+        .await
+        .map(|result| !result.messages.is_empty())
+        .map_err(|err| err.to_string())?;
+
+    Ok(if tombstoned { None } else { Some(initial) })
+}
+
 pub(crate) async fn fetch_initial_write_message<MessageStore>(
     tenant: &str,
     record_id: &str,
