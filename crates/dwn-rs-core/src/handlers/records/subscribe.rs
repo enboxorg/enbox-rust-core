@@ -137,7 +137,7 @@ where
             .await
             {
                 Ok(auth) => auth,
-                Err(detail) => return Response::unauthorized(detail),
+                Err(error) => return Response::new(error.into_status(), Default::default()),
             };
             let filters = collection_filters(
                 &auth,
@@ -728,7 +728,7 @@ where
             RecordsAuthorizationKind::Subscribe,
         )
         .await
-        .map_err(Response::unauthorized)?;
+        .map_err(|error| Response::new(error.into_status(), Default::default()))?;
         let author = auth.author.clone();
         // Retain mutable authority for delivery-time revalidation. Paths
         // authorized immutably (owner, published, author, recipient) need

@@ -50,6 +50,7 @@ pub struct WriteSpec {
     pub data_format: String,
     pub published: Option<bool>,
     pub permission_grant_id: Option<String>,
+    pub protocol_role: Option<String>,
     pub squash: Option<bool>,
     pub encryption: Option<EncryptionEnvelope>,
 }
@@ -74,6 +75,7 @@ impl WriteSpec {
             data_format: "text/plain".to_string(),
             published: None,
             permission_grant_id: None,
+            protocol_role: None,
             squash: None,
             encryption: None,
         }
@@ -109,8 +111,12 @@ pub async fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
             .unwrap_or_else(|| record_id.clone())
     });
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
-    let mut signature_payload =
-        payload_with_permission_grant(&record_id, &context_id, spec.permission_grant_id.as_deref());
+    let mut signature_payload = payload_with_permission_grant(
+        &record_id,
+        &context_id,
+        spec.permission_grant_id.as_deref(),
+        spec.protocol_role.as_deref(),
+    );
     if let Some(envelope) = &spec.encryption {
         let encryption_cid = generate_cid_from_serialized(envelope.clone()).unwrap();
         signature_payload
@@ -502,6 +508,7 @@ pub fn payload_with_permission_grant(
     record_id: &str,
     context_id: &str,
     permission_grant_id: Option<&str>,
+    protocol_role: Option<&str>,
 ) -> serde_json::Value {
     let mut payload = serde_json::Map::from_iter([
         (
@@ -517,6 +524,12 @@ pub fn payload_with_permission_grant(
         payload.insert(
             "permissionGrantId".to_string(),
             serde_json::Value::String(permission_grant_id.to_string()),
+        );
+    }
+    if let Some(protocol_role) = protocol_role {
+        payload.insert(
+            "protocolRole".to_string(),
+            serde_json::Value::String(protocol_role.to_string()),
         );
     }
     serde_json::Value::Object(payload)

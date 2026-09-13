@@ -34,9 +34,9 @@ use crate::{canonical_rfc3339, Message, MessageSort, Pagination, Response, SortD
 
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum QueryAuthorizationResult {
-    Unauthorized(String),
+    Unauthorized(ProtocolAuthorizationError),
 }
 
 pub(crate) fn records_delete_descriptor(
@@ -899,11 +899,12 @@ pub(crate) async fn authorize_records_read<MessageStore>(
     signature: Option<&AuthorizationContext>,
     matched_records_write: &Message<Descriptor>,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), ProtocolAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let descriptor = records_write_descriptor(matched_records_write)?;
+    let descriptor =
+        records_write_descriptor(matched_records_write).map_err(|error| error.to_string())?;
     if signature.map(|signature| signature.author.as_str()) == Some(tenant)
         || descriptor.published == Some(true)
     {
@@ -927,16 +928,22 @@ where
         {
             return Ok(());
         }
+        let evaluation_timestamp = canonical_rfc3339(read_message.message_timestamp());
         return authorize_against_protocol(
             tenant,
             matched_records_write,
-            &signature.author,
+            signature,
             RecordsAuthorizationKind::Read,
+            Some(&evaluation_timestamp),
             message_store,
         )
         .await;
     }
-    Err("ProtocolAuthorizationActionNotAllowed: anonymous read is not authorized".to_string())
+    Err(
+        "ProtocolAuthorizationActionNotAllowed: anonymous read is not authorized"
+            .to_string()
+            .into(),
+    )
 }
 
 pub(crate) async fn authorize_records_delete<MessageStore>(
@@ -945,7 +952,7 @@ pub(crate) async fn authorize_records_delete<MessageStore>(
     initial_write: &Message<Descriptor>,
     signature: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), ProtocolAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -965,11 +972,13 @@ where
         return Ok(());
     }
     let prune = records_delete_descriptor(delete_message)?.prune;
+    let evaluation_timestamp = canonical_rfc3339(delete_message.message_timestamp());
     authorize_against_protocol(
         tenant,
         initial_write,
-        &signature.author,
+        signature,
         RecordsAuthorizationKind::Delete { prune },
+        Some(&evaluation_timestamp),
         message_store,
     )
     .await
@@ -983,6 +992,146 @@ pub(crate) struct ResolvedProtocolRole {
     pub role_record_id: String,
 }
 
+/// A protocol-authorization failure. Role failures carry a stable
+/// [`DwnErrorCode`]; action-rule failures are plain unauthorized details.
+#[derive(Debug)]
+pub(crate) enum ProtocolAuthorizationError {
+    Code(DwnError),
+    Detail(String),
+}
+
+impl From<DwnError> for ProtocolAuthorizationError {
+    fn from(error: DwnError) -> Self {
+        Self::Code(error)
+    }
+}
+
+impl From<String> for ProtocolAuthorizationError {
+    fn from(detail: String) -> Self {
+        Self::Detail(detail)
+    }
+}
+
+impl std::fmt::Display for ProtocolAuthorizationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Code(error) => error.fmt(formatter),
+            Self::Detail(detail) => formatter.write_str(detail),
+        }
+    }
+}
+
+impl ProtocolAuthorizationError {
+    /// The HTTP 401 status carrying the stable code when one is present.
+    pub(crate) fn into_status(self) -> Status {
+        match self {
+            Self::Code(error) => Status::from_error(401, error),
+            Self::Detail(detail) => Status::new(401, detail),
+        }
+    }
+}
+
+/// Verifies the role named by `protocolRole` and returns its resolved address.
+///
+/// Mirrors the parity target's `verifyInvokedRole`: a local invoked role must
+/// be a `$role` node in the composing definition, and an `alias:path` role
+/// resolves through `uses` to the referenced protocol. Either way the role's
+/// context source must carry its ancestor depth, and `author` must hold an
+/// active role record. A role that fails any check is rejected before action
+/// rules are matched, so a `who` rule cannot mask a bad role invocation.
+pub(crate) async fn verify_invoked_role<MessageStore>(
+    tenant: &str,
+    author: &str,
+    invoked_role: Option<&str>,
+    protocol: &str,
+    context_id: Option<&str>,
+    definition: &Definition,
+    message_store: &MessageStore,
+) -> Result<Option<ResolvedProtocolRole>, DwnError>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
+    let Some(invoked_role) = invoked_role else {
+        return Ok(None);
+    };
+
+    let parsed = protocol_types::parse_cross_protocol_ref(invoked_role);
+    let (role_protocol, role_path) = match &parsed {
+        Some(parsed) => {
+            let role_protocol = definition
+                .uses
+                .as_ref()
+                .and_then(|uses| uses.get(parsed.alias))
+                .ok_or_else(|| {
+                    DwnError::new(
+                        DwnErrorCode::ProtocolAuthorizationNotARole,
+                        format!(
+                            "cross-protocol role alias '{}' in '{invoked_role}' does not exist in the protocol's uses map",
+                            parsed.alias
+                        ),
+                    )
+                })?;
+            (role_protocol.clone(), parsed.protocol_path.to_string())
+        }
+        None => (protocol.to_string(), invoked_role.to_string()),
+    };
+
+    // A local role must name a `$role` node in the composing definition.
+    if parsed.is_none() {
+        let is_role = definition
+            .rule_at(&role_path)
+            .is_some_and(|rule_set| rule_set.role == Some(true));
+        if !is_role {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationNotARole,
+                format!("protocol path '{invoked_role}' does not match a role record type"),
+            ));
+        }
+    }
+
+    let ancestor_count = role_path.split('/').count().saturating_sub(1);
+    if ancestor_count > 0 {
+        let segments: Vec<&str> = context_id.unwrap_or_default().split('/').collect();
+        if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationMissingContextId,
+                format!(
+                    "could not verify role '{invoked_role}' because contextId is missing or too shallow"
+                ),
+            ));
+        }
+    }
+
+    let role_record = query_role_records(
+        tenant,
+        author,
+        &role_protocol,
+        &role_path,
+        context_id,
+        message_store,
+    )
+    .await
+    .map_err(|detail| {
+        DwnError::new(
+            DwnErrorCode::ProtocolAuthorizationMatchingRoleRecordNotFound,
+            detail,
+        )
+    })?;
+    let Some(role_record) = role_record else {
+        return Err(DwnError::new(
+            DwnErrorCode::ProtocolAuthorizationMatchingRoleRecordNotFound,
+            format!("no matching role record found for protocol path '{role_path}'"),
+        ));
+    };
+
+    Ok(Some(ResolvedProtocolRole {
+        protocol: role_protocol,
+        protocol_path: role_path,
+        context_id_prefix: context_id.map(str::to_string),
+        role_record_id: record_id(&role_record).unwrap_or_default(),
+    }))
+}
+
 /// Authorizes a role-invoking collection filter against the protocol
 /// definition governing `request_timestamp` (`DWN-PROTO-004`), never blindly
 /// the newest configuration. Every lookup failure denies: a missing
@@ -994,7 +1143,7 @@ pub(crate) async fn authorize_protocol_query_or_subscribe<MessageStore>(
     message_store: &MessageStore,
     request_timestamp: &str,
     kind: RecordsAuthorizationKind,
-) -> Result<ResolvedProtocolRole, String>
+) -> Result<ResolvedProtocolRole, ProtocolAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1053,93 +1202,110 @@ async fn resolve_query_or_subscribe_role<MessageStore>(
     rule_set: &RuleSet,
     definition: &Definition,
     message_store: &MessageStore,
-) -> Result<ResolvedProtocolRole, String>
+) -> Result<ResolvedProtocolRole, ProtocolAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    for action in &rule_set.actions {
-        let Action::Role(action) = action else {
-            continue;
-        };
+    // Verify the invoked role before matching action rules, so a malformed or
+    // unheld role is rejected even when no rule would have authorized it.
+    let resolved = verify_invoked_role(
+        tenant,
+        author,
+        Some(invoked_role),
+        protocol,
+        context_id_prefix,
+        definition,
+        message_store,
+    )
+    .await?
+    .expect("invoked role is present");
 
-        if !action.can.contains(&can) || action.role != invoked_role {
-            continue;
-        }
-
-        if let Some(role) = find_matching_role_record(
-            tenant,
-            author,
-            &action.role,
-            protocol,
-            context_id_prefix,
-            message_store,
-            definition,
-        )
-        .await?
-        {
-            return Ok(role);
-        }
+    let rule_allows = rule_set.actions.iter().any(|action| match action {
+        Action::Role(action) => action.role == invoked_role && action.can.contains(&can),
+        // An `anyone` rule authorizes regardless of the invoked role, matching
+        // the actor-independent evaluation used for the other methods.
+        Action::Who(action) => action.who == Who::Anyone && action.can.contains(&can),
+    });
+    if !rule_allows {
+        return Err(
+            "ProtocolAuthorizationActionNotAllowed: no action rule allows the invoked role"
+                .to_string()
+                .into(),
+        );
     }
 
-    Err("invoke role is not allowed or has no active role record".to_string())
+    Ok(resolved)
 }
 
 pub(crate) async fn authorize_against_protocol<MessageStore>(
     tenant: &str,
     message: &Message<Descriptor>,
-    author: &str,
+    auth: &AuthorizationContext,
     kind: RecordsAuthorizationKind,
+    evaluation_timestamp: Option<&str>,
     message_store: &MessageStore,
-) -> Result<(), String>
+) -> Result<(), ProtocolAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let descriptor = records_write_descriptor(message)?;
+    let author = auth.author.as_str();
+    let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
     let protocol = descriptor.protocol.clone();
     let protocol_path = descriptor.protocol_path.clone();
-    let governing_timestamp = governing_timestamp(tenant, message, message_store, author)
-        .await
-        .map_err(|error| error.to_string())?;
+    // Read and Delete evaluate at the operation's own timestamp; Write resolves
+    // the governing timestamp from the record (initial write time for updates).
+    let evaluation_timestamp = match evaluation_timestamp {
+        Some(timestamp) => timestamp.to_string(),
+        None => governing_timestamp(tenant, message, message_store, author)
+            .await
+            .map_err(|error| error.to_string())?,
+    };
     let definition = fetch_protocol_definition(
         tenant,
         protocol.as_str(),
         message_store,
-        Some(&governing_timestamp),
+        Some(&evaluation_timestamp),
     )
     .await
     .map_err(|err| err.to_string())?;
     let rule_set = definition.rule_at(protocol_path.as_str()).ok_or_else(|| {
         format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
     })?;
+    let invoked_role = auth.protocol_role();
+    if invoked_role.is_some() {
+        let context = context_id(message);
+        verify_invoked_role(
+            tenant,
+            author,
+            invoked_role,
+            &protocol,
+            context.as_deref(),
+            &definition,
+            message_store,
+        )
+        .await?;
+    }
     let chain = construct_record_chain(tenant, message, message_store).await?;
     let actions = actions_for_message_kind(tenant, message, author, kind, message_store).await?;
     authorize_actions(
-        tenant,
         author,
-        None,
+        invoked_role,
         &actions,
         rule_set,
         &chain,
-        message_store,
         Some(&definition),
-    )
-    .await
+    )?;
+    Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn authorize_actions<MessageStore>(
-    tenant: &str,
+pub(crate) fn authorize_actions(
     author: &str,
     invoked_role: Option<&str>,
     actions: &[Can],
     rule_set: &RuleSet,
     record_chain: &[Message<Descriptor>],
-    message_store: &MessageStore,
     definition: Option<&Definition>,
-) -> Result<(), String>
-where
-    MessageStore: crate::stores::MessageStore + Sync,
-{
+) -> Result<(), String> {
     for action in &rule_set.actions {
         match action {
             Action::Who(action) => {
@@ -1148,6 +1314,10 @@ where
                 }
                 match action.who {
                     Who::Anyone => return Ok(()),
+                    // An invoked role replaces actor selection: only an
+                    // `anyone` rule or an exactly matching `role` rule can
+                    // authorize it, never a `who` selection.
+                    Who::Author | Who::Recipient if invoked_role.is_some() => {}
                     Who::Recipient if action.of.is_none() => {
                         if record_chain
                             .last()
@@ -1175,17 +1345,8 @@ where
                 if !action.can.iter().any(|can| actions.contains(can)) {
                     continue;
                 }
-                if invoked_role == Some(action.role.as_str())
-                    && matching_role_record_exists(
-                        tenant,
-                        author,
-                        &action.role,
-                        record_chain,
-                        message_store,
-                        definition,
-                    )
-                    .await?
-                {
+                // The invoked role was verified before rule iteration.
+                if invoked_role == Some(action.role.as_str()) {
                     return Ok(());
                 }
             }
@@ -1231,106 +1392,22 @@ pub(crate) fn check_actor(
     })
 }
 
-async fn find_matching_role_record<MS>(
-    tenant: &str,
-    author: &str,
-    role: &str,
-    requested_protocol: &str,
-    context_id: Option<&str>,
-    message_store: &MS,
-    definition: &Definition,
-) -> Result<Option<ResolvedProtocolRole>, String>
-where
-    MS: crate::stores::MessageStore + Sync,
-{
-    let (role_proto, role_proto_path) =
-        if let Some(parsed) = protocol_types::parse_cross_protocol_ref(role) {
-            let role_proto = definition
-                .uses
-                .as_ref()
-                .and_then(|uses| uses.get(parsed.alias))
-                .ok_or_else(|| {
-                    "ProtocolAuthorizationNotARole: cross-protocol role alias not found".to_string()
-                })?;
-            (role_proto.as_str(), parsed.protocol_path)
-        } else {
-            (requested_protocol, role)
-        };
-
-    let mut filter = filter_map([
-        ("interface", string_filter(RECORDS_INTERFACE)),
-        ("method", string_filter(WRITE_METHOD)),
-        ("protocol", string_filter(role_proto)),
-        ("protocolPath", string_filter(role_proto_path)),
-        ("recipient", string_filter(author)),
-        ("isLatestBaseState", bool_filter(true)),
-    ]);
-
-    if let Some(context) = context_id {
-        let ancestor_count = role_proto_path.split('/').count().saturating_sub(1);
-        if ancestor_count > 0 {
-            let context_prefix = context
-                .split('/')
-                .take(ancestor_count)
-                .collect::<Vec<_>>()
-                .join("/");
-
-            filter.insert(
-                FilterKey::Index("contextId".to_string()),
-                Filter::Subtree(SubtreeFilter {
-                    subtree: context_prefix,
-                }),
-            );
-        }
-    };
-
-    let result = message_store
-        .query(
-            tenant,
-            Filters::from(filter),
-            None,
-            Some(Pagination::with_limit(1)),
-            None,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
-
-    let Some(role_record) = result.messages.first() else {
-        return Ok(None);
-    };
-
-    let role_record_id =
-        record_id(role_record).ok_or_else(|| "recordId is required".to_string())?;
-
-    Ok(Some(ResolvedProtocolRole {
-        protocol: role_proto.to_string(),
-        protocol_path: role_proto_path.to_string(),
-        context_id_prefix: context_id.map(|s| s.to_string()),
-        role_record_id,
-    }))
-}
-
-/// Whether `recipient` holds `role_path` in `protocol`, within the context
-/// named by `context_id`.
+/// The retained, latest-state role record that gives `recipient` the role
+/// `role_path` in `protocol`, scoped by the context source `context_id`.
 ///
 /// The context dimension follows role depth: a root role has none, and a
 /// nested role is scoped by the ancestor context at its parent's depth. A
 /// nested role with no usable ancestor context is unaddressable, and no record
-/// can satisfy it — that is a negative answer, not an unscoped search that
-/// would match role holders in unrelated contexts.
-///
-/// Callers arrive with the role addressed two different ways — derived from a
-/// record chain during ordinary protocol authorization, or carried as explicit
-/// tags on a control record — so this takes the resolved address and leaves
-/// resolution to them.
-pub(crate) async fn role_record_exists<MessageStore>(
+/// can satisfy it — a negative answer, not an unscoped search that would match
+/// role holders in unrelated contexts.
+pub(crate) async fn query_role_records<MessageStore>(
     tenant: &str,
     recipient: &str,
     protocol: &str,
     role_path: &str,
     context_id: Option<&str>,
     message_store: &MessageStore,
-) -> Result<bool, String>
+) -> Result<Option<Message<Descriptor>>, String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1344,15 +1421,9 @@ where
     ]);
     let ancestor_count = role_path.split('/').count().saturating_sub(1);
     if ancestor_count > 0 {
-        // A nested role is addressed by the ancestor context at its parent's
-        // depth. A context shallower than that does not merely under-specify
-        // the search — it names a different, wider region, and truncating to
-        // whatever segments happen to exist would match role holders in
-        // unrelated sibling contexts. Such a role is unaddressable, which is a
-        // negative answer rather than a broader query.
         let segments: Vec<&str> = context_id.unwrap_or_default().split('/').collect();
         if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
-            return Ok(false);
+            return Ok(None);
         }
         filter.insert(
             FilterKey::Index("contextId".to_string()),
@@ -1361,7 +1432,7 @@ where
             }),
         );
     }
-    let result = message_store
+    message_store
         .query(
             tenant,
             Filters::from(filter),
@@ -1370,47 +1441,33 @@ where
             None,
         )
         .await
-        .map_err(|err| err.to_string())?;
-    Ok(!result.messages.is_empty())
+        .map(|result| result.messages.into_iter().next())
+        .map_err(|err| err.to_string())
 }
 
-pub(crate) async fn matching_role_record_exists<MessageStore>(
+/// Whether `recipient` holds `role_path` in `protocol`, within the context
+/// named by `context_id`. See [`query_role_records`] for the context rules.
+pub(crate) async fn role_record_exists<MessageStore>(
     tenant: &str,
-    author: &str,
-    role: &str,
-    record_chain: &[Message<Descriptor>],
+    recipient: &str,
+    protocol: &str,
+    role_path: &str,
+    context_id: Option<&str>,
     message_store: &MessageStore,
-    definition: Option<&Definition>,
 ) -> Result<bool, String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let mut protocol: String = record_chain
-        .last()
-        .and_then(|message| records_write_descriptor(message).ok())
-        .map(|descriptor| descriptor.protocol.clone())
-        .unwrap_or_default();
-
-    let mut protocol_path = role.to_string();
-    if let Some(parsed) = protocol_types::parse_cross_protocol_ref(role) {
-        protocol = definition
-            .and_then(|definition| definition.uses.as_ref())
-            .and_then(|uses| uses.get(parsed.alias))
-            .cloned()
-            .ok_or_else(|| {
-                "ProtocolAuthorizationNotARole: cross-protocol role alias not found".to_string()
-            })?;
-        protocol_path = parsed.protocol_path.to_string();
-    }
-    role_record_exists(
+    query_role_records(
         tenant,
-        author,
-        &protocol,
-        &protocol_path,
-        record_chain.last().and_then(context_id).as_deref(),
+        recipient,
+        protocol,
+        role_path,
+        context_id,
         message_store,
     )
     .await
+    .map(|record| record.is_some())
 }
 
 pub(crate) async fn actions_for_message_kind<MessageStore>(
@@ -1872,7 +1929,19 @@ mod tests {
             uses,
             key_agreement: None,
             types: BTreeMap::new(),
-            structure: BTreeMap::new(),
+            structure: BTreeMap::from([(
+                "thread".to_string(),
+                RuleSet {
+                    rules: BTreeMap::from([(
+                        "participant".to_string(),
+                        RuleSet {
+                            role: Some(true),
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            )]),
         }
     }
 
@@ -2092,7 +2161,8 @@ mod tests {
         .await;
         assert!(unknown_alias
             .expect_err("unknown alias must fail")
-            .contains("cross-protocol role alias not found"));
+            .to_string()
+            .contains("does not exist in the protocol's uses map"));
 
         let sibling_context = resolve_query_or_subscribe_role(
             ROLE_TEST_TENANT,
@@ -2217,7 +2287,10 @@ mod tests {
 
     fn history_configure_message(timestamp: &str, participant_read: bool) -> Message<Descriptor> {
         let participant = if participant_read {
-            json!({ "$actions": [{"role": "thread/participant", "can": ["read"]}] })
+            json!({
+                "$role": true,
+                "$actions": [{"role": "thread/participant", "can": ["read"]}]
+            })
         } else {
             json!({})
         };

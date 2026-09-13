@@ -19,6 +19,7 @@ use crate::handlers::records::common::{
     delete_from_data_store_if_needed, encoded_data_bytes, filter_map, find_initial_write,
     message_cid, newest_message, records_write_indexes, store_error_reply, string_filter,
     validate_records_write_integrity, verify_immutable_properties, GoverningTimestampError,
+    ProtocolAuthorizationError,
 };
 use crate::handlers::records::control;
 use crate::permissions::{self, AuthorizationContext};
@@ -183,11 +184,11 @@ where
                 };
             }
 
-            if let Err(detail) = self
+            if let Err(error) = self
                 .authorize_records_write(tenant, &message, &signature)
                 .await
             {
-                return Response::unauthorized(detail);
+                return Response::new(error.into_status(), Write::default());
             }
 
             if let Err(error) = self
@@ -460,14 +461,14 @@ where
         tenant: &str,
         message: &Message<Descriptor>,
         auth: &AuthorizationContext,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProtocolAuthorizationError> {
         // Control writes carry their own authority question — may this actor
         // mint this role's key material — so they do not fall through to the
         // ordinary grant and protocol-action ladder.
         if let Some(kind) = ControlKind::of(message) {
             return control::authorize_write(tenant, message, kind, auth, &self.message_store)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(|error| error.to_string().into());
         }
         if permissions::authorize_delegated_records_write(message, auth, &self.message_store)
             .await
@@ -489,22 +490,17 @@ where
         {
             return Ok(());
         }
-        self.authorize_against_protocol(
-            tenant,
-            message,
-            &auth.author,
-            RecordsAuthorizationKind::Write,
-        )
-        .await
+        self.authorize_against_protocol(tenant, message, auth, RecordsAuthorizationKind::Write)
+            .await
     }
 
     async fn authorize_against_protocol(
         &self,
         tenant: &str,
         message: &Message<Descriptor>,
-        author: &str,
+        auth: &AuthorizationContext,
         kind: RecordsAuthorizationKind,
-    ) -> Result<(), String> {
-        authorize_against_protocol(tenant, message, author, kind, &self.message_store).await
+    ) -> Result<(), ProtocolAuthorizationError> {
+        authorize_against_protocol(tenant, message, auth, kind, None, &self.message_store).await
     }
 }
