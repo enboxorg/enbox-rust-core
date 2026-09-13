@@ -21,8 +21,8 @@ use crate::handlers::records::common::{
 };
 use crate::handlers::records::control::repair::{control_config_validity, ControlConfigValidity};
 use crate::handlers::records::delete::{perform_records_delete, RecordsDeleteExecution};
+use crate::handlers::records::squash::perform_records_squash;
 use crate::handlers::records::state::{plan_records_transition, RecordsTransitionPlan};
-use crate::handlers::records::write::perform_records_squash;
 use crate::handlers::records::{RECORDS_INTERFACE, WRITE_METHOD};
 use crate::permissions::message_author;
 use crate::{Descriptor, Message};
