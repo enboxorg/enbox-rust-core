@@ -234,16 +234,18 @@ impl GrantKeyError {
         }
     }
 
-    /// Reply classified by variant: writer-authorization failures are 401,
-    /// every other identified failure is 400, unmapped transport failures
-    /// are 500.
+    /// Reply classified by variant: the writer addressing anyone but the
+    /// grantor is a writer-authorization failure (401); every other
+    /// identified failure, including a mis-addressed recipient the writer
+    /// could not fix by re-authenticating, is referential (400). Unmapped
+    /// transport failures are 500.
     pub fn reply<R: Default>(&self) -> Response<R> {
         let Some(code) = self.code() else {
             return Response::internal_error(self.to_string());
         };
         let error = DwnError::new(code, self.detail());
         match self {
-            Self::AuthorMismatch(_) | Self::RecipientMismatch(_) => Response {
+            Self::AuthorMismatch(_) => Response {
                 status: Status::from_error(401, error),
                 reply: R::default(),
             },

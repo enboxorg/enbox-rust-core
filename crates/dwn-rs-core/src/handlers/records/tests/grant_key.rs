@@ -547,7 +547,7 @@ async fn rejects_wrong_author_and_recipient() {
         Some(grant_key_envelope()),
     )
     .await;
-    // Writer-authorization failures are 401, classified by variant.
+    // Writer-authorization failure: the signer is not the grantor.
     assert_code(
         &reply,
         401,
@@ -565,9 +565,11 @@ async fn rejects_wrong_author_and_recipient() {
         Some(grant_key_envelope()),
     )
     .await;
+    // Referential failure: re-authenticating cannot fix a mis-addressed
+    // recipient, so this is 400 where the author check above is 401.
     assert_code(
         &reply,
-        401,
+        400,
         "EncryptionProtocolValidateGrantKeyRecipientMismatch",
     );
 }
