@@ -1709,12 +1709,31 @@ where
 /// retained initial write still proves the parent, unless a tombstone has
 /// displaced it: a deleted record keeps its delete in the latest base state,
 /// which the initial-write lookup must not resurrect.
+/// The outcome of resolving a parent Record for a parent-bearing write.
+pub(crate) enum ParentRecordLookup {
+    /// A retained, not-deleted parent.
+    Found(Box<Message<Descriptor>>),
+    /// No retained write for the recordId in the expected protocol yet; the
+    /// dependency may still arrive and the write is repairable.
+    Missing,
+    /// The recordId was tombstoned. A delete is terminal, so the parent can
+    /// never return and the write is permanently invalid, not repairable.
+    Deleted,
+}
+
+/// The retained, not-deleted Record that is the current parent for `record_id`
+/// in `protocol`.
+///
+/// The current latest-base-state write is preferred. When none exists the
+/// retained initial write still proves the parent, unless a tombstone has
+/// displaced it. A missing parent and a tombstoned parent are distinct: only
+/// the former can be repaired by a later arrival.
 pub(crate) async fn fetch_parent_record<MessageStore>(
     tenant: &str,
     record_id: &str,
     protocol: &str,
     message_store: &MessageStore,
-) -> Result<Option<Message<Descriptor>>, String>
+) -> Result<ParentRecordLookup, String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1736,8 +1755,8 @@ where
         .await
         .map(|result| result.messages.into_iter().next())
         .map_err(|err| err.to_string())?;
-    if latest.is_some() {
-        return Ok(latest);
+    if let Some(latest) = latest {
+        return Ok(ParentRecordLookup::Found(Box::new(latest)));
     }
 
     let initial_filter = filter_map([
@@ -1758,7 +1777,7 @@ where
         .map(|result| result.messages.into_iter().next())
         .map_err(|err| err.to_string())?;
     let Some(initial) = initial else {
-        return Ok(None);
+        return Ok(ParentRecordLookup::Missing);
     };
 
     let tombstone_filter = filter_map([
@@ -1778,7 +1797,11 @@ where
         .map(|result| !result.messages.is_empty())
         .map_err(|err| err.to_string())?;
 
-    Ok(if tombstoned { None } else { Some(initial) })
+    Ok(if tombstoned {
+        ParentRecordLookup::Deleted
+    } else {
+        ParentRecordLookup::Found(Box::new(initial))
+    })
 }
 
 pub(crate) async fn fetch_initial_write_message<MessageStore>(
