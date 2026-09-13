@@ -203,6 +203,19 @@ where
                 return Response::unauthorized(detail);
             }
 
+            if let Err(error) = self
+                .core_protocol_registry
+                .pre_process_write(tenant, &message, &self.message_store)
+                .await
+            {
+                return match error {
+                    CoreProtocolError::GrantKey(error) => error.reply(),
+                    CoreProtocolError::Detail(detail) => {
+                        core_protocol_error_reply(&self.core_protocol_registry, detail)
+                    }
+                };
+            }
+
             let incoming_is_initial = match is_initial_write(&message, &signature.author) {
                 Ok(is_initial) => is_initial,
                 Err(detail) => return Response::bad_request(detail),
@@ -318,18 +331,6 @@ where
             }
 
             if let Err(error) = self.core_protocol_registry.validate_record(&message, None) {
-                return match error {
-                    CoreProtocolError::GrantKey(error) => error.reply(),
-                    CoreProtocolError::Detail(detail) => {
-                        core_protocol_error_reply(&self.core_protocol_registry, detail)
-                    }
-                };
-            }
-            if let Err(error) = self
-                .core_protocol_registry
-                .pre_process_write(tenant, &message, &self.message_store)
-                .await
-            {
                 return match error {
                     CoreProtocolError::GrantKey(error) => error.reply(),
                     CoreProtocolError::Detail(detail) => {
