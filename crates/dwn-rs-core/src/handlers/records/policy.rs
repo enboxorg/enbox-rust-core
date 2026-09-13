@@ -9,6 +9,7 @@
 use crate::descriptors::records::records_write_descriptor;
 use crate::descriptors::{Descriptor, RecordsWriteDescriptor};
 use crate::dwn::core_protocol::CoreProtocolRegistry;
+use crate::errors::{DwnError, DwnErrorCode};
 use crate::handlers::protocols::configure::fetch_protocol_definition;
 use crate::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use crate::Message;
@@ -73,9 +74,12 @@ impl EffectivePolicy {
         // Covers: DWN-PROTO-001, DWN-PROTO-004, DWN-PROTO-005, DWN-ENC-001
         // Protocol-declared encryption representation is enforced at admission
         // against the definition governing the record timestamp. A record at
-        // a `$ref` position follows the referenced protocol's type and key
-        // namespace at the referenced target path; locally declared
-        // descendants follow the composing type map.
+        // a `$ref` position resolves its type from the referenced protocol's
+        // `types`, keyed by the local structure key; locally declared
+        // descendants follow the composing type map. The key agreement is
+        // always the composing rule set at the declared path: a `$ref` node
+        // carries no `$keyAgreement`, so an encrypted record written at the
+        // attachment point has no reachable key namespace.
         let referenced = referenced_definition_for_ref_path(
             tenant,
             descriptor,
@@ -86,15 +90,7 @@ impl EffectivePolicy {
         .await?;
         let ref_position = definition.ref_position(descriptor.protocol_path.as_str());
         let (types, type_name) = match (&referenced, &ref_position) {
-            (Some(referenced), Some(position)) => (
-                &referenced.types,
-                position
-                    .protocol_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
+            (Some(referenced), Some(_)) => (&referenced.types, descriptor.protocol_path.clone()),
             _ => (
                 &definition.types,
                 descriptor
@@ -105,16 +101,20 @@ impl EffectivePolicy {
                     .to_string(),
             ),
         };
-        let key_agreement = match (&referenced, &ref_position) {
-            (Some(referenced), Some(position)) => referenced
-                .rule_at(position.protocol_path)
-                .and_then(|rule_set| rule_set.key_agreement.clone()),
-            _ => rule_set.key_agreement.clone(),
-        };
-        let encryption_required = types
-            .get(&type_name)
-            .and_then(|protocol_type| protocol_type.encryption_required)
-            == Some(true);
+        let protocol_type = types.get(&type_name);
+        if referenced.is_some() && protocol_type.is_none() {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationInvalidType,
+                format!(
+                    "type '{type_name}' is not defined in the referenced protocol for '$ref' path '{}'",
+                    descriptor.protocol_path
+                ),
+            )
+            .into());
+        }
+        let key_agreement = rule_set.key_agreement.clone();
+        let encryption_required =
+            protocol_type.and_then(|protocol_type| protocol_type.encryption_required) == Some(true);
 
         Ok(Self {
             definition,

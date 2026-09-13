@@ -2077,14 +2077,24 @@ async fn protocols_configure_rejects_composed_policy_flip() {
         published: true,
         uses: None,
         key_agreement: None,
-        types: BTreeMap::from([(
-            "post".to_string(),
-            Type {
-                schema: None,
-                data_formats: None,
-                encryption_required: None,
-            },
-        )]),
+        types: BTreeMap::from([
+            (
+                "post".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            ),
+            (
+                "article".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            ),
+        ]),
         structure: BTreeMap::from([(
             "post".to_string(),
             RuleSet {
@@ -2134,14 +2144,24 @@ async fn protocols_configure_rejects_composed_policy_flip() {
 
     let mut blog_v2 = flip_keyed(true, flip_x);
     blog_v2.protocol = BLOG.to_string();
-    blog_v2.types = BTreeMap::from([(
-        "post".to_string(),
-        Type {
-            schema: None,
-            data_formats: None,
-            encryption_required: Some(true),
-        },
-    )]);
+    blog_v2.types = BTreeMap::from([
+        (
+            "post".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: Some(true),
+            },
+        ),
+        (
+            "article".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: Some(true),
+            },
+        ),
+    ]);
     blog_v2.structure = BTreeMap::from([(
         "post".to_string(),
         RuleSet {

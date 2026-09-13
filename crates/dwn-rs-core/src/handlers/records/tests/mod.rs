@@ -3869,7 +3869,7 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
 
 // Covers: DWN-PROTO-001, DWN-PROTO-005
 #[tokio::test]
-async fn records_write_ref_roots_use_referenced_key_namespace() {
+async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_key() {
     let (message_store, data_store) = open_stores().await;
     put_protocol_definition(
         "did:example:alice",
@@ -3887,20 +3887,34 @@ async fn records_write_ref_roots_use_referenced_key_namespace() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    for path in ["post", "article"] {
-        let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-        let write =
-            enc_protocol_write(COMPOSED_PROTOCOL, path, ENC_WRITE_TIME, Some(envelope)).await;
-        let reply = handler.run("did:example:alice", &write, write_data()).await;
-        assert_eq!(reply.status.code, 202, "{} at {path}", reply.status.detail);
-    }
-
-    let write = enc_protocol_write(COMPOSED_PROTOCOL, "article", ENC_WRITE_TIME, None).await;
+    // The referenced `post` type requires encryption, but a `$ref` node carries
+    // no `$keyAgreement`, so a plaintext write is rejected and an encrypted one
+    // has no key namespace to protect it.
+    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, None).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
         Some("ProtocolAuthorizationEncryptionRequired")
+    );
+
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, Some(envelope)).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionKeyAgreementMissing")
+    );
+
+    // The `$ref` position type is looked up by the local structure key, so a
+    // renamed key with no matching referenced type is invalid.
+    let write = enc_protocol_write(COMPOSED_PROTOCOL, "article", ENC_WRITE_TIME, None).await;
+    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationInvalidType")
     );
 }
 
