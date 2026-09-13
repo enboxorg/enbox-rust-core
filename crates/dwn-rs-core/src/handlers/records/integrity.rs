@@ -15,7 +15,7 @@ use crate::encryption::{
     KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
 use crate::errors::{DwnError, DwnErrorCode};
-use crate::handlers::records::common::{context_id, fetch_newest_write};
+use crate::handlers::records::common::{context_id, fetch_parent_record, message_record_id};
 use crate::Message;
 
 use super::policy::EffectivePolicy;
@@ -154,24 +154,83 @@ where
     }
 
     if let Some(parent_id) = &descriptor.parent_id {
-        let parent = fetch_newest_write(tenant, parent_id, message_store).await?;
+        let parent_protocol = policy
+            .definition
+            .parent_protocol(descriptor.protocol_path.as_str());
+        let parent = fetch_parent_record(tenant, parent_id, &parent_protocol, message_store)
+            .await?
+            .ok_or_else(|| {
+                let code = if parent_protocol != descriptor.protocol {
+                    DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound
+                } else {
+                    DwnErrorCode::ProtocolAuthorizationParentRecordNotFound
+                };
+                DwnError::new(
+                    code,
+                    format!(
+                        "could not find parent record '{parent_id}' in protocol '{parent_protocol}'"
+                    ),
+                )
+            })?;
+        let parent_descriptor =
+            records_write_descriptor(&parent).map_err(|error| error.to_string())?;
+        let type_name = descriptor
+            .protocol_path
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        let expected_path = format!("{}/{type_name}", parent_descriptor.protocol_path);
+        if expected_path != descriptor.protocol_path {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationIncorrectProtocolPath,
+                format!(
+                    "declared protocol path '{}' does not extend parent path '{}'",
+                    descriptor.protocol_path, parent_descriptor.protocol_path
+                ),
+            )
+            .into());
+        }
         let parent_context = context_id(&parent).ok_or_else(|| {
-            "ProtocolAuthorizationParentContextMissing: parent contextId is required".to_string()
+            DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                "parent contextId is required",
+            )
         })?;
+        let record_id = message_record_id(message).ok_or_else(|| {
+            DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                "recordId is required",
+            )
+        })?;
+        let expected_context = format!("{parent_context}/{record_id}");
         let context_id = write_fields(message)
             .map_err(|error| error.to_string())?
             .context_id
             .clone()
             .ok_or_else(|| {
-                "ProtocolAuthorizationContextMissing: contextId is required".to_string()
+                DwnError::new(
+                    DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                    "contextId is required",
+                )
             })?;
-        if !context_id.starts_with(&format!("{parent_context}/")) {
-            return Err(
-                "ProtocolAuthorizationContextMismatch: contextId must be under parent context"
-                    .to_string()
-                    .into(),
-            );
+        if context_id != expected_context {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                format!(
+                    "declared contextId '{context_id}' is not the expected '{expected_context}'"
+                ),
+            )
+            .into());
         }
+    } else if descriptor.protocol_path.contains('/') {
+        return Err(DwnError::new(
+            DwnErrorCode::ProtocolAuthorizationParentlessIncorrectProtocolPath,
+            format!(
+                "declared protocol path '{}' is not valid for records with no parent",
+                descriptor.protocol_path
+            ),
+        )
+        .into());
     }
 
     Ok(())

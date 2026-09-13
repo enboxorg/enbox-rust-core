@@ -59,6 +59,7 @@ use super::subscribe::{
 use super::*;
 use crate::handlers::configure::ProtocolsConfigureHandler;
 
+mod composition;
 mod control;
 mod grant_invocation;
 mod grant_invocation_temporal;
@@ -1263,7 +1264,7 @@ async fn records_delete_prune_purges_descendant_records() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_limited_threads_protocol("did:example:alice", &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -1278,6 +1279,8 @@ async fn records_delete_prune_purges_descendant_records() {
     let data = Bytes::from_static(b"parent");
     let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
     let parent = signed_write_message(WriteSpec {
+        protocol: "http://example.com/limited".to_string(),
+        protocol_path: "thread".to_string(),
         data_cid,
         data_size: data.len() as u64,
         published: Some(true),
@@ -1298,6 +1301,8 @@ async fn records_delete_prune_purges_descendant_records() {
     let child_data = Bytes::from_static(b"child");
     let child_data_cid = generate_dag_pb_cid_from_bytes(&child_data).to_string();
     let child = signed_write_message(WriteSpec {
+        protocol: "http://example.com/limited".to_string(),
+        protocol_path: "thread/message".to_string(),
         parent_id: Some(parent_record_id.clone()),
         parent_context_id: Some(parent_context_id),
         data_cid: child_data_cid,
@@ -3919,15 +3924,38 @@ async fn records_write_local_child_below_ref_uses_composing_key_namespace() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-    let write = enc_protocol_write(
-        COMPOSED_PROTOCOL,
-        "post/comment",
-        ENC_WRITE_TIME,
-        Some(envelope),
-    )
+    let post_data = Bytes::from_static(b"post");
+    let post = signed_write_message(WriteSpec {
+        protocol: REF_BLOG_PROTOCOL.to_string(),
+        protocol_path: "post".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&post_data).to_string(),
+        data_size: post_data.len() as u64,
+        ..WriteSpec::new("2024-12-02T00:00:00.000000Z")
+    })
     .await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
+    let post_reply = handler
+        .run("did:example:alice", &post, Some(post_data))
+        .await;
+    assert_eq!(post_reply.status.code, 202, "{}", post_reply.status.detail);
+    let post_record_id = post["recordId"].as_str().unwrap().to_string();
+    let post_context_id = post["contextId"].as_str().unwrap().to_string();
+
+    let comment_data = Bytes::from_static(SECRET_DATA);
+    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let write = signed_write_message(WriteSpec {
+        protocol: COMPOSED_PROTOCOL.to_string(),
+        protocol_path: "post/comment".to_string(),
+        parent_id: Some(post_record_id),
+        parent_context_id: Some(post_context_id),
+        data_cid: generate_dag_pb_cid_from_bytes(&comment_data).to_string(),
+        data_size: comment_data.len() as u64,
+        encryption: Some(envelope),
+        ..WriteSpec::new(ENC_WRITE_TIME)
+    })
+    .await;
+    let reply = handler
+        .run("did:example:alice", &write, Some(comment_data))
+        .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 

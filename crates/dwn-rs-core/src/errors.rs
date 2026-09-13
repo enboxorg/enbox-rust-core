@@ -15,6 +15,9 @@ pub enum DwnErrorCode {
     ProtocolsConfigureReservedEncryptionControlPath,
     ProtocolAuthorizationParentRecordNotFound,
     ProtocolAuthorizationCrossProtocolParentNotFound,
+    ProtocolAuthorizationParentlessIncorrectProtocolPath,
+    ProtocolAuthorizationIncorrectProtocolPath,
+    ProtocolAuthorizationIncorrectContextId,
     ProtocolAuthorizationParentNotFoundConstructingRecordChain,
     RecordsWriteGetInitialWriteNotFound,
     GrantAuthorizationGrantMissing,
@@ -87,6 +90,15 @@ impl DwnErrorCode {
             }
             Self::ProtocolAuthorizationCrossProtocolParentNotFound => {
                 "ProtocolAuthorizationCrossProtocolParentNotFound"
+            }
+            Self::ProtocolAuthorizationParentlessIncorrectProtocolPath => {
+                "ProtocolAuthorizationParentlessIncorrectProtocolPath"
+            }
+            Self::ProtocolAuthorizationIncorrectProtocolPath => {
+                "ProtocolAuthorizationIncorrectProtocolPath"
+            }
+            Self::ProtocolAuthorizationIncorrectContextId => {
+                "ProtocolAuthorizationIncorrectContextId"
             }
             Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain => {
                 "ProtocolAuthorizationParentNotFoundConstructingRecordChain"
@@ -279,6 +291,15 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "ProtocolAuthorizationCrossProtocolParentNotFound" => {
                 Ok(Self::ProtocolAuthorizationCrossProtocolParentNotFound)
+            }
+            "ProtocolAuthorizationParentlessIncorrectProtocolPath" => {
+                Ok(Self::ProtocolAuthorizationParentlessIncorrectProtocolPath)
+            }
+            "ProtocolAuthorizationIncorrectProtocolPath" => {
+                Ok(Self::ProtocolAuthorizationIncorrectProtocolPath)
+            }
+            "ProtocolAuthorizationIncorrectContextId" => {
+                Ok(Self::ProtocolAuthorizationIncorrectContextId)
             }
             "ProtocolAuthorizationParentNotFoundConstructingRecordChain" => {
                 Ok(Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain)
