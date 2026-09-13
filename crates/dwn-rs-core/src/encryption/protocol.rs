@@ -153,7 +153,7 @@ pub enum GrantKeyError {
     #[error("{0}")]
     EncryptionNotAllowed(String),
     #[error("{0}")]
-    MissingTag(String),
+    InvalidTags(String),
     #[error("{0}")]
     AuthorMismatch(String),
     #[error("{0}")]
@@ -190,9 +190,7 @@ impl GrantKeyError {
             Self::EncryptionNotAllowed(_) => {
                 Some(DwnErrorCode::ProtocolAuthorizationEncryptionNotAllowed)
             }
-            Self::MissingTag(_) => {
-                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyMissingRequiredTag)
-            }
+            Self::InvalidTags(_) => Some(DwnErrorCode::ProtocolAuthorizationTagsInvalidSchema),
             Self::AuthorMismatch(_) => {
                 Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyAuthorMismatch)
             }
@@ -221,7 +219,7 @@ impl GrantKeyError {
         match self {
             Self::MissingEncryption(detail)
             | Self::EncryptionNotAllowed(detail)
-            | Self::MissingTag(detail)
+            | Self::InvalidTags(detail)
             | Self::AuthorMismatch(detail)
             | Self::RecipientMismatch(detail)
             | Self::ScopeMismatch(detail)
@@ -317,6 +315,18 @@ where
     }
 
     let tags = descriptor.tags.as_ref();
+    if let Some(tags) = tags {
+        if let Some(name) = tags.keys().find(|name| {
+            !matches!(
+                name.as_str(),
+                "grantId" | "protocol" | "protocolPath" | "keyId"
+            )
+        }) {
+            return Err(GrantKeyError::InvalidTags(format!(
+                "grantKey records must not carry undefined tag '{name}'."
+            )));
+        }
+    }
     let grant_id = required_tag(tags, "grantId")?;
     let protocol = required_tag(tags, "protocol")?;
     let protocol_path = optional_tag(tags, "protocolPath")?;
@@ -326,7 +336,7 @@ where
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
     {
-        return Err(GrantKeyError::MissingTag(format!(
+        return Err(GrantKeyError::InvalidTags(format!(
             "grantKey tag 'keyId' must match ^[A-Za-z0-9_-]{{43}}$, got '{key_id}'."
         )));
     }
@@ -412,8 +422,8 @@ fn required_tag(tags: Option<&MapValue>, name: &str) -> Result<String, GrantKeyE
     tags.and_then(|tags| tags.get(name))
         .and_then(tag_str)
         .ok_or_else(|| {
-            GrantKeyError::MissingTag(format!(
-                "grantKey records must include string tag '{name}'."
+            GrantKeyError::InvalidTags(format!(
+                "grantKey tag '{name}' must be a defined string tag."
             ))
         })
 }
@@ -422,7 +432,9 @@ fn optional_tag(tags: Option<&MapValue>, name: &str) -> Result<Option<String>, G
     match tags.and_then(|tags| tags.get(name)) {
         None => Ok(None),
         Some(value) => tag_str(value).map(Some).ok_or_else(|| {
-            GrantKeyError::MissingTag(format!("grantKey tag '{name}' must be a string."))
+            GrantKeyError::InvalidTags(format!(
+                "grantKey tag '{name}' must be a defined string tag."
+            ))
         }),
     }
 }

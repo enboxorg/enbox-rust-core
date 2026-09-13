@@ -23,6 +23,7 @@ pub enum DwnErrorCode {
     GrantAuthorizationGrantRevoked,
     ProtocolAuthorizationMatchingRoleRecordNotFound,
     ProtocolAuthorizationEncryptionRequired,
+    ProtocolAuthorizationTagsInvalidSchema,
     ProtocolAuthorizationEncryptionNotAllowed,
     ProtocolAuthorizationEncryptionKeyAgreementMissing,
     ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
@@ -43,7 +44,6 @@ pub enum DwnErrorCode {
     EncryptionControlValidateUnexpectedRecord,
     EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
     EncryptionProtocolValidateEncryptedDeliveryMissingEncryption,
-    EncryptionProtocolValidateGrantKeyMissingRequiredTag,
     EncryptionProtocolValidateGrantKeyAuthorMismatch,
     EncryptionProtocolValidateGrantKeyRecipientMismatch,
     EncryptionProtocolValidateGrantKeyGrantScopeMismatch,
@@ -99,6 +99,9 @@ impl DwnErrorCode {
             }
             Self::ProtocolAuthorizationEncryptionRequired => {
                 "ProtocolAuthorizationEncryptionRequired"
+            }
+            Self::ProtocolAuthorizationTagsInvalidSchema => {
+                "ProtocolAuthorizationTagsInvalidSchema"
             }
             Self::ProtocolAuthorizationEncryptionNotAllowed => {
                 "ProtocolAuthorizationEncryptionNotAllowed"
@@ -157,9 +160,6 @@ impl DwnErrorCode {
             }
             Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption => {
                 "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption"
-            }
-            Self::EncryptionProtocolValidateGrantKeyMissingRequiredTag => {
-                "EncryptionProtocolValidateGrantKeyMissingRequiredTag"
             }
             Self::EncryptionProtocolValidateGrantKeyAuthorMismatch => {
                 "EncryptionProtocolValidateGrantKeyAuthorMismatch"
@@ -290,6 +290,9 @@ impl TryFrom<&str> for DwnErrorCode {
             "ProtocolAuthorizationEncryptionRequired" => {
                 Ok(Self::ProtocolAuthorizationEncryptionRequired)
             }
+            "ProtocolAuthorizationTagsInvalidSchema" => {
+                Ok(Self::ProtocolAuthorizationTagsInvalidSchema)
+            }
             "ProtocolAuthorizationEncryptionNotAllowed" => {
                 Ok(Self::ProtocolAuthorizationEncryptionNotAllowed)
             }
@@ -347,9 +350,6 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption" => {
                 Ok(Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption)
-            }
-            "EncryptionProtocolValidateGrantKeyMissingRequiredTag" => {
-                Ok(Self::EncryptionProtocolValidateGrantKeyMissingRequiredTag)
             }
             "EncryptionProtocolValidateGrantKeyAuthorMismatch" => {
                 Ok(Self::EncryptionProtocolValidateGrantKeyAuthorMismatch)

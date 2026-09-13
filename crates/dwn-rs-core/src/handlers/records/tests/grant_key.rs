@@ -402,7 +402,7 @@ async fn rejects_malformed_tags() {
         assert_eq!(reply.status.code, 400, "{why}: {}", reply.status.detail);
         assert_eq!(
             reply.status.error_code.as_deref(),
-            Some("EncryptionProtocolValidateGrantKeyMissingRequiredTag"),
+            Some("ProtocolAuthorizationTagsInvalidSchema"),
             "{why}"
         );
     }
@@ -817,11 +817,7 @@ async fn representation_precedes_grant_lookup() {
         Some(grant_key_envelope()),
     )
     .await;
-    assert_code(
-        &reply,
-        400,
-        "EncryptionProtocolValidateGrantKeyMissingRequiredTag",
-    );
+    assert_code(&reply, 400, "ProtocolAuthorizationTagsInvalidSchema");
 }
 
 // Covers: DWN-REC-003
