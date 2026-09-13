@@ -1709,31 +1709,12 @@ where
 /// retained initial write still proves the parent, unless a tombstone has
 /// displaced it: a deleted record keeps its delete in the latest base state,
 /// which the initial-write lookup must not resurrect.
-/// The outcome of resolving a parent Record for a parent-bearing write.
-pub(crate) enum ParentRecordLookup {
-    /// A retained, not-deleted parent.
-    Found(Box<Message<Descriptor>>),
-    /// No retained write for the recordId in the expected protocol yet; the
-    /// dependency may still arrive and the write is repairable.
-    Missing,
-    /// The recordId was tombstoned. A delete is terminal, so the parent can
-    /// never return and the write is permanently invalid, not repairable.
-    Deleted,
-}
-
-/// The retained, not-deleted Record that is the current parent for `record_id`
-/// in `protocol`.
-///
-/// The current latest-base-state write is preferred. When none exists the
-/// retained initial write still proves the parent, unless a tombstone has
-/// displaced it. A missing parent and a tombstoned parent are distinct: only
-/// the former can be repaired by a later arrival.
 pub(crate) async fn fetch_parent_record<MessageStore>(
     tenant: &str,
     record_id: &str,
     protocol: &str,
     message_store: &MessageStore,
-) -> Result<ParentRecordLookup, String>
+) -> Result<Option<Message<Descriptor>>, String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1755,8 +1736,8 @@ where
         .await
         .map(|result| result.messages.into_iter().next())
         .map_err(|err| err.to_string())?;
-    if let Some(latest) = latest {
-        return Ok(ParentRecordLookup::Found(Box::new(latest)));
+    if latest.is_some() {
+        return Ok(latest);
     }
 
     let initial_filter = filter_map([
@@ -1777,15 +1758,33 @@ where
         .map(|result| result.messages.into_iter().next())
         .map_err(|err| err.to_string())?;
     let Some(initial) = initial else {
-        return Ok(ParentRecordLookup::Missing);
+        return Ok(None);
     };
 
+    if record_has_tombstone(tenant, record_id, message_store).await? {
+        return Ok(None);
+    }
+    Ok(Some(initial))
+}
+
+/// Whether any `RecordsDelete` tombstone exists for `record_id`. A delete is
+/// terminal, so a parent missing because of a tombstone can never be repaired.
+/// Callers use this to classify a missing parent as terminal without putting
+/// the distinction on the client-facing reply.
+pub(crate) async fn record_has_tombstone<MessageStore>(
+    tenant: &str,
+    record_id: &str,
+    message_store: &MessageStore,
+) -> Result<bool, String>
+where
+    MessageStore: crate::stores::MessageStore + Sync,
+{
     let tombstone_filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
         ("method", string_filter(crate::descriptors::DELETE)),
         ("recordId", string_filter(record_id)),
     ]);
-    let tombstoned = message_store
+    message_store
         .query(
             tenant,
             Filters::from(tombstone_filter),
@@ -1795,13 +1794,7 @@ where
         )
         .await
         .map(|result| !result.messages.is_empty())
-        .map_err(|err| err.to_string())?;
-
-    Ok(if tombstoned {
-        ParentRecordLookup::Deleted
-    } else {
-        ParentRecordLookup::Found(Box::new(initial))
-    })
+        .map_err(|err| err.to_string())
 }
 
 pub(crate) async fn fetch_initial_write_message<MessageStore>(

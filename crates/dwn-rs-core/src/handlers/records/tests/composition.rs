@@ -693,7 +693,7 @@ async fn retained_initial_write_proves_a_dataless_parent() {
 
 // Covers: DWN-PROTO-001, DWN-SYNC-003
 #[tokio::test]
-async fn deleted_parent_is_permanently_invalid() {
+async fn deleted_parent_classifies_terminal_only_from_local_tombstone() {
     let fixture = composition_fixture().await;
     let (thread_id, thread_ctx) = seed_thread(&fixture, TS_THREAD).await;
 
@@ -714,14 +714,19 @@ async fn deleted_parent_is_permanently_invalid() {
         .run(TENANT, &comment, Some(data))
         .await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    // The client-facing reply is the same generic missing-parent code whether the
+    // parent is absent or tombstoned.
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationParentRecordDeleted")
+        Some("ProtocolAuthorizationCrossProtocolParentNotFound")
     );
-    // A tombstone is terminal, so the write is permanently invalid, not a
-    // repairable missing dependency.
+    // Only the receiver, which can see its local tombstone, classifies it terminal.
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&comment), false),
+        ReplicationApplyOutcome::Incomplete
+    );
+    assert_eq!(
+        classify_apply_reply_with_parent_state(&reply.status, &parsed(&comment), false, true),
         ReplicationApplyOutcome::Invalid
     );
 }
