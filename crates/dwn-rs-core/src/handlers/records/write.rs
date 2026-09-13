@@ -1,53 +1,35 @@
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use bytes::Bytes;
-use futures_util::stream;
-
 use crate::auth::resolver::DidResolver;
-use crate::cid::generate_dag_pb_cid_from_bytes;
 use crate::descriptors::records::is_initial_write;
 use crate::descriptors::{
-    messages::record_id,
-    records::{records_write_descriptor, write_fields},
-    Descriptor, Records, RecordsWriteDescriptor,
+    messages::record_id, records::records_write_descriptor, Descriptor, Records,
+    RecordsWriteDescriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolStores;
 use crate::dwn::core_protocol::{CoreProtocolError, CoreProtocolRegistry};
 use crate::dwn::{Handler, HandlerContext};
 use crate::encryption::control::ControlKind;
-use crate::encryption::protocol::validate_encryption_delivery;
-use crate::encryption::{
-    KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
-};
 use crate::errors::{DwnError, DwnErrorCode};
-use crate::filters::{Filter, FilterKey, Filters};
-use crate::handlers::protocols::configure::{
-    fetch_protocol_definition, ProtocolDefinitionLookupError,
-};
+use crate::filters::Filters;
+use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
 use crate::handlers::records::common::{
-    authorize_against_protocol, bool_filter, compare_messages, context_id,
-    core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
-    fetch_newest_write, filter_map, find_initial_write, message_cid, message_record_id,
-    newest_message, parent_context_id, purge_record_messages, records_write_indexes,
-    set_encoded_data, store_error_reply, string_filter, validate_data_integrity,
+    authorize_against_protocol, compare_messages, core_protocol_error_reply,
+    delete_from_data_store_if_needed, encoded_data_bytes, filter_map, find_initial_write,
+    message_cid, newest_message, records_write_indexes, store_error_reply, string_filter,
     validate_records_write_integrity, verify_immutable_properties, GoverningTimestampError,
 };
 use crate::handlers::records::control;
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Write;
 use crate::replies::Status;
-use crate::stores::{KeyValues, LatestStateMutation, LatestStateTransition};
+use crate::Message;
 use crate::Response;
-use crate::SubtreeFilter;
-use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection};
 
-use super::policy::EffectivePolicy;
 use super::state::{plan_records_transition, RecordsTransitionPlan};
-use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
+use super::{data, integrity, squash};
+use super::{RecordsAuthorizationKind, RECORDS_INTERFACE};
 
 #[derive(Clone)]
 pub struct RecordsWriteHandler<MessageStore, DataStore> {
@@ -183,9 +165,14 @@ where
                 return Response::bad_request(detail);
             }
 
-            if let Err(error) = self
-                .validate_referential_integrity(tenant, &message, &signature.author)
-                .await
+            if let Err(error) = integrity::validate_referential_integrity(
+                tenant,
+                &message,
+                &signature.author,
+                &self.core_protocol_registry,
+                &self.message_store,
+            )
+            .await
             {
                 return match error {
                     RecordsWriteValidationError::Dwn(error) => Response::bad_request_error(error),
@@ -234,7 +221,9 @@ where
                 }
             }
 
-            if let Err(error) = self.enforce_squash_backstop(tenant, &message).await {
+            if let Err(error) =
+                squash::enforce_squash_backstop(tenant, &message, &self.message_store).await
+            {
                 return match error {
                     RecordsWriteValidationError::Dwn(error) => Response::conflict_error(error),
                     RecordsWriteValidationError::Detail(detail) => {
@@ -280,9 +269,14 @@ where
             }
 
             if let Some(data) = supplied_data {
-                if let Err(error) = self
-                    .process_message_with_data_stream(tenant, &mut message, data)
-                    .await
+                if let Err(error) = data::process_message_with_data_stream(
+                    tenant,
+                    &mut message,
+                    data,
+                    &self.message_store,
+                    &self.data_store,
+                )
+                .await
                 {
                     return match error {
                         RecordsWriteValidationError::Dwn(error) => {
@@ -307,13 +301,13 @@ where
                         "No dataStream was provided and unable to get data from previous message",
                     ));
                 };
-                if let Err(error) = self
-                    .process_message_without_data_stream(
-                        tenant,
-                        &mut message,
-                        newest_existing_write,
-                    )
-                    .await
+                if let Err(error) = data::process_message_without_data_stream(
+                    tenant,
+                    &mut message,
+                    newest_existing_write,
+                    &self.data_store,
+                )
+                .await
                 {
                     return match error {
                         RecordsWriteValidationError::Dwn(error) => {
@@ -349,7 +343,7 @@ where
                 RecordsTransitionPlan::Duplicate { .. }
                 | RecordsTransitionPlan::Superseded { .. } => Vec::new(),
             };
-            let transition = match self.records_write_transition(
+            let transition = match squash::records_write_transition(
                 &message,
                 indexes,
                 &existing_messages,
@@ -385,9 +379,13 @@ where
             }
 
             if descriptor.squash == Some(true) {
-                if let Err(detail) =
-                    perform_records_squash(&self.message_store, &self.data_store, tenant, &message)
-                        .await
+                if let Err(detail) = squash::perform_records_squash(
+                    &self.message_store,
+                    &self.data_store,
+                    tenant,
+                    &message,
+                )
+                .await
                 {
                     return store_error_reply(detail);
                 }
@@ -457,298 +455,6 @@ where
             .map_err(|err| store_error_reply(err.to_string()))
     }
 
-    async fn process_message_with_data_stream(
-        &self,
-        tenant: &str,
-        message: &mut Message<Descriptor>,
-        data: Bytes,
-    ) -> Result<(), RecordsWriteValidationError> {
-        let descriptor = records_write_descriptor(message)
-            .map_err(|error| error.to_string())?
-            .clone();
-        let actual_data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
-        validate_data_integrity(
-            &descriptor.data_cid,
-            descriptor.data_size,
-            &actual_data_cid,
-            data.len() as u64,
-        )?;
-
-        // An audience record's payload is part of its admission contract: the
-        // key it publishes and the seal over that key are checked here, once
-        // the bytes the descriptor commits to are actually in hand.
-        if let Some(kind) = ControlKind::from_protocol_path(&descriptor.protocol_path) {
-            control::validate_payload(tenant, message, kind, &data, &self.message_store)
-                .await
-                .map_err(RecordsWriteValidationError::from)?;
-        }
-
-        if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
-            // Grant-key payload validation runs where the bytes are in hand;
-            // the post-processing hook below re-runs the descriptor half with
-            // no data, which is what lets dataless initial writes through.
-            // Only the encryption check runs here: the permissions check
-            // reads back the encoded data set below, so it stays post-hoc.
-            if descriptor.protocol.as_str() == ENCRYPTION_PROTOCOL_URI {
-                validate_encryption_delivery(message, &data).map_err(|error| {
-                    match error.code() {
-                        Some(code) => {
-                            RecordsWriteValidationError::Dwn(DwnError::new(code, error.detail()))
-                        }
-                        None => RecordsWriteValidationError::Internal(error.to_string()),
-                    }
-                })?;
-            }
-            set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))
-                .map_err(RecordsWriteValidationError::from)?;
-            return Ok(());
-        }
-
-        let record_id = record_id(message)
-            .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
-        let put_result = self
-            .data_store
-            .put(
-                tenant,
-                &record_id,
-                &descriptor.data_cid,
-                stream::iter(vec![data]),
-            )
-            .await
-            .map_err(|err| RecordsWriteValidationError::Internal(err.to_string()))?;
-        if put_result.data_size as u64 != descriptor.data_size {
-            let _ = self
-                .data_store
-                .delete(tenant, &record_id, &descriptor.data_cid)
-                .await;
-            return Err(DwnError::new(
-                DwnErrorCode::RecordsWriteDataSizeMismatch,
-                format!(
-                    "actual data size {} bytes does not match dataSize in descriptor: {}",
-                    put_result.data_size, descriptor.data_size
-                ),
-            )
-            .into());
-        }
-        set_encoded_data(message, None).map_err(RecordsWriteValidationError::from)
-    }
-
-    async fn process_message_without_data_stream(
-        &self,
-        tenant: &str,
-        message: &mut Message<Descriptor>,
-        newest_existing_write: &Message<Descriptor>,
-    ) -> Result<(), RecordsWriteValidationError> {
-        let descriptor = records_write_descriptor(message)
-            .map_err(|error| error.to_string())?
-            .clone();
-        let newest_descriptor =
-            records_write_descriptor(newest_existing_write).map_err(|error| error.to_string())?;
-        validate_data_integrity(
-            &descriptor.data_cid,
-            descriptor.data_size,
-            &newest_descriptor.data_cid,
-            newest_descriptor.data_size,
-        )?;
-
-        if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
-            let encoded_data = write_fields(newest_existing_write)
-                .map_err(|error| error.to_string())?
-                .encoded_data
-                .clone()
-                .ok_or_else(|| {
-                    DwnError::new(
-                        DwnErrorCode::RecordsWriteMissingEncodedDataInPrevious,
-                        "No dataStream was provided and unable to get data from previous message",
-                    )
-                })?;
-            set_encoded_data(message, Some(encoded_data))
-                .map_err(RecordsWriteValidationError::from)?;
-            return Ok(());
-        }
-
-        let record_id = record_id(newest_existing_write).ok_or_else(|| {
-            "RecordsWriteMissingRecordId: previous recordId is required".to_string()
-        })?;
-        let has_data = self
-            .data_store
-            .get(tenant, &record_id, &descriptor.data_cid)
-            .await
-            .map_err(|err| err.to_string())?
-            .is_some();
-        if !has_data {
-            return Err(DwnError::new(
-                DwnErrorCode::RecordsWriteMissingDataInPrevious,
-                "No dataStream was provided and unable to get data from previous message",
-            )
-            .into());
-        }
-        set_encoded_data(message, None).map_err(RecordsWriteValidationError::from)
-    }
-
-    async fn validate_referential_integrity(
-        &self,
-        tenant: &str,
-        message: &Message<Descriptor>,
-        author: &str,
-    ) -> Result<(), RecordsWriteValidationError> {
-        let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
-        let protocol_path = descriptor.protocol_path.clone();
-
-        // Control records live at virtual paths the protocol never declares, so
-        // there is no type or rule set to validate them against. They are
-        // admitted on their own fixed contract instead, and the application
-        // encryption-policy checks below deliberately do not apply: a control
-        // record's representation is fixed by its kind, not by the protocol.
-        if let Some(kind) = ControlKind::from_protocol_path(&protocol_path) {
-            return control::validate_referential_integrity(
-                tenant,
-                message,
-                kind,
-                author,
-                &self.message_store,
-            )
-            .await
-            .map_err(RecordsWriteValidationError::from);
-        }
-
-        let policy = EffectivePolicy::resolve(
-            tenant,
-            message,
-            author,
-            &self.core_protocol_registry,
-            &self.message_store,
-        )
-        .await?;
-        let definition = &policy.definition;
-        let rule_set = &policy.rule_set;
-        let type_name = policy.type_name.as_str();
-        let fields = write_fields(message).map_err(|error| error.to_string())?;
-        let has_envelope = fields.encryption.is_some();
-        if policy.encryption_required && !has_envelope {
-            return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
-                format!(
-                    "type '{type_name}' requires encryption but message has no encryption metadata"
-                ),
-            )
-            .into());
-        }
-        if !policy.encryption_required && has_envelope {
-            return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationEncryptionNotAllowed,
-                format!(
-                    "type '{type_name}' requires plaintext but message has encryption metadata"
-                ),
-            )
-            .into());
-        }
-        if policy.encryption_required {
-            match &policy.key_agreement {
-                Some(agreement) => {
-                    let key_id = agreement.public_key_jwk.thumbprint().map_err(|error| {
-                        RecordsWriteValidationError::Internal(error.to_string())
-                    })?;
-                    let Some(envelope) = fields.encryption.as_ref() else {
-                        return Err(DwnError::new(
-                            DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
-                            format!(
-                                "type '{type_name}' requires encryption but message has no encryption metadata"
-                            ),
-                        )
-                        .into());
-                    };
-                    let has_protocol_path_entry = envelope.key_encryption.iter().any(|entry| {
-                        matches!(entry, KeyEncryption::ProtocolPath { key_id: id, .. } if id == &key_id)
-                    });
-                    if !has_protocol_path_entry {
-                        return Err(DwnError::new(
-                            DwnErrorCode::ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
-                            format!(
-                                "encrypted record is missing a protocolPath keyEncryption entry for '{protocol_path}'"
-                            ),
-                        )
-                        .into());
-                    }
-                }
-                None => {
-                    let dynamic_recipient = definition.protocol == ENCRYPTION_PROTOCOL_URI
-                        && descriptor.protocol_path == ENCRYPTION_PROTOCOL_GRANT_KEY_PATH;
-                    if !dynamic_recipient {
-                        return Err(DwnError::new(
-                            DwnErrorCode::ProtocolAuthorizationEncryptionKeyAgreementMissing,
-                            format!(
-                                "encrypted protocol path '{protocol_path}' has no $keyAgreement"
-                            ),
-                        )
-                        .into());
-                    }
-                }
-            }
-        }
-
-        if rule_set.immutable == Some(true) && !is_initial_write(message, author)? {
-            return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationImmutableRecord,
-                format!(
-                    "record at protocol path '{protocol_path}' is immutable: updates are not allowed."
-                ),
-            )
-            .into());
-        }
-
-        if let Some(size) = &rule_set.size {
-            if let Some(min) = size.min {
-                if descriptor.data_size < min {
-                    return Err(format!(
-                        "ProtocolAuthorizationInvalidDataSize: dataSize {} is smaller than minimum {}",
-                        descriptor.data_size, min
-                    )
-                    .into());
-                }
-            }
-            if let Some(max) = size.max {
-                if descriptor.data_size > max {
-                    return Err(format!(
-                        "ProtocolAuthorizationInvalidDataSize: dataSize {} exceeds maximum {}",
-                        descriptor.data_size, max
-                    )
-                    .into());
-                }
-            }
-        }
-
-        if descriptor.squash == Some(true)
-            && (rule_set.squash != Some(true) || !is_initial_write(message, author)?)
-        {
-            return Err("ProtocolAuthorizationInvalidSquash: squash writes must be initial writes at a $squash path".to_string().into());
-        }
-
-        if let Some(parent_id) = &descriptor.parent_id {
-            let parent = fetch_newest_write(tenant, parent_id, &self.message_store).await?;
-            let parent_context = context_id(&parent).ok_or_else(|| {
-                "ProtocolAuthorizationParentContextMissing: parent contextId is required"
-                    .to_string()
-            })?;
-            let context_id = write_fields(message)
-                .map_err(|error| error.to_string())?
-                .context_id
-                .clone()
-                .ok_or_else(|| {
-                    "ProtocolAuthorizationContextMissing: contextId is required".to_string()
-                })?;
-            if !context_id.starts_with(&format!("{parent_context}/")) {
-                return Err(
-                    "ProtocolAuthorizationContextMismatch: contextId must be under parent context"
-                        .to_string()
-                        .into(),
-                );
-            }
-        }
-
-        Ok(())
-    }
-
     async fn authorize_records_write(
         &self,
         tenant: &str,
@@ -801,191 +507,4 @@ where
     ) -> Result<(), String> {
         authorize_against_protocol(tenant, message, author, kind, &self.message_store).await
     }
-
-    async fn enforce_squash_backstop(
-        &self,
-        tenant: &str,
-        message: &Message<Descriptor>,
-    ) -> Result<(), RecordsWriteValidationError> {
-        let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
-        let definition = match fetch_protocol_definition(
-            tenant,
-            &descriptor.protocol,
-            &self.message_store,
-            None,
-        )
-        .await
-        {
-            Ok(definition) => definition,
-            Err(_) => return Ok(()),
-        };
-        let Some(rule_set) = definition.rule_at(&descriptor.protocol_path) else {
-            return Ok(());
-        };
-        if rule_set.squash != Some(true) {
-            return Ok(());
-        }
-
-        let mut filter = filter_map([
-            ("interface", string_filter(RECORDS_INTERFACE)),
-            ("method", string_filter(WRITE_METHOD)),
-            ("isLatestBaseState", bool_filter(true)),
-            ("protocol", string_filter(&descriptor.protocol)),
-            ("protocolPath", string_filter(&descriptor.protocol_path)),
-            ("squash", bool_filter(true)),
-        ]);
-        if let Some(parent_context) =
-            context_id(message).and_then(|context| parent_context_id(&context))
-        {
-            if !parent_context.is_empty() {
-                filter.insert(
-                    FilterKey::Index("contextId".to_string()),
-                    Filter::Subtree(SubtreeFilter {
-                        subtree: parent_context,
-                    }),
-                );
-            }
-        }
-
-        let result = self
-            .message_store
-            .query(
-                tenant,
-                Filters::from(filter),
-                Some(MessageSort::Timestamp(SortDirection::Descending)),
-                Some(Pagination::with_limit(1)),
-                None,
-            )
-            .await
-            .map_err(|err| err.to_string())?;
-        let Some(newest_squash) = result.messages.first() else {
-            return Ok(());
-        };
-        let newest_timestamp = newest_squash.message_timestamp();
-        if descriptor.message_timestamp <= newest_timestamp {
-            let squash_floor_timestamp = canonical_rfc3339(newest_timestamp);
-            return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationSquashBackstop,
-                format!(
-                    "incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
-                    canonical_rfc3339(descriptor.message_timestamp),
-                    squash_floor_timestamp,
-                    descriptor.protocol_path
-                ),
-            )
-            .with_info(BTreeMap::from([(
-                "squashFloorTimestamp".to_string(),
-                serde_json::Value::String(squash_floor_timestamp),
-            )]))
-            .into());
-        }
-        Ok(())
-    }
-
-    fn records_write_transition(
-        &self,
-        message: &Message<Descriptor>,
-        indexes: KeyValues,
-        existing_messages: &[Message<Descriptor>],
-        plan: &RecordsTransitionPlan,
-        author: &str,
-    ) -> Result<LatestStateTransition, String> {
-        let outranked_cids = match plan {
-            RecordsTransitionPlan::Apply { outranked_cids, .. } => outranked_cids.as_slice(),
-            RecordsTransitionPlan::Duplicate { .. } => &[],
-            RecordsTransitionPlan::Superseded { .. } => {
-                return Err(
-                    "RecordsStateSupersededTransition: superseded write cannot be committed"
-                        .to_string(),
-                )
-            }
-        };
-        let mut retains = Vec::new();
-        let mut deletes = Vec::new();
-
-        for existing in existing_messages {
-            let existing_cid = message_cid(existing)?;
-            if !outranked_cids.contains(&existing_cid) {
-                continue;
-            }
-            if is_initial_write(existing, author).unwrap_or(false) {
-                let mut initial_write = existing.clone();
-                set_encoded_data(&mut initial_write, None)?;
-                let indexes = records_write_indexes(&initial_write, author, false)?;
-                retains.push(LatestStateMutation {
-                    message: initial_write,
-                    indexes,
-                });
-            } else {
-                deletes.push(existing_cid);
-            }
-        }
-
-        Ok(LatestStateTransition {
-            put: LatestStateMutation {
-                message: message.clone(),
-                indexes,
-            },
-            retains,
-            deletes,
-        })
-    }
-}
-
-pub(crate) async fn perform_records_squash<MessageStore, DataStore>(
-    message_store: &MessageStore,
-    data_store: &DataStore,
-    tenant: &str,
-    message: &Message<Descriptor>,
-) -> Result<(), String>
-where
-    MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
-    DataStore: crate::stores::DataStore + Clone + Send + Sync + 'static,
-{
-    let descriptor = records_write_descriptor(message)?;
-    let record_id = record_id(message)
-        .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
-    let mut filter = filter_map([
-        ("interface", string_filter(RECORDS_INTERFACE)),
-        ("protocol", string_filter(&descriptor.protocol)),
-        ("protocolPath", string_filter(&descriptor.protocol_path)),
-    ]);
-    if let Some(parent_context) =
-        context_id(message).and_then(|context| parent_context_id(&context))
-    {
-        if !parent_context.is_empty() {
-            filter.insert(
-                FilterKey::Index("contextId".to_string()),
-                Filter::Subtree(SubtreeFilter {
-                    subtree: parent_context,
-                }),
-            );
-        }
-    }
-    let sibling_messages = message_store
-        .query(tenant, Filters::from(filter), None, None, None)
-        .await
-        .map_err(|err| err.to_string())?
-        .messages;
-    let mut by_record_id = BTreeMap::<String, Vec<Message<Descriptor>>>::new();
-    for sibling in sibling_messages {
-        if let Some(sibling_record_id) = message_record_id(&sibling) {
-            by_record_id
-                .entry(sibling_record_id)
-                .or_default()
-                .push(sibling);
-        }
-    }
-    for (sibling_record_id, messages) in by_record_id {
-        if sibling_record_id == record_id {
-            continue;
-        }
-        let Some(newest) = newest_message(&messages) else {
-            continue;
-        };
-        if newest.message_timestamp() < descriptor.message_timestamp {
-            purge_record_messages(tenant, &messages, message_store, data_store).await?;
-        }
-    }
-    Ok(())
 }
