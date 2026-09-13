@@ -13,6 +13,9 @@ use serde_json::Value;
 use crate::descriptors::protocols::ProtocolsMethod;
 use crate::descriptors::MESSAGES_QUERY_SCHEMA;
 use crate::dwn::MessageKind;
+use crate::encryption::protocol::{
+    GRANT_KEY_PAYLOAD_SCHEMA_URI, WRAPPED_GRANT_KEY_ENVELOPE_SCHEMA_URI,
+};
 use crate::encryption::ENCRYPTION_AUDIENCE_SCHEMA;
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::interfaces::messages::descriptors::{
@@ -55,6 +58,19 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
         ENCRYPTION_AUDIENCE_SCHEMA,
         include_str!("../../schemas/encryption/audience.json"),
+    ),
+    // Vendored byte-identical from enboxorg/enbox
+    // `packages/dwn-sdk-js/json-schemas/encryption/wrapped-grant-key-envelope.json`.
+    // Its remote `$ref`s need no rewriting: `defs.json` and `public-jwk.json`
+    // are resources of this same registry, resolved by `$id`.
+    (
+        WRAPPED_GRANT_KEY_ENVELOPE_SCHEMA_URI,
+        include_str!("../../schemas/encryption/wrapped-grant-key-envelope.json"),
+    ),
+    // Rust-owned decrypted-payload schema; see its `$comment` for provenance.
+    (
+        GRANT_KEY_PAYLOAD_SCHEMA_URI,
+        include_str!("../../schemas/encryption/grant-key.json"),
     ),
     (
         "https://identity.foundation/dwn/json-schemas/defs.json",

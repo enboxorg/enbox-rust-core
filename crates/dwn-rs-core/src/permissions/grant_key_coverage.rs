@@ -15,17 +15,17 @@
 //!
 //! # What is here and what is not
 //!
-//! The **Read** direction is complete: eligibility, and whether a Read grant
-//! covers a delivered path. The **Write** direction, enumerating the scopes a
-//! grant delivers, and the protocol-scoped delivered direction belong to
-//! grant-key records themselves and are not answered here. The eligibility
-//! helpers already admit Write scopes, so that side needs nothing reshaped.
+//! Eligibility, directional coverage, and delivery scope enumeration for both
+//! Read and Write grants. Enumerating what a grant delivers and checking a
+//! delivery against a grant always agree: every emitted scope passes the
+//! predicate.
 
 use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet};
 use crate::permissions::{PermissionScope, RecordsMethod, RecordsSelector};
 use crate::protocols::parse_cross_protocol_ref;
 
 use std::collections::BTreeSet;
+use thiserror::Error;
 
 /// A grant scope that could deliver a grant key.
 ///
@@ -115,6 +115,141 @@ pub fn read_grant_covers_delivered_scope(
     })
 }
 
+/// Whether a **Write** grant covers a delivered key's scope.
+///
+/// Write grants never cover protocol-scoped keys or ordinary non-role paths:
+/// only exact local keyed roles, additionally restricted to the grant subtree
+/// when the grant names a path. Role coverage needs the definition, so
+/// without one nothing is covered.
+pub fn write_grant_covers_delivered_scope(
+    grant: &EligibleGrantScope<'_>,
+    delivered: &DeliveredScope<'_>,
+    definition: Option<&Definition>,
+) -> bool {
+    if grant.method != RecordsMethod::Write || grant.protocol != delivered.protocol {
+        return false;
+    }
+    let Some(delivered_path) = delivered.protocol_path else {
+        return false;
+    };
+    let Some(definition) = definition else {
+        return false;
+    };
+    if !is_keyed_role(definition, delivered_path) {
+        return false;
+    }
+    let Some(grant_path) = grant.protocol_path else {
+        return true;
+    };
+    matches_subtree(grant_path, delivered_path)
+}
+
+/// Whether an eligible grant covers a delivered key's scope, dispatching on
+/// the grant method. The single dispatch point for admission and resolution
+/// alike; matching on the method anywhere else forks this rule.
+pub fn grant_covers_delivered_scope(
+    grant: &EligibleGrantScope<'_>,
+    delivered: &DeliveredScope<'_>,
+    definition: Option<&Definition>,
+) -> bool {
+    match grant.method {
+        RecordsMethod::Read => read_grant_covers_delivered_scope(grant, delivered, definition),
+        RecordsMethod::Write => write_grant_covers_delivered_scope(grant, delivered, definition),
+        _ => false,
+    }
+}
+
+/// A scope a grant delivers keys for: the protocol itself, or one path in it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GrantedScope {
+    pub protocol: String,
+    pub protocol_path: Option<String>,
+}
+
+/// Delivery scopes cannot be enumerated for a Write grant without the
+/// definition that names its roles; a Read grant degrades to its own path.
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum DeliveryScopesError {
+    #[error("grant-key delivery scopes for a Write grant require a protocol definition")]
+    DefinitionRequired,
+}
+
+/// The scopes a grant delivers: the protocol for a protocol-wide Read grant,
+/// the path plus its read-referenced roles for a path Read grant, and the
+/// covered keyed roles for a Write grant. Deduplicated; every emitted scope
+/// passes [`grant_covers_delivered_scope`].
+pub fn grant_key_delivery_scopes(
+    grant: &EligibleGrantScope<'_>,
+    definition: Option<&Definition>,
+) -> Result<Vec<GrantedScope>, DeliveryScopesError> {
+    let mut scopes = BTreeSet::new();
+    match grant.method {
+        RecordsMethod::Read => {
+            scopes.insert(GrantedScope {
+                protocol: grant.protocol.to_string(),
+                protocol_path: grant.protocol_path.map(str::to_string),
+            });
+            if let (Some(path), Some(definition)) = (grant.protocol_path, definition) {
+                for role in read_roles_under(definition, path) {
+                    scopes.insert(GrantedScope {
+                        protocol: grant.protocol.to_string(),
+                        protocol_path: Some(role),
+                    });
+                }
+            }
+        }
+        RecordsMethod::Write => {
+            let Some(definition) = definition else {
+                return Err(DeliveryScopesError::DefinitionRequired);
+            };
+            for role in keyed_roles_under(definition, grant.protocol_path) {
+                scopes.insert(GrantedScope {
+                    protocol: grant.protocol.to_string(),
+                    protocol_path: Some(role),
+                });
+            }
+        }
+        _ => {}
+    }
+    Ok(scopes.into_iter().collect())
+}
+
+/// Every keyed local role path, restricted to a subtree when one is named.
+fn keyed_roles_under(definition: &Definition, scope_path: Option<&str>) -> Vec<String> {
+    fn walk(
+        definition: &Definition,
+        rule_set: &RuleSet,
+        prefix: String,
+        scope_path: Option<&str>,
+        out: &mut Vec<String>,
+    ) {
+        for (key, child) in &rule_set.rules {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}/{key}")
+            };
+            if is_keyed_role(definition, &path)
+                && scope_path.is_none_or(|scope| matches_subtree(scope, &path))
+            {
+                out.push(path.clone());
+            }
+            walk(definition, child, path, scope_path, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    for (key, child) in &definition.structure {
+        if is_keyed_role(definition, key)
+            && scope_path.is_none_or(|scope| matches_subtree(scope, key))
+        {
+            out.push(key.clone());
+        }
+        walk(definition, child, key.clone(), scope_path, &mut out);
+    }
+    out
+}
+
 /// Local role paths that the rule set at `scope_path`, or anything beneath it,
 /// grants read through.
 ///
@@ -156,7 +291,7 @@ pub fn is_keyed_role(definition: &Definition, protocol_path: &str) -> bool {
 }
 
 /// Whether `path` is `scope` or lies beneath it, respecting path boundaries.
-fn matches_subtree(scope: &str, path: &str) -> bool {
+pub(crate) fn matches_subtree(scope: &str, path: &str) -> bool {
     path == scope || (path.starts_with(scope) && path.as_bytes().get(scope.len()) == Some(&b'/'))
 }
 
@@ -177,7 +312,7 @@ mod tests {
             "protocol": "http://example.com/threads",
             "published": true,
             "types": {
-                "member": {}, "archivist": {}, "unkeyed": {},
+                "member": {}, "archivist": {}, "unkeyed": {}, "curator": {},
                 "thread": {}, "notes": {}, "plain": {}, "leaf": {}
             },
             "structure": {
@@ -193,6 +328,10 @@ mod tests {
                 "plain": {},
                 "thread": {
                     "$actions": [{ "role": "member", "can": ["read"] }],
+                    "curator": { "$role": true, "$keyAgreement": { "publicKeyJwk": {
+                        "kty": "OKP", "crv": "X25519",
+                        "x": "Xf7dO2vUf2-ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI"
+                    } } },
                     "notes": {
                         "$actions": [
                             { "role": "archivist", "can": ["read"] },
@@ -380,8 +519,9 @@ mod tests {
             );
         }
 
-        // The Write direction is not answered here: a Write grant covers
-        // nothing through this predicate, however it is scoped.
+        // The Write direction is answered by the Write predicate below, never
+        // here: a Write grant covers nothing through the Read predicate,
+        // however it is scoped.
         for grant_path in [None, Some("thread")] {
             for delivered_path in [None, Some("thread"), Some("member")] {
                 assert!(
@@ -389,6 +529,227 @@ mod tests {
                     "the Read predicate must not answer for a Write grant"
                 );
             }
+        }
+    }
+
+    // Covers: ENBOX-ENC-003
+    #[test]
+    fn delivery_scopes_enumeration() {
+        use RecordsMethod::{Read, Write};
+
+        fn scopes(
+            method: RecordsMethod,
+            grant_path: Option<&str>,
+            with_definition: bool,
+        ) -> Result<Vec<GrantedScope>, DeliveryScopesError> {
+            let scope = scope(method, grant_path);
+            let eligible = eligible_grant_scope(&scope).expect("the fixture scope is eligible");
+            let definition = with_definition.then(definition);
+            grant_key_delivery_scopes(&eligible, definition.as_ref())
+        }
+
+        fn granted(paths: &[Option<&str>]) -> Vec<GrantedScope> {
+            paths
+                .iter()
+                .map(|path| GrantedScope {
+                    protocol: "http://example.com/threads".to_string(),
+                    protocol_path: path.map(str::to_string),
+                })
+                .collect()
+        }
+
+        // A protocol-wide Read grant delivers the protocol scope alone.
+        assert_eq!(scopes(Read, None, false), Ok(granted(&[None])));
+        // A path Read grant delivers its path plus the keyed roles its
+        // subtree reads through — `member` and `archivist`, but neither the
+        // unkeyed role, the cross-protocol reference, nor the unreferenced
+        // `thread/curator`. Sorted, not in TS insertion order: output order
+        // is not a security authority.
+        assert_eq!(
+            scopes(Read, Some("thread"), true),
+            Ok(granted(&[
+                Some("archivist"),
+                Some("member"),
+                Some("thread")
+            ]))
+        );
+        // Without a definition the Read enumeration degrades to the path.
+        assert_eq!(
+            scopes(Read, Some("thread"), false),
+            Ok(granted(&[Some("thread")]))
+        );
+        // A protocol-wide Write grant delivers every keyed role ...
+        assert_eq!(
+            scopes(Write, None, true),
+            Ok(granted(&[
+                Some("archivist"),
+                Some("member"),
+                Some("thread/curator")
+            ]))
+        );
+        // ... a path Write grant only the keyed roles beneath it ...
+        assert_eq!(
+            scopes(Write, Some("thread"), true),
+            Ok(granted(&[Some("thread/curator")]))
+        );
+        // ... and a Write grant without a definition is undecidable, which
+        // reads as an error rather than an empty delivery set.
+        assert_eq!(
+            scopes(Write, Some("thread"), false),
+            Err(DeliveryScopesError::DefinitionRequired)
+        );
+        assert_eq!(
+            scopes(Write, None, false),
+            Err(DeliveryScopesError::DefinitionRequired)
+        );
+
+        // Enumeration and the predicate agree: every emitted scope passes.
+        let definition = definition();
+        for (method, grant_path, with_definition) in [
+            (Read, None, false),
+            (Read, Some("thread"), true),
+            (Read, Some("thread"), false),
+            (Write, None, true),
+            (Write, Some("thread"), true),
+        ] {
+            let scope = scope(method.clone(), grant_path);
+            let eligible = eligible_grant_scope(&scope).expect("eligible");
+            let scopes =
+                grant_key_delivery_scopes(&eligible, with_definition.then_some(&definition))
+                    .expect("enumerable");
+            for scope in &scopes {
+                assert!(
+                    grant_covers_delivered_scope(
+                        &eligible,
+                        &DeliveredScope {
+                            protocol: &scope.protocol,
+                            protocol_path: scope.protocol_path.as_deref(),
+                        },
+                        with_definition.then_some(&definition),
+                    ),
+                    "{method:?} grant {grant_path:?} must cover its emitted scope {scope:?}"
+                );
+            }
+        }
+    }
+
+    // Covers: ENBOX-ENC-003
+    #[test]
+    fn write_coverage_table() {
+        use RecordsMethod::Write;
+
+        fn covers(
+            grant_path: Option<&str>,
+            delivered_path: Option<&str>,
+            with_definition: bool,
+        ) -> bool {
+            let scope = scope(Write, grant_path);
+            let eligible = eligible_grant_scope(&scope).expect("the fixture scope is eligible");
+            let definition = with_definition.then(definition);
+            write_grant_covers_delivered_scope(
+                &eligible,
+                &DeliveredScope {
+                    protocol: "http://example.com/threads",
+                    protocol_path: delivered_path,
+                },
+                definition.as_ref(),
+            )
+        }
+
+        for (grant_path, delivered_path, with_definition, expected, why) in [
+            // Write grants never cover protocol-scoped keys, however the
+            // grant itself is scoped.
+            (None, None, true, false, "no protocol key through Write"),
+            (
+                Some("thread"),
+                None,
+                true,
+                false,
+                "nor through a path grant",
+            ),
+            // ... nor without the definition that names the roles.
+            (
+                None,
+                Some("member"),
+                false,
+                false,
+                "undecidable without a definition",
+            ),
+            (
+                Some("thread"),
+                Some("member"),
+                false,
+                false,
+                "undecidable without a definition",
+            ),
+            // A protocol-wide Write grant reaches every keyed role ...
+            (
+                None,
+                Some("member"),
+                true,
+                true,
+                "wide grant reaches keyed roles",
+            ),
+            (None, Some("archivist"), true, true, "wherever declared"),
+            // ... but not unkeyed roles or plain paths.
+            (
+                None,
+                Some("unkeyed"),
+                true,
+                false,
+                "an unkeyed role conveys nothing",
+            ),
+            (
+                None,
+                Some("thread/notes"),
+                true,
+                false,
+                "nor does a non-role path",
+            ),
+            // A path Write grant is additionally restricted to its subtree, with
+            // no role exception: only roles beneath the grant path are covered.
+            (
+                Some("thread"),
+                Some("thread/curator"),
+                true,
+                true,
+                "keyed role in the subtree",
+            ),
+            (
+                Some("thread"),
+                Some("thread/notes/leaf"),
+                true,
+                false,
+                "a leaf is not a role",
+            ),
+            (
+                Some("thread"),
+                Some("archivist"),
+                true,
+                false,
+                "outside the subtree",
+            ),
+            (
+                Some("thread"),
+                Some("member"),
+                true,
+                false,
+                "outside the subtree",
+            ),
+            (
+                Some("plain"),
+                Some("member"),
+                true,
+                false,
+                "outside the subtree",
+            ),
+        ] {
+            assert_eq!(
+                covers(grant_path, delivered_path, with_definition),
+                expected,
+                "write grant {grant_path:?} over delivered {delivered_path:?} \
+                 (definition: {with_definition}): {why}"
+            );
         }
     }
 

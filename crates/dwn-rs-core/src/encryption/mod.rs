@@ -15,8 +15,9 @@ pub mod aes_kw;
 pub mod control;
 pub mod ctr;
 pub mod error;
-pub mod grant_key;
 pub mod kdf;
+pub mod protocol;
+pub mod resolution;
 pub mod x25519;
 
 use std::collections::BTreeMap;
@@ -39,6 +40,7 @@ pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
 pub const SEAL_DERIVATION_SCHEME: &str = "seal";
 pub const ENCRYPTION_PROTOCOL_URI: &str = "https://identity.foundation/dwn/protocols/encryption";
 pub const ENCRYPTION_PROTOCOL_GRANT_KEY_PATH: &str = "grantKey";
+pub const ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH: &str = "wrappedGrantKey";
 /// Reserved virtual protocol-path root owning the control record paths
 /// below. A protocol definition may never declare it; enforcement lives with
 /// the rest of protocol-definition validation in

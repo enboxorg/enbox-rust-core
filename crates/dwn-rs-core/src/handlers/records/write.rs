@@ -15,10 +15,11 @@ use crate::descriptors::{
     records::{records_write_descriptor, write_fields},
     Descriptor, Records, RecordsWriteDescriptor,
 };
-use crate::dwn::core_protocol::CoreProtocolRegistry;
 use crate::dwn::core_protocol::CoreProtocolStores;
+use crate::dwn::core_protocol::{CoreProtocolError, CoreProtocolRegistry};
 use crate::dwn::{Handler, HandlerContext};
 use crate::encryption::control::ControlKind;
+use crate::encryption::protocol::validate_encryption_delivery;
 use crate::encryption::{
     KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
@@ -30,14 +31,12 @@ use crate::handlers::protocols::configure::{
 use crate::handlers::records::common::{
     authorize_against_protocol, bool_filter, compare_messages, context_id,
     core_protocol_error_reply, delete_from_data_store_if_needed, encoded_data_bytes,
-    fetch_newest_write, filter_map, find_initial_write, governing_timestamp, message_cid,
-    message_record_id, newest_message, parent_context_id, purge_record_messages,
-    records_write_indexes, set_encoded_data, store_error_reply, string_filter,
-    validate_data_integrity, validate_records_write_integrity, verify_immutable_properties,
-    GoverningTimestampError,
+    fetch_newest_write, filter_map, find_initial_write, message_cid, message_record_id,
+    newest_message, parent_context_id, purge_record_messages, records_write_indexes,
+    set_encoded_data, store_error_reply, string_filter, validate_data_integrity,
+    validate_records_write_integrity, verify_immutable_properties, GoverningTimestampError,
 };
 use crate::handlers::records::control;
-use crate::interfaces::messages::protocols::{self as protocol_types};
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::Write;
 use crate::replies::Status;
@@ -46,6 +45,7 @@ use crate::Response;
 use crate::SubtreeFilter;
 use crate::{canonical_rfc3339, Message, MessageSort, Pagination, SortDirection};
 
+use super::policy::EffectivePolicy;
 use super::state::{plan_records_transition, RecordsTransitionPlan};
 use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, WRITE_METHOD};
 
@@ -58,7 +58,7 @@ pub struct RecordsWriteHandler<MessageStore, DataStore> {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum RecordsWriteValidationError {
+pub(crate) enum RecordsWriteValidationError {
     #[error(transparent)]
     Dwn(#[from] DwnError),
     #[error("{0}")]
@@ -203,6 +203,19 @@ where
                 return Response::unauthorized(detail);
             }
 
+            if let Err(error) = self
+                .core_protocol_registry
+                .pre_process_write(tenant, &message, &self.message_store)
+                .await
+            {
+                return match error {
+                    CoreProtocolError::GrantKey(error) => error.reply(),
+                    CoreProtocolError::Detail(detail) => {
+                        core_protocol_error_reply(&self.core_protocol_registry, detail)
+                    }
+                };
+            }
+
             let incoming_is_initial = match is_initial_write(&message, &signature.author) {
                 Ok(is_initial) => is_initial,
                 Err(detail) => return Response::bad_request(detail),
@@ -317,15 +330,13 @@ where
                 is_latest_base_state = true;
             }
 
-            if let Err(detail) = self.core_protocol_registry.validate_record(&message, None) {
-                return core_protocol_error_reply(&self.core_protocol_registry, detail);
-            }
-            if let Err(detail) = self
-                .core_protocol_registry
-                .pre_process_write(tenant, &message, &self.message_store)
-                .await
-            {
-                return core_protocol_error_reply(&self.core_protocol_registry, detail);
+            if let Err(error) = self.core_protocol_registry.validate_record(&message, None) {
+                return match error {
+                    CoreProtocolError::GrantKey(error) => error.reply(),
+                    CoreProtocolError::Detail(detail) => {
+                        core_protocol_error_reply(&self.core_protocol_registry, detail)
+                    }
+                };
             }
 
             let indexes =
@@ -416,7 +427,7 @@ impl<MessageStore, DataStore> RecordsWriteHandler<MessageStore, DataStore> {
         Self {
             message_store,
             data_store,
-            core_protocol_registry: CoreProtocolRegistry::with_permissions(),
+            core_protocol_registry: CoreProtocolRegistry::with_core_protocols(),
             did_resolver,
         }
     }
@@ -473,6 +484,21 @@ where
         }
 
         if descriptor.data_size <= MAX_ENCODED_DATA_SIZE {
+            // Grant-key payload validation runs where the bytes are in hand;
+            // the post-processing hook below re-runs the descriptor half with
+            // no data, which is what lets dataless initial writes through.
+            // Only the encryption check runs here: the permissions check
+            // reads back the encoded data set below, so it stays post-hoc.
+            if descriptor.protocol.as_str() == ENCRYPTION_PROTOCOL_URI {
+                validate_encryption_delivery(message, &data).map_err(|error| {
+                    match error.code() {
+                        Some(code) => {
+                            RecordsWriteValidationError::Dwn(DwnError::new(code, error.detail()))
+                        }
+                        None => RecordsWriteValidationError::Internal(error.to_string()),
+                    }
+                })?;
+            }
             set_encoded_data(message, Some(URL_SAFE_NO_PAD.encode(&data)))
                 .map_err(RecordsWriteValidationError::from)?;
             return Ok(());
@@ -560,37 +586,6 @@ where
         set_encoded_data(message, None).map_err(RecordsWriteValidationError::from)
     }
 
-    async fn referenced_definition_for_ref_path(
-        &self,
-        tenant: &str,
-        descriptor: &RecordsWriteDescriptor,
-        definition: &protocol_types::Definition,
-        governing_timestamp: &str,
-    ) -> Result<Option<protocol_types::Definition>, RecordsWriteValidationError> {
-        let Some(parsed) = definition.ref_position(descriptor.protocol_path.as_str()) else {
-            return Ok(None);
-        };
-        let ref_uri = definition
-            .uses
-            .as_ref()
-            .and_then(|uses| uses.get(parsed.alias))
-            .ok_or_else(|| {
-                format!(
-                    "ProtocolsConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' does not exist in the 'uses' map.",
-                    parsed.alias, descriptor.protocol_path
-                )
-            })?;
-        Ok(Some(
-            fetch_protocol_definition(
-                tenant,
-                ref_uri,
-                &self.message_store,
-                Some(governing_timestamp),
-            )
-            .await?,
-        ))
-    }
-
     async fn validate_referential_integrity(
         &self,
         tenant: &str,
@@ -617,81 +612,20 @@ where
             .map_err(RecordsWriteValidationError::from);
         }
 
-        let governing_timestamp =
-            governing_timestamp(tenant, message, &self.message_store, author).await?;
-
-        // check if protocol is defined in the core_protocol_registry and use that
-        // definition, otherwise fetch the protocol definition from the message store
-        let definition = if self.core_protocol_registry.has(&descriptor.protocol) {
-            self.core_protocol_registry
-                .get_definition(&descriptor.protocol)
-                .ok_or_else(|| {
-                    format!(
-                        "ProtocolAuthorizationInvalidProtocol: {} is not defined",
-                        descriptor.protocol
-                    )
-                })?
-        } else {
-            fetch_protocol_definition(
-                tenant,
-                &descriptor.protocol,
-                &self.message_store,
-                Some(&governing_timestamp),
-            )
-            .await?
-        };
-        let rule_set = definition
-            .rule_at(descriptor.protocol_path.as_str())
-            .ok_or_else(|| {
-                format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
-            })?;
-
-        // Covers: DWN-PROTO-001, DWN-PROTO-004, DWN-PROTO-005, DWN-ENC-001
-        // Protocol-declared encryption representation is enforced at admission
-        // against the definition governing the record timestamp. A record at
-        // a `$ref` position follows the referenced protocol's type and key
-        // namespace at the referenced target path; locally declared
-        // descendants follow the composing type map.
-        let referenced = self
-            .referenced_definition_for_ref_path(
-                tenant,
-                descriptor,
-                &definition,
-                &governing_timestamp,
-            )
-            .await?;
-        let ref_position = definition.ref_position(descriptor.protocol_path.as_str());
-        let (types, type_name) = match (&referenced, &ref_position) {
-            (Some(referenced), Some(position)) => (
-                &referenced.types,
-                position
-                    .protocol_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or_default(),
-            ),
-            _ => (
-                &definition.types,
-                descriptor
-                    .protocol_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or_default(),
-            ),
-        };
-        let key_agreement = match (&referenced, &ref_position) {
-            (Some(referenced), Some(position)) => referenced
-                .rule_at(position.protocol_path)
-                .and_then(|rule_set| rule_set.key_agreement.as_ref()),
-            _ => rule_set.key_agreement.as_ref(),
-        };
-        let encryption_required = types
-            .get(type_name)
-            .and_then(|protocol_type| protocol_type.encryption_required)
-            == Some(true);
+        let policy = EffectivePolicy::resolve(
+            tenant,
+            message,
+            author,
+            &self.core_protocol_registry,
+            &self.message_store,
+        )
+        .await?;
+        let definition = &policy.definition;
+        let rule_set = &policy.rule_set;
+        let type_name = policy.type_name.as_str();
         let fields = write_fields(message).map_err(|error| error.to_string())?;
         let has_envelope = fields.encryption.is_some();
-        if encryption_required && !has_envelope {
+        if policy.encryption_required && !has_envelope {
             return Err(DwnError::new(
                 DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
                 format!(
@@ -700,7 +634,7 @@ where
             )
             .into());
         }
-        if !encryption_required && has_envelope {
+        if !policy.encryption_required && has_envelope {
             return Err(DwnError::new(
                 DwnErrorCode::ProtocolAuthorizationEncryptionNotAllowed,
                 format!(
@@ -709,8 +643,8 @@ where
             )
             .into());
         }
-        if encryption_required {
-            match key_agreement {
+        if policy.encryption_required {
+            match &policy.key_agreement {
                 Some(agreement) => {
                     let key_id = agreement.public_key_jwk.thumbprint().map_err(|error| {
                         RecordsWriteValidationError::Internal(error.to_string())

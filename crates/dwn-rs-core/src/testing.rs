@@ -143,16 +143,19 @@ pub async fn with_author_delegated_grant(
     let grant_message: Message<Descriptor> = serde_json::from_value(grant.clone()).unwrap();
     let grant_cid = message_cid(&grant_message).unwrap();
     let descriptor_json = message["descriptor"].clone();
-    let signature = signature_for_descriptor(
-        &descriptor_json,
-        json!({
-            "recordId": message["recordId"].as_str().unwrap(),
-            "contextId": message["contextId"].as_str().unwrap(),
-            "delegatedGrantId": grant_cid,
-        }),
-        signer,
-    )
-    .await;
+    // The signature commits to the encryption object exactly like a direct
+    // signature does; a delegated encrypted write without the binding fails
+    // verification the same way a direct one would.
+    let mut payload = json!({
+        "recordId": message["recordId"].as_str().unwrap(),
+        "contextId": message["contextId"].as_str().unwrap(),
+        "delegatedGrantId": grant_cid,
+    });
+    if let Some(envelope) = message.get("encryption") {
+        let encryption_cid = generate_cid_from_serialized(envelope.clone()).unwrap();
+        payload["encryptionCid"] = serde_json::Value::String(encryption_cid.to_string());
+    }
+    let signature = signature_for_descriptor(&descriptor_json, payload, signer).await;
     message["authorization"] = json!({
         "signature": signature,
         "authorDelegatedGrant": grant,

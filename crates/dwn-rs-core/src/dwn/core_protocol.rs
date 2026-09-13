@@ -4,6 +4,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::encryption::protocol::{
+    encryption_protocol_definition, pre_process_encryption_write,
+    validate_encryption_record_schema, GrantKeyError,
+};
+use crate::encryption::ENCRYPTION_PROTOCOL_URI;
 use crate::interfaces::messages::protocols::Definition;
 use crate::permissions::{
     permissions_protocol_definition, post_process_permissions_write, pre_process_permissions_write,
@@ -20,6 +25,31 @@ pub struct CoreProtocolStores<'a, MessageStore, DataStore> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RegisteredCoreProtocol {
     Permissions,
+    Encryption,
+}
+
+/// Failure from a core protocol hook. The permissions protocol reports
+/// unstructured details; the encryption protocol reports typed failures so
+/// reply status is classified by variant, never by string prefix.
+#[derive(Debug)]
+pub enum CoreProtocolError {
+    Detail(String),
+    GrantKey(GrantKeyError),
+}
+
+impl std::fmt::Display for CoreProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Detail(detail) => formatter.write_str(detail),
+            Self::GrantKey(error) => std::fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl From<GrantKeyError> for CoreProtocolError {
+    fn from(error: GrantKeyError) -> Self {
+        Self::GrantKey(error)
+    }
 }
 
 /// Registry of core protocols owned by a DWN instance.
@@ -37,11 +67,20 @@ impl CoreProtocolRegistry {
         );
     }
 
-    /// Create a registry with the permissions protocol pre-registered.
-    pub fn with_permissions() -> Self {
+    /// Create a registry with all core protocols pre-registered.
+    pub fn with_core_protocols() -> Self {
         let mut registry = Self::default();
         registry.register_permissions();
+        registry.register_encryption();
         registry
+    }
+
+    /// Register the encryption core protocol.
+    pub fn register_encryption(&mut self) {
+        self.protocols.insert(
+            ENCRYPTION_PROTOCOL_URI.to_string(),
+            RegisteredCoreProtocol::Encryption,
+        );
     }
 
     pub fn has(&self, uri: &str) -> bool {
@@ -51,6 +90,7 @@ impl CoreProtocolRegistry {
     pub fn get_definition(&self, uri: &str) -> Option<Definition> {
         match self.protocols.get(uri)? {
             RegisteredCoreProtocol::Permissions => Some(permissions_protocol_definition()),
+            RegisteredCoreProtocol::Encryption => Some(encryption_protocol_definition()),
         }
     }
 
@@ -72,9 +112,13 @@ impl CoreProtocolRegistry {
         &self,
         message: &Message<Descriptor>,
         _data: Option<&[u8]>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CoreProtocolError> {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
-            validate_permissions_record_schema(message).map_err(|error| error.to_string())?;
+            validate_permissions_record_schema(message)
+                .map_err(|error| CoreProtocolError::Detail(error.to_string()))?;
+        }
+        if self.has(ENCRYPTION_PROTOCOL_URI) {
+            validate_encryption_record_schema(message)?;
         }
         Ok(())
     }
@@ -84,14 +128,17 @@ impl CoreProtocolRegistry {
         tenant: &str,
         message: &Message<Descriptor>,
         message_store: &MessageStore,
-    ) -> Result<(), String>
+    ) -> Result<(), CoreProtocolError>
     where
         MessageStore: crate::stores::MessageStore + Sync,
     {
         if self.has(PERMISSIONS_PROTOCOL_URI) {
             pre_process_permissions_write(tenant, message, message_store)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| CoreProtocolError::Detail(error.to_string()))?;
+        }
+        if self.has(ENCRYPTION_PROTOCOL_URI) {
+            pre_process_encryption_write(tenant, message, message_store).await?;
         }
         Ok(())
     }

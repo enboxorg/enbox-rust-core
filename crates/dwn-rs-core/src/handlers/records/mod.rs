@@ -2,6 +2,7 @@ pub(crate) mod common;
 pub(crate) mod control;
 pub(crate) mod count;
 pub(crate) mod delete;
+pub(crate) mod policy;
 pub(crate) mod query;
 pub(crate) mod read;
 // RecordsWrite, RecordsDelete, and resumable delete rechecks share this planner.

@@ -579,7 +579,8 @@ pub async fn fetch_protocol_definition<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    if let Some(definition) = CoreProtocolRegistry::with_permissions().get_definition(protocol_uri)
+    if let Some(definition) =
+        CoreProtocolRegistry::with_core_protocols().get_definition(protocol_uri)
     {
         return Ok(definition);
     }

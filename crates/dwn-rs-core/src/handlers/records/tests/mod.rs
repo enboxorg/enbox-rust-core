@@ -62,6 +62,7 @@ use crate::handlers::configure::ProtocolsConfigureHandler;
 mod control;
 mod grant_invocation;
 mod grant_invocation_temporal;
+mod grant_key;
 
 /// Drives a resumable delete the way a resume actually does: through the
 /// controller that owns the stores, not a free function taking them.
@@ -3704,47 +3705,14 @@ async fn records_write_encrypted_path_with_extra_entries_is_accepted() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
-// Covers: DWN-PROTO-001
+// Covers: ENBOX-ENC-002
 #[tokio::test]
-async fn records_write_grant_key_path_bypasses_path_key_lookup() {
+async fn encryption_definition_resolves_without_installation() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
-        "did:example:alice",
-        &message_store,
-        Definition {
-            protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-            published: true,
-            uses: None,
-            key_agreement: None,
-            types: BTreeMap::from([(
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
-                Type {
-                    schema: None,
-                    data_formats: None,
-                    encryption_required: Some(true),
-                },
-            )]),
-            structure: BTreeMap::from([(
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
-                RuleSet::default(),
-            )]),
-        },
-        ENC_T1,
-    )
-    .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry("recipient-kid")]);
-    let write = enc_protocol_write(
-        ENCRYPTION_PROTOCOL_URI,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
-        ENC_WRITE_TIME,
-        Some(envelope),
-    )
-    .await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-
+    // No tenant ProtocolsConfigure: the core definition still governs, so a
+    // plaintext grantKey fails the encryption-required gate.
     let bare = enc_protocol_write(
         ENCRYPTION_PROTOCOL_URI,
         ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,

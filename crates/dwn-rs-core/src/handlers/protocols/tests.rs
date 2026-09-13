@@ -14,6 +14,7 @@ use crate::descriptors::{
     ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
 };
 use crate::dwn::{Dwn, Handler};
+use crate::encryption::{protocol::encryption_protocol_definition, ENCRYPTION_PROTOCOL_URI};
 use crate::fields::WriteFields;
 use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
 use crate::handlers::query::ProtocolsQueryHandler;
@@ -578,6 +579,37 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
     .await
     .unwrap();
     assert!(!latest.published);
+}
+
+// Covers: ENBOX-ENC-002
+#[tokio::test]
+async fn core_encryption_definition_takes_precedence_over_tenant_configure() {
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+    let handler =
+        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+
+    // A tenant configuration at the core URI is accepted and stored ...
+    let reply = handler
+        .run(
+            "did:example:alice",
+            &signed_configure_message(ENCRYPTION_PROTOCOL_URI, true, "2025-01-01T00:00:00.000000Z")
+                .await,
+            None,
+        )
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // ... but never consulted: the registry definition wins over the stored one.
+    let definition = fetch_protocol_definition(
+        "did:example:alice",
+        ENCRYPTION_PROTOCOL_URI,
+        &message_store,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(definition, encryption_protocol_definition());
 }
 
 #[tokio::test]

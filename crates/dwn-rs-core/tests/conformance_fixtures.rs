@@ -3930,7 +3930,7 @@ fn ledger_divergences_still_hold() {
 // parity against the implementation rather than against a reading of it.
 #[test]
 fn grant_key_coverage_matches_typescript() {
-    use dwn_rs_core::encryption::grant_key::{
+    use dwn_rs_core::permissions::grant_key_coverage::{
         eligible_grant_scope, read_grant_covers_delivered_scope, DeliveredScope,
     };
     use dwn_rs_core::permissions::PermissionScope;

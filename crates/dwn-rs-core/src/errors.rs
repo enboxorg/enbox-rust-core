@@ -18,8 +18,12 @@ pub enum DwnErrorCode {
     ProtocolAuthorizationParentNotFoundConstructingRecordChain,
     RecordsWriteGetInitialWriteNotFound,
     GrantAuthorizationGrantMissing,
+    GrantAuthorizationGrantNotYetActive,
+    GrantAuthorizationGrantExpired,
+    GrantAuthorizationGrantRevoked,
     ProtocolAuthorizationMatchingRoleRecordNotFound,
     ProtocolAuthorizationEncryptionRequired,
+    ProtocolAuthorizationTagsInvalidSchema,
     ProtocolAuthorizationEncryptionNotAllowed,
     ProtocolAuthorizationEncryptionKeyAgreementMissing,
     ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
@@ -39,6 +43,12 @@ pub enum DwnErrorCode {
     EncryptionControlValidateDeliveryTagsMismatch,
     EncryptionControlValidateUnexpectedRecord,
     EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
+    EncryptionProtocolValidateEncryptedDeliveryMissingEncryption,
+    EncryptionProtocolValidateGrantKeyAuthorMismatch,
+    EncryptionProtocolValidateGrantKeyRecipientMismatch,
+    EncryptionProtocolValidateGrantKeyGrantScopeMismatch,
+    EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid,
+    EncryptionProtocolValidateSchemaUnexpectedRecord,
     RecordsWriteMissingDataInPrevious,
     RecordsWriteMissingEncodedDataInPrevious,
     RecordsWriteNotAllowedAfterDelete,
@@ -81,11 +91,17 @@ impl DwnErrorCode {
             }
             Self::RecordsWriteGetInitialWriteNotFound => "RecordsWriteGetInitialWriteNotFound",
             Self::GrantAuthorizationGrantMissing => "GrantAuthorizationGrantMissing",
+            Self::GrantAuthorizationGrantNotYetActive => "GrantAuthorizationGrantNotYetActive",
+            Self::GrantAuthorizationGrantExpired => "GrantAuthorizationGrantExpired",
+            Self::GrantAuthorizationGrantRevoked => "GrantAuthorizationGrantRevoked",
             Self::ProtocolAuthorizationMatchingRoleRecordNotFound => {
                 "ProtocolAuthorizationMatchingRoleRecordNotFound"
             }
             Self::ProtocolAuthorizationEncryptionRequired => {
                 "ProtocolAuthorizationEncryptionRequired"
+            }
+            Self::ProtocolAuthorizationTagsInvalidSchema => {
+                "ProtocolAuthorizationTagsInvalidSchema"
             }
             Self::ProtocolAuthorizationEncryptionNotAllowed => {
                 "ProtocolAuthorizationEncryptionNotAllowed"
@@ -141,6 +157,24 @@ impl DwnErrorCode {
             }
             Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing => {
                 "EncryptionControlValidateDeliveryRecipientRoleRecordMissing"
+            }
+            Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption => {
+                "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption"
+            }
+            Self::EncryptionProtocolValidateGrantKeyAuthorMismatch => {
+                "EncryptionProtocolValidateGrantKeyAuthorMismatch"
+            }
+            Self::EncryptionProtocolValidateGrantKeyRecipientMismatch => {
+                "EncryptionProtocolValidateGrantKeyRecipientMismatch"
+            }
+            Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch => {
+                "EncryptionProtocolValidateGrantKeyGrantScopeMismatch"
+            }
+            Self::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid => {
+                "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid"
+            }
+            Self::EncryptionProtocolValidateSchemaUnexpectedRecord => {
+                "EncryptionProtocolValidateSchemaUnexpectedRecord"
             }
             Self::RecordsWriteMissingDataInPrevious => "RecordsWriteMissingDataInPrevious",
             Self::RecordsWriteMissingEncodedDataInPrevious => {
@@ -247,11 +281,17 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "RecordsWriteGetInitialWriteNotFound" => Ok(Self::RecordsWriteGetInitialWriteNotFound),
             "GrantAuthorizationGrantMissing" => Ok(Self::GrantAuthorizationGrantMissing),
+            "GrantAuthorizationGrantNotYetActive" => Ok(Self::GrantAuthorizationGrantNotYetActive),
+            "GrantAuthorizationGrantExpired" => Ok(Self::GrantAuthorizationGrantExpired),
+            "GrantAuthorizationGrantRevoked" => Ok(Self::GrantAuthorizationGrantRevoked),
             "ProtocolAuthorizationMatchingRoleRecordNotFound" => {
                 Ok(Self::ProtocolAuthorizationMatchingRoleRecordNotFound)
             }
             "ProtocolAuthorizationEncryptionRequired" => {
                 Ok(Self::ProtocolAuthorizationEncryptionRequired)
+            }
+            "ProtocolAuthorizationTagsInvalidSchema" => {
+                Ok(Self::ProtocolAuthorizationTagsInvalidSchema)
             }
             "ProtocolAuthorizationEncryptionNotAllowed" => {
                 Ok(Self::ProtocolAuthorizationEncryptionNotAllowed)
@@ -307,6 +347,24 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "EncryptionControlValidateDeliveryRecipientRoleRecordMissing" => {
                 Ok(Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing)
+            }
+            "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption" => {
+                Ok(Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption)
+            }
+            "EncryptionProtocolValidateGrantKeyAuthorMismatch" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyAuthorMismatch)
+            }
+            "EncryptionProtocolValidateGrantKeyRecipientMismatch" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyRecipientMismatch)
+            }
+            "EncryptionProtocolValidateGrantKeyGrantScopeMismatch" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch)
+            }
+            "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid" => {
+                Ok(Self::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid)
+            }
+            "EncryptionProtocolValidateSchemaUnexpectedRecord" => {
+                Ok(Self::EncryptionProtocolValidateSchemaUnexpectedRecord)
             }
             "RecordsWriteMissingDataInPrevious" => Ok(Self::RecordsWriteMissingDataInPrevious),
             "RecordsWriteMissingEncodedDataInPrevious" => {
