@@ -138,7 +138,7 @@ where
                 ));
             }
 
-            if let Err(detail) = authorize_records_delete(
+            if let Err(error) = authorize_records_delete(
                 tenant,
                 &message,
                 &initial_write,
@@ -147,7 +147,7 @@ where
             )
             .await
             {
-                return Response::unauthorized(detail);
+                return Response::new(error.into_status(), ());
             }
 
             if let Err(detail) = perform_records_delete(

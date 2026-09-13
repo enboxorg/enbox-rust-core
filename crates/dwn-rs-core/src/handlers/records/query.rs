@@ -84,8 +84,8 @@ where
                 .await
             {
                 Ok(result) => result,
-                Err(QueryAuthorizationResult::Unauthorized(detail)) => {
-                    return Response::unauthorized(detail)
+                Err(QueryAuthorizationResult::Unauthorized(error)) => {
+                    return Response::new(error.into_status(), Default::default())
                 }
             };
             let record_limit = match resolve_record_limit_policy(

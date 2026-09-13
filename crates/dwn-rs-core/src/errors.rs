@@ -22,6 +22,8 @@ pub enum DwnErrorCode {
     GrantAuthorizationGrantExpired,
     GrantAuthorizationGrantRevoked,
     ProtocolAuthorizationMatchingRoleRecordNotFound,
+    ProtocolAuthorizationNotARole,
+    ProtocolAuthorizationMissingContextId,
     ProtocolAuthorizationEncryptionRequired,
     ProtocolAuthorizationTagsInvalidSchema,
     ProtocolAuthorizationEncryptionNotAllowed,
@@ -97,6 +99,8 @@ impl DwnErrorCode {
             Self::ProtocolAuthorizationMatchingRoleRecordNotFound => {
                 "ProtocolAuthorizationMatchingRoleRecordNotFound"
             }
+            Self::ProtocolAuthorizationNotARole => "ProtocolAuthorizationNotARole",
+            Self::ProtocolAuthorizationMissingContextId => "ProtocolAuthorizationMissingContextId",
             Self::ProtocolAuthorizationEncryptionRequired => {
                 "ProtocolAuthorizationEncryptionRequired"
             }
@@ -286,6 +290,10 @@ impl TryFrom<&str> for DwnErrorCode {
             "GrantAuthorizationGrantRevoked" => Ok(Self::GrantAuthorizationGrantRevoked),
             "ProtocolAuthorizationMatchingRoleRecordNotFound" => {
                 Ok(Self::ProtocolAuthorizationMatchingRoleRecordNotFound)
+            }
+            "ProtocolAuthorizationNotARole" => Ok(Self::ProtocolAuthorizationNotARole),
+            "ProtocolAuthorizationMissingContextId" => {
+                Ok(Self::ProtocolAuthorizationMissingContextId)
             }
             "ProtocolAuthorizationEncryptionRequired" => {
                 Ok(Self::ProtocolAuthorizationEncryptionRequired)

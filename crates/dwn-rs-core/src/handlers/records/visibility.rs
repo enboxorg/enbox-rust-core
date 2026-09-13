@@ -23,7 +23,7 @@ use super::common::{
     authorize_protocol_query_or_subscribe, filter_includes_published_records,
     non_owner_records_event_filters, non_owner_records_filters, owner_records_event_filter,
     owner_records_filter, published_records_event_filter, published_records_filter,
-    should_protocol_authorize,
+    should_protocol_authorize, ProtocolAuthorizationError,
 };
 use super::control;
 use super::RecordsAuthorizationKind;
@@ -69,7 +69,7 @@ pub(crate) async fn authorize_collection<MessageStore>(
     message_store: &MessageStore,
     request_timestamp: &str,
     kind: RecordsAuthorizationKind,
-) -> Result<CollectionAuthorization, String>
+) -> Result<CollectionAuthorization, ProtocolAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {

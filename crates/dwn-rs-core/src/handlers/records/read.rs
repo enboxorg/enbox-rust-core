@@ -18,6 +18,7 @@ use crate::handlers::records::common::{
     fetch_initial_write_message, fetch_newest_write, filter_map, message_record_id,
     message_record_limit_policy, published_sort_name, records_delete_descriptor,
     records_filter_to_filter_map, set_encoded_data, store_error_reply, string_filter,
+    ProtocolAuthorizationError,
 };
 use crate::handlers::records::control;
 use crate::permissions::{self};
@@ -138,7 +139,7 @@ where
                             fetch_newest_write(tenant, &record_id, &self.message_store)
                                 .await
                                 .unwrap_or_else(|_| initial_write.clone());
-                        if let Err(detail) = authorize_records_read(
+                        if let Err(error) = authorize_records_read(
                             tenant,
                             &message,
                             signature.as_ref(),
@@ -148,7 +149,7 @@ where
                         .await
                         {
                             if point_read {
-                                return Response::unauthorized(detail);
+                                return Response::new(error.into_status(), Read::default());
                             }
                             continue;
                         }
@@ -219,11 +220,11 @@ where
                         .await
                         {
                             Ok(true) => Ok(()),
-                            Ok(false) => Err("EncryptionControlReadUnauthorized: requester is not authorized to read the encryption control record".to_string()),
+                            Ok(false) => Err(ProtocolAuthorizationError::Detail("EncryptionControlReadUnauthorized: requester is not authorized to read the encryption control record".to_string())),
                             Err(control::ControlValidationError::Internal(detail)) => {
                                 return store_error_reply(detail)
                             }
-                            Err(error) => Err(error.to_string()),
+                            Err(error) => Err(ProtocolAuthorizationError::Detail(error.to_string())),
                         }
                     } else {
                         authorize_records_read(
@@ -235,9 +236,9 @@ where
                         )
                         .await
                     };
-                    if let Err(detail) = authorized {
+                    if let Err(error) = authorized {
                         if point_read {
-                            return Response::unauthorized(detail);
+                            return Response::new(error.into_status(), Read::default());
                         }
                         continue;
                     }

@@ -63,6 +63,7 @@ mod control;
 mod grant_invocation;
 mod grant_invocation_temporal;
 mod grant_key;
+mod local_roles;
 
 /// Drives a resumable delete the way a resume actually does: through the
 /// controller that owns the stores, not a free function taking them.

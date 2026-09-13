@@ -75,7 +75,7 @@ where
             .await
             {
                 Ok(auth) => auth,
-                Err(detail) => return Response::unauthorized(detail),
+                Err(error) => return Response::new(error.into_status(), Default::default()),
             };
             let filters = collection_filters(&auth, &descriptor.filter, None, PlanMode::Snapshot);
             let record_limit = match resolve_record_limit_policy(
