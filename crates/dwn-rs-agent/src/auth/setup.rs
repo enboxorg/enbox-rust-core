@@ -3,11 +3,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use crate::identity::agent::{
+use crate::agent::{
     jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
     AgentKeyManager, PortableDid, SecretStore,
 };
-use crate::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
+use dwn_rs_core::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
@@ -578,11 +578,11 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::agent::{
+    use crate::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
-    use crate::interfaces::messages::protocols::{Type, Who};
+    use dwn_rs_core::interfaces::messages::protocols::{Type, Who};
     use serde_json::Value as JsonValue;
 
     #[tokio::test]
@@ -942,11 +942,11 @@ mod tests {
             structure: BTreeMap::from([(
                 "note".to_string(),
                 RuleSet {
-                    actions: vec![crate::interfaces::messages::protocols::Action::Who(
-                        crate::interfaces::messages::protocols::ActionWho {
+                    actions: vec![dwn_rs_core::interfaces::messages::protocols::Action::Who(
+                        dwn_rs_core::interfaces::messages::protocols::ActionWho {
                             who: Who::Anyone,
                             of: None,
-                            can: vec![crate::interfaces::messages::protocols::Can::Create],
+                            can: vec![dwn_rs_core::interfaces::messages::protocols::Can::Create],
                         },
                     )],
                     ..Default::default()

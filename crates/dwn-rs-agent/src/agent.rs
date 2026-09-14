@@ -188,8 +188,8 @@ pub trait AgentKeyManager: Clone + Send + Sync + 'static {
 
 /// Stores agent-owned portable identities.
 ///
-/// This is not the cache for externally resolved DID documents. See
-/// [`crate::auth::resolver::DidResolutionCache`] for that boundary.
+/// This is not the cache for externally resolved DID documents, which keeps
+/// freshness and version metadata for documents obtained from elsewhere.
 pub trait PortableDidStore: Clone + Send + Sync + 'static {
     fn get_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, Option<PortableDid>>;
     fn put_did<'a>(&'a self, portable_did: PortableDid) -> AgentIdentityFuture<'a, ()>;

@@ -7,12 +7,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-use crate::identity::agent::{
+use crate::agent::{
     jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
     AgentKeyManager, DidProvider, PortableDid, SecretStore,
 };
-use crate::interfaces::messages::protocols::Definition;
-use crate::permissions::{PermissionScope, RecordsMethod, RecordsScope};
+use dwn_rs_core::interfaces::messages::protocols::Definition;
+use dwn_rs_core::permissions::{PermissionScope, RecordsMethod, RecordsScope};
 use ssi_jwk::JWK;
 
 pub type ConnectFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
@@ -620,12 +620,12 @@ mod tests {
     use chrono::Duration;
 
     use super::*;
-    use crate::identity::agent::{
+    use crate::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
-    use crate::interfaces::messages::protocols::{Action, ActionWho, Can, RuleSet, Type, Who};
-    use crate::permissions::{ProtocolPath, RecordsMethod, RecordsScope, RecordsSelector};
+    use dwn_rs_core::interfaces::messages::protocols::{Action, ActionWho, Can, RuleSet, Type, Who};
+    use dwn_rs_core::permissions::{ProtocolPath, RecordsMethod, RecordsScope, RecordsSelector};
 
     #[tokio::test]
     async fn read_like_scope_receives_decryption_key_and_write_only_does_not() {
