@@ -2,17 +2,17 @@
 //!
 //! Persists agent vault secrets (portable DID JSON, vault content encryption
 //! key, vault unlock salt, and delegate decryption/context keys) in the same
-//! SQLite database used by [`SqliteNativeDwn`](crate::SqliteNativeDwn).
+//! SQLite database used by the native node.
 //!
 //! **Not encryption at rest.** The host is still responsible for binding
 //! the underlying database file to a platform keychain / Secure Enclave /
 //! TPM. This impl provides durability across `open()` calls so a freshly
-//! restored agent can drive [`dwn_rs_core::identity::agent::AgentIdentityService::stored_agent_did`].
+//! restored agent can drive [`crate::agent::AgentIdentityService::stored_agent_did`].
 
-use dwn_rs_core::identity::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore};
+use crate::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore};
+use dwn_rs_core::errors::StoreError;
+use dwn_rs_stores::SqliteStore;
 use rusqlite::{params, OptionalExtension};
-
-use crate::sqlite::{sqlite_store_error, SqliteStore};
 
 const VAULT_ERROR_CODE: &str = "AgentVaultError";
 
@@ -26,7 +26,7 @@ impl SqliteSecretStore {
     /// Build a secret store that shares the supplied database connection.
     ///
     /// The underlying `SqliteStore` must already be opened (typically by
-    /// [`SqliteNativeDwn::open_at`](crate::SqliteNativeDwn::open_at)).
+    /// opening the native node at a database path).
     pub fn new(store: &SqliteStore) -> Self {
         Self {
             store: store.clone(),
@@ -56,7 +56,7 @@ impl SecretStore for SqliteSecretStore {
                             |row| row.get::<_, Vec<u8>>(0),
                         )
                         .optional()
-                        .map_err(sqlite_store_error)
+                        .map_err(|err| StoreError::InternalException(err.to_string()))
                 })
                 .await
                 .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
@@ -76,7 +76,7 @@ impl SecretStore for SqliteSecretStore {
                             "INSERT OR REPLACE INTO agent_secrets (key, value) VALUES (?1, ?2)",
                             params![key, value],
                         )
-                        .map_err(sqlite_store_error)?;
+                        .map_err(|err| StoreError::InternalException(err.to_string()))?;
                     Ok(())
                 })
                 .await
@@ -94,7 +94,7 @@ impl SecretStore for SqliteSecretStore {
                 .with_writer(move |connection| {
                     let affected = connection
                         .execute("DELETE FROM agent_secrets WHERE key = ?1", params![key])
-                        .map_err(sqlite_store_error)?;
+                        .map_err(|err| StoreError::InternalException(err.to_string()))?;
                     Ok(affected > 0)
                 })
                 .await
