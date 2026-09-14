@@ -15,10 +15,12 @@ use sha2::{Digest, Sha256};
 use crate::auth::Authorization;
 use crate::descriptors::messages::SyncParameters;
 use crate::descriptors::{
-    records::strip_encoded_data, Descriptor, MessagesSyncDescriptor, Records,
+    records::{records_write_descriptor, strip_encoded_data},
+    Descriptor, MessagesSyncDescriptor, Records,
 };
 use crate::descriptors::{MessageDescriptor, DELETE};
 use crate::errors::DwnErrorCode;
+use crate::handlers::records::common::{context_id, record_has_prune};
 use crate::interfaces::messages::descriptors::messages::SyncAction;
 use crate::replies::messages::{self};
 use crate::replies::Status;
@@ -53,15 +55,17 @@ pub fn classify_apply_reply(
 }
 
 /// Classifies a handler reply using the receiver's local knowledge of whether a
-/// missing parent was tombstoned. A tombstone is terminal, so the reply's
-/// generic missing-parent code classifies `Invalid` instead of the retryable
-/// `Incomplete`. Keeping this out of [`Status`] means the client-facing reply
-/// never distinguishes a tombstoned parent from one that has merely not arrived.
+/// missing parent was pruned. A prune is terminal, so the reply's generic
+/// missing-parent code settles as `Superseded` instead of the retryable
+/// `Incomplete`: the retained prune dominates the rejected descendant. A soft
+/// delete alone is not terminal. Keeping this out of [`Status`] means the
+/// client-facing reply never distinguishes a pruned parent from one that has
+/// merely not arrived.
 pub fn classify_apply_reply_with_parent_state(
     status: &Status,
     message: &Message<Descriptor>,
     already_stored: bool,
-    parent_deleted: bool,
+    parent_pruned: bool,
 ) -> ReplicationApplyOutcome {
     // A pre-existing CID only refines the handler's ordinary conflict response.
     // It must never turn a fresh validation or authorization failure into a duplicate.
@@ -87,15 +91,17 @@ pub fn classify_apply_reply_with_parent_state(
             Some(
                 DwnErrorCode::ProtocolAuthorizationParentRecordNotFound
                 | DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound,
-            ) if parent_deleted => ReplicationApplyOutcome::Invalid,
+            ) if parent_pruned => ReplicationApplyOutcome::Superseded,
             Some(code) if code.is_missing_dependency() => ReplicationApplyOutcome::Incomplete,
             _ => ReplicationApplyOutcome::Invalid,
         },
     }
 }
 
-/// Whether a parent-missing reply is locally known to be terminal because the
-/// referenced parent record carries a tombstone.
+/// Whether a parent-missing reply is locally known to be terminal because an
+/// ancestor of the referenced record carries a retained prune. Prune physically
+/// removes its subtree, so a later descendant's immediate parent may be gone
+/// with no prune row of its own; the check walks the message's context chain.
 async fn parent_reply_is_terminal<MessageStore>(
     tenant: &str,
     message: &Message<Descriptor>,
@@ -116,15 +122,40 @@ where
     if !parent_missing {
         return false;
     }
-    let Ok(descriptor) = crate::descriptors::records::records_write_descriptor(message) else {
+    let Ok(descriptor) = records_write_descriptor(message) else {
         return false;
     };
     let Some(parent_id) = descriptor.parent_id.as_deref() else {
         return false;
     };
-    crate::handlers::records::common::record_has_tombstone(tenant, parent_id, message_store)
-        .await
-        .unwrap_or(false)
+
+    // `contextId` is the ancestor recordId chain ending with the record's own
+    // recordId; the immediate parent is its last ancestor. Fall back to the
+    // declared parent when the chain is unavailable.
+    let ancestors: Vec<String> = context_id(message)
+        .map(|context| {
+            let mut segments: Vec<&str> = context
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect();
+            segments.pop();
+            segments
+                .into_iter()
+                .map(|segment| segment.to_string())
+                .collect::<Vec<String>>()
+        })
+        .filter(|ancestors| !ancestors.is_empty())
+        .unwrap_or_else(|| vec![parent_id.to_string()]);
+
+    for ancestor in ancestors {
+        match record_has_prune(tenant, &ancestor, message_store).await {
+            Ok(true) => return true,
+            Ok(false) => {}
+            // A failed read cannot prove prune; the reply stays repairable.
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 /// Builds signed MessagesSync requests for remote HTTP peers.
@@ -285,14 +316,14 @@ where
                     .process_message(&tenant, entry.message.clone())
                     .await
             };
-            let parent_deleted =
+            let parent_pruned =
                 parent_reply_is_terminal(&tenant, &entry.message, &reply.status, &message_store)
                     .await;
             match classify_apply_reply_with_parent_state(
                 &reply.status,
                 &entry.message,
                 already_stored,
-                parent_deleted,
+                parent_pruned,
             ) {
                 ReplicationApplyOutcome::Applied
                 | ReplicationApplyOutcome::Duplicate
@@ -945,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn tombstoned_parent_missing_reply_classifies_terminal_with_local_state() {
+    fn pruned_parent_missing_reply_classifies_terminal_with_local_state() {
         // Covers: DWN-SYNC-003
         let write = Message::new(
             Descriptor::Records(Box::new(Records::Write(Default::default()))),
@@ -959,15 +990,21 @@ mod tests {
                 "could not find parent record",
             ),
         );
-        // Without local tombstone knowledge the reply is a repairable dependency.
+        // Without local prune knowledge the reply is a repairable dependency.
         assert_eq!(
             classify_apply_reply(&missing_parent, &write, false),
             ReplicationApplyOutcome::Incomplete
         );
-        // A receiver that can see the parent's tombstone classifies it terminal.
+        // A receiver that can see the parent's prune settles it as Superseded,
+        // not a retryable dependency.
         assert_eq!(
             classify_apply_reply_with_parent_state(&missing_parent, &write, false, true),
-            ReplicationApplyOutcome::Invalid
+            ReplicationApplyOutcome::Superseded
+        );
+        // A soft tombstone alone is not terminal: the receiver passes `false`.
+        assert_eq!(
+            classify_apply_reply_with_parent_state(&missing_parent, &write, false, false),
+            ReplicationApplyOutcome::Incomplete
         );
         // The terminal override is scoped to parent-missing replies.
         let missing_initial = Status::from_error(

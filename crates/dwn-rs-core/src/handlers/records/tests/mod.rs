@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::Bound;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -15,21 +16,24 @@ use crate::auth::resolver::{DidResolver, Resolution, ResolverError, ResolverFutu
 use crate::auth::Jws;
 use crate::cid::generate_dag_pb_cid_from_bytes;
 use crate::descriptors::MessageDescriptor;
-use crate::descriptors::{records::write_fields, Records};
+use crate::descriptors::{records::write_fields, ReadDescriptor, Records};
 use crate::dwn::Handler;
 use crate::errors::EventLogError;
-use crate::errors::{DataStoreError, MessageStoreError, StoreError};
+use crate::errors::{DataStoreError, DwnError, DwnErrorCode, MessageStoreError, StoreError};
 use crate::filters::Records as RecordsFilter;
 use crate::permissions::{
     AuthorizationContext, PermissionGrant, PermissionScope, RecordsMethod, RecordsScope,
     VerifiedAuthorizationPayload,
 };
 use crate::replies::records::Write as WriteReply;
+use crate::replies::Status;
+use crate::runtime::desktop::server::DwnProcessMessage;
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::occupancy::{is_occupant, occupant_ids_for_rows};
 use crate::stores::replication_feed_reader::build_token;
 use crate::stores::replication_feed_reader::{Fingerprint, ReplicationBounds};
+use crate::stores::state_index::MemoryStateIndex;
 use crate::stores::wake::{InProcessWakeBus, Wake, WakeError, WakePublisher};
 use crate::stores::{
     DataStore, DataStoreGetResult, DataStorePutResult, EventLog, EventLogReadOptions, KeyValues,
@@ -38,10 +42,13 @@ use crate::stores::{
 };
 use crate::stores::{EventLogReadResult, ProgressGapCode, ProgressGapReason};
 use crate::sync::endpoint::{
-    classify_apply_reply, classify_apply_reply_with_parent_state, ReplicationApplyOutcome,
+    classify_apply_reply, classify_apply_reply_with_parent_state, DirectSyncEndpoint,
+    ReplicationApplyOutcome,
 };
+use crate::sync::{SyncEndpoint, SyncMessageEntry};
 use crate::tasks::controller::{ResumableRecordsDeleteData, StorageController};
-use crate::validation::admit_message;
+use crate::validation::{admit_message, parse_message};
+use crate::Reply;
 use crate::{
     permissions, Filter, FilterKey, Filters, MapValue, Message, MessageSort, Pagination,
     RangeFilter, SortDirection,
@@ -60,6 +67,8 @@ use super::subscribe::{
 };
 use super::*;
 use crate::handlers::configure::ProtocolsConfigureHandler;
+
+const TENANT: &str = "did:example:alice";
 
 mod composition;
 mod control;
@@ -2361,6 +2370,7 @@ use crate::testing::*;
 #[derive(Clone, Default)]
 struct TestMessageStore {
     rows: Arc<RwLock<Vec<TestMessageRow>>>,
+    fail_prune_query: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -2464,7 +2474,17 @@ impl MessageStore for TestMessageStore {
     ) -> impl Future<Output = Result<MessageQueryResult, MessageStoreError>> + Send {
         let rows = self.rows.clone();
         let tenant = tenant.to_string();
+        let fail_prune = self.fail_prune_query.clone();
         async move {
+            if fail_prune.load(Ordering::SeqCst)
+                && filters.set.iter().any(|filter| {
+                    filter
+                        .keys()
+                        .any(|key| matches!(key, FilterKey::Index(name) if name == "prune"))
+                })
+            {
+                return Err(test_store_error("injected prune query failure".to_string()));
+            }
             let occupants = match record_limit {
                 None => None,
                 Some(policy) => match occupant_ids_for_rows(
@@ -4021,4 +4041,460 @@ async fn records_write_policy_follows_governing_definition_over_time() {
         .run("did:example:alice", &late_keyed, write_data())
         .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+const ANCESTRY_PROTOCOL: &str = "http://example.com/ancestry";
+
+fn ancestry_definition() -> crate::protocols::Definition {
+    use crate::protocols::{Definition, RuleSet, Type};
+    let text = || Type {
+        schema: None,
+        data_formats: None,
+        encryption_required: None,
+    };
+    Definition {
+        protocol: ANCESTRY_PROTOCOL.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: None,
+        types: BTreeMap::from([
+            ("thread".to_string(), text()),
+            ("message".to_string(), text()),
+        ]),
+        structure: BTreeMap::from([(
+            "thread".to_string(),
+            RuleSet {
+                rules: BTreeMap::from([("message".to_string(), RuleSet::default())]),
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+async fn ancestry_write(
+    protocol_path: &str,
+    parent: Option<(&str, &str)>,
+    timestamp: &str,
+    data: &'static [u8],
+) -> (serde_json::Value, Bytes) {
+    let bytes = Bytes::from_static(data);
+    let (parent_id, parent_context_id) = match parent {
+        Some((record_id, context_id)) => {
+            (Some(record_id.to_string()), Some(context_id.to_string()))
+        }
+        None => (None, None),
+    };
+    let message = signed_write_message(WriteSpec {
+        protocol: ANCESTRY_PROTOCOL.to_string(),
+        protocol_path: protocol_path.to_string(),
+        parent_id,
+        parent_context_id,
+        data_cid: generate_dag_pb_cid_from_bytes(&bytes).to_string(),
+        data_size: bytes.len() as u64,
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    (message, bytes)
+}
+
+async fn ancestry_fixture() -> (
+    TestMessageStore,
+    TestDataStore,
+    RecordsWriteHandler<TestMessageStore, TestDataStore>,
+    RecordsDeleteHandler<TestMessageStore, TestDataStore>,
+) {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(TENANT, &message_store, ancestry_definition(), T_INSTALL).await;
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let delete_handler = RecordsDeleteHandler::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    (message_store, data_store, write_handler, delete_handler)
+}
+
+const T_INSTALL: &str = "2024-12-31T00:00:00.000000Z";
+
+fn record_string(message: &serde_json::Value, key: &str) -> String {
+    message[key].as_str().unwrap().to_string()
+}
+
+// Covers: DWN-REC-004, DWN-REC-005
+#[tokio::test]
+async fn soft_deleted_same_protocol_parent_still_proves_ancestry() {
+    let (message_store, data_store, write_handler, delete_handler) = ancestry_fixture().await;
+
+    let (thread, thread_data) =
+        ancestry_write("thread", None, "2025-01-01T00:00:00.000000Z", b"t").await;
+    let thread_id = record_string(&thread, "recordId");
+    let thread_ctx = record_string(&thread, "contextId");
+    assert_eq!(
+        write_handler
+            .run(TENANT, &thread, Some(thread_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let delete = signed_delete_message(&thread_id, false, "2025-01-01T00:00:01.000000Z").await;
+    assert_eq!(
+        delete_handler.run(TENANT, &delete, None).await.status.code,
+        202
+    );
+
+    let (child, child_data) = ancestry_write(
+        "thread/message",
+        Some((&thread_id, &thread_ctx)),
+        "2025-01-01T00:00:02.000000Z",
+        b"m",
+    )
+    .await;
+    let reply = write_handler.run(TENANT, &child, Some(child_data)).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // The parent reads as absent while the child is still addressable.
+    let read_handler = RecordsReadHandler::new(
+        message_store.clone(),
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+    let read = owner_read_message(&record_id_json(&child), "2025-01-01T00:00:03.000000Z").await;
+    let reply = read_handler.run(TENANT, &read, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+
+    let read = owner_read_message(&thread_id, "2025-01-01T00:00:04.000000Z").await;
+    let reply = read_handler.run(TENANT, &read, None).await;
+    assert_eq!(reply.status.code, 404, "{}", reply.status.detail);
+
+    assert!(!record_has_prune(TENANT, &thread_id, &message_store)
+        .await
+        .unwrap());
+}
+
+// Covers: DWN-REC-004, DWN-SYNC-003
+#[tokio::test]
+async fn pruned_same_protocol_parent_rejects_child() {
+    let (message_store, _data_store, write_handler, delete_handler) = ancestry_fixture().await;
+
+    let (thread, thread_data) =
+        ancestry_write("thread", None, "2025-01-01T00:00:00.000000Z", b"t").await;
+    let thread_id = record_string(&thread, "recordId");
+    let thread_ctx = record_string(&thread, "contextId");
+    assert_eq!(
+        write_handler
+            .run(TENANT, &thread, Some(thread_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let prune = signed_delete_message(&thread_id, true, "2025-01-01T00:00:01.000000Z").await;
+    assert_eq!(
+        delete_handler.run(TENANT, &prune, None).await.status.code,
+        202
+    );
+
+    let (child, child_data) = ancestry_write(
+        "thread/message",
+        Some((&thread_id, &thread_ctx)),
+        "2025-01-01T00:00:02.000000Z",
+        b"m",
+    )
+    .await;
+    let reply = write_handler.run(TENANT, &child, Some(child_data)).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationParentRecordNotFound")
+    );
+    let pruned = record_has_prune(TENANT, &thread_id, &message_store)
+        .await
+        .unwrap();
+    assert!(pruned);
+    assert_eq!(
+        classify_apply_reply_with_parent_state(&reply.status, &parsed_value(&child), false, pruned),
+        ReplicationApplyOutcome::Superseded
+    );
+}
+
+// Covers: DWN-REC-002, DWN-REC-005
+#[tokio::test]
+async fn updates_then_soft_delete_still_proves_ancestry() {
+    let (_message_store, _data_store, write_handler, delete_handler) = ancestry_fixture().await;
+
+    let (thread, thread_data) =
+        ancestry_write("thread", None, "2025-01-01T00:00:00.000000Z", b"t").await;
+    let thread_id = record_string(&thread, "recordId");
+    let thread_ctx = record_string(&thread, "contextId");
+    assert_eq!(
+        write_handler
+            .run(TENANT, &thread, Some(thread_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    // An update displaces the initial write from latest state; the initial
+    // write is retained and remains the structural ancestor.
+    let update = signed_write_message(WriteSpec {
+        protocol: ANCESTRY_PROTOCOL.to_string(),
+        protocol_path: "thread".to_string(),
+        record_id: Some(thread_id.clone()),
+        context_id: Some(thread_ctx.clone()),
+        date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(b"t2").to_string(),
+        data_size: b"t2".len() as u64,
+        ..WriteSpec::new("2025-01-01T00:00:01.000000Z")
+    })
+    .await;
+    assert_eq!(
+        write_handler
+            .run(TENANT, &update, Some(Bytes::from_static(b"t2")))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let delete = signed_delete_message(&thread_id, false, "2025-01-01T00:00:02.000000Z").await;
+    assert_eq!(
+        delete_handler.run(TENANT, &delete, None).await.status.code,
+        202
+    );
+
+    let (child, child_data) = ancestry_write(
+        "thread/message",
+        Some((&thread_id, &thread_ctx)),
+        "2025-01-01T00:00:03.000000Z",
+        b"m",
+    )
+    .await;
+    let reply = write_handler.run(TENANT, &child, Some(child_data)).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-SYNC-003, DWN-SYNC-005
+#[tokio::test]
+async fn prune_lookup_failure_does_not_accept_ancestry() {
+    let (message_store, _data_store, write_handler, _delete_handler) = ancestry_fixture().await;
+
+    let (thread, thread_data) =
+        ancestry_write("thread", None, "2025-01-01T00:00:00.000000Z", b"t").await;
+    let thread_id = record_string(&thread, "recordId");
+    let thread_ctx = record_string(&thread, "contextId");
+    assert_eq!(
+        write_handler
+            .run(TENANT, &thread, Some(thread_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    message_store.fail_prune_query.store(true, Ordering::SeqCst);
+    let (child, child_data) = ancestry_write(
+        "thread/message",
+        Some((&thread_id, &thread_ctx)),
+        "2025-01-01T00:00:02.000000Z",
+        b"m",
+    )
+    .await;
+    let reply = write_handler.run(TENANT, &child, Some(child_data)).await;
+    assert!(
+        reply.status.code >= 400,
+        "a failed prune read must not admit the child: {} {}",
+        reply.status.code,
+        reply.status.detail
+    );
+
+    message_store
+        .fail_prune_query
+        .store(false, Ordering::SeqCst);
+    let (retry, retry_data) = ancestry_write(
+        "thread/message",
+        Some((&thread_id, &thread_ctx)),
+        "2025-01-01T00:00:02.000000Z",
+        b"m",
+    )
+    .await;
+    let reply = write_handler.run(TENANT, &retry, Some(retry_data)).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+fn record_id_json(message: &serde_json::Value) -> String {
+    record_string(message, "recordId")
+}
+
+async fn owner_read_message(record_id: &str, timestamp: &str) -> serde_json::Value {
+    let descriptor = ReadDescriptor {
+        message_timestamp: parse_time(timestamp),
+        filter: RecordsFilter {
+            record_id: Some(record_id.to_string()),
+            ..Default::default()
+        },
+        permission_grant_id: None,
+        date_sort: None,
+    };
+    let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+    let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer()).await;
+    json!({
+        "descriptor": descriptor_json,
+        "authorization": { "signature": signature }
+    })
+}
+
+fn parsed_value(message: &serde_json::Value) -> Message<Descriptor> {
+    parse_message(message).unwrap()
+}
+
+struct MissingParentApplier;
+
+impl DwnProcessMessage for MissingParentApplier {
+    fn process_message(
+        &self,
+        _tenant: &str,
+        _message: Message<Descriptor>,
+    ) -> Pin<Box<dyn Future<Output = Response<Reply>> + Send + '_>> {
+        Box::pin(async {
+            Response::new(
+                Status::from_error(
+                    400,
+                    DwnError::new(
+                        DwnErrorCode::ProtocolAuthorizationParentRecordNotFound,
+                        "missing parent",
+                    ),
+                ),
+                Reply::Empty,
+            )
+        })
+    }
+}
+
+async fn seed_prune_row(message_store: &TestMessageStore, tenant: &str, record_id: &str) {
+    let delete = parsed_value(&signed_delete_message(record_id, true, T_INSTALL).await);
+    let indexes: KeyValues = BTreeMap::from([
+        (
+            "interface".to_string(),
+            Value::String("Records".to_string()),
+        ),
+        ("method".to_string(), Value::String("Delete".to_string())),
+        ("recordId".to_string(), Value::String(record_id.to_string())),
+        ("prune".to_string(), Value::Bool(true)),
+    ]);
+    message_store.put(tenant, delete, indexes).await.unwrap();
+}
+
+async fn parent_missing_entry(parent_id: &str) -> SyncMessageEntry {
+    let message = parsed_value(
+        &signed_write_message(WriteSpec {
+            protocol: ANCESTRY_PROTOCOL.to_string(),
+            protocol_path: "thread/message".to_string(),
+            parent_id: Some(parent_id.to_string()),
+            ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+        })
+        .await,
+    );
+    let cid = message_cid(&message).unwrap();
+    SyncMessageEntry::new(cid, message).unwrap()
+}
+
+// Covers: DWN-SYNC-003, DWN-SYNC-005
+#[tokio::test]
+async fn direct_sync_endpoint_settles_pruned_parent_as_terminal() {
+    let data_store = TestDataStore::default();
+
+    // Missing parent: repairable.
+    let missing_store = TestMessageStore::default();
+    let endpoint = DirectSyncEndpoint::new(
+        MissingParentApplier,
+        missing_store,
+        data_store.clone(),
+        MemoryStateIndex::default(),
+    );
+    let error = endpoint
+        .apply(TENANT, parent_missing_entry("parent-missing").await)
+        .await
+        .unwrap_err();
+    assert!(error.retryable, "{error:?}");
+
+    // Pruned parent: settled as superseded, no failure and no dead letter.
+    let pruned_store = TestMessageStore::default();
+    seed_prune_row(&pruned_store, TENANT, "parent-pruned").await;
+    let endpoint = DirectSyncEndpoint::new(
+        MissingParentApplier,
+        pruned_store,
+        data_store.clone(),
+        MemoryStateIndex::default(),
+    );
+    endpoint
+        .apply(TENANT, parent_missing_entry("parent-pruned").await)
+        .await
+        .expect("a pruned parent settles the descendant without a failure");
+}
+
+// Covers: DWN-SYNC-003, DWN-SYNC-005
+#[tokio::test]
+async fn direct_sync_endpoint_settles_a_late_descendant_of_a_pruned_subtree() {
+    // Prune physically purges its subtree, so a late grandchild's immediate
+    // parent is gone with no prune row of its own. The receiver must find the
+    // pruned ancestor through the context chain rather than the direct parent.
+    let ancestor_store = TestMessageStore::default();
+    seed_prune_row(&ancestor_store, TENANT, "root-ancestor").await;
+    let endpoint = DirectSyncEndpoint::new(
+        MissingParentApplier,
+        ancestor_store,
+        TestDataStore::default(),
+        MemoryStateIndex::default(),
+    );
+    endpoint
+        .apply(
+            TENANT,
+            descendant_entry("child-purged", "root-ancestor").await,
+        )
+        .await
+        .expect("a pruned ancestor settles the descendant chain");
+}
+
+async fn descendant_entry(parent_id: &str, root_ancestor: &str) -> SyncMessageEntry {
+    let message = parsed_value(
+        &signed_write_message(WriteSpec {
+            protocol: ANCESTRY_PROTOCOL.to_string(),
+            protocol_path: "thread/message/reply".to_string(),
+            parent_id: Some(parent_id.to_string()),
+            parent_context_id: Some(format!("{root_ancestor}/{parent_id}")),
+            ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+        })
+        .await,
+    );
+    let cid = message_cid(&message).unwrap();
+    SyncMessageEntry::new(cid, message).unwrap()
+}
+
+// Covers: DWN-SYNC-003, DWN-SYNC-005
+#[tokio::test]
+async fn direct_sync_endpoint_does_not_prove_prune_from_a_failed_lookup() {
+    let pruned_store = TestMessageStore::default();
+    seed_prune_row(&pruned_store, TENANT, "parent-failing").await;
+    pruned_store.fail_prune_query.store(true, Ordering::SeqCst);
+
+    let endpoint = DirectSyncEndpoint::new(
+        MissingParentApplier,
+        pruned_store,
+        TestDataStore::default(),
+        MemoryStateIndex::default(),
+    );
+    let error = endpoint
+        .apply(TENANT, parent_missing_entry("parent-failing").await)
+        .await
+        .unwrap_err();
+    // The prune row exists, but a failed read cannot prove it: stay repairable.
+    assert!(error.retryable, "{error:?}");
 }

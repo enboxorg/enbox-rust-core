@@ -160,9 +160,9 @@ where
         let parent = fetch_parent_record(tenant, parent_id, &parent_protocol, message_store)
             .await?
             .ok_or_else(|| {
-                // A missing parent and a tombstoned parent are indistinguishable on the
-                // client-facing reply; the replication apply layer classifies a tombstone
-                // as terminal locally. See `record_has_tombstone`.
+                // A missing parent and a pruned parent are indistinguishable on the
+                // client-facing reply; the replication apply layer classifies a prune
+                // as terminal locally. See `record_has_prune`.
                 let code = if parent_protocol != descriptor.protocol {
                     DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound
                 } else {
