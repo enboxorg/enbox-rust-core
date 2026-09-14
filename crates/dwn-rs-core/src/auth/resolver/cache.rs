@@ -1,7 +1,8 @@
 //! Storage primitives for complete DID-document resolution results.
 //!
-//! This is deliberately distinct from `identity::agent::PortableDidStore`, which stores
-//! agent-owned portable identities and may contain private key material. Resolution results are
+//! This is deliberately distinct from the agent-owned portable identity store
+//! in `dwn-rs-agent`, which stores agent-owned portable identities and may
+//! contain private key material. Resolution results are
 //! externally obtained documents whose freshness and version metadata must be retained.
 
 use std::collections::BTreeMap;

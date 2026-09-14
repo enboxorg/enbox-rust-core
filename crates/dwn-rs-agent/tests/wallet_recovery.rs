@@ -2,21 +2,21 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use chrono::{Duration, Utc};
-use dwn_rs_core::identity::agent::{
+use dwn_rs_agent::agent::{
     AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
     IdentityMetadata, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     PortableIdentity,
 };
-use dwn_rs_core::identity::connect::{
+use dwn_rs_agent::auth::connect::{
     create_delegate_grant, derive_delegate_keys, load_delegate_decryption_keys,
     save_delegate_decryption_keys, ConnectPermissionRequest,
 };
-use dwn_rs_core::identity::setup::{
+use dwn_rs_agent::auth::setup::{
     install_protocol_if_needed, register_with_dwn_endpoints, run_restore_flow, DwnServerInfo,
     MemoryProtocolEndpoint, RegistrationMethod, TenantRegistrationClient,
     TenantRegistrationRequest,
 };
-use dwn_rs_core::identity::setup::{RegistrationTokenData, SetupFuture};
+use dwn_rs_agent::auth::setup::{RegistrationTokenData, SetupFuture};
 use dwn_rs_core::interfaces::messages::protocols::{
     Action, ActionWho, Can, Definition, RuleSet, Type, Who,
 };
@@ -163,7 +163,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
 }
 
 struct RecoveredAgent {
-    portable_did: dwn_rs_core::identity::agent::PortableDid,
+    portable_did: dwn_rs_agent::agent::PortableDid,
     key_manager: MemoryKeyManager,
     secret_store: MemorySecretStore,
 }
@@ -277,7 +277,7 @@ impl TenantRegistrationClient for MockRegistrationClient {
         _refresh_token: &'a str,
     ) -> SetupFuture<'a, RegistrationTokenData> {
         Box::pin(async move {
-            Err(dwn_rs_core::identity::agent::AgentIdentityError::new(
+            Err(dwn_rs_agent::agent::AgentIdentityError::new(
                 "UnexpectedRefresh",
                 "test does not use provider auth",
             ))

@@ -1,4 +1,4 @@
-//! Glue between [`dwn_rs_core::identity::setup`] and the FFI surface.
+//! Glue between [`dwn_rs_agent::auth::setup`] and the FFI surface.
 //!
 //! Exposes a local [`ProtocolEndpoint`] backed by [`SqliteNativeDwn`] plus
 //! the helpers needed to extract a `ProtocolsConfigure`/`ProtocolsQuery`
@@ -10,8 +10,8 @@ use chrono::Utc;
 use dwn_rs_core::auth::{Jws, PrivateJwkSigner, JWK};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{ConfigureDescriptor, ProtocolQueryDescriptor};
-use dwn_rs_core::identity::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
-use dwn_rs_core::identity::setup::{ProtocolEndpoint, SetupFuture};
+use dwn_rs_agent::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
+use dwn_rs_agent::auth::setup::{ProtocolEndpoint, SetupFuture};
 use dwn_rs_core::interfaces::messages::descriptors::protocols::QueryFilter;
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_stores::SqliteNativeDwn;

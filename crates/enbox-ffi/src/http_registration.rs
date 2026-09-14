@@ -13,8 +13,8 @@
 //! `code` so FFI callers can distinguish transport failures from server
 //! rejections.
 
-use dwn_rs_core::identity::agent::{AgentIdentityError, AgentIdentityResult};
-use dwn_rs_core::identity::setup::{
+use dwn_rs_agent::agent::{AgentIdentityError, AgentIdentityResult};
+use dwn_rs_agent::auth::setup::{
     DwnServerInfo, RegistrationTokenData, SetupFuture, TenantRegistrationClient,
 };
 use serde::Serialize;

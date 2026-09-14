@@ -11,6 +11,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+dwn-rs-agent = { path = "../dwn-rs-agent" }
 dwn-rs-core = { path = "../dwn-rs-core" }
 dwn-rs-stores = { path = "../dwn-rs-stores" }
 reqwest = { version = "0.13.4", default-features = false, features = [

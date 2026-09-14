@@ -1,9 +1,10 @@
 //! Native Rust core for Enbox Decentralized Web Nodes (DWN).
 //!
-//! This crate provides the DWN message model, handlers, agent identity, sync,
+//! This crate provides the DWN message model, handlers, sync,
 //! state index, and supporting traits used by Enbox apps that need to run a
 //! DWN without a JavaScript runtime. Mobile, desktop, and server consumers
-//! build on the same core.
+//! build on the same core. Agent identity, vault, tenant registration, and
+//! connect helpers live in `dwn-rs-agent`.
 //!
 //! Correctness is anchored in tiers. Where an external specification or test
 //! vector exists, that is the source of truth: those checks form a
@@ -18,8 +19,6 @@
 //! - [`dwn::Dwn`] processes DWN messages and dispatches to method handlers.
 //! - [`interfaces::Message`] is the typed DWN message model.
 //! - [`stores`] defines the persistence traits a DWN engine requires.
-//! - [`identity`] groups agent identity, connect/delegate, and tenant setup
-//!   flows ([`identity::agent`], [`identity::connect`], [`identity::setup`]).
 //! - [`sync`] covers the native `MessagesSync` engine and dead-letter
 //!   bookkeeping.
 //!
@@ -28,7 +27,7 @@
 //! All modules under `crate::` are public. Top-level re-exports are limited
 //! to the most commonly used types ([`dwn`], [`interfaces`], [`filters`],
 //! [`value`], [`utils`]) to keep the prelude small. Other modules
-//! (`auth`, `dwn`, `encryption`, `errors`, `events`, `handlers`, `identity`,
+//! (`auth`, `dwn`, `encryption`, `errors`, `events`, `handlers`,
 //! `permissions`, `runtime`, `stores`, `sync`, `tasks`) are accessed via their
 //! qualified paths.
 #![doc(issue_tracker_base_url = "https://github.com/enboxorg/enbox-rust-core/issues/")]
@@ -44,7 +43,6 @@ pub mod filters;
 // clippy's `manual_async_fn` doesn't account for that bound, so its suggestion would not compile.
 #[allow(clippy::manual_async_fn)]
 pub mod handlers;
-pub mod identity;
 pub mod interfaces;
 pub mod permissions;
 pub mod runtime;
