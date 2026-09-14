@@ -54,7 +54,7 @@ impl SqliteStore {
     /// checked *before* opening, so closed handles never pay an
     /// open-then-discard cycle just to report failure. Only
     /// [`SqliteStore::open_inner`] transitions out of `Closed`.
-    pub(crate) async fn connection(&self) -> Result<SqliteConnection, StoreError> {
+    pub async fn connection(&self) -> Result<SqliteConnection, StoreError> {
         if let Some(conn) = self.check_state()? {
             return Ok(conn);
         }

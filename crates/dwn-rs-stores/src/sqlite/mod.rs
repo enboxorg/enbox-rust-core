@@ -9,7 +9,6 @@ mod migrations;
 mod query;
 pub mod replication_feed_reader;
 pub mod resumable_task_store;
-pub mod secrets_store;
 pub mod state_index;
 pub mod store;
 mod sync_ledger;
@@ -19,7 +18,6 @@ pub use self::conn::SqliteConnection;
 #[deprecated(note = "Use DurableEventLog instead")]
 pub use self::event_log::SqliteEventLog;
 pub use self::resumable_task_store::SqliteResumableTaskStore;
-pub use self::secrets_store::SqliteSecretStore;
 pub use self::state_index::SqliteStateIndex;
 pub(crate) use self::store::sqlite_store_error;
 pub use self::store::SqliteStore;

@@ -6,21 +6,22 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use dwn_rs_core::auth::{PrivateJwkSigner, StaticPublicKeyResolver, JWK};
-use dwn_rs_core::identity::agent::{
+use dwn_rs_agent::agent::{
     derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
     DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, PortableDid,
 };
-use dwn_rs_core::identity::connect::{
+use dwn_rs_agent::auth::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
     derive_delegate_keys, load_delegate_context_keys, load_delegate_decryption_keys,
     save_delegate_context_keys, save_delegate_decryption_keys, DelegateContextKey,
     DelegateDecryptionKey,
 };
-use dwn_rs_core::identity::setup::{
+use dwn_rs_agent::auth::setup::{
     inject_protocol_encryption, install_protocol_if_needed, push_protocol_if_needed,
     register_with_dwn_endpoints, run_restore_flow, TenantRegistrationRequest,
 };
+use dwn_rs_agent::SqliteSecretStore;
+use dwn_rs_core::auth::{PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
 use dwn_rs_core::stores::MessageStore;
@@ -30,7 +31,7 @@ use dwn_rs_core::sync::{
     SyncCheckpoint, SyncConnectivity, SyncDirection, SyncIdentityOptions, SyncOnceRequest,
     SyncOnceResult, SyncRunStatus,
 };
-use dwn_rs_stores::{SqliteNativeDwn, SqliteSecretStore};
+use dwn_rs_stores::SqliteNativeDwn;
 use serde::{Deserialize, Serialize};
 
 pub mod connect;
@@ -101,8 +102,8 @@ pub enum EnboxError {
     DeadlineExceeded,
 }
 
-impl From<dwn_rs_core::identity::agent::AgentIdentityError> for EnboxError {
-    fn from(err: dwn_rs_core::identity::agent::AgentIdentityError) -> Self {
+impl From<dwn_rs_agent::agent::AgentIdentityError> for EnboxError {
+    fn from(err: dwn_rs_agent::agent::AgentIdentityError) -> Self {
         EnboxError::Agent {
             code: err.code,
             detail: err.detail,
@@ -850,7 +851,7 @@ impl EnboxCore {
     /// When `persistTokens: true`, the agent secret store is read first
     /// (overriding any inline `registrationTokens`) and written back at
     /// the end with any refreshed tokens, matching
-    /// `dwn_rs_core::identity::setup::register_with_dwn_endpoints`.
+    /// `dwn_rs_agent::auth::setup::register_with_dwn_endpoints`.
     ///
     /// Returns the JSON-serialized `TenantRegistrationResult` (per-endpoint
     /// `records` and the final `registrationTokens` map).
@@ -913,7 +914,7 @@ impl EnboxCore {
     ///
     /// Returns the JSON-serialized `RestoreFlowResult` (ordered `steps`,
     /// `localInstalls`, `remotePushes`). Identity tenant restoration is
-    /// out of scope (see `dwn_rs_core::identity::setup::run_restore_flow` docs).
+    /// out of scope (see `dwn_rs_agent::auth::setup::run_restore_flow` docs).
     pub fn run_restore_flow(&self, request_json: String) -> Result<String, EnboxError> {
         let input: setup::RunRestoreFlowInput =
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
@@ -1373,8 +1374,8 @@ impl EnboxCore {
 pub(crate) async fn import_existing_identity(
     service: &AgentService,
     portable_did: &PortableDid,
-) -> Result<(), dwn_rs_core::identity::agent::AgentIdentityError> {
-    use dwn_rs_core::identity::agent::{DidProvider, PortableDidStore};
+) -> Result<(), dwn_rs_agent::agent::AgentIdentityError> {
+    use dwn_rs_agent::agent::{DidProvider, PortableDidStore};
     service
         .did_provider()
         .import_did(portable_did.clone())
@@ -1389,8 +1390,8 @@ pub(crate) async fn import_existing_identity(
 pub(crate) async fn import_private_keys(
     key_manager: &MemoryKeyManager,
     portable_did: &PortableDid,
-) -> Result<(), dwn_rs_core::identity::agent::AgentIdentityError> {
-    use dwn_rs_core::identity::agent::AgentKeyManager;
+) -> Result<(), dwn_rs_agent::agent::AgentIdentityError> {
+    use dwn_rs_agent::agent::AgentKeyManager;
     for jwk in &portable_did.private_keys {
         key_manager.import_private_jwk(jwk.clone()).await?;
     }

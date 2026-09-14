@@ -108,9 +108,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use dwn_rs_core::identity::agent::{
+    use crate::agent::{
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
-        MemoryKeyManager, MemoryPortableDidStore, VAULT_PORTABLE_DID_KEY,
+        MemoryKeyManager, MemoryPortableDidStore, PortableDid, VAULT_PORTABLE_DID_KEY,
     };
     use dwn_rs_core::stores::wake::WakePublishHandler;
     use dwn_rs_core::stores::MessageStore;
@@ -187,7 +187,7 @@ mod tests {
             .await
             .expect("get vault did")
             .expect("vault did persisted");
-        let restored: dwn_rs_core::identity::agent::PortableDid =
+        let restored: PortableDid =
             serde_json::from_slice(&raw).expect("vault json");
         assert_eq!(restored.uri, first_did_uri);
     }

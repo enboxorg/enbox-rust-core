@@ -1410,13 +1410,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "dwn-rs-agent"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bip39",
+ "chrono",
+ "dwn-rs-core",
+ "dwn-rs-stores",
+ "ed25519-dalek 3.0.0",
+ "hkdf",
+ "hmac 0.13.0",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "ssi-dids-core",
+ "ssi-jwk",
+ "tempfile",
+ "tokio",
+ "ulid",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "dwn-rs-core"
 version = "0.1.0"
 dependencies = [
  "aes",
  "axum",
  "base64 0.23.1",
- "bip39",
  "bytes",
  "chrono",
  "cid",
@@ -1428,7 +1451,6 @@ dependencies = [
  "futures-util",
  "hex",
  "hkdf",
- "hmac 0.13.0",
  "ipld-core",
  "jsonschema",
  "k256 0.14.0",
@@ -1688,6 +1710,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "dwn-rs-agent",
  "dwn-rs-core",
  "dwn-rs-stores",
  "reqwest",
