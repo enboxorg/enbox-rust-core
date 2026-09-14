@@ -1713,7 +1713,15 @@ async fn encrypted_write(
     data: &'static [u8],
 ) -> (serde_json::Value, Bytes) {
     let bytes = Bytes::from_static(data);
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let mut entries = vec![protocol_path_entry(&path_key_id())];
+    if protocol == COMMENTS && protocol_path == "thread/comment" {
+        entries.push(role_audience_entry_for(
+            THREADS,
+            "thread/participant",
+            "participant-key",
+        ));
+    }
+    let envelope = envelope_with_entries(entries);
     let (parent_id, parent_context_id) = match parent {
         Some((record_id, context_id)) => {
             (Some(record_id.to_string()), Some(context_id.to_string()))
@@ -1773,6 +1781,15 @@ async fn encrypted_referenced_parent_admits_encrypted_composing_child() {
         b"comment",
     )
     .await;
+    put_retained_audience(
+        &message_store,
+        THREADS,
+        "thread/participant",
+        &thread_id,
+        "participant-key",
+        TS_ROLE,
+    )
+    .await;
 
     // Parent-first order admits both.
     assert_eq!(
@@ -1809,6 +1826,15 @@ async fn encrypted_referenced_parent_admits_encrypted_composing_child() {
         &message_store,
         encrypted_comments_definition(),
         INSTALL,
+    )
+    .await;
+    put_retained_audience(
+        &message_store,
+        THREADS,
+        "thread/participant",
+        &thread_id,
+        "participant-key",
+        TS_ROLE,
     )
     .await;
     let child_first = RecordsWriteHandler::<_, _>::new(

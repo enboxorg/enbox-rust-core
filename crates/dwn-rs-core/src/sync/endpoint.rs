@@ -1069,5 +1069,21 @@ mod tests {
         let error = map_apply_error(immutable_permission, ReplicationApplyOutcome::Invalid);
         assert_eq!(error.code, "ProtocolAuthorizationImmutableRecord");
         assert!(!error.retryable);
+
+        let missing_entry = Status::from_error(
+            400,
+            DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing,
+                "encrypted record is missing a roleAudience entry",
+            ),
+        );
+        assert_eq!(
+            DwnErrorCode::try_from("ProtocolAuthorizationEncryptionRoleAudienceEntryMissing"),
+            Ok(DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing)
+        );
+        assert_eq!(
+            classify_apply_reply(&missing_entry, &write, false),
+            ReplicationApplyOutcome::Invalid
+        );
     }
 }

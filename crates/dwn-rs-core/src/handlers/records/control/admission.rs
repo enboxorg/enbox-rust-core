@@ -180,7 +180,7 @@ where
             None,
         )
         .await
-        .map_err(|error| unexpected(error.to_string()))?;
+        .map_err(|error| ControlValidationError::Internal(error.to_string()))?;
     Ok(!result.messages.is_empty())
 }
 

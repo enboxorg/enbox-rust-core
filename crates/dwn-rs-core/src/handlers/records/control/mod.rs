@@ -21,7 +21,9 @@ pub(crate) mod visibility;
 // `control::project_current_audiences` — rather than through the file that
 // happens to hold them: the split is for readers of this module, not for its
 // callers. Anything used from one place only stays behind its own module.
-pub(crate) use admission::{validate_payload, validate_referential_integrity};
+pub(crate) use admission::{
+    stored_audience_exists, validate_payload, validate_referential_integrity,
+};
 pub(crate) use authorization::authorize_write;
 pub(crate) use projection::{collect_visible_page, project_current_audiences};
 pub(crate) use visibility::{

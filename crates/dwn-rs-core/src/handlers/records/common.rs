@@ -1121,17 +1121,13 @@ where
         ));
     }
 
-    let ancestor_count = role_path.split('/').count().saturating_sub(1);
-    if ancestor_count > 0 {
-        let segments: Vec<&str> = context_id.unwrap_or_default().split('/').collect();
-        if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
-            return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationMissingContextId,
-                format!(
-                    "could not verify role '{invoked_role}' because contextId is missing or too shallow"
-                ),
-            ));
-        }
+    if role_audience_context_id(&role_path, context_id).is_none() {
+        return Err(DwnError::new(
+            DwnErrorCode::ProtocolAuthorizationMissingContextId,
+            format!(
+                "could not verify role '{invoked_role}' because contextId is missing or too shallow"
+            ),
+        ));
     }
 
     let role_record = query_role_records(
@@ -1455,16 +1451,14 @@ where
         ("recipient", string_filter(recipient)),
         ("isLatestBaseState", bool_filter(true)),
     ]);
-    let ancestor_count = role_path.split('/').count().saturating_sub(1);
-    if ancestor_count > 0 {
-        let segments: Vec<&str> = context_id.unwrap_or_default().split('/').collect();
-        if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
-            return Ok(None);
-        }
+    let Some(context_prefix) = role_audience_context_id(role_path, context_id) else {
+        return Ok(None);
+    };
+    if !context_prefix.is_empty() {
         filter.insert(
             FilterKey::Index("contextId".to_string()),
             Filter::Subtree(SubtreeFilter {
-                subtree: segments[..ancestor_count].join("/"),
+                subtree: context_prefix,
             }),
         );
     }
@@ -1479,6 +1473,24 @@ where
         .await
         .map(|result| result.messages.into_iter().next())
         .map_err(|err| err.to_string())
+}
+
+/// The audience context shared by role authorization and encrypted-record
+/// admission. Root roles use an explicit empty context; nested roles use the
+/// ancestor prefix at their parent depth.
+pub(crate) fn role_audience_context_id(
+    role_path: &str,
+    context_id: Option<&str>,
+) -> Option<String> {
+    let ancestor_count = role_path.split('/').count().saturating_sub(1);
+    if ancestor_count == 0 {
+        return Some(String::new());
+    }
+    let segments: Vec<&str> = context_id?.split('/').collect();
+    if segments.len() < ancestor_count {
+        return None;
+    }
+    Some(segments[..ancestor_count].join("/"))
 }
 
 /// Whether `recipient` holds `role_path` in `protocol`, within the context
@@ -2568,8 +2580,6 @@ mod tests {
     // Covers: DWN-PROTO-004
     #[tokio::test]
     async fn protocol_definition_selects_governing_version() {
-        use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
-
         let store = MemoryMessageStore::default();
         put_history_configure(&store, HISTORY_T1, true).await;
         put_history_configure(&store, HISTORY_T2, false).await;
@@ -2594,18 +2604,31 @@ mod tests {
         .expect("definition after reconfigure sees v2");
         assert!(!late.published, "request after reconfigure sees v2");
 
-        assert!(
-            matches!(
-                fetch_protocol_definition(
-                    ROLE_TEST_TENANT,
-                    ROLE_TEST_PROTOCOL,
-                    &store,
-                    Some(HISTORY_EARLY),
-                )
-                .await,
-                Err(ProtocolDefinitionLookupError::NotFound(_))
-            ),
-            "request before any configure is classified not-found"
+        let early = fetch_protocol_definition(
+            ROLE_TEST_TENANT,
+            ROLE_TEST_PROTOCOL,
+            &store,
+            Some(HISTORY_EARLY),
+        )
+        .await
+        .expect("request before retained history falls back to the earliest configure");
+        assert!(early.published, "earliest retained configure is v1");
+    }
+
+    // Covers: DWN-PROTO-002
+    #[test]
+    fn role_audience_context_uses_role_parent_depth() {
+        assert_eq!(
+            role_audience_context_id("member", None).as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            role_audience_context_id("thread/participant", Some("thread-id/record-id")).as_deref(),
+            Some("thread-id")
+        );
+        assert_eq!(
+            role_audience_context_id("a/b/c", Some("only-one-segment")),
+            None
         );
     }
 
