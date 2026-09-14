@@ -2371,6 +2371,7 @@ use crate::testing::*;
 struct TestMessageStore {
     rows: Arc<RwLock<Vec<TestMessageRow>>>,
     fail_prune_query: Arc<AtomicBool>,
+    fail_audience_query: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -2475,6 +2476,7 @@ impl MessageStore for TestMessageStore {
         let rows = self.rows.clone();
         let tenant = tenant.to_string();
         let fail_prune = self.fail_prune_query.clone();
+        let fail_audience = self.fail_audience_query.clone();
         async move {
             if fail_prune.load(Ordering::SeqCst)
                 && filters.set.iter().any(|filter| {
@@ -2484,6 +2486,17 @@ impl MessageStore for TestMessageStore {
                 })
             {
                 return Err(test_store_error("injected prune query failure".to_string()));
+            }
+            if fail_audience.load(Ordering::SeqCst)
+                && filters.set.iter().any(|filter| {
+                    filter
+                        .keys()
+                        .any(|key| matches!(key, FilterKey::Index(name) if name == "tag.keyId"))
+                })
+            {
+                return Err(test_store_error(
+                    "injected audience query failure".to_string(),
+                ));
             }
             let occupants = match record_limit {
                 None => None,
@@ -3452,7 +3465,7 @@ use crate::encryption::{
     ContentEncryptionAlgorithm, EncryptionEnvelope, KeyAgreementAlgorithm, KeyEncryption,
     ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
-use crate::protocols::{Definition, ProtocolKeyAgreement, RuleSet, Type};
+use crate::protocols::{Action, ActionRole, Can, Definition, ProtocolKeyAgreement, RuleSet, Type};
 use ssi_jwk::JWK;
 
 const ENC_NOTES_PROTOCOL: &str = "http://example.com/enc-notes";
@@ -3526,14 +3539,123 @@ fn protocol_path_entry(key_id: &str) -> KeyEncryption {
 }
 
 fn role_audience_entry() -> KeyEncryption {
+    role_audience_entry_for(ENC_NOTES_PROTOCOL, "note/role", "role-kid")
+}
+
+fn role_audience_entry_for(protocol: &str, role_path: &str, key_id: &str) -> KeyEncryption {
     KeyEncryption::RoleAudience {
         algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
-        key_id: "role-kid".to_string(),
+        key_id: key_id.to_string(),
         ephemeral_public_key: path_key_jwk(),
         encrypted_key: "a2V5".to_string(),
-        protocol: ENC_NOTES_PROTOCOL.to_string(),
-        role_path: "note/role".to_string(),
+        protocol: protocol.to_string(),
+        role_path: role_path.to_string(),
     }
+}
+
+fn enc_role_definition(
+    role: &str,
+    can: Vec<Can>,
+    uses: Option<BTreeMap<String, String>>,
+) -> Definition {
+    let mut definition = enc_notes_definition(true, true);
+    definition.uses = uses;
+    definition.structure.get_mut("note").unwrap().actions = vec![Action::Role(ActionRole {
+        role: role.to_string(),
+        can,
+    })];
+    if !role.contains(':') {
+        let segments: Vec<&str> = role.split('/').collect();
+        if segments.len() == 1 {
+            definition.types.insert(
+                role.to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            );
+            definition.structure.insert(
+                role.to_string(),
+                RuleSet {
+                    role: Some(true),
+                    ..Default::default()
+                },
+            );
+        } else if segments.len() == 2 && segments[0] == "note" {
+            definition.types.insert(
+                segments[1].to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            );
+            definition.structure.get_mut("note").unwrap().rules.insert(
+                segments[1].to_string(),
+                RuleSet {
+                    role: Some(true),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    definition
+}
+
+async fn put_retained_audience(
+    message_store: &TestMessageStore,
+    protocol: &str,
+    role_path: &str,
+    context_id: &str,
+    key_id: &str,
+    timestamp: &str,
+) {
+    let message = signed_write_message(WriteSpec {
+        protocol: protocol.to_string(),
+        protocol_path: "$encryption/audience".to_string(),
+        tags: Some(MapValue::from([
+            ("protocol".to_string(), Value::String(protocol.to_string())),
+            ("rolePath".to_string(), Value::String(role_path.to_string())),
+            (
+                "contextId".to_string(),
+                Value::String(context_id.to_string()),
+            ),
+            ("keyId".to_string(), Value::String(key_id.to_string())),
+        ])),
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    let indexes = KeyValues::from([
+        (
+            "interface".to_string(),
+            Value::String("Records".to_string()),
+        ),
+        ("method".to_string(), Value::String("Write".to_string())),
+        ("protocol".to_string(), Value::String(protocol.to_string())),
+        (
+            "protocolPath".to_string(),
+            Value::String("$encryption/audience".to_string()),
+        ),
+        ("isLatestBaseState".to_string(), Value::Bool(true)),
+        (
+            "tag.protocol".to_string(),
+            Value::String(protocol.to_string()),
+        ),
+        (
+            "tag.rolePath".to_string(),
+            Value::String(role_path.to_string()),
+        ),
+        (
+            "tag.contextId".to_string(),
+            Value::String(context_id.to_string()),
+        ),
+        ("tag.keyId".to_string(), Value::String(key_id.to_string())),
+    ]);
+    message_store
+        .put(TENANT, parsed_value(&message), indexes)
+        .await
+        .unwrap();
 }
 
 fn envelope_with_entries(entries: Vec<KeyEncryption>) -> EncryptionEnvelope {
@@ -3731,6 +3853,340 @@ async fn records_write_encrypted_path_with_extra_entries_is_accepted() {
         enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: ENBOX-ENC-001, DWN-ENC-001, DWN-PROTO-002, DWN-AUTH-006
+#[tokio::test]
+async fn records_write_role_audience_distinguishes_entry_from_audience_dependency() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition("member", vec![Can::Read], None),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store.clone(), data_store).await;
+
+    let missing_entry = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        ENC_WRITE_TIME,
+        Some(envelope_with_entries(vec![
+            protocol_path_entry(&path_key_id()),
+            role_audience_entry_for("http://example.com/wrong", "member", "wrong-protocol"),
+            role_audience_entry_for(ENC_NOTES_PROTOCOL, "other-role", "wrong-role"),
+        ])),
+    )
+    .await;
+    let reply = handler.run(TENANT, &missing_entry, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRoleAudienceEntryMissing")
+    );
+    assert_eq!(
+        classify_apply_reply(&reply.status, &parsed_value(&missing_entry), false),
+        ReplicationApplyOutcome::Invalid
+    );
+
+    let missing_audience = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        "2025-01-03T00:01:00.000000Z",
+        Some(envelope_with_entries(vec![
+            protocol_path_entry(&path_key_id()),
+            role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "missing-key"),
+        ])),
+    )
+    .await;
+    let reply = handler.run(TENANT, &missing_audience, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRoleAudienceMissing")
+    );
+    assert!(reply.status.detail.contains("missing-key"));
+    assert_eq!(
+        classify_apply_reply(&reply.status, &parsed_value(&missing_audience), false),
+        ReplicationApplyOutcome::Incomplete
+    );
+}
+
+// Covers: ENBOX-ENC-001, DWN-PROTO-002, DWN-REC-004
+#[tokio::test]
+async fn records_write_role_audience_accepts_any_retained_matching_key() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition("member", vec![Can::Read], None),
+        ENC_T1,
+    )
+    .await;
+    put_retained_audience(
+        &message_store,
+        ENC_NOTES_PROTOCOL,
+        "member",
+        "",
+        "old-key",
+        ENC_T2,
+    )
+    .await;
+    put_retained_audience(
+        &message_store,
+        ENC_NOTES_PROTOCOL,
+        "member",
+        "",
+        "new-key",
+        ENC_LATE,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+    let envelope = envelope_with_entries(vec![
+        protocol_path_entry(&path_key_id()),
+        role_audience_entry_for("http://example.com/wrong", "member", "old-key"),
+        role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "missing-key"),
+        role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "old-key"),
+    ]);
+    let write =
+        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let reply = handler.run(TENANT, &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: ENBOX-ENC-001, DWN-PROTO-002
+#[tokio::test]
+async fn records_write_role_audience_uses_root_nested_and_unresolved_contexts() {
+    for (role, requires_entry) in [
+        ("member", true),
+        ("note/role", true),
+        ("note/role/deep", false),
+    ] {
+        let (message_store, data_store) = open_stores().await;
+        put_protocol_definition(
+            TENANT,
+            &message_store,
+            enc_role_definition(role, vec![Can::Read], None),
+            ENC_T1,
+        )
+        .await;
+        let timestamp = if role == "note/role" {
+            "2025-01-03T00:02:00.000000Z"
+        } else {
+            ENC_WRITE_TIME
+        };
+        let mut entries = vec![protocol_path_entry(&path_key_id())];
+        if requires_entry {
+            entries.push(role_audience_entry_for(
+                ENC_NOTES_PROTOCOL,
+                role,
+                "role-key",
+            ));
+        }
+        let write = enc_protocol_write(
+            ENC_NOTES_PROTOCOL,
+            "note",
+            timestamp,
+            Some(envelope_with_entries(entries)),
+        )
+        .await;
+        let derived_context = context_id(&parsed_value(&write));
+        if requires_entry {
+            let context = if role == "member" {
+                ""
+            } else {
+                derived_context.as_deref().unwrap()
+            };
+            put_retained_audience(
+                &message_store,
+                ENC_NOTES_PROTOCOL,
+                role,
+                context,
+                "role-key",
+                ENC_T2,
+            )
+            .await;
+        }
+        let handler = enc_test_handler(message_store, data_store).await;
+        let reply = handler.run(TENANT, &write, write_data()).await;
+        assert_eq!(reply.status.code, 202, "{role}: {}", reply.status.detail);
+    }
+}
+
+// Covers: ENBOX-ENC-001, DWN-PROTO-005
+#[tokio::test]
+async fn records_write_role_audience_resolves_uses_and_skips_unresolved_rules() {
+    let role_protocol = "http://example.com/roles";
+    for uses in [
+        None,
+        Some(BTreeMap::from([(
+            "roles".to_string(),
+            role_protocol.to_string(),
+        )])),
+    ] {
+        let (message_store, data_store) = open_stores().await;
+        let resolved = uses.is_some();
+        put_protocol_definition(
+            TENANT,
+            &message_store,
+            enc_role_definition("roles:member", vec![Can::Read], uses),
+            ENC_T1,
+        )
+        .await;
+        let mut entries = vec![protocol_path_entry(&path_key_id())];
+        if resolved {
+            put_retained_audience(
+                &message_store,
+                role_protocol,
+                "member",
+                "",
+                "role-key",
+                ENC_T2,
+            )
+            .await;
+            entries.push(role_audience_entry_for(role_protocol, "member", "role-key"));
+        }
+        let write = enc_protocol_write(
+            ENC_NOTES_PROTOCOL,
+            "note",
+            ENC_WRITE_TIME,
+            Some(envelope_with_entries(entries)),
+        )
+        .await;
+        let handler = enc_test_handler(message_store, data_store).await;
+        let reply = handler.run(TENANT, &write, write_data()).await;
+        assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    }
+}
+
+// Covers: ENBOX-ENC-001
+#[tokio::test]
+async fn records_write_non_read_role_rule_imposes_no_audience() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition("member", vec![Can::Query, Can::Subscribe], None),
+        ENC_T1,
+    )
+    .await;
+    let write = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        ENC_WRITE_TIME,
+        Some(envelope_with_entries(vec![protocol_path_entry(
+            &path_key_id(),
+        )])),
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+    let reply = handler.run(TENANT, &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-004, ENBOX-ENC-001
+#[tokio::test]
+async fn records_write_role_audience_uses_the_timestamped_definition() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        TENANT,
+        &message_store,
+        enc_notes_definition(true, true),
+        ENC_T1,
+    )
+    .await;
+    put_protocol_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition("member", vec![Can::Read], None),
+        ENC_T2,
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+
+    let historical = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        ENC_MID,
+        Some(envelope_with_entries(vec![protocol_path_entry(
+            &path_key_id(),
+        )])),
+    )
+    .await;
+    let reply = handler.run(TENANT, &historical, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let current = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        ENC_LATE,
+        Some(envelope_with_entries(vec![protocol_path_entry(
+            &path_key_id(),
+        )])),
+    )
+    .await;
+    let reply = handler.run(TENANT, &current, write_data()).await;
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationEncryptionRoleAudienceEntryMissing")
+    );
+}
+
+// Covers: DWN-ENC-001, DWN-REC-003
+#[tokio::test]
+async fn records_write_role_audience_store_failures_are_internal_but_replay_stays_duplicate() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition("member", vec![Can::Read], None),
+        ENC_T1,
+    )
+    .await;
+    put_retained_audience(
+        &message_store,
+        ENC_NOTES_PROTOCOL,
+        "member",
+        "",
+        "role-key",
+        ENC_T2,
+    )
+    .await;
+    let handler = enc_test_handler(message_store.clone(), data_store).await;
+    let envelope = || {
+        envelope_with_entries(vec![
+            protocol_path_entry(&path_key_id()),
+            role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "role-key"),
+        ])
+    };
+    let accepted =
+        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope())).await;
+    assert_eq!(
+        handler
+            .run(TENANT, &accepted, write_data())
+            .await
+            .status
+            .code,
+        202
+    );
+
+    message_store
+        .fail_audience_query
+        .store(true, Ordering::SeqCst);
+    let replay = handler.run(TENANT, &accepted, write_data()).await;
+    assert_eq!(replay.status.code, 409, "{}", replay.status.detail);
+
+    let fresh = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        "2025-01-03T00:03:00.000000Z",
+        Some(envelope()),
+    )
+    .await;
+    let reply = handler.run(TENANT, &fresh, write_data()).await;
+    assert_eq!(reply.status.code, 500, "{}", reply.status.detail);
+    assert!(!reply.status.detail.contains("RoleAudienceMissing"));
 }
 
 // Covers: ENBOX-ENC-002

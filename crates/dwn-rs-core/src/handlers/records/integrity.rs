@@ -10,26 +10,30 @@ use crate::descriptors::{
     Descriptor,
 };
 use crate::dwn::core_protocol::CoreProtocolRegistry;
-use crate::encryption::control::ControlKind;
+use crate::encryption::control::{AudienceId, AudienceScope, ControlKind};
 use crate::encryption::{
-    KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
+    EncryptionEnvelope, KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
 };
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::handlers::records::common::{context_id, fetch_parent_record, message_record_id};
+use crate::interfaces::messages::protocols::{
+    parse_cross_protocol_ref, Action, Can, Definition, RuleSet,
+};
+use crate::stores::MessageStore;
 use crate::Message;
 
 use super::policy::EffectivePolicy;
 use super::write::RecordsWriteValidationError;
 
-pub(crate) async fn validate_referential_integrity<MessageStore>(
+pub(crate) async fn validate_referential_integrity<M>(
     tenant: &str,
     message: &Message<Descriptor>,
     author: &str,
     registry: &CoreProtocolRegistry,
-    message_store: &MessageStore,
+    message_store: &M,
 ) -> Result<(), RecordsWriteValidationError>
 where
-    MessageStore: crate::stores::MessageStore + Sync,
+    M: MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
     let protocol_path = descriptor.protocol_path.clone();
@@ -101,6 +105,15 @@ where
                     )
                     .into());
                 }
+                validate_role_audiences(
+                    tenant,
+                    message,
+                    definition,
+                    rule_set,
+                    envelope,
+                    message_store,
+                )
+                .await?;
             }
             None => {
                 let dynamic_recipient = definition.protocol == ENCRYPTION_PROTOCOL_URI
@@ -236,5 +249,101 @@ where
         .into());
     }
 
+    Ok(())
+}
+
+async fn validate_role_audiences<M>(
+    tenant: &str,
+    message: &Message<Descriptor>,
+    definition: &Definition,
+    rule_set: &RuleSet,
+    envelope: &EncryptionEnvelope,
+    message_store: &M,
+) -> Result<(), RecordsWriteValidationError>
+where
+    M: MessageStore + Sync,
+{
+    let record_context = context_id(message);
+    for action in &rule_set.actions {
+        let Action::Role(action) = action else {
+            continue;
+        };
+        if !action.can.contains(&Can::Read) {
+            continue;
+        }
+
+        let (protocol, role_path) = match parse_cross_protocol_ref(&action.role) {
+            Some(parsed) => {
+                let Some(protocol) = definition
+                    .uses
+                    .as_ref()
+                    .and_then(|uses| uses.get(parsed.alias))
+                else {
+                    continue;
+                };
+                (protocol.as_str(), parsed.protocol_path)
+            }
+            None => (definition.protocol.as_str(), action.role.as_str()),
+        };
+        let Some(audience_context) =
+            super::common::role_audience_context_id(role_path, record_context.as_deref())
+        else {
+            continue;
+        };
+
+        let matching_entries: Vec<&KeyEncryption> = envelope
+            .key_encryption
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    KeyEncryption::RoleAudience {
+                        protocol: entry_protocol,
+                        role_path: entry_role_path,
+                        ..
+                    } if entry_protocol == protocol && entry_role_path == role_path
+                )
+            })
+            .collect();
+        if matching_entries.is_empty() {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing,
+                format!(
+                    "encrypted record is missing a roleAudience keyEncryption entry for role '{role_path}'"
+                ),
+            )
+            .into());
+        }
+
+        let mut missing_key_ids = Vec::with_capacity(matching_entries.len());
+        for entry in matching_entries {
+            let KeyEncryption::RoleAudience { key_id, .. } = entry else {
+                unreachable!("matching entries are roleAudience entries");
+            };
+            let id = AudienceId {
+                scope: AudienceScope {
+                    protocol: protocol.to_string(),
+                    role_path: role_path.to_string(),
+                    context_id: audience_context.clone(),
+                },
+                key_id: key_id.clone(),
+            };
+            if super::control::stored_audience_exists(tenant, &id, message_store).await? {
+                missing_key_ids.clear();
+                break;
+            }
+            missing_key_ids.push(key_id.as_str());
+        }
+        if !missing_key_ids.is_empty() {
+            return Err(DwnError::new(
+                DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceMissing,
+                format!(
+                    "encrypted record references no retained audience for protocol '{protocol}', role '{role_path}', context '{audience_context}', and key IDs [{}]",
+                    missing_key_ids.join(", ")
+                ),
+            )
+            .into());
+        }
+    }
     Ok(())
 }

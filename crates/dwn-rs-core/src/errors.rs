@@ -33,6 +33,7 @@ pub enum DwnErrorCode {
     ProtocolAuthorizationEncryptionNotAllowed,
     ProtocolAuthorizationEncryptionKeyAgreementMissing,
     ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
+    ProtocolAuthorizationEncryptionRoleAudienceEntryMissing,
     ProtocolAuthorizationEncryptionRoleAudienceMissing,
     EncryptionControlValidateDeliveryAudienceMissing,
     EncryptionControlReadUnauthorized,
@@ -129,6 +130,9 @@ impl DwnErrorCode {
             }
             Self::ProtocolAuthorizationEncryptionProtocolPathEntryMissing => {
                 "ProtocolAuthorizationEncryptionProtocolPathEntryMissing"
+            }
+            Self::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing => {
+                "ProtocolAuthorizationEncryptionRoleAudienceEntryMissing"
             }
             Self::ProtocolAuthorizationEncryptionRoleAudienceMissing => {
                 "ProtocolAuthorizationEncryptionRoleAudienceMissing"
@@ -333,6 +337,9 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "ProtocolAuthorizationEncryptionProtocolPathEntryMissing" => {
                 Ok(Self::ProtocolAuthorizationEncryptionProtocolPathEntryMissing)
+            }
+            "ProtocolAuthorizationEncryptionRoleAudienceEntryMissing" => {
+                Ok(Self::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing)
             }
             "ProtocolAuthorizationEncryptionRoleAudienceMissing" => {
                 Ok(Self::ProtocolAuthorizationEncryptionRoleAudienceMissing)

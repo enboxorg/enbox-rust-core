@@ -108,6 +108,23 @@ pub(crate) fn protocol_definition_lookup_filters(
     Filters::from(filters)
 }
 
+pub(crate) fn protocol_definition_history_filters(protocol: &str) -> Filters {
+    let mut filters = BTreeMap::new();
+    filters.insert(
+        FilterKey::Index("interface".to_string()),
+        Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+    );
+    filters.insert(
+        FilterKey::Index("method".to_string()),
+        Filter::Equal(Value::String(CONFIGURE_METHOD.to_string())),
+    );
+    filters.insert(
+        FilterKey::Index("protocol".to_string()),
+        Filter::Equal(Value::String(protocol.to_string())),
+    );
+    Filters::from(filters)
+}
+
 pub(crate) fn configure_indexes(
     descriptor: &ConfigureDescriptor,
     author: Option<&str>,

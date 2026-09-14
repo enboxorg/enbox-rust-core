@@ -586,7 +586,7 @@ where
     }
 
     let filters = protocol_definition_lookup_filters(protocol_uri, message_timestamp);
-    let result = message_store
+    let mut result = message_store
         .query(
             tenant,
             filters,
@@ -596,6 +596,19 @@ where
         )
         .await
         .map_err(|err| ProtocolDefinitionLookupError::Store(err.to_string()))?;
+
+    if result.messages.is_empty() && message_timestamp.is_some() {
+        result = message_store
+            .query(
+                tenant,
+                protocol_definition_history_filters(protocol_uri),
+                Some(MessageSort::Timestamp(SortDirection::Ascending)),
+                Some(Pagination::with_limit(1)),
+                None,
+            )
+            .await
+            .map_err(|err| ProtocolDefinitionLookupError::Store(err.to_string()))?;
+    }
 
     let Some(message) = result.messages.first() else {
         return Err(ProtocolDefinitionLookupError::NotFound(
