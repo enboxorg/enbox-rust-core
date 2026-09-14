@@ -1487,7 +1487,7 @@ pub(crate) fn role_audience_context_id(
         return Some(String::new());
     }
     let segments: Vec<&str> = context_id?.split('/').collect();
-    if segments.len() < ancestor_count {
+    if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
         return None;
     }
     Some(segments[..ancestor_count].join("/"))
@@ -2630,6 +2630,9 @@ mod tests {
             role_audience_context_id("a/b/c", Some("only-one-segment")),
             None
         );
+        assert_eq!(role_audience_context_id("a/b", Some("")), None);
+        assert_eq!(role_audience_context_id("a/b", Some("/")), None);
+        assert_eq!(role_audience_context_id("a/b", Some("a//b")), None);
     }
 
     // Covers: DWN-PROTO-001
