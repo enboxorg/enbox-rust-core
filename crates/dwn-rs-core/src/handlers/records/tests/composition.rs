@@ -1506,13 +1506,15 @@ async fn cross_protocol_nested_role_query_without_context_denies() {
     let thread = seed_thread(&fixture, TS_THREAD).await;
     grant_participant(&fixture, (&thread.0, &thread.1), BOB, TS_ROLE).await;
 
-    let query = bob_query(COMMENTS, "thread", None, PARTICIPANT, TS_COMMENT).await;
-    let reply = fixture.query_handler.run(TENANT, &query, None).await;
-    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMissingContextId")
-    );
+    for context_id in [None, Some(""), Some("/")] {
+        let query = bob_query(COMMENTS, "thread", context_id, PARTICIPANT, TS_COMMENT).await;
+        let reply = fixture.query_handler.run(TENANT, &query, None).await;
+        assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+        assert_eq!(
+            reply.status.error_code.as_deref(),
+            Some("ProtocolAuthorizationMissingContextId")
+        );
+    }
 }
 
 // Covers: DWN-PROTO-002

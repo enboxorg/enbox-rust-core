@@ -4189,6 +4189,85 @@ async fn records_write_role_audience_store_failures_are_internal_but_replay_stay
     assert!(!reply.status.detail.contains("RoleAudienceMissing"));
 }
 
+// Covers: ENBOX-ENC-001, DWN-PROTO-002
+#[tokio::test]
+async fn records_write_role_regrants_share_the_same_audience_identity() {
+    let (message_store, data_store) = open_stores().await;
+    put_protocol_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition("member", vec![Can::Read], None),
+        ENC_T1,
+    )
+    .await;
+    let handler = enc_test_handler(message_store.clone(), data_store).await;
+    let mut role_ids = Vec::new();
+    for timestamp in [ENC_T2, ENC_LATE] {
+        let data = Bytes::from_static(b"role");
+        let role = signed_write_message(WriteSpec {
+            protocol: ENC_NOTES_PROTOCOL.to_string(),
+            protocol_path: "member".to_string(),
+            recipient: Some("did:example:bob".to_string()),
+            data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+            data_size: data.len() as u64,
+            ..WriteSpec::new(timestamp)
+        })
+        .await;
+        let reply = handler.run(TENANT, &role, Some(data)).await;
+        assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+        role_ids.push(role["recordId"].as_str().unwrap().to_string());
+    }
+    assert_ne!(role_ids[0], role_ids[1]);
+    put_retained_audience(
+        &message_store,
+        ENC_NOTES_PROTOCOL,
+        "member",
+        "",
+        "shared-key",
+        "2025-01-02T00:01:00.000000Z",
+    )
+    .await;
+
+    let write = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        ENC_WRITE_TIME,
+        Some(envelope_with_entries(vec![
+            protocol_path_entry(&path_key_id()),
+            role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "shared-key"),
+        ])),
+    )
+    .await;
+    let reply = handler.run(TENANT, &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-004, DWN-AUTH-006
+#[tokio::test]
+async fn records_write_missing_protocol_stays_a_repairable_dependency() {
+    let (message_store, data_store) = open_stores().await;
+    let handler = enc_test_handler(message_store, data_store).await;
+    let write = enc_protocol_write(
+        ENC_NOTES_PROTOCOL,
+        "note",
+        ENC_WRITE_TIME,
+        Some(envelope_with_entries(vec![protocol_path_entry(
+            &path_key_id(),
+        )])),
+    )
+    .await;
+    let reply = handler.run(TENANT, &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationProtocolNotFound")
+    );
+    assert_eq!(
+        classify_apply_reply(&reply.status, &parsed_value(&write), false),
+        ReplicationApplyOutcome::Incomplete
+    );
+}
+
 // Covers: ENBOX-ENC-002
 #[tokio::test]
 async fn encryption_definition_resolves_without_installation() {

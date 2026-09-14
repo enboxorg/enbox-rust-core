@@ -498,6 +498,21 @@ async fn nested_role_query_without_context_is_rejected() {
         reply.status.error_code.as_deref(),
         Some("ProtocolAuthorizationMissingContextId")
     );
+
+    let query = signed_query(
+        Some("thread"),
+        None,
+        Some(""),
+        "thread/participant",
+        T_MESSAGE,
+    )
+    .await;
+    let reply = fixture.query.run(TENANT, &query, None).await;
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationMissingContextId")
+    );
 }
 
 // Covers: DWN-PROTO-002
