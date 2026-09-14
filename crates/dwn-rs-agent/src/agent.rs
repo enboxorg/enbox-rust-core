@@ -24,11 +24,16 @@ pub type AgentIdentityFuture<'a, T> =
     Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
 
 pub const VAULT_PORTABLE_DID_KEY: &str = "agent:vault:portableDid";
+/// Secret-store key for the vault content-encryption key bytes.
 pub const VAULT_CONTENT_ENCRYPTION_KEY: &str = "agent:vault:contentEncryptionKey";
+/// Secret-store key for the vault unlock salt bytes.
 pub const VAULT_UNLOCK_SALT_KEY: &str = "agent:vault:unlockSalt";
 
 type HmacSha512 = Hmac<Sha512>;
 
+/// Agent error with a stable machine-readable `code` and human `detail`.
+///
+/// Codes pass through the FFI surface verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentIdentityError {
     pub code: String,
@@ -36,6 +41,7 @@ pub struct AgentIdentityError {
 }
 
 impl AgentIdentityError {
+    /// Build an error with the given stable code.
     pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
         Self {
             code: code.into(),
@@ -163,12 +169,16 @@ pub struct AgentIdentityInitialization {
     pub vault_unlock_salt: Vec<u8>,
 }
 
+/// Key/value secret backend for vault material (portable DID JSON, content-encryption key, salts, delegate keys).
+///
+/// Unencrypted by itself; durability and at-rest protection are the host's job.
 pub trait SecretStore: Clone + Send + Sync + 'static {
     fn get<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, Option<Vec<u8>>>;
     fn put<'a>(&'a self, key: &'a str, value: Vec<u8>) -> AgentIdentityFuture<'a, ()>;
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool>;
 }
 
+/// Host key manager: owns private JWKs and derives protocol/context keys.
 pub trait AgentKeyManager: Clone + Send + Sync + 'static {
     fn import_private_jwk<'a>(&'a self, jwk: JWK) -> AgentIdentityFuture<'a, String>;
     fn export_private_jwk<'a>(&'a self, key_uri: &'a str) -> AgentIdentityFuture<'a, Option<JWK>>;
@@ -197,14 +207,21 @@ pub trait PortableDidStore: Clone + Send + Sync + 'static {
 }
 
 pub trait DidProvider: Clone + Send + Sync + 'static {
+    /// Create a fresh DID and document from caller-supplied private JWKs.
     fn create_did<'a>(
         &'a self,
         request: AgentDidCreateRequest,
     ) -> AgentIdentityFuture<'a, PortableDid>;
+    /// Import an existing portable DID (e.g. from recovery).
     fn import_did<'a>(&'a self, portable_did: PortableDid) -> AgentIdentityFuture<'a, PortableDid>;
+    /// Export a DID previously created or imported through this provider.
     fn export_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, Option<PortableDid>>;
 }
 
+/// Agent identity orchestrator: derivation, vault persistence, and DID lifecycle.
+///
+/// Holds no process-global state; independently constructed services in one
+/// process do not observe each other.
 #[derive(Clone)]
 pub struct AgentIdentityService<D, K, S, R> {
     did_provider: D,
@@ -625,6 +642,9 @@ pub use PortableDidStore as DidResolverCache;
 #[deprecated(note = "use MemoryPortableDidStore")]
 pub type MemoryDidResolverCache = MemoryPortableDidStore;
 
+/// Derive the deterministic key set (vault, identity, signing, encryption) from a BIP-39 phrase.
+///
+/// Pure: derives the same keys for the same phrase and persists nothing.
 pub fn derive_agent_keys(recovery_phrase: &str) -> AgentIdentityResult<AgentDerivedKeys> {
     let mnemonic = Mnemonic::parse_in(Language::English, recovery_phrase)
         .map_err(|err| AgentIdentityError::invalid_mnemonic(err.to_string()))?;
@@ -644,6 +664,7 @@ pub fn derive_agent_keys(recovery_phrase: &str) -> AgentIdentityResult<AgentDeri
     })
 }
 
+/// Check that a portable DID carries usable signing and encryption key material.
 pub fn validate_agent_did_key_requirements(portable_did: &PortableDid) -> AgentIdentityResult<()> {
     let has_signing_method = portable_did
         .document

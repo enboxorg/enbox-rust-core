@@ -187,8 +187,7 @@ mod tests {
             .await
             .expect("get vault did")
             .expect("vault did persisted");
-        let restored: PortableDid =
-            serde_json::from_slice(&raw).expect("vault json");
+        let restored: PortableDid = serde_json::from_slice(&raw).expect("vault json");
         assert_eq!(restored.uri, first_did_uri);
     }
 }

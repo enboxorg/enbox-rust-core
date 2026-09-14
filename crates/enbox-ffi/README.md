@@ -49,7 +49,7 @@ Typed errors (`EnboxError`) cross the FFI boundary without panics.
 3. On subsequent launches, `current_agent_identity()` returns the persisted `PortableDid` JSON (or `null` if missing).
 4. For recovery-screen validation before committing, call `derive_agent_keys_from_phrase(phrase)` — this is pure and does not persist anything.
 
-`PortableDid` and `AgentIdentityInitialization` shapes follow [`agent.rs`](../../crates/dwn-rs-core/src/agent.rs). The secret store layer is `SqliteSecretStore` ([`crates/dwn-rs-stores/src/sqlite_agent.rs`](../../crates/dwn-rs-stores/src/sqlite_agent.rs)), which shares the SQLite database used for DWN data.
+`PortableDid` and `AgentIdentityInitialization` shapes follow [`agent.rs`](../dwn-rs-agent/src/agent.rs). The secret store layer is `SqliteSecretStore` ([`dwn-rs-agent/src/secrets_store.rs`](../dwn-rs-agent/src/secrets_store.rs), feature `sqlite`), which shares the SQLite database used for DWN data.
 
 ## Protocol install workflow
 
@@ -67,7 +67,7 @@ install_protocol(
 )
 ```
 
-Returns JSON `ProtocolInstallResult` (`{protocol, installed, encryptionActive}`). Subsequent calls for the same protocol return `installed: false` — the helper queries before configuring, matching [`install_protocol_if_needed`](../../crates/dwn-rs-core/src/setup.rs).
+Returns JSON `ProtocolInstallResult` (`{protocol, installed, encryptionActive}`). Subsequent calls for the same protocol return `installed: false` — the helper queries before configuring, matching [`install_protocol_if_needed`](../dwn-rs-agent/src/auth/setup.rs).
 
 Encrypted protocols (those with `encryptionRequired: true`) have per-path key-agreement encryption injected automatically. For preview or sharing the augmented definition with another agent, call `inject_protocol_encryption` separately — it is pure and does not touch the DWN.
 
@@ -111,11 +111,11 @@ For HTTP-backed registration and protocol push (closes #145), three additional m
      "protocols": [<definition>, ...]
    })
    ```
-   For each protocol: local `install_protocol_if_needed` then remote `push_protocol_if_needed`. Returns a `RestoreFlowResult` (`steps`, `localInstalls`, `remotePushes`). Identity tenant restoration is out of scope (see [`run_restore_flow`](../../crates/dwn-rs-core/src/setup.rs) docs).
+   For each protocol: local `install_protocol_if_needed` then remote `push_protocol_if_needed`. Returns a `RestoreFlowResult` (`steps`, `localInstalls`, `remotePushes`). Identity tenant restoration is out of scope (see [`run_restore_flow`](../dwn-rs-agent/src/auth/setup.rs) docs).
 
 ## DWeb Connect workflow
 
-The connect FFI mirrors [`dwn_rs_core::connect`](../../crates/dwn-rs-core/src/connect.rs) so a mobile host can drive a delegate session without a JS runtime:
+The connect FFI mirrors [`dwn_rs_agent::auth::connect`](../dwn-rs-agent/src/auth/connect.rs) so a mobile host can drive a delegate session without a JS runtime:
 
 1. Build a permission request to present in UI: `create_permission_request({ requester, scope, delegated, description? })`.
 2. After the user approves, mint a delegate grant: `create_delegate_grant({ grantor, grantee, scope, dateExpires, description? })`.

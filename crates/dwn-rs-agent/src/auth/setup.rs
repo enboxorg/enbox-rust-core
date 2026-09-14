@@ -7,8 +7,8 @@ use crate::agent::{
     jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
     AgentKeyManager, PortableDid, SecretStore,
 };
-use dwn_rs_core::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use chrono::Utc;
+use dwn_rs_core::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
 
@@ -100,6 +100,7 @@ pub struct TenantRegistrationResult {
     pub registration_tokens: BTreeMap<String, RegistrationTokenData>,
 }
 
+/// Host seam for tenant registration against a DWN server (server info, anonymous and token registration, token refresh).
 pub trait TenantRegistrationClient: Clone + Send + Sync + 'static {
     fn server_info<'a>(&'a self, endpoint: &'a str) -> SetupFuture<'a, DwnServerInfo>;
 
@@ -119,6 +120,7 @@ pub trait TenantRegistrationClient: Clone + Send + Sync + 'static {
     ) -> SetupFuture<'a, RegistrationTokenData>;
 }
 
+/// Load persisted registration tokens; undecodable stored JSON falls back to an empty map.
 pub async fn load_registration_tokens<S>(
     secret_store: &S,
 ) -> AgentIdentityResult<BTreeMap<String, RegistrationTokenData>>
@@ -131,6 +133,7 @@ where
     Ok(serde_json::from_slice(&bytes).unwrap_or_default())
 }
 
+/// Persist registration tokens to the secret store.
 pub async fn save_registration_tokens<S>(
     secret_store: &S,
     tokens: &BTreeMap<String, RegistrationTokenData>,
@@ -143,6 +146,7 @@ where
     secret_store.put(REGISTRATION_TOKENS_KEY, bytes).await
 }
 
+/// Register the agent and connected DIDs against each endpoint, refreshing provider-auth tokens as needed.
 pub async fn register_with_dwn_endpoints<C, S>(
     client: &C,
     secret_store: Option<&S>,
@@ -259,6 +263,7 @@ fn unique_dids(dids: [String; 2]) -> Vec<String> {
         .collect()
 }
 
+/// Host seam for protocol install/query against a DWN (local engine or remote server).
 pub trait ProtocolEndpoint: Clone + Send + Sync + 'static {
     fn query_protocol<'a>(
         &'a self,
@@ -297,6 +302,7 @@ pub struct RestoreFlowResult {
     pub remote_pushes: Vec<ProtocolInstallResult>,
 }
 
+/// Install a protocol locally when the endpoint does not already serve it.
 pub async fn install_protocol_if_needed<E, K>(
     endpoint: &E,
     key_manager: &K,
@@ -336,6 +342,7 @@ where
     })
 }
 
+/// Push a protocol to a remote endpoint when it does not already serve it.
 pub async fn push_protocol_if_needed<E, K>(
     endpoint: &E,
     key_manager: &K,
@@ -349,14 +356,9 @@ where
     install_protocol_if_needed(endpoint, key_manager, tenant_did, definition).await
 }
 
-/// Replay protocol installs/pushes for a recovered agent.
+/// Replay local installs then remote pushes for a recovered agent.
 ///
-/// This intentionally does **not** restore portable identities. The
-/// TypeScript wallet recovery flow re-imports `PortableIdentity` records
-/// into the connected agent's identity store; the Rust port does not yet
-/// model that store. Until it does, callers are expected to manage
-/// identity restoration outside this function (see
-/// `tests/wallet_recovery.rs::IdentityTenantStore` for the current pattern).
+/// Portable identities are out of scope; callers restore them separately.
 pub async fn run_restore_flow<L, R, K>(
     local: &L,
     remote: &R,
@@ -386,6 +388,9 @@ where
     Ok(result)
 }
 
+/// Return a copy of the protocol definition with per-path key-agreement encryption injected.
+///
+/// Pure: touches no DWN endpoint.
 pub async fn inject_protocol_encryption<K>(
     definition: &Definition,
     key_manager: &K,

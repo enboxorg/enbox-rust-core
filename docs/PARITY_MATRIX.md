@@ -79,9 +79,9 @@ See [`DID_RESOLUTION.md`](./DID_RESOLUTION.md) and the #185 DID parity-matrix co
 
 | Surface | Rust status | Notes / remaining owner |
 | --- | --- | --- |
-| Agent identity, HD vault, secret store, keys | partial — #199 | `AgentIdentityService`, `SqliteSecretStore`, `derive_agent_keys_from_phrase` implemented; DWN-backed stores, read-through/protocol caches, session lifecycle are #199. |
-| Connect kernel (request/response envelope, session grants) | partial — #193 | Legacy grant/key-delivery model retained; current Connect envelope, approval ceremony, and session lifecycle are #193. |
-| Tenant registration / provider auth / proof-of-work | partial — #196 | `register_tenant` client path implemented; proof-of-work solve, provider-auth plugin model, and serving-side tenant gate are #196. |
+| Agent identity, HD vault, secret store, keys | partial — #199 | Owner: `dwn-rs-agent` (`agent` for identity/vault, `auth` for registration/connect, `SqliteSecretStore` behind `sqlite`); consumes DWN/protocol/permission types from `dwn-rs-core` and shares the `dwn-rs-stores` SQLite file (`agent_secrets` schema stays in stores). Legacy sync and `runtime::mobile` stay in `dwn-rs-core`, not agent extension points. DWN-backed stores, read-through/protocol caches, session lifecycle are #199. |
+| Connect kernel (request/response envelope, session grants) | partial — #193 | Owner: `dwn-rs-agent::auth::connect`. Legacy grant/key-delivery model retained; current Connect envelope, approval ceremony, and session lifecycle are #193. |
+| Tenant registration / provider auth / proof-of-work | partial — #196 | Owner: `dwn-rs-agent::auth::setup` (`TenantRegistrationClient`, `ProtocolEndpoint` host seams). `register_tenant` client path implemented; proof-of-work solve, provider-auth plugin model, and serving-side tenant gate are #196. |
 | Local-node discovery / pairing / profile | missing — #198 | Rust serves JSON-RPC + WebSocket; discovery payload, pairing broker/session store, and node profile are #198. |
 | Standard protocol definitions (`@enbox/protocols`) | missing — #200 | No pinned Rust artifacts for `connect`/`profile`/`preferences`/permissions/encryption-control protocols; #200. |
 | JSON-RPC client surface (`dwn-rs-remote`) | partial — #195 | `dwn.processMessage` only; consolidation with the supported transport and the full method set are #195. |
