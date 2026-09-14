@@ -123,6 +123,7 @@ pub struct ContextKeyDeliveryRecord {
     pub context_key: DelegateContextKey,
 }
 
+/// Host seam for delivered context keys (write/fetch/delete by recipient).
 pub trait KeyDeliveryStore: Clone + Send + Sync + 'static {
     fn write_context_key<'a>(
         &'a self,
@@ -140,6 +141,7 @@ pub trait KeyDeliveryStore: Clone + Send + Sync + 'static {
     fn delete_for_recipient<'a>(&'a self, recipient_did: &'a str) -> ConnectFuture<'a, usize>;
 }
 
+/// Build a permission request record for UI approval.
 pub fn create_permission_request(
     requester: impl Into<String>,
     scope: PermissionScope,
@@ -155,6 +157,7 @@ pub fn create_permission_request(
     }
 }
 
+/// Mint a delegate grant after the user approves a permission request.
 pub fn create_delegate_grant(
     grantor: impl Into<String>,
     grantee: impl Into<String>,
@@ -174,6 +177,7 @@ pub fn create_delegate_grant(
     }
 }
 
+/// Build a revocation record for an existing delegate grant.
 pub fn create_grant_revocation(
     grant: &DelegateGrant,
     revocation_grant_id: impl Into<String>,
@@ -203,6 +207,7 @@ where
     Ok(imported)
 }
 
+/// Derive decryption keys for read-like delegate scopes; write-only and context-bound scopes yield none.
 pub async fn derive_delegate_keys<K>(
     key_manager: &K,
     owner_did: &PortableDid,
@@ -282,6 +287,7 @@ where
     Ok(result)
 }
 
+/// Derive the context key for one protocol context.
 pub async fn derive_context_key<K>(
     key_manager: &K,
     owner_did: &PortableDid,
@@ -334,6 +340,7 @@ where
     store.write_context_key(record).await
 }
 
+/// Persist delegate decryption keys to the secret store.
 pub async fn save_delegate_decryption_keys<S>(
     secret_store: &S,
     keys: &[DelegateDecryptionKey],
@@ -344,6 +351,7 @@ where
     save_json_secret(secret_store, DELEGATE_DECRYPTION_KEYS_KEY, keys).await
 }
 
+/// Load delegate decryption keys; missing or undecodable entries yield an empty list.
 pub async fn load_delegate_decryption_keys<S>(
     secret_store: &S,
 ) -> AgentIdentityResult<Vec<DelegateDecryptionKey>>
@@ -353,6 +361,7 @@ where
     load_json_secret(secret_store, DELEGATE_DECRYPTION_KEYS_KEY).await
 }
 
+/// Persist delegate context keys to the secret store.
 pub async fn save_delegate_context_keys<S>(
     secret_store: &S,
     keys: &[DelegateContextKey],
@@ -363,6 +372,7 @@ where
     save_json_secret(secret_store, DELEGATE_CONTEXT_KEYS_KEY, keys).await
 }
 
+/// Load delegate context keys; missing or undecodable entries yield an empty list.
 pub async fn load_delegate_context_keys<S>(
     secret_store: &S,
 ) -> AgentIdentityResult<Vec<DelegateContextKey>>
@@ -624,7 +634,9 @@ mod tests {
         AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
         MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
-    use dwn_rs_core::interfaces::messages::protocols::{Action, ActionWho, Can, RuleSet, Type, Who};
+    use dwn_rs_core::interfaces::messages::protocols::{
+        Action, ActionWho, Can, RuleSet, Type, Who,
+    };
     use dwn_rs_core::permissions::{ProtocolPath, RecordsMethod, RecordsScope, RecordsSelector};
 
     #[tokio::test]

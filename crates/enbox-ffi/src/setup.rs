@@ -7,11 +7,11 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use dwn_rs_agent::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
+use dwn_rs_agent::auth::setup::{ProtocolEndpoint, SetupFuture};
 use dwn_rs_core::auth::{Jws, PrivateJwkSigner, JWK};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{ConfigureDescriptor, ProtocolQueryDescriptor};
-use dwn_rs_agent::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
-use dwn_rs_agent::auth::setup::{ProtocolEndpoint, SetupFuture};
 use dwn_rs_core::interfaces::messages::descriptors::protocols::QueryFilter;
 use dwn_rs_core::protocols::Definition;
 use dwn_rs_stores::SqliteNativeDwn;

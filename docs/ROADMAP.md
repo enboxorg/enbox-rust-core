@@ -79,7 +79,7 @@ Delivered:
 - Tenant registration via HTTP-backed `TenantRegistrationClient` against `@enbox/dwn-server`-style endpoints (provider-auth-v0 token refresh, anonymous fallback, persisted registration tokens). FFI: `register_tenant`.
 - Protocol installation flows (`install_protocol_if_needed`, `push_protocol_if_needed`, `run_restore_flow`) over a local `SqliteNativeDwn` and the new `HttpDwnProtocolEndpoint`. FFI: `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption`.
 - Delegated grants, DWeb Connect authorization, derived decryption/context keys, and persisted key delivery (`dwn_rs_core::connect`). FFI: `create_permission_request`, `create_delegate_grant`, `create_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, `save_/load_delegate_decryption_keys`, `save_/load_delegate_context_keys`.
-- Encrypted protocol behavior with per-path key-agreement derivation (`inject_protocol_encryption`); recovery semantics covered by `crates/dwn-rs-core/tests/wallet_recovery.rs`.
+- Encrypted protocol behavior with per-path key-agreement derivation (`inject_protocol_encryption`); recovery semantics covered by `crates/dwn-rs-agent/tests/wallet_recovery.rs`.
 
 ## Milestone 6: Native Bindings And Integration
 

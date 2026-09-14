@@ -165,7 +165,7 @@ Identity migration runs independently of DWN store migration:
 
 - Portable DID material and BIP-39 recovery phrases round-trip through `derive_agent_keys_from_phrase` and `initialize_agent_identity`. Both Ed25519 signing keys and X25519 key-agreement keys survive.
 - `SqliteSecretStore` is the durable vault; the host never sees raw private keys outside the `PortableDid` JSON the user explicitly exports.
-- Wallet recovery must prove that encrypted protocol records can be decrypted after restoring the seed/vault. The integration test `crates/dwn-rs-core/tests/wallet_recovery.rs` exercises this exact flow.
+- Wallet recovery must prove that encrypted protocol records can be decrypted after restoring the seed/vault. The integration test `crates/dwn-rs-agent/tests/wallet_recovery.rs` exercises this exact flow.
 - Data migration must not introduce a plaintext fallback for records whose protocol requires encryption. The Rust handler enforces the encryption requirement on every `RecordsWrite`.
 
 ## Remote server compatibility
@@ -194,7 +194,7 @@ Allowed to change at the app integration boundary:
 - Direct access to store instances.
 - Stream representation across native bindings.
 - Background sync scheduling APIs (the spec in [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md) is stable; FFI signatures may add optional fields).
-- Internal crate / module names before the first stable Rust release.
+- Internal crate / module names before the first stable Rust release. Agent identity, tenant setup, and connect helpers moved path-only from `dwn_rs_core::identity::{agent, setup, connect}` and `dwn_rs_stores::SqliteSecretStore` to `dwn_rs_agent::{agent, auth::{setup, connect}}` and `dwn_rs_agent::SqliteSecretStore` (feature `sqlite`); behaviour, error codes, JSON shapes, and the `agent_secrets` schema are unchanged.
 
 ## Where to look next
 
