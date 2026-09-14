@@ -10,7 +10,9 @@ use crate::descriptors::{
     DeleteDescriptor as RecordsDeleteDescriptor, ReadDescriptor as RecordsReadDescriptor,
     RecordsQueryDescriptor,
 };
+use crate::filters::Records as RecordsFilter;
 use crate::protocols::{Action, ActionRole, ActionWho, Can, ProtocolKeyAgreement, Who};
+use crate::replies::Status;
 
 const TENANT: &str = "did:example:alice";
 const BOB: &str = "did:example:bob";
@@ -691,13 +693,68 @@ async fn retained_initial_write_proves_a_dataless_parent() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
-// Covers: DWN-PROTO-001, DWN-SYNC-003
+// Covers: DWN-REC-004, DWN-REC-005, DWN-SYNC-003
 #[tokio::test]
-async fn deleted_parent_classifies_terminal_only_from_local_tombstone() {
+async fn soft_deleted_parent_still_proves_structural_ancestry() {
     let fixture = composition_fixture().await;
     let (thread_id, thread_ctx) = seed_thread(&fixture, TS_THREAD).await;
 
     let delete = signed_delete_message(&thread_id, false, TS_COMMENT).await;
+    let reply = fixture.delete_handler.run(TENANT, &delete, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // A soft delete removes the parent's visible state but not its retained
+    // initial write, so a child written after the delete is still admissible.
+    let (comment, data) = write_record(
+        COMMENTS,
+        "thread/comment",
+        TS_REACTION,
+        Some((&thread_id, &thread_ctx)),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // The child stays reachable through its own record ID and filters.
+    let child_id = record_id(&comment);
+    let read = owner_read(&child_id, "2025-01-01T00:02:30.000000Z").await;
+    let reply = fixture.read_handler.run(TENANT, &read, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+
+    let query = owner_scoped_query(
+        COMMENTS,
+        "thread/comment",
+        Some(&thread_ctx),
+        "2025-01-01T00:02:31.000000Z",
+    )
+    .await;
+    let reply = fixture.query_handler.run(TENANT, &query, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(reply.reply.entries.unwrap_or_default().len(), 1);
+
+    // Soft deletion does not revive the parent: a direct read is still absent.
+    let read = owner_read(&thread_id, "2025-01-01T00:02:32.000000Z").await;
+    let reply = fixture.read_handler.run(TENANT, &read, None).await;
+    assert_eq!(reply.status.code, 404, "{}", reply.status.detail);
+
+    assert!(
+        !record_has_prune(TENANT, &thread_id, &fixture.message_store)
+            .await
+            .unwrap()
+    );
+}
+
+// Covers: DWN-REC-004, DWN-SYNC-003, DWN-SYNC-005
+#[tokio::test]
+async fn pruned_parent_rejects_child_as_terminal() {
+    let fixture = composition_fixture().await;
+    let (thread_id, thread_ctx) = seed_thread(&fixture, TS_THREAD).await;
+
+    let delete = signed_delete_message(&thread_id, true, TS_COMMENT).await;
     let reply = fixture.delete_handler.run(TENANT, &delete, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
@@ -714,21 +771,453 @@ async fn deleted_parent_classifies_terminal_only_from_local_tombstone() {
         .run(TENANT, &comment, Some(data))
         .await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    // The client-facing reply is the same generic missing-parent code whether the
-    // parent is absent or tombstoned.
+    // The public reply is the same generic missing-parent code as an absent
+    // parent; prune is not disclosed on the wire.
     assert_eq!(
         reply.status.error_code.as_deref(),
         Some("ProtocolAuthorizationCrossProtocolParentNotFound")
     );
-    // Only the receiver, which can see its local tombstone, classifies it terminal.
+    // Without prune evidence the missing parent is a repairable dependency.
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&comment), false),
         ReplicationApplyOutcome::Incomplete
     );
+    // A receiver that can see the local prune settles the same reply as
+    // superseded rather than a retryable dependency.
+    let pruned = record_has_prune(TENANT, &thread_id, &fixture.message_store)
+        .await
+        .unwrap();
+    assert!(pruned);
     assert_eq!(
-        classify_apply_reply_with_parent_state(&reply.status, &parsed(&comment), false, true),
-        ReplicationApplyOutcome::Invalid
+        classify_apply_reply_with_parent_state(&reply.status, &parsed(&comment), false, pruned),
+        ReplicationApplyOutcome::Superseded
     );
+}
+
+// Covers: DWN-REC-002, DWN-REC-005, DWN-PROTO-001
+#[tokio::test]
+async fn a_non_initial_parent_write_is_not_ancestry() {
+    let fixture = composition_fixture().await;
+    let (thread, thread_data) = write_record(THREADS, "thread", TS_THREAD, None, b"thread").await;
+    let thread_id = record_id(&thread);
+    let thread_ctx = context_id(&thread);
+
+    // A later write for the same record, stored as latest state while the
+    // initial write is absent. Structural ancestry must not treat it as a
+    // substitute, even though it is the newest live write.
+    let update = signed_write_message(WriteSpec {
+        protocol: THREADS.to_string(),
+        protocol_path: "thread".to_string(),
+        record_id: Some(thread_id.clone()),
+        context_id: Some(thread_ctx.clone()),
+        date_created: TS_THREAD.to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(b"thread update").to_string(),
+        data_size: b"thread update".len() as u64,
+        timestamp: TS_COMMENT.to_string(),
+        ..WriteSpec::new(TS_COMMENT)
+    })
+    .await;
+    let parsed_update = parsed(&update);
+    let author = extract_author(&parsed_update).unwrap();
+    let indexes = records_write_indexes(&parsed_update, &author, true).unwrap();
+    fixture
+        .message_store
+        .put(TENANT, parsed_update, indexes)
+        .await
+        .unwrap();
+
+    let (comment, data) = write_record(
+        COMMENTS,
+        "thread/comment",
+        TS_REACTION,
+        Some((&thread_id, &thread_ctx)),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ProtocolAuthorizationCrossProtocolParentNotFound")
+    );
+
+    // Control: a separate receiver that has the real initial write admits the
+    // same child.
+    let control = composition_fixture().await;
+    let reply = control
+        .write_handler
+        .run(TENANT, &thread, Some(thread_data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let reply = control
+        .write_handler
+        .run(TENANT, &comment, Some(Bytes::from_static(b"comment")))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-REC-005, DWN-PROTO-001
+#[tokio::test]
+async fn missing_and_pruned_parent_replies_are_indistinguishable() {
+    let (thread, thread_data) = write_record(THREADS, "thread", TS_THREAD, None, b"thread").await;
+    let thread_id = record_id(&thread);
+    let thread_ctx = context_id(&thread);
+    let (comment, data) = write_record(
+        COMMENTS,
+        "thread/comment",
+        TS_REACTION,
+        Some((&thread_id, &thread_ctx)),
+        b"comment",
+    )
+    .await;
+
+    // Missing parent: never written.
+    let missing_fixture = composition_fixture().await;
+    let missing = missing_fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data.clone()))
+        .await;
+
+    // Pruned parent: written, then removed as ancestry.
+    let pruned_fixture = composition_fixture().await;
+    let reply = pruned_fixture
+        .write_handler
+        .run(TENANT, &thread, Some(thread_data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let prune = signed_delete_message(&thread_id, true, TS_COMMENT).await;
+    let reply = pruned_fixture
+        .delete_handler
+        .run(TENANT, &prune, None)
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let pruned = pruned_fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+
+    assert_eq!(missing.status.code, 400);
+    assert_eq!(missing.status.error_code, pruned.status.error_code);
+    assert_eq!(missing.status.detail, pruned.status.detail);
+}
+
+// Covers: DWN-PROTO-001, DWN-SYNC-002
+#[tokio::test]
+async fn another_tenants_prune_does_not_terminate_ancestry() {
+    let other_tenant = "did:example:bob";
+    let fixture = composition_fixture().await;
+
+    // The same signed parent lives in the queried tenant. Prune evidence for
+    // the same record ID exists in another tenant and must not leak over.
+    let (thread, thread_data) = write_record(THREADS, "thread", TS_THREAD, None, b"thread").await;
+    let thread_id = record_id(&thread);
+    let thread_ctx = context_id(&thread);
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &thread, Some(thread_data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let prune = parsed(&signed_delete_message(&thread_id, true, TS_COMMENT).await);
+    let indexes: KeyValues = BTreeMap::from([
+        (
+            "interface".to_string(),
+            Value::String("Records".to_string()),
+        ),
+        ("method".to_string(), Value::String("Delete".to_string())),
+        ("recordId".to_string(), Value::String(thread_id.clone())),
+        ("prune".to_string(), Value::Bool(true)),
+    ]);
+    fixture
+        .message_store
+        .put(other_tenant, prune, indexes)
+        .await
+        .unwrap();
+    assert!(
+        record_has_prune(other_tenant, &thread_id, &fixture.message_store)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !record_has_prune(TENANT, &thread_id, &fixture.message_store)
+            .await
+            .unwrap()
+    );
+
+    let (comment, data) = write_record(
+        COMMENTS,
+        "thread/comment",
+        TS_REACTION,
+        Some((&thread_id, &thread_ctx)),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-REC-003, DWN-REC-004
+#[tokio::test]
+async fn replay_of_a_retained_child_after_soft_delete_is_idempotent() {
+    let fixture = composition_fixture().await;
+    let (thread_id, thread_ctx) = seed_thread(&fixture, TS_THREAD).await;
+    let (comment, data) = write_record(
+        COMMENTS,
+        "thread/comment",
+        TS_REACTION,
+        Some((&thread_id, &thread_ctx)),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data.clone()))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let before = state_cids(&fixture, &record_id(&comment)).await;
+
+    let delete = signed_delete_message(&thread_id, false, TS_COMMENT).await;
+    let reply = fixture.delete_handler.run(TENANT, &delete, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 409, "{}", reply.status.detail);
+    assert_eq!(state_cids(&fixture, &record_id(&comment)).await, before);
+}
+
+#[derive(Clone)]
+enum AncestryOp {
+    Write(serde_json::Value, Bytes),
+    Delete(serde_json::Value),
+}
+
+async fn apply_ancestry_op(fixture: &CompositionFixture, op: &AncestryOp) -> Status {
+    match op {
+        AncestryOp::Write(message, data) => {
+            fixture
+                .write_handler
+                .run(TENANT, message, Some(data.clone()))
+                .await
+                .status
+        }
+        AncestryOp::Delete(message) => {
+            fixture
+                .delete_handler
+                .run(TENANT, message, None)
+                .await
+                .status
+        }
+    }
+}
+
+/// Delivers `ops` in `order`, retrying only replies the receiver classifies as
+/// repairable. A pruned parent is terminal through local prune evidence, so the
+/// loop cannot spin on a rejection the receiver knows is unrepairable.
+async fn admit_ancestry_ops(
+    fixture: &CompositionFixture,
+    ops: &[AncestryOp],
+    order: &[usize],
+    parent_id: &str,
+) -> Vec<i32> {
+    let mut pending: Vec<usize> = order.to_vec();
+    let mut statuses = vec![0i32; ops.len()];
+    loop {
+        let mut next = Vec::new();
+        let mut progressed = false;
+        for index in std::mem::take(&mut pending) {
+            let op = &ops[index];
+            let status = apply_ancestry_op(fixture, op).await;
+            statuses[index] = status.code;
+            let message = match op {
+                AncestryOp::Write(message, _) | AncestryOp::Delete(message) => message,
+            };
+            let pruned = record_has_prune(TENANT, parent_id, &fixture.message_store)
+                .await
+                .unwrap_or(false);
+            let outcome =
+                classify_apply_reply_with_parent_state(&status, &parsed(message), false, pruned);
+            if outcome == ReplicationApplyOutcome::Incomplete {
+                next.push(index);
+            } else {
+                progressed = true;
+            }
+        }
+        if next.is_empty() || !progressed {
+            break;
+        }
+        pending = next;
+    }
+    statuses
+}
+
+fn permutation_orders(count: usize) -> Vec<Vec<usize>> {
+    let mut orders = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    fn recurse(count: usize, current: &mut Vec<usize>, orders: &mut Vec<Vec<usize>>) {
+        if current.len() == count {
+            orders.push(current.clone());
+            return;
+        }
+        for index in 0..count {
+            if current.contains(&index) {
+                continue;
+            }
+            current.push(index);
+            recurse(count, current, orders);
+            current.pop();
+        }
+    }
+    recurse(count, &mut current, &mut orders);
+    orders
+}
+
+// Covers: DWN-REC-004, DWN-REC-005
+#[tokio::test]
+async fn soft_delete_parent_child_permutations_converge() {
+    let (thread, thread_data) = write_record(THREADS, "thread", TS_THREAD, None, b"thread").await;
+    let thread_id = record_id(&thread);
+    let thread_ctx = context_id(&thread);
+    let (comment, comment_data) = write_record(
+        COMMENTS,
+        "thread/comment",
+        TS_REACTION,
+        Some((&thread_id, &thread_ctx)),
+        b"comment",
+    )
+    .await;
+    let delete = signed_delete_message(&thread_id, false, TS_COMMENT).await;
+    let ops = [
+        AncestryOp::Write(thread, thread_data),
+        AncestryOp::Write(comment, comment_data),
+        AncestryOp::Delete(delete),
+    ];
+
+    let mut observed: Option<Vec<String>> = None;
+    for order in permutation_orders(ops.len()) {
+        let fixture = composition_fixture().await;
+        admit_ancestry_ops(&fixture, &ops, &order, &thread_id).await;
+        let child_state = state_cids(&fixture, &record_id(&ops_child(&ops))).await;
+        assert!(
+            !child_state.is_empty(),
+            "child must survive a soft delete (order {order:?})"
+        );
+        assert!(
+            !record_has_prune(TENANT, &thread_id, &fixture.message_store)
+                .await
+                .unwrap(),
+            "a soft delete is not prune evidence (order {order:?})"
+        );
+        match &observed {
+            None => observed = Some(child_state),
+            Some(expected) => assert_eq!(&child_state, expected, "order {order:?} diverged"),
+        }
+    }
+}
+
+// Covers: DWN-REC-004, ENBOX-REC-001, DWN-SYNC-003, DWN-SYNC-005
+#[tokio::test]
+async fn prune_parent_child_delete_permutations_converge() {
+    let (thread, thread_data) = write_record(THREADS, "thread", TS_THREAD, None, b"thread").await;
+    let thread_id = record_id(&thread);
+    let thread_ctx = context_id(&thread);
+    let (comment, comment_data) = write_record(
+        COMMENTS,
+        "thread/comment",
+        TS_REACTION,
+        Some((&thread_id, &thread_ctx)),
+        b"comment",
+    )
+    .await;
+    let soft_delete = signed_delete_message(&thread_id, false, TS_COMMENT).await;
+    let prune = signed_delete_message(&thread_id, true, TS_REACTION).await;
+    let ops = [
+        AncestryOp::Write(thread, thread_data),
+        AncestryOp::Write(comment, comment_data),
+        AncestryOp::Delete(soft_delete),
+        AncestryOp::Delete(prune),
+    ];
+
+    for order in permutation_orders(ops.len()) {
+        let fixture = composition_fixture().await;
+        admit_ancestry_ops(&fixture, &ops, &order, &thread_id).await;
+        let child_state = state_cids(&fixture, &record_id(&ops_child(&ops))).await;
+        assert!(
+            child_state.is_empty(),
+            "prune must settle the child absent (order {order:?})"
+        );
+        assert!(
+            record_has_prune(TENANT, &thread_id, &fixture.message_store)
+                .await
+                .unwrap(),
+            "prune must be retained (order {order:?})"
+        );
+    }
+}
+
+fn ops_child(ops: &[AncestryOp]) -> serde_json::Value {
+    ops.iter()
+        .find_map(|op| match op {
+            AncestryOp::Write(message, _)
+                if message["descriptor"]["protocolPath"] == "thread/comment" =>
+            {
+                Some(message.clone())
+            }
+            _ => None,
+        })
+        .expect("scenario has a child write")
+}
+
+async fn owner_read(record_id: &str, timestamp: &str) -> serde_json::Value {
+    let descriptor = RecordsReadDescriptor {
+        message_timestamp: parse_time(timestamp),
+        filter: RecordsFilter {
+            record_id: Some(record_id.to_string()),
+            ..Default::default()
+        },
+        permission_grant_id: None,
+        date_sort: None,
+    };
+    let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+    let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer()).await;
+    json!({
+        "descriptor": descriptor_json,
+        "authorization": { "signature": signature }
+    })
+}
+
+async fn owner_scoped_query(
+    protocol: &str,
+    protocol_path: &str,
+    context_id: Option<&str>,
+    timestamp: &str,
+) -> serde_json::Value {
+    let descriptor = RecordsQueryDescriptor {
+        message_timestamp: parse_time(timestamp),
+        filter: RecordsFilter {
+            protocol: Some(protocol.to_string()),
+            protocol_path: Some(protocol_path.to_string()),
+            context_id: context_id.map(str::to_string),
+            ..Default::default()
+        },
+        pagination: None,
+        permission_grant_id: None,
+        date_sort: None,
+    };
+    let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+    let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer()).await;
+    json!({
+        "descriptor": descriptor_json,
+        "authorization": { "signature": signature }
+    })
 }
 
 // Covers: DWN-REC-004, DWN-SYNC-003

@@ -14,8 +14,8 @@ use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::stores::ReplicationFeedReader;
 use dwn_rs_core::testing::{
-    put_notes_protocol_without_actions, signed_delete_message, signed_write_message, test_resolver,
-    unsigned_query_message, unsigned_read_message, WriteSpec,
+    put_limited_threads_protocol, put_notes_protocol_without_actions, signed_delete_message,
+    signed_write_message, test_resolver, unsigned_query_message, unsigned_read_message, WriteSpec,
 };
 use dwn_rs_core::Reply;
 use serde_json::{json, Value as JsonValue};
@@ -329,4 +329,83 @@ async fn restart_mid_sequence_converges_with_uninterrupted_run() {
     let (mem_state, disk_state) = states(&nodes, &scenario.record_id).await;
     assert_eq!(mem_state, disk_state);
     assert_eq!(mem_state.read_status, 404);
+}
+
+const ANCESTRY_PROTOCOL: &str = "http://example.com/limited";
+
+fn ancestry_write(
+    protocol_path: &str,
+    parent: Option<(&str, &str)>,
+    timestamp: &str,
+    data: &'static [u8],
+) -> WriteSpec {
+    WriteSpec {
+        protocol: ANCESTRY_PROTOCOL.to_string(),
+        protocol_path: protocol_path.to_string(),
+        parent_id: parent.map(|(record_id, _)| record_id.to_string()),
+        parent_context_id: parent.map(|(_, context_id)| context_id.to_string()),
+        data_cid: generate_dag_pb_cid_from_bytes(data).to_string(),
+        data_size: data.len() as u64,
+        ..WriteSpec::new(timestamp)
+    }
+}
+
+/// Commits a parent plus a delete, drops and reopens the disk node, then
+/// submits the child. The retained ancestry decision must survive the restart.
+async fn ancestry_after_reopen(prune: bool) -> (i32, Option<String>) {
+    let db = TempDb::new(if prune {
+        "ancestry-prune-reopen"
+    } else {
+        "ancestry-soft-delete-reopen"
+    });
+    let mut disk = SqliteNativeDwn::open_at(db.path(), test_resolver())
+        .await
+        .expect("open disk node");
+    put_limited_threads_protocol(TENANT, disk.store()).await;
+
+    let thread = signed_write_message(ancestry_write("thread", None, T1, b"thread")).await;
+    let thread_id = thread["recordId"].as_str().expect("recordId").to_string();
+    let thread_ctx = thread["contextId"].as_str().expect("contextId").to_string();
+    let reply = disk
+        .process_message_with_data(TENANT, thread, Some(Bytes::from_static(b"thread")))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let delete = signed_delete_message(&thread_id, prune, T2).await;
+    let reply = disk.dwn().process_message(TENANT, delete).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    disk = SqliteNativeDwn::open_at(db.path(), test_resolver())
+        .await
+        .expect("reopen disk node");
+
+    let child = signed_write_message(ancestry_write(
+        "thread/message",
+        Some((&thread_id, &thread_ctx)),
+        T3,
+        b"message",
+    ))
+    .await;
+    let reply = disk
+        .process_message_with_data(TENANT, child, Some(Bytes::from_static(b"message")))
+        .await;
+    (reply.status.code, reply.status.error_code)
+}
+
+// Covers: DWN-REC-004, DWN-REC-005
+#[tokio::test]
+async fn soft_delete_ancestry_survives_reopen() {
+    let (status, error) = ancestry_after_reopen(false).await;
+    assert_eq!(status, 202, "{error:?}");
+}
+
+// Covers: DWN-SYNC-003, DWN-SYNC-005
+#[tokio::test]
+async fn prune_ancestry_is_terminal_after_reopen() {
+    let (status, error) = ancestry_after_reopen(true).await;
+    assert_eq!(status, 400);
+    assert_eq!(
+        error.as_deref(),
+        Some("ProtocolAuthorizationParentRecordNotFound")
+    );
 }

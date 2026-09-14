@@ -1702,13 +1702,13 @@ where
         .ok_or_else(|| "RecordsWriteGetNewestWriteRecordNotFound: record not found".to_string())
 }
 
-/// The retained, not-deleted Record that is the current parent for `record_id`
-/// in `protocol`.
+/// The retained initial write that proves `record_id` is an addressable parent
+/// in `protocol`, unless that Record has been pruned.
 ///
-/// The current latest-base-state write is preferred. When none exists the
-/// retained initial write still proves the parent, unless a tombstone has
-/// displaced it: a deleted record keeps its delete in the latest base state,
-/// which the initial-write lookup must not resurrect.
+/// Structural ancestry is the retained initial write, not current liveness. A
+/// soft delete leaves the parent usable as an ancestor; an arbitrary later
+/// write is not a substitute for the initial write. A `prune: true` delete
+/// removes the parent as ancestry even though its initial write is retained.
 pub(crate) async fn fetch_parent_record<MessageStore>(
     tenant: &str,
     record_id: &str,
@@ -1718,60 +1718,26 @@ pub(crate) async fn fetch_parent_record<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let latest_filter = filter_map([
-        ("interface", string_filter(RECORDS_INTERFACE)),
-        ("method", string_filter(WRITE_METHOD)),
-        ("isLatestBaseState", bool_filter(true)),
-        ("protocol", string_filter(protocol)),
-        ("recordId", string_filter(record_id)),
-    ]);
-    let latest = message_store
-        .query(
-            tenant,
-            Filters::from(latest_filter),
-            Some(MessageSort::Timestamp(SortDirection::Descending)),
-            Some(Pagination::with_limit(1)),
-            None,
-        )
-        .await
-        .map(|result| result.messages.into_iter().next())
-        .map_err(|err| err.to_string())?;
-    if latest.is_some() {
-        return Ok(latest);
+    if record_has_prune(tenant, record_id, message_store).await? {
+        return Ok(None);
     }
-
-    let initial_filter = filter_map([
-        ("interface", string_filter(RECORDS_INTERFACE)),
-        ("method", string_filter(WRITE_METHOD)),
-        ("protocol", string_filter(protocol)),
-        ("recordId", string_filter(record_id)),
-    ]);
-    let initial = message_store
-        .query(
-            tenant,
-            Filters::from(initial_filter),
-            Some(MessageSort::Timestamp(SortDirection::Ascending)),
-            Some(Pagination::with_limit(1)),
-            None,
-        )
-        .await
-        .map(|result| result.messages.into_iter().next())
-        .map_err(|err| err.to_string())?;
-    let Some(initial) = initial else {
+    let Some(initial) = fetch_initial_write_message(tenant, record_id, message_store).await? else {
         return Ok(None);
     };
-
-    if record_has_tombstone(tenant, record_id, message_store).await? {
+    let descriptor = records_write_descriptor(&initial).map_err(|error| error.to_string())?;
+    if descriptor.protocol != protocol {
         return Ok(None);
     }
     Ok(Some(initial))
 }
 
-/// Whether any `RecordsDelete` tombstone exists for `record_id`. A delete is
-/// terminal, so a parent missing because of a tombstone can never be repaired.
-/// Callers use this to classify a missing parent as terminal without putting
-/// the distinction on the client-facing reply.
-pub(crate) async fn record_has_tombstone<MessageStore>(
+/// Whether `record_id` has a retained `prune: true` delete. Prune is the
+/// explicit subtree-removal operation, so it removes the Record as structural
+/// ancestry even though the initial write is retained. Prune evidence is
+/// protocol-agnostic and tenant-scoped: a delete in another tenant supplies
+/// none. Callers use this to classify a missing parent as terminal without
+/// putting that distinction on the client-facing reply.
+pub(crate) async fn record_has_prune<MessageStore>(
     tenant: &str,
     record_id: &str,
     message_store: &MessageStore,
@@ -1779,15 +1745,16 @@ pub(crate) async fn record_has_tombstone<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let tombstone_filter = filter_map([
+    let prune_filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
         ("method", string_filter(crate::descriptors::DELETE)),
         ("recordId", string_filter(record_id)),
+        ("prune", bool_filter(true)),
     ]);
     message_store
         .query(
             tenant,
-            Filters::from(tombstone_filter),
+            Filters::from(prune_filter),
             None,
             Some(Pagination::with_limit(1)),
             None,
