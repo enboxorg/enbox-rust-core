@@ -157,7 +157,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
     )
     .await;
     assert_eq!(
-        plaintext_fallback.unwrap_err().code,
+        plaintext_fallback.unwrap_err().code(),
         "ProtocolInstallMissingKeyAgreement"
     );
 }

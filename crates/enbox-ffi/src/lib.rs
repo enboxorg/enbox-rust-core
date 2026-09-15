@@ -105,8 +105,8 @@ pub enum EnboxError {
 impl From<dwn_rs_agent::agent::AgentIdentityError> for EnboxError {
     fn from(err: dwn_rs_agent::agent::AgentIdentityError) -> Self {
         EnboxError::Agent {
-            code: err.code,
-            detail: err.detail,
+            code: err.code().to_owned(),
+            detail: err.detail().to_owned(),
         }
     }
 }
