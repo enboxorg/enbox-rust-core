@@ -124,7 +124,9 @@ pub struct ContextKeyDeliveryRecord {
 }
 
 /// Host seam for delivered context keys (write/fetch/delete by recipient).
-pub trait KeyDeliveryStore: Clone + Send + Sync + 'static {
+///
+/// Dyn-compatible so hosts supply backends at runtime as `Arc<dyn KeyDeliveryStore>`.
+pub trait KeyDeliveryStore: Send + Sync + 'static {
     fn write_context_key<'a>(
         &'a self,
         record: ContextKeyDeliveryRecord,
@@ -139,6 +141,29 @@ pub trait KeyDeliveryStore: Clone + Send + Sync + 'static {
     ) -> ConnectFuture<'a, Option<DelegateContextKey>>;
 
     fn delete_for_recipient<'a>(&'a self, recipient_did: &'a str) -> ConnectFuture<'a, usize>;
+}
+
+impl<T: ?Sized + KeyDeliveryStore> KeyDeliveryStore for Arc<T> {
+    fn write_context_key<'a>(
+        &'a self,
+        record: ContextKeyDeliveryRecord,
+    ) -> ConnectFuture<'a, String> {
+        (**self).write_context_key(record)
+    }
+
+    fn fetch_context_key<'a>(
+        &'a self,
+        owner_did: &'a str,
+        requester_did: &'a str,
+        source_protocol: &'a str,
+        source_context_id: &'a str,
+    ) -> ConnectFuture<'a, Option<DelegateContextKey>> {
+        (**self).fetch_context_key(owner_did, requester_did, source_protocol, source_context_id)
+    }
+
+    fn delete_for_recipient<'a>(&'a self, recipient_did: &'a str) -> ConnectFuture<'a, usize> {
+        (**self).delete_for_recipient(recipient_did)
+    }
 }
 
 /// Build a permission request record for UI approval.
