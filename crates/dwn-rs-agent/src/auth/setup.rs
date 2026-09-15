@@ -142,7 +142,7 @@ where
     S: SecretStore,
 {
     let bytes = serde_json::to_vec(tokens)
-        .map_err(|err| AgentIdentityError::new("RegistrationTokenStoreInvalid", err.to_string()))?;
+        .map_err(|err| AgentIdentityError::registration_token_store(err.to_string()))?;
     secret_store.put(REGISTRATION_TOKENS_KEY, bytes).await
 }
 
@@ -452,23 +452,22 @@ fn set_path_encryption(
     public_key_jwk: JWK,
 ) -> AgentIdentityResult<()> {
     let Some((root, rest)) = relative_path.split_first() else {
-        return Err(AgentIdentityError::new(
-            "ProtocolInstallInvalidPath",
+        return Err(AgentIdentityError::protocol_path(
             "protocol path must not be empty",
         ));
     };
     let mut rule_set = definition.structure.get_mut(root).ok_or_else(|| {
-        AgentIdentityError::new(
-            "ProtocolInstallInvalidPath",
-            format!("protocol path {} was not found", relative_path.join("/")),
-        )
+        AgentIdentityError::protocol_path(format!(
+            "protocol path {} was not found",
+            relative_path.join("/")
+        ))
     })?;
     for segment in rest {
         rule_set = rule_set.rules.get_mut(segment).ok_or_else(|| {
-            AgentIdentityError::new(
-                "ProtocolInstallInvalidPath",
-                format!("protocol path {} was not found", relative_path.join("/")),
-            )
+            AgentIdentityError::protocol_path(format!(
+                "protocol path {} was not found",
+                relative_path.join("/")
+            ))
         })?;
     }
     rule_set.key_agreement = Some(ProtocolKeyAgreement {
@@ -785,7 +784,7 @@ mod tests {
                 .await
                 .unwrap_err();
 
-        assert_eq!(error.code, "ProtocolInstallMissingKeyAgreement");
+        assert_eq!(error.code(), "ProtocolInstallMissingKeyAgreement");
     }
 
     #[derive(Clone, Default)]

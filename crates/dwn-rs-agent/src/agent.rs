@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
@@ -31,59 +30,186 @@ pub const VAULT_UNLOCK_SALT_KEY: &str = "agent:vault:unlockSalt";
 
 type HmacSha512 = Hmac<Sha512>;
 
-/// Agent error with a stable machine-readable `code` and human `detail`.
+/// Agent error with a stable machine-readable code and human detail.
 ///
-/// Codes pass through the FFI surface verbatim.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentIdentityError {
-    pub code: String,
-    pub detail: String,
+/// Each variant preserves the code string previously carried in the
+/// `code` field, exposed through [`AgentIdentityError::code`]. Codes pass
+/// through the FFI surface verbatim. Backend implementors outside this
+/// crate report their own failures through [`AgentIdentityError::new`],
+/// which carries any code and detail unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum AgentIdentityError {
+    #[error("AgentIdentityInvalidMnemonic: {detail}")]
+    InvalidMnemonic { detail: String },
+    #[error("AgentIdentityInvalidKeyMaterial: {detail}")]
+    InvalidKeyMaterial { detail: String },
+    #[error("AgentIdentityDidError: {detail}")]
+    Did { detail: String },
+    #[error("AgentIdentityKeyManagerError: {detail}")]
+    KeyManager { detail: String },
+    #[error("AgentIdentityVaultError: {detail}")]
+    Vault { detail: String },
+    #[error("AgentIdentityLockPoisoned: {detail}")]
+    LockPoisoned { detail: String },
+    #[error("AgentVaultError: {detail}")]
+    AgentVault { detail: String },
+    #[error("RegistrationTokenStoreInvalid: {detail}")]
+    RegistrationTokenStore { detail: String },
+    #[error("DelegateSecretInvalid: {detail}")]
+    DelegateSecret { detail: String },
+    #[error("DelegateKeyMissingKeyAgreement: {detail}")]
+    DelegateKeyAgreement { detail: String },
+    #[error("DelegateKeyMissingX25519: {detail}")]
+    DelegateKeyX25519 { detail: String },
+    #[error("ProtocolInstallInvalidPath: {detail}")]
+    ProtocolPath { detail: String },
+    #[error("ProtocolInstallMissingKeyAgreement: {detail}")]
+    ProtocolAgreement { detail: String },
+    #[error("ProtocolInstallMissingX25519: {detail}")]
+    ProtocolX25519 { detail: String },
+    #[error("{code}: {detail}")]
+    Backend { code: String, detail: String },
 }
 
 impl AgentIdentityError {
-    /// Build an error with the given stable code.
+    /// Build an implementor-defined failure carrying its own code and detail.
+    ///
+    /// Codes raised by host backends (FFI, developer) reach the caller and
+    /// the FFI mapping unchanged.
     pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self {
+        Self::Backend {
             code: code.into(),
             detail: detail.into(),
         }
     }
 
+    /// Stable machine-readable code for this failure.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::InvalidMnemonic { .. } => "AgentIdentityInvalidMnemonic",
+            Self::InvalidKeyMaterial { .. } => "AgentIdentityInvalidKeyMaterial",
+            Self::Did { .. } => "AgentIdentityDidError",
+            Self::KeyManager { .. } => "AgentIdentityKeyManagerError",
+            Self::Vault { .. } => "AgentIdentityVaultError",
+            Self::LockPoisoned { .. } => "AgentIdentityLockPoisoned",
+            Self::AgentVault { .. } => "AgentVaultError",
+            Self::RegistrationTokenStore { .. } => "RegistrationTokenStoreInvalid",
+            Self::DelegateSecret { .. } => "DelegateSecretInvalid",
+            Self::DelegateKeyAgreement { .. } => "DelegateKeyMissingKeyAgreement",
+            Self::DelegateKeyX25519 { .. } => "DelegateKeyMissingX25519",
+            Self::ProtocolPath { .. } => "ProtocolInstallInvalidPath",
+            Self::ProtocolAgreement { .. } => "ProtocolInstallMissingKeyAgreement",
+            Self::ProtocolX25519 { .. } => "ProtocolInstallMissingX25519",
+            Self::Backend { code, .. } => code,
+        }
+    }
+
+    /// Human-readable detail. Never contains key material, salts, or tokens.
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::InvalidMnemonic { detail }
+            | Self::InvalidKeyMaterial { detail }
+            | Self::Did { detail }
+            | Self::KeyManager { detail }
+            | Self::Vault { detail }
+            | Self::LockPoisoned { detail }
+            | Self::AgentVault { detail }
+            | Self::RegistrationTokenStore { detail }
+            | Self::DelegateSecret { detail }
+            | Self::DelegateKeyAgreement { detail }
+            | Self::DelegateKeyX25519 { detail }
+            | Self::ProtocolPath { detail }
+            | Self::ProtocolAgreement { detail }
+            | Self::ProtocolX25519 { detail }
+            | Self::Backend { detail, .. } => detail,
+        }
+    }
+
     fn invalid_mnemonic(detail: impl Into<String>) -> Self {
-        Self::new("AgentIdentityInvalidMnemonic", detail)
+        Self::InvalidMnemonic {
+            detail: detail.into(),
+        }
     }
 
     fn invalid_key_material(detail: impl Into<String>) -> Self {
-        Self::new("AgentIdentityInvalidKeyMaterial", detail)
+        Self::InvalidKeyMaterial {
+            detail: detail.into(),
+        }
     }
 
     fn did(detail: impl Into<String>) -> Self {
-        Self::new("AgentIdentityDidError", detail)
+        Self::Did {
+            detail: detail.into(),
+        }
     }
 
     fn key_manager(detail: impl Into<String>) -> Self {
-        Self::new("AgentIdentityKeyManagerError", detail)
+        Self::KeyManager {
+            detail: detail.into(),
+        }
     }
 
     fn vault(detail: impl Into<String>) -> Self {
-        Self::new("AgentIdentityVaultError", detail)
+        Self::Vault {
+            detail: detail.into(),
+        }
     }
 
     pub(crate) fn lock_poisoned<E: Display>(err: E) -> Self {
-        Self::new(
-            "AgentIdentityLockPoisoned",
-            format!("agent identity store lock poisoned: {err}"),
-        )
+        Self::LockPoisoned {
+            detail: format!("agent identity store lock poisoned: {err}"),
+        }
+    }
+
+    pub(crate) fn agent_vault(detail: impl Into<String>) -> Self {
+        Self::AgentVault {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn registration_token_store(detail: impl Into<String>) -> Self {
+        Self::RegistrationTokenStore {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn delegate_secret(detail: impl Into<String>) -> Self {
+        Self::DelegateSecret {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn delegate_key_agreement(detail: impl Into<String>) -> Self {
+        Self::DelegateKeyAgreement {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn delegate_key_x25519(detail: impl Into<String>) -> Self {
+        Self::DelegateKeyX25519 {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn protocol_path(detail: impl Into<String>) -> Self {
+        Self::ProtocolPath {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn protocol_agreement(detail: impl Into<String>) -> Self {
+        Self::ProtocolAgreement {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn protocol_x25519(detail: impl Into<String>) -> Self {
+        Self::ProtocolX25519 {
+            detail: detail.into(),
+        }
     }
 }
-
-impl Display for AgentIdentityError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.detail)
-    }
-}
-
-impl Error for AgentIdentityError {}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1048,8 +1174,8 @@ mod tests {
 
         let error = provider.import_did(portable_did).await.unwrap_err();
 
-        assert_eq!(error.code, "AgentIdentityInvalidKeyMaterial");
-        assert!(error.detail.contains("X25519"));
+        assert_eq!(error.code(), "AgentIdentityInvalidKeyMaterial");
+        assert!(error.detail().contains("X25519"));
     }
 
     #[tokio::test]

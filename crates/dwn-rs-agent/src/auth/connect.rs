@@ -391,7 +391,7 @@ where
         .put(
             key,
             serde_json::to_vec(value)
-                .map_err(|err| AgentIdentityError::new("DelegateSecretInvalid", err.to_string()))?,
+                .map_err(|err| AgentIdentityError::delegate_secret(err.to_string()))?,
         )
         .await
 }

@@ -1428,6 +1428,7 @@ dependencies = [
  "ssi-dids-core",
  "ssi-jwk",
  "tempfile",
+ "thiserror 2.0.20",
  "tokio",
  "ulid",
  "x25519-dalek",

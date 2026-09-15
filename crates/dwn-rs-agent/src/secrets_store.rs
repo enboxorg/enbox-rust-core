@@ -14,8 +14,6 @@ use dwn_rs_core::errors::StoreError;
 use dwn_rs_stores::SqliteStore;
 use rusqlite::{params, OptionalExtension};
 
-const VAULT_ERROR_CODE: &str = "AgentVaultError";
-
 /// Durable [`SecretStore`] backed by the shared SQLite database.
 #[derive(Clone)]
 pub struct SqliteSecretStore {
@@ -47,7 +45,7 @@ impl SecretStore for SqliteSecretStore {
             self.store
                 .connection()
                 .await
-                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))?
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))?
                 .with_reader(move |connection| {
                     connection
                         .query_row(
@@ -59,7 +57,7 @@ impl SecretStore for SqliteSecretStore {
                         .map_err(|err| StoreError::InternalException(err.to_string()))
                 })
                 .await
-                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))
         })
     }
 
@@ -69,7 +67,7 @@ impl SecretStore for SqliteSecretStore {
             self.store
                 .connection()
                 .await
-                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))?
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))?
                 .with_writer(move |connection| {
                     connection
                         .execute(
@@ -80,7 +78,7 @@ impl SecretStore for SqliteSecretStore {
                     Ok(())
                 })
                 .await
-                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))
         })
     }
 
@@ -90,7 +88,7 @@ impl SecretStore for SqliteSecretStore {
             self.store
                 .connection()
                 .await
-                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))?
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))?
                 .with_writer(move |connection| {
                     let affected = connection
                         .execute("DELETE FROM agent_secrets WHERE key = ?1", params![key])
@@ -98,7 +96,7 @@ impl SecretStore for SqliteSecretStore {
                     Ok(affected > 0)
                 })
                 .await
-                .map_err(|err| AgentIdentityError::new(VAULT_ERROR_CODE, err.to_string()))
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))
         })
     }
 }
