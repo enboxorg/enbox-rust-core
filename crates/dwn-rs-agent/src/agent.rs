@@ -1151,6 +1151,11 @@ pub(crate) fn relationship_id(document: &Document, relationship: &ValueOrReferen
     relationship.id().resolve(&document.id).to_string()
 }
 
+/// Current time, behind one choke point so a future injectable clock has a single migration site.
+pub(crate) fn now_utc() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
 pub(crate) fn key_agreement_root_key_id(
     tenant_did: &PortableDid,
     missing: impl Fn(String) -> AgentIdentityError,

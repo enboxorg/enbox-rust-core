@@ -4,10 +4,9 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use crate::agent::{
-    key_agreement_root_key_id, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
+    key_agreement_root_key_id, now_utc, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
     PortableDid, SecretStore,
 };
-use chrono::Utc;
 use dwn_rs_core::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
@@ -205,7 +204,7 @@ where
         request.registration_tokens
     };
     let mut records = Vec::new();
-    let now_ms = Utc::now().timestamp_millis();
+    let now_ms = now_utc().timestamp_millis();
     let dids = unique_dids([request.agent_did, request.connected_did]);
 
     for endpoint in request.dwn_endpoints {
@@ -605,6 +604,7 @@ mod tests {
         jwk_curve, AgentIdentityInitializeRequest, AgentIdentityService,
         DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
+    use chrono::Utc;
     use dwn_rs_core::interfaces::messages::protocols::{Type, Who};
     use serde_json::Value as JsonValue;
 
