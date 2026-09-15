@@ -9,7 +9,7 @@ use ssi_jwk::{
     ed25519_parse, p256_parse, secp256k1_parse, Algorithm, Base64urlUInt, OctetParams, Params, JWK,
 };
 
-use crate::auth::resolver::{Resolution, ResolverError};
+use super::error::DhtPublishError;
 
 const ED25519_KEY_TYPE: &str = "0";
 const SECP256K1_KEY_TYPE: &str = "1";
@@ -23,9 +23,12 @@ struct TxtRecord {
     data: String,
 }
 
-pub(super) fn decode_document(did: &DID, dns_bytes: &[u8]) -> Result<Resolution, ResolverError> {
+pub(crate) fn decode_document(
+    did: &DID,
+    dns_bytes: &[u8],
+) -> Result<(Document, Option<Vec<u64>>), DhtPublishError> {
     if did.method_name() != "dht" {
-        return Err(ResolverError::MethodNotSupported(
+        return Err(DhtPublishError::MethodNotSupported(
             did.method_name().to_string(),
         ));
     }
@@ -84,22 +87,11 @@ pub(super) fn decode_document(did: &DID, dns_bytes: &[u8]) -> Result<Resolution,
 
     let document = serde_json::from_value::<Document>(Value::Object(document))
         .map_err(|error| invalid_document(error.to_string()))?;
-    let mut resolution = Resolution::new(document);
-    resolution
-        .document_metadata
-        .properties
-        .insert("published".to_string(), Value::Bool(true));
-    if let Some(types) = metadata_types {
-        resolution
-            .document_metadata
-            .properties
-            .insert("types".to_string(), Value::Array(types));
-    }
 
-    Ok(resolution)
+    Ok((document, metadata_types))
 }
 
-fn txt_records(packet: &simple_dns::Packet<'_>) -> Result<Vec<TxtRecord>, ResolverError> {
+fn txt_records(packet: &simple_dns::Packet<'_>) -> Result<Vec<TxtRecord>, DhtPublishError> {
     packet
         .answers
         .iter()
@@ -139,33 +131,33 @@ fn verification_method(
     did: &DID,
     record_id: &str,
     data: &str,
-) -> Result<(Value, String), ResolverError> {
+) -> Result<(Value, String), DhtPublishError> {
     let values = properties(data);
     let key_type = values.get("t").map(String::as_str).unwrap_or_default();
-    let encoded_key = values.get("k").ok_or(ResolverError::InvalidPublicKey)?;
+    let encoded_key = values.get("k").ok_or(DhtPublishError::InvalidPublicKey)?;
     let key_bytes = URL_SAFE_NO_PAD
         .decode(encoded_key)
-        .map_err(|_| ResolverError::InvalidPublicKey)?;
+        .map_err(|_| DhtPublishError::InvalidPublicKey)?;
 
     let (mut jwk, default_algorithm) = match key_type {
         ED25519_KEY_TYPE => {
             require_length(&key_bytes, OKP_PUBLIC_KEY_LEN)?;
             (
-                ed25519_parse(&key_bytes).map_err(|_| ResolverError::InvalidPublicKey)?,
+                ed25519_parse(&key_bytes).map_err(|_| DhtPublishError::InvalidPublicKey)?,
                 Algorithm::EdDSA.as_str(),
             )
         }
         SECP256K1_KEY_TYPE => {
             require_length(&key_bytes, EC_PUBLIC_KEY_LEN)?;
             (
-                secp256k1_parse(&key_bytes).map_err(|_| ResolverError::InvalidPublicKey)?,
+                secp256k1_parse(&key_bytes).map_err(|_| DhtPublishError::InvalidPublicKey)?,
                 Algorithm::ES256K.as_str(),
             )
         }
         P256_KEY_TYPE => {
             require_length(&key_bytes, EC_PUBLIC_KEY_LEN)?;
             (
-                p256_parse(&key_bytes).map_err(|_| ResolverError::InvalidPublicKey)?,
+                p256_parse(&key_bytes).map_err(|_| DhtPublishError::InvalidPublicKey)?,
                 Algorithm::ES256.as_str(),
             )
         }
@@ -181,7 +173,7 @@ fn verification_method(
             )
         }
         found => {
-            return Err(ResolverError::InvalidPublicKeyType {
+            return Err(DhtPublishError::InvalidPublicKeyType {
                 found: found.to_string(),
             });
         }
@@ -189,7 +181,7 @@ fn verification_method(
 
     let thumbprint = jwk
         .thumbprint()
-        .map_err(|_| ResolverError::InvalidPublicKey)?;
+        .map_err(|_| DhtPublishError::InvalidPublicKey)?;
     jwk.key_id = Some(thumbprint.clone());
     let mut jwk = serde_json::to_value(jwk)
         .map_err(|error| invalid_document(format!("could not encode public JWK: {error}")))?;
@@ -222,18 +214,18 @@ fn verification_method(
     Ok((method, method_id))
 }
 
-fn require_length(bytes: &[u8], expected: usize) -> Result<(), ResolverError> {
+fn require_length(bytes: &[u8], expected: usize) -> Result<(), DhtPublishError> {
     if bytes.len() == expected {
         Ok(())
     } else {
-        Err(ResolverError::InvalidPublicKeyLength {
+        Err(DhtPublishError::InvalidPublicKeyLength {
             expected,
             found: bytes.len(),
         })
     }
 }
 
-fn service(did: &DID, data: &str) -> Result<Value, ResolverError> {
+fn service(did: &DID, data: &str) -> Result<Value, DhtPublishError> {
     let mut values = properties(data);
     let id = values
         .remove("id")
@@ -268,7 +260,7 @@ fn service(did: &DID, data: &str) -> Result<Value, ResolverError> {
     Ok(Value::Object(service))
 }
 
-fn did_types(data: &str) -> Result<Vec<Value>, ResolverError> {
+fn did_types(data: &str) -> Result<Vec<u64>, DhtPublishError> {
     let values = properties(data);
     let types = values
         .get("id")
@@ -278,8 +270,6 @@ fn did_types(data: &str) -> Result<Vec<Value>, ResolverError> {
         .map(|value| {
             value
                 .parse::<u64>()
-                .map(serde_json::Number::from)
-                .map(Value::Number)
                 .map_err(|_| invalid_document(format!("invalid DID type: {value}")))
         })
         .collect()
@@ -318,8 +308,8 @@ fn string_values(value: &str) -> Vec<Value> {
         .collect()
 }
 
-fn invalid_document(message: impl Into<String>) -> ResolverError {
-    ResolverError::InvalidDocument(message.into())
+fn invalid_document(message: impl Into<String>) -> DhtPublishError {
+    DhtPublishError::InvalidDocument(message.into())
 }
 
 #[cfg(test)]
@@ -366,8 +356,8 @@ mod tests {
             ("_k0._did.", &format!("t=0;k={ED25519_KEY}")),
         ]);
 
-        let resolution = decode_document(&did(), &bytes).unwrap();
-        let document = serde_json::to_value(resolution.document).unwrap();
+        let (document, types) = decode_document(&did(), &bytes).unwrap();
+        let document = serde_json::to_value(document).unwrap();
         let method_id = format!("{DID}#0");
 
         assert_eq!(document["id"], DID);
@@ -393,7 +383,7 @@ mod tests {
             assert_eq!(document[relationship], serde_json::json!([method_id]));
         }
         assert!(document.get("keyAgreement").is_none());
-        assert_eq!(resolution.document_metadata.properties["published"], true);
+        assert_eq!(types, None);
     }
 
     #[test]
@@ -425,8 +415,8 @@ mod tests {
             ("_k3._did.", &k3),
         ]);
 
-        let document =
-            serde_json::to_value(decode_document(&did(), &bytes).unwrap().document).unwrap();
+        let (document, _) = decode_document(&did(), &bytes).unwrap();
+        let document = serde_json::to_value(document).unwrap();
 
         assert_eq!(document["verificationMethod"].as_array().unwrap().len(), 4);
         assert_eq!(
@@ -487,8 +477,8 @@ mod tests {
             (&root_name, "v=0;auth=k0"),
         ]);
 
-        let resolution = decode_document(&did(), &bytes).unwrap();
-        let document = serde_json::to_value(resolution.document).unwrap();
+        let (document, types) = decode_document(&did(), &bytes).unwrap();
+        let document = serde_json::to_value(document).unwrap();
 
         assert_eq!(
             document["alsoKnownAs"],
@@ -506,11 +496,7 @@ mod tests {
             document["service"][0]["sig"],
             serde_json::json!(["#sig", "#backup"])
         );
-        assert_eq!(
-            resolution.document_metadata.properties["types"],
-            serde_json::json!([1, 2, 3])
-        );
-        assert_eq!(resolution.document_metadata.properties["published"], true);
+        assert_eq!(types, Some(vec![1, 2, 3]));
     }
 
     #[test]
@@ -519,8 +505,8 @@ mod tests {
         let key = format!("t=0;k={ED25519_KEY};c=did:example:controller;a=EdDSA");
         let bytes = packet(&[("_k1._did.", &key), (&root_name, "v=0;asm=k1")]);
 
-        let document =
-            serde_json::to_value(decode_document(&did(), &bytes).unwrap().document).unwrap();
+        let (document, _) = decode_document(&did(), &bytes).unwrap();
+        let document = serde_json::to_value(document).unwrap();
 
         assert_eq!(
             document["verificationMethod"][0]["id"],
@@ -548,7 +534,7 @@ mod tests {
         assert_eq!(fixture["source"]["repository"], "enboxorg/enbox");
         assert_eq!(
             fixture["source"]["commit"],
-            include_str!("../../../../../../.enbox-version")
+            include_str!("../../../.enbox-version")
                 .lines()
                 .find(|line| !line.starts_with('#') && !line.trim().is_empty())
                 .unwrap()
@@ -579,18 +565,12 @@ mod tests {
         }
 
         let bytes = packet.build_bytes_vec_compressed().unwrap();
-        let resolution = decode_document(&did, &bytes).unwrap();
+        let (document, types) = decode_document(&did, &bytes).unwrap();
         assert_eq!(
-            serde_json::to_value(resolution.document).unwrap(),
+            serde_json::to_value(document).unwrap(),
             vector["didDocument"]
         );
-        assert_eq!(
-            resolution.document_metadata.properties,
-            BTreeMap::from([
-                ("published".to_string(), Value::Bool(true)),
-                ("types".to_string(), serde_json::json!([1, 2, 3])),
-            ])
-        );
+        assert_eq!(types, Some(vec![1, 2, 3]));
     }
 
     #[test]
@@ -599,8 +579,8 @@ mod tests {
         let service = format!("id=test;t=Test;se=https://example.com;long={long_property}");
         let bytes = packet(&[("_s0._did.", &service)]);
 
-        let document =
-            serde_json::to_value(decode_document(&did(), &bytes).unwrap().document).unwrap();
+        let (document, _) = decode_document(&did(), &bytes).unwrap();
+        let document = serde_json::to_value(document).unwrap();
 
         assert_eq!(document["service"][0]["long"], long_property);
         assert_eq!(
@@ -614,11 +594,11 @@ mod tests {
         let web = "did:web:example.com".parse::<DIDBuf>().unwrap();
         assert_eq!(
             decode_document(&web, &[]),
-            Err(ResolverError::MethodNotSupported("web".to_string()))
+            Err(DhtPublishError::MethodNotSupported("web".to_string()))
         );
         assert!(matches!(
             decode_document(&did(), &[0]),
-            Err(ResolverError::InvalidDocument(_))
+            Err(DhtPublishError::InvalidDocument(_))
         ));
     }
 
@@ -636,14 +616,14 @@ mod tests {
             match expected {
                 "type" => assert_eq!(
                     error,
-                    ResolverError::InvalidPublicKeyType {
+                    DhtPublishError::InvalidPublicKeyType {
                         found: "9".to_string()
                     }
                 ),
-                "encoding" => assert_eq!(error, ResolverError::InvalidPublicKey),
+                "encoding" => assert_eq!(error, DhtPublishError::InvalidPublicKey),
                 "length" => assert_eq!(
                     error,
-                    ResolverError::InvalidPublicKeyLength {
+                    DhtPublishError::InvalidPublicKeyLength {
                         expected: 32,
                         found: 1
                     }
@@ -656,7 +636,7 @@ mod tests {
         let bytes = packet(&[("_k0._did.", &invalid_curve)]);
         assert_eq!(
             decode_document(&did(), &bytes).unwrap_err(),
-            ResolverError::InvalidPublicKey
+            DhtPublishError::InvalidPublicKey
         );
     }
 
@@ -666,14 +646,14 @@ mod tests {
             let bytes = packet(&[("_s0._did.", record)]);
             assert!(matches!(
                 decode_document(&did(), &bytes),
-                Err(ResolverError::InvalidDocument(_))
+                Err(DhtPublishError::InvalidDocument(_))
             ));
         }
 
         let bytes = packet(&[("_typ._did.", "id=one")]);
         assert!(matches!(
             decode_document(&did(), &bytes),
-            Err(ResolverError::InvalidDocument(_))
+            Err(DhtPublishError::InvalidDocument(_))
         ));
     }
 
@@ -688,9 +668,8 @@ mod tests {
         ));
         let bytes = packet.build_bytes_vec_compressed().unwrap();
 
-        let resolution = decode_document(&did(), &bytes).unwrap();
+        let (document, _) = decode_document(&did(), &bytes).unwrap();
 
-        assert!(resolution.document.verification_method.is_empty());
-        assert_eq!(resolution.document_metadata.properties["published"], true);
+        assert!(document.verification_method.is_empty());
     }
 }

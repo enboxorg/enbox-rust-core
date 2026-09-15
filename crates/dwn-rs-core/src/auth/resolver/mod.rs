@@ -24,7 +24,7 @@ pub mod web;
 pub use cache::{
     CachedResolution, DidResolutionCache, MemoryDidResolutionCache, ResolutionCacheError,
 };
-pub use dht::{DhtResolver, DhtResolverConfig};
+pub use dht::{new_dht_resolver, DhtPublishError, DhtResolver, DhtResolverConfig};
 pub use error::ResolverError;
 pub use jwk::JwkResolver;
 pub use key::KeyResolver;

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/did-dht",
     "crates/dwn-rs-agent",
     "crates/dwn-rs-core",
     "crates/dwn-rs-message-derive",

@@ -2,9 +2,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use ssi_dids_core::DID;
 use url::Url;
 
-use crate::auth::resolver::{Resolution, ResolverError};
-
-use super::dns;
+use super::error::DhtPublishError;
 
 const SIGNATURE_LEN: usize = 64;
 const SEQUENCE_LEN: usize = 8;
@@ -13,37 +11,37 @@ const MAX_VALUE_LEN: usize = 1000;
 const MIN_RELAY_PAYLOAD_LEN: usize = HEADER_LEN;
 const MAX_RELAY_PAYLOAD_LEN: usize = HEADER_LEN + MAX_VALUE_LEN;
 
-fn decode_identity_key(did: &DID) -> Result<VerifyingKey, ResolverError> {
+pub(crate) fn decode_identity_key(did: &DID) -> Result<VerifyingKey, DhtPublishError> {
     if did.method_name() != "dht" {
-        return Err(ResolverError::MethodNotSupported(
+        return Err(DhtPublishError::MethodNotSupported(
             did.method_name().to_string(),
         ));
     }
 
-    let decoded =
-        z32::decode(did.method_specific_id_bytes()).map_err(|_| ResolverError::InvalidPublicKey)?;
+    let decoded = z32::decode(did.method_specific_id_bytes())
+        .map_err(|_| DhtPublishError::InvalidPublicKey)?;
 
     let found = decoded.len();
     let bytes: [u8; 32] =
         decoded
             .try_into()
-            .map_err(|_| ResolverError::InvalidPublicKeyLength {
+            .map_err(|_| DhtPublishError::InvalidPublicKeyLength {
                 expected: 32,
                 found,
             })?;
 
-    VerifyingKey::from_bytes(&bytes).map_err(|_| ResolverError::InvalidPublicKey)
+    VerifyingKey::from_bytes(&bytes).map_err(|_| DhtPublishError::InvalidPublicKey)
 }
 
-pub(super) struct Bep44Message<'a> {
+pub(crate) struct Bep44Message<'a> {
     pub signature: &'a [u8; 64],
     pub sequence: u64,
     pub value: &'a [u8],
 }
 
-pub(super) fn parse_relay_payload(payload: &[u8]) -> Result<Bep44Message<'_>, ResolverError> {
+pub(crate) fn parse_relay_payload(payload: &[u8]) -> Result<Bep44Message<'_>, DhtPublishError> {
     if !(MIN_RELAY_PAYLOAD_LEN..=MAX_RELAY_PAYLOAD_LEN).contains(&payload.len()) {
-        return Err(ResolverError::InvalidDocumentLength {
+        return Err(DhtPublishError::InvalidDocumentLength {
             min: MIN_RELAY_PAYLOAD_LEN,
             max: MAX_RELAY_PAYLOAD_LEN,
             found: payload.len(),
@@ -67,7 +65,7 @@ pub(super) fn parse_relay_payload(payload: &[u8]) -> Result<Bep44Message<'_>, Re
     })
 }
 
-fn bep44_signing_payload(sequence: u64, value: &[u8]) -> Vec<u8> {
+pub(crate) fn bep44_signing_payload(sequence: u64, value: &[u8]) -> Vec<u8> {
     let prefix = format!("3:seqi{sequence}e1:v{}:", value.len());
 
     let mut payload = Vec::with_capacity(prefix.len() + value.len());
@@ -76,34 +74,19 @@ fn bep44_signing_payload(sequence: u64, value: &[u8]) -> Vec<u8> {
     payload
 }
 
-fn verify_bep44_message(
+pub(crate) fn verify_bep44_message(
     key: &VerifyingKey,
     message: &Bep44Message<'_>,
-) -> Result<(), ResolverError> {
+) -> Result<(), DhtPublishError> {
     let signature = Signature::from_bytes(message.signature);
 
     let payload = bep44_signing_payload(message.sequence, message.value);
 
     key.verify(&payload, &signature)
-        .map_err(|_| ResolverError::InvalidSignature)
+        .map_err(|_| DhtPublishError::InvalidSignature)
 }
 
-pub(super) fn resolve_relay_payload(
-    did: &DID,
-    payload: &[u8],
-) -> Result<Resolution, ResolverError> {
-    let key = decode_identity_key(did)?;
-    let message = parse_relay_payload(payload)?;
-
-    verify_bep44_message(&key, &message)?;
-    let mut decoded = dns::decode_document(did, message.value)?;
-
-    decoded.document_metadata.version_id = Some(message.sequence.to_string());
-
-    Ok(decoded)
-}
-
-pub(super) fn gateway_identity_uri(gateway: &Url, did: &DID) -> Result<Url, ResolverError> {
+pub(crate) fn gateway_identity_uri(gateway: &Url, did: &DID) -> Result<Url, DhtPublishError> {
     let identity_key = decode_identity_key(did)?;
     let encoded = z32::encode(identity_key.as_bytes());
     let mut gateway = gateway.clone();
@@ -117,7 +100,7 @@ pub(super) fn gateway_identity_uri(gateway: &Url, did: &DID) -> Result<Url, Reso
 
     gateway
         .join(&encoded)
-        .map_err(|_| ResolverError::InvalidGatewayUri(gateway.to_string()))
+        .map_err(|_| DhtPublishError::InvalidGatewayUri(gateway.to_string()))
 }
 
 #[cfg(test)]
@@ -149,7 +132,7 @@ mod tests {
     fn rejects_a_different_did_method() {
         assert!(matches!(
             decode_identity_key(&did("web", "example.com")),
-            Err(ResolverError::MethodNotSupported(method)) if method == "web"
+            Err(DhtPublishError::MethodNotSupported(method)) if method == "web"
         ));
     }
 
@@ -158,7 +141,7 @@ mod tests {
         // `0` is valid DID method-specific-id syntax but is not in the z-base-32 alphabet.
         assert_eq!(
             decode_identity_key(&did("dht", "0")),
-            Err(ResolverError::InvalidPublicKey)
+            Err(DhtPublishError::InvalidPublicKey)
         );
     }
 
@@ -169,7 +152,7 @@ mod tests {
 
             assert!(matches!(
                 decode_identity_key(&did("dht", &identifier)),
-                Err(ResolverError::InvalidPublicKeyLength {
+                Err(DhtPublishError::InvalidPublicKeyLength {
                     expected: 32,
                     found,
                 }) if found == expected_found
@@ -187,7 +170,7 @@ mod tests {
 
         assert_eq!(
             decode_identity_key(&did("dht", &identifier)),
-            Err(ResolverError::InvalidPublicKey)
+            Err(DhtPublishError::InvalidPublicKey)
         );
     }
 
@@ -222,7 +205,7 @@ mod tests {
         for found in [MIN_RELAY_PAYLOAD_LEN - 1, MAX_RELAY_PAYLOAD_LEN + 1] {
             assert!(matches!(
                 parse_relay_payload(&vec![0; found]),
-                Err(ResolverError::InvalidDocumentLength {
+                Err(DhtPublishError::InvalidDocumentLength {
                     min: MIN_RELAY_PAYLOAD_LEN,
                     max: MAX_RELAY_PAYLOAD_LEN,
                     found: actual,
@@ -281,7 +264,7 @@ mod tests {
         for message in tampered_messages {
             assert_eq!(
                 verify_bep44_message(&verifying_key, &message),
-                Err(ResolverError::InvalidSignature)
+                Err(DhtPublishError::InvalidSignature)
             );
         }
 
@@ -294,7 +277,7 @@ mod tests {
         };
         assert_eq!(
             verify_bep44_message(&verifying_key, &message),
-            Err(ResolverError::InvalidSignature)
+            Err(DhtPublishError::InvalidSignature)
         );
 
         let other_key = SigningKey::from_bytes(&[8; 32]).verifying_key();
@@ -305,7 +288,7 @@ mod tests {
         };
         assert_eq!(
             verify_bep44_message(&other_key, &message),
-            Err(ResolverError::InvalidSignature)
+            Err(DhtPublishError::InvalidSignature)
         );
     }
 }
