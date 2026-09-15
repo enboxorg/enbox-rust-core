@@ -73,14 +73,32 @@ pub enum AgentIdentityError {
 }
 
 impl AgentIdentityError {
-    /// Build an implementor-defined failure carrying its own code and detail.
+    /// Build a failure for the given code and detail.
     ///
-    /// Codes raised by host backends (FFI, developer) reach the caller and
-    /// the FFI mapping unchanged.
+    /// Codes the crate defines map to their typed variant, so a failure
+    /// built here compares equal to one raised internally with the same
+    /// code and detail. Anything else becomes an implementor-defined
+    /// [`AgentIdentityError::Backend`] failure, which reaches the caller
+    /// and the FFI mapping unchanged.
     pub fn new(code: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self::Backend {
-            code: code.into(),
-            detail: detail.into(),
+        let code = code.into();
+        let detail: String = detail.into();
+        match code.as_str() {
+            "AgentIdentityInvalidMnemonic" => Self::InvalidMnemonic { detail },
+            "AgentIdentityInvalidKeyMaterial" => Self::InvalidKeyMaterial { detail },
+            "AgentIdentityDidError" => Self::Did { detail },
+            "AgentIdentityKeyManagerError" => Self::KeyManager { detail },
+            "AgentIdentityVaultError" => Self::Vault { detail },
+            "AgentIdentityLockPoisoned" => Self::LockPoisoned { detail },
+            "AgentVaultError" => Self::AgentVault { detail },
+            "RegistrationTokenStoreInvalid" => Self::RegistrationTokenStore { detail },
+            "DelegateSecretInvalid" => Self::DelegateSecret { detail },
+            "DelegateKeyMissingKeyAgreement" => Self::DelegateKeyAgreement { detail },
+            "DelegateKeyMissingX25519" => Self::DelegateKeyX25519 { detail },
+            "ProtocolInstallInvalidPath" => Self::ProtocolPath { detail },
+            "ProtocolInstallMissingKeyAgreement" => Self::ProtocolAgreement { detail },
+            "ProtocolInstallMissingX25519" => Self::ProtocolX25519 { detail },
+            _ => Self::Backend { code, detail },
         }
     }
 
@@ -1344,73 +1362,71 @@ mod tests {
 
     #[test]
     fn error_codes_are_stable() {
-        let cases = [
+        type ErrorCase = (fn(String) -> AgentIdentityError, &'static str);
+        let cases: [ErrorCase; 14] = [
             (
-                AgentIdentityError::invalid_mnemonic("bad phrase"),
+                AgentIdentityError::invalid_mnemonic,
                 "AgentIdentityInvalidMnemonic",
             ),
             (
-                AgentIdentityError::invalid_key_material("bad keys"),
+                AgentIdentityError::invalid_key_material,
                 "AgentIdentityInvalidKeyMaterial",
             ),
-            (AgentIdentityError::did("bad did"), "AgentIdentityDidError"),
+            (AgentIdentityError::did, "AgentIdentityDidError"),
             (
-                AgentIdentityError::key_manager("bad key"),
+                AgentIdentityError::key_manager,
                 "AgentIdentityKeyManagerError",
             ),
+            (AgentIdentityError::vault, "AgentIdentityVaultError"),
             (
-                AgentIdentityError::vault("bad vault"),
-                "AgentIdentityVaultError",
-            ),
-            (
-                AgentIdentityError::lock_poisoned("poison"),
+                AgentIdentityError::lock_poisoned,
                 "AgentIdentityLockPoisoned",
             ),
+            (AgentIdentityError::agent_vault, "AgentVaultError"),
             (
-                AgentIdentityError::agent_vault("bad store"),
-                "AgentVaultError",
-            ),
-            (
-                AgentIdentityError::registration_token_store("bad tokens"),
+                AgentIdentityError::registration_token_store,
                 "RegistrationTokenStoreInvalid",
             ),
+            (AgentIdentityError::delegate_secret, "DelegateSecretInvalid"),
             (
-                AgentIdentityError::delegate_secret("bad secret"),
-                "DelegateSecretInvalid",
-            ),
-            (
-                AgentIdentityError::delegate_key_agreement("no agreement"),
+                AgentIdentityError::delegate_key_agreement,
                 "DelegateKeyMissingKeyAgreement",
             ),
             (
-                AgentIdentityError::delegate_key_x25519("not x25519"),
+                AgentIdentityError::delegate_key_x25519,
                 "DelegateKeyMissingX25519",
             ),
             (
-                AgentIdentityError::protocol_path("bad path"),
+                AgentIdentityError::protocol_path,
                 "ProtocolInstallInvalidPath",
             ),
             (
-                AgentIdentityError::protocol_agreement("no agreement"),
+                AgentIdentityError::protocol_agreement,
                 "ProtocolInstallMissingKeyAgreement",
             ),
             (
-                AgentIdentityError::protocol_x25519("not x25519"),
+                AgentIdentityError::protocol_x25519,
                 "ProtocolInstallMissingX25519",
             ),
-            (
-                AgentIdentityError::new("HttpRegistrationTransportFailed", "down"),
-                "HttpRegistrationTransportFailed",
-            ),
-            (
-                AgentIdentityError::new("CustomHostCode", "host detail"),
-                "CustomHostCode",
-            ),
         ];
-        for (error, code) in cases {
+        for (build, code) in cases {
+            let error = build("detail".to_string());
             assert_eq!(error.code(), code);
             assert_eq!(error.to_string(), format!("{code}: {}", error.detail()));
             assert!(!error.detail().is_empty());
+            if code == "AgentIdentityLockPoisoned" {
+                // lock_poisoned prefixes its detail, so it cannot round-trip
+                // through new(); the code mapping still holds.
+                assert!(error.detail().contains("lock poisoned"));
+            } else {
+                assert_eq!(AgentIdentityError::new(code, "detail"), error);
+            }
+        }
+        for code in ["HttpRegistrationTransportFailed", "CustomHostCode"] {
+            let error = AgentIdentityError::new(code, "host detail");
+            assert_eq!(error.code(), code);
+            assert_eq!(error.detail(), "host detail");
+            assert_eq!(error.to_string(), format!("{code}: host detail"));
         }
     }
 
