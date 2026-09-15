@@ -395,7 +395,14 @@ pub trait AgentKeyManager: Send + Sync + 'static {
         &'a self,
         key_uri: &'a str,
         derivation_path: Vec<String>,
-    ) -> AgentIdentityFuture<'a, JWK>;
+    ) -> AgentIdentityFuture<'a, JWK> {
+        Box::pin(async move {
+            Ok(self
+                .derive_private_jwk(key_uri, derivation_path)
+                .await?
+                .to_public())
+        })
+    }
     fn derive_private_jwk<'a>(
         &'a self,
         key_uri: &'a str,
@@ -788,19 +795,6 @@ impl AgentKeyManager for MemoryKeyManager {
                 .map_err(AgentIdentityError::lock_poisoned)?
                 .get(key_uri)
                 .map(JWK::to_public))
-        })
-    }
-
-    fn derive_public_jwk<'a>(
-        &'a self,
-        key_uri: &'a str,
-        derivation_path: Vec<String>,
-    ) -> AgentIdentityFuture<'a, JWK> {
-        Box::pin(async move {
-            Ok(self
-                .derive_private_jwk(key_uri, derivation_path)
-                .await?
-                .to_public())
         })
     }
 
