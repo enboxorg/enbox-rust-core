@@ -1342,6 +1342,78 @@ mod tests {
         assert!(error.detail().contains("X25519"));
     }
 
+    #[test]
+    fn error_codes_are_stable() {
+        let cases = [
+            (
+                AgentIdentityError::invalid_mnemonic("bad phrase"),
+                "AgentIdentityInvalidMnemonic",
+            ),
+            (
+                AgentIdentityError::invalid_key_material("bad keys"),
+                "AgentIdentityInvalidKeyMaterial",
+            ),
+            (AgentIdentityError::did("bad did"), "AgentIdentityDidError"),
+            (
+                AgentIdentityError::key_manager("bad key"),
+                "AgentIdentityKeyManagerError",
+            ),
+            (
+                AgentIdentityError::vault("bad vault"),
+                "AgentIdentityVaultError",
+            ),
+            (
+                AgentIdentityError::lock_poisoned("poison"),
+                "AgentIdentityLockPoisoned",
+            ),
+            (
+                AgentIdentityError::agent_vault("bad store"),
+                "AgentVaultError",
+            ),
+            (
+                AgentIdentityError::registration_token_store("bad tokens"),
+                "RegistrationTokenStoreInvalid",
+            ),
+            (
+                AgentIdentityError::delegate_secret("bad secret"),
+                "DelegateSecretInvalid",
+            ),
+            (
+                AgentIdentityError::delegate_key_agreement("no agreement"),
+                "DelegateKeyMissingKeyAgreement",
+            ),
+            (
+                AgentIdentityError::delegate_key_x25519("not x25519"),
+                "DelegateKeyMissingX25519",
+            ),
+            (
+                AgentIdentityError::protocol_path("bad path"),
+                "ProtocolInstallInvalidPath",
+            ),
+            (
+                AgentIdentityError::protocol_agreement("no agreement"),
+                "ProtocolInstallMissingKeyAgreement",
+            ),
+            (
+                AgentIdentityError::protocol_x25519("not x25519"),
+                "ProtocolInstallMissingX25519",
+            ),
+            (
+                AgentIdentityError::new("HttpRegistrationTransportFailed", "down"),
+                "HttpRegistrationTransportFailed",
+            ),
+            (
+                AgentIdentityError::new("CustomHostCode", "host detail"),
+                "CustomHostCode",
+            ),
+        ];
+        for (error, code) in cases {
+            assert_eq!(error.code(), code);
+            assert_eq!(error.to_string(), format!("{code}: {}", error.detail()));
+            assert!(!error.detail().is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn secret_store_is_pluggable_for_native_vaults() {
         let store = MemorySecretStore::default();
