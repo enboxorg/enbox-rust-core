@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::agent::{
-    jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
-    AgentKeyManager, DidProvider, PortableDid, SecretStore,
+    key_agreement_root_key_id, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
+    DidProvider, PortableDid, SecretStore,
 };
 use dwn_rs_core::interfaces::messages::protocols::Definition;
 use dwn_rs_core::permissions::{PermissionScope, RecordsMethod, RecordsScope};
@@ -252,7 +252,11 @@ pub async fn derive_delegate_keys<K>(
 where
     K: AgentKeyManager,
 {
-    let root_key_id = key_agreement_root_key_id(owner_did)?;
+    let root_key_id = key_agreement_root_key_id(
+        owner_did,
+        AgentIdentityError::delegate_key_agreement,
+        AgentIdentityError::delegate_key_x25519,
+    )?;
     let mut result = DelegateKeyDerivationResult::default();
     let mut multi_party_protocols = BTreeSet::new();
 
@@ -333,7 +337,11 @@ pub async fn derive_context_key<K>(
 where
     K: AgentKeyManager,
 {
-    let root_key_id = key_agreement_root_key_id(owner_did)?;
+    let root_key_id = key_agreement_root_key_id(
+        owner_did,
+        AgentIdentityError::delegate_key_agreement,
+        AgentIdentityError::delegate_key_x25519,
+    )?;
     let context_id = context_id.into();
     let derivation_path = vec![
         PROTOCOL_CONTEXT_DERIVATION_SCHEME.to_string(),
@@ -614,51 +622,6 @@ pub fn is_read_like_scope(scope: &PermissionScope) -> bool {
     )
 }
 
-fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<String> {
-    let Some(root_key) = tenant_did
-        .document
-        .verification_relationships
-        .key_agreement
-        .first()
-    else {
-        return Err(AgentIdentityError::new(
-            "DelegateKeyMissingKeyAgreement",
-            format!(
-                "DID {} does not have a keyAgreement verification method",
-                tenant_did.uri
-            ),
-        ));
-    };
-    let root_key_id = relationship_id(&tenant_did.document, root_key);
-    let method = tenant_did
-        .document
-        .verification_method
-        .iter()
-        .find(|method| method.id.as_str() == root_key_id)
-        .ok_or_else(|| {
-            AgentIdentityError::new(
-                "DelegateKeyMissingKeyAgreement",
-                format!("keyAgreement method {root_key_id} is missing from the DID document"),
-            )
-        })?;
-    let public_jwk = verification_method_jwk(method).ok_or_else(|| {
-        AgentIdentityError::new(
-            "DelegateKeyMissingKeyAgreement",
-            format!("keyAgreement method {root_key_id} does not contain a public JWK"),
-        )
-    })?;
-    if jwk_curve(&public_jwk) != Some("X25519") {
-        return Err(AgentIdentityError::new(
-            "DelegateKeyMissingX25519",
-            format!(
-                "keyAgreement method {root_key_id} uses {}, but delegate key delivery requires X25519",
-                jwk_curve(&public_jwk).unwrap_or("unknown")
-            ),
-        ));
-    }
-    Ok(root_key_id)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -667,8 +630,8 @@ mod tests {
 
     use super::*;
     use crate::agent::{
-        AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
-        MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
+        jwk_curve, AgentIdentityInitializeRequest, AgentIdentityService,
+        DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
     use dwn_rs_core::interfaces::messages::protocols::{
         Action, ActionWho, Can, RuleSet, Type, Who,

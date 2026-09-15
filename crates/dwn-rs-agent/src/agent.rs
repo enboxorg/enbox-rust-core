@@ -1139,6 +1139,47 @@ pub(crate) fn relationship_id(document: &Document, relationship: &ValueOrReferen
     relationship.id().resolve(&document.id).to_string()
 }
 
+pub(crate) fn key_agreement_root_key_id(
+    tenant_did: &PortableDid,
+    missing: impl Fn(String) -> AgentIdentityError,
+    not_x25519: impl Fn(String) -> AgentIdentityError,
+) -> AgentIdentityResult<String> {
+    let Some(root_key) = tenant_did
+        .document
+        .verification_relationships
+        .key_agreement
+        .first()
+    else {
+        return Err(missing(format!(
+            "DID {} does not have a keyAgreement verification method",
+            tenant_did.uri
+        )));
+    };
+    let root_key_id = relationship_id(&tenant_did.document, root_key);
+    let method = tenant_did
+        .document
+        .verification_method
+        .iter()
+        .find(|method| method.id.as_str() == root_key_id)
+        .ok_or_else(|| {
+            missing(format!(
+                "keyAgreement method {root_key_id} is missing from the DID document"
+            ))
+        })?;
+    let public_jwk = verification_method_jwk(method).ok_or_else(|| {
+        missing(format!(
+            "keyAgreement method {root_key_id} does not contain a public JWK"
+        ))
+    })?;
+    if jwk_curve(&public_jwk) != Some("X25519") {
+        return Err(not_x25519(format!(
+            "keyAgreement method {root_key_id} uses {}, but X25519 key agreement is required",
+            jwk_curve(&public_jwk).unwrap_or("unknown")
+        )));
+    }
+    Ok(root_key_id)
+}
+
 fn relationship_contains(
     document: &Document,
     relationships: &[ValueOrReference],
