@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::agent::{
-    key_agreement_root_key_id, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
+    key_agreement_root_key_id, now_utc, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
     DidProvider, PortableDid, SecretStore,
 };
 use dwn_rs_core::interfaces::messages::protocols::Definition;
@@ -205,7 +205,7 @@ pub fn create_delegate_grant(
         id: Ulid::generate().to_string(),
         grantor: grantor.into(),
         grantee: grantee.into(),
-        date_granted: Utc::now(),
+        date_granted: now_utc(),
         date_expires,
         delegated: true,
         scope,
@@ -223,7 +223,7 @@ pub fn create_grant_revocation(
         revocation_grant_id: revocation_grant_id.into(),
         grantor: grant.grantor.clone(),
         grantee: grant.grantee.clone(),
-        date_revoked: Utc::now(),
+        date_revoked: now_utc(),
     }
 }
 
