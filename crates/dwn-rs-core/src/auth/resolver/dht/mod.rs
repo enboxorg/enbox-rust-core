@@ -167,6 +167,12 @@ fn map_resolve_error(error: DhtPublishError) -> ResolverError {
         DhtPublishError::ValueTooLarge { found } => {
             ResolverError::Internal(format!("document too large: {found} bytes"))
         }
+        DhtPublishError::TimeBeforeEpoch => {
+            ResolverError::Internal("time is before the unix epoch".to_string())
+        }
+        DhtPublishError::SequenceOverflow => {
+            ResolverError::Internal("sequence number overflowed".to_string())
+        }
     }
 }
 

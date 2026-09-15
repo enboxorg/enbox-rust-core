@@ -11,8 +11,10 @@ mod bep44;
 mod codec;
 mod error;
 mod gateway;
+mod sequence;
 mod transport;
 
 pub use error::DhtPublishError;
 pub use gateway::{DhtResolver, DhtResolverConfig, ResolvedDhtDocument};
+pub use sequence::next_sequence;
 pub use transport::{DhtTransport, RelayMethod, RelayRequest, RelayResponse};

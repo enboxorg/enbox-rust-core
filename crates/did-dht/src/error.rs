@@ -46,6 +46,12 @@ pub enum DhtPublishError {
     #[error("document too large: {found} bytes")]
     ValueTooLarge { found: usize },
 
+    #[error("time is before the unix epoch")]
+    TimeBeforeEpoch,
+
+    #[error("sequence number overflowed")]
+    SequenceOverflow,
+
     #[error("transport failed: {0}")]
     Transport(String),
 }
