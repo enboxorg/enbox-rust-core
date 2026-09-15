@@ -2544,6 +2544,23 @@ mod tests {
     }
 
     #[test]
+    fn agent_error_mapping_preserves_code_and_detail() {
+        for code in [
+            "AgentIdentityInvalidMnemonic",
+            "AgentVaultError",
+            "CustomHostCode",
+        ] {
+            let mapped = EnboxError::from(dwn_rs_agent::agent::AgentIdentityError::new(
+                code,
+                "host detail",
+            ));
+            assert!(
+                matches!(mapped, EnboxError::Agent { code: ref c, detail: ref d } if c == code && d == "host detail")
+            );
+        }
+    }
+
+    #[test]
     fn connect_methods_surface_json_errors() {
         let core = EnboxCore::open_in_memory().expect("core opens");
         let err = core
