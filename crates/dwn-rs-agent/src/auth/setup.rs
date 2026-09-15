@@ -4,8 +4,8 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use crate::agent::{
-    jwk_curve, relationship_id, verification_method_jwk, AgentIdentityError, AgentIdentityResult,
-    AgentKeyManager, PortableDid, SecretStore,
+    key_agreement_root_key_id, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
+    PortableDid, SecretStore,
 };
 use chrono::Utc;
 use dwn_rs_core::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
@@ -460,7 +460,11 @@ where
     K: AgentKeyManager,
 {
     let mut clone = definition.clone();
-    let root_key_id = key_agreement_root_key_id(tenant_did)?;
+    let root_key_id = key_agreement_root_key_id(
+        tenant_did,
+        AgentIdentityError::protocol_agreement,
+        AgentIdentityError::protocol_x25519,
+    )?;
     let root_key_jwk = key_manager
         .derive_public_jwk(
             &root_key_id,
@@ -536,51 +540,6 @@ fn set_path_encryption(
     Ok(())
 }
 
-fn key_agreement_root_key_id(tenant_did: &PortableDid) -> AgentIdentityResult<String> {
-    let Some(root_key) = tenant_did
-        .document
-        .verification_relationships
-        .key_agreement
-        .first()
-    else {
-        return Err(AgentIdentityError::new(
-            "ProtocolInstallMissingKeyAgreement",
-            format!(
-                "DID {} does not have a keyAgreement verification method",
-                tenant_did.uri
-            ),
-        ));
-    };
-    let root_key_id = relationship_id(&tenant_did.document, root_key);
-    let method = tenant_did
-        .document
-        .verification_method
-        .iter()
-        .find(|method| method.id.as_str() == root_key_id)
-        .ok_or_else(|| {
-            AgentIdentityError::new(
-                "ProtocolInstallMissingKeyAgreement",
-                format!("keyAgreement method {root_key_id} is missing from the DID document"),
-            )
-        })?;
-    let public_jwk = verification_method_jwk(method).ok_or_else(|| {
-        AgentIdentityError::new(
-            "ProtocolInstallMissingKeyAgreement",
-            format!("keyAgreement method {root_key_id} does not contain a public JWK"),
-        )
-    })?;
-    if jwk_curve(&public_jwk) != Some("X25519") {
-        return Err(AgentIdentityError::new(
-            "ProtocolInstallMissingX25519",
-            format!(
-                "keyAgreement method {root_key_id} uses {}, but protocol encryption requires X25519",
-                jwk_curve(&public_jwk).unwrap_or("unknown")
-            ),
-        ));
-    }
-    Ok(root_key_id)
-}
-
 /// In-memory `ProtocolEndpoint` for development, tests, and the wallet
 /// recovery reference flow. Holds protocol definitions per `(tenant,
 /// protocol)`. **Not durable.** Production setups will use a real DWN
@@ -643,8 +602,8 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
 mod tests {
     use super::*;
     use crate::agent::{
-        AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
-        MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
+        jwk_curve, AgentIdentityInitializeRequest, AgentIdentityService,
+        DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
     use dwn_rs_core::interfaces::messages::protocols::{Type, Who};
     use serde_json::Value as JsonValue;
@@ -784,7 +743,12 @@ mod tests {
             .unwrap();
         assert_eq!(definition, snapshot);
 
-        let root_key_id = key_agreement_root_key_id(&agent_did).unwrap();
+        let root_key_id = key_agreement_root_key_id(
+            &agent_did,
+            AgentIdentityError::protocol_agreement,
+            AgentIdentityError::protocol_x25519,
+        )
+        .unwrap();
         let expected_root = key_manager
             .derive_public_jwk(
                 &root_key_id,
