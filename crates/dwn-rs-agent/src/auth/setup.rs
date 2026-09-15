@@ -320,22 +320,6 @@ pub trait ProtocolEndpoint: Send + Sync + 'static {
     ) -> SetupFuture<'a, ()>;
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProtocolInstallResult {
-    pub protocol: String,
-    pub installed: bool,
-    pub encryption_active: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RestoreFlowStep {
-    AgentDidSync,
-    ProtocolInstall,
-    ProtocolPush,
-}
-
 impl<T: ?Sized + ProtocolEndpoint> ProtocolEndpoint for Arc<T> {
     fn query_protocol<'a>(
         &'a self,
@@ -352,6 +336,22 @@ impl<T: ?Sized + ProtocolEndpoint> ProtocolEndpoint for Arc<T> {
     ) -> SetupFuture<'a, ()> {
         (**self).configure_protocol(tenant, definition)
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolInstallResult {
+    pub protocol: String,
+    pub installed: bool,
+    pub encryption_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreFlowStep {
+    AgentDidSync,
+    ProtocolInstall,
+    ProtocolPush,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
