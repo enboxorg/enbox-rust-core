@@ -44,6 +44,30 @@
 //! [`SqliteSecretStore`] is an unencrypted key/value backend. Unlike the
 //! TypeScript `SecretStore`, it does not encrypt at rest; the host binds the
 //! database file to platform storage.
+//!
+//! Runtime conventions for agent work:
+//!
+//! - Per-operation cancellation is future drop: dropping the future returned
+//!   by a backend or helper cancels that operation.
+//! - Session and lifecycle cancellation uses
+//!   `tokio_util::sync::CancellationToken`, introduced by the child that
+//!   first implements sessions.
+//! - Time-dependent behaviour takes an injectable clock. The seam arrives
+//!   with the first TTL/expiry-bearing child instead of being retrofitted
+//!   onto the calls that stamp timestamps today.
+//! - Remote and cache outcomes keep transport failure, authoritative empty,
+//!   integrity/authentication failure, and session-expired distinguishable.
+//!   Remote material never counts as admitted state without normal DWN
+//!   admission.
+//! - Backend traits are dyn-compatible: hosts inject `Arc<dyn Trait>`
+//!   backends at runtime; concrete backends stay `Clone`.
+//! - Fallible operations return the typed [`agent::AgentIdentityError`];
+//!   every failure carries a stable code through `code()`.
+//! - Secret-bearing types never print secrets: `Debug` omits private keys,
+//!   content-encryption keys, salts, derived private JWKs, delegate keys,
+//!   and registration/refresh tokens, while serde shapes stay complete.
+//! - No process-global state: independently constructed services in one
+//!   process do not observe each other.
 
 pub mod agent;
 pub mod auth;
