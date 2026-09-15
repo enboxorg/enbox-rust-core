@@ -63,6 +63,7 @@ partially = { version = "0.2.1", features = ["derive"] }
 multihash = { version = "0.19.1", features = ["serde"] }
 multihash-codetable = { version = "0.2.2", features = ["serde", "sha2"] }
 dwn-rs-message-derive = { path = "../dwn-rs-message-derive" }
+did-dht = { path = "../did-dht" }
 ssi-claims-core = { version = "0.2.0", default-features = false }
 hex = "0.4.3"
 k256 = { version = "0.14.0", features = ["ecdh"] }

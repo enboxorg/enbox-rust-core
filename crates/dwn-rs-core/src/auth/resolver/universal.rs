@@ -13,7 +13,8 @@ use ssi_jwk::JWK;
 use tokio::sync::watch;
 
 use super::{
-    DhtResolver, DidMethodResolver, DidResolutionCache, DidResolver, JwkResolver, KeyResolver,
+    dht::{new_dht_resolver, DhtResolverConfig},
+    DidMethodResolver, DidResolutionCache, DidResolver, JwkResolver, KeyResolver,
     MemoryDidResolutionCache, Resolution, ResolverError, ResolverFuture, WebResolver,
 };
 
@@ -108,7 +109,7 @@ impl UniversalResolver {
         resolver.register(JwkResolver);
         resolver.register(KeyResolver);
         resolver.register(WebResolver::default());
-        resolver.register(DhtResolver::default());
+        resolver.register(new_dht_resolver(DhtResolverConfig::default()));
         resolver
     }
 
