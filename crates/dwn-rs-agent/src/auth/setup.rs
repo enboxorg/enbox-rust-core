@@ -101,7 +101,9 @@ pub struct TenantRegistrationResult {
 }
 
 /// Host seam for tenant registration against a DWN server (server info, anonymous and token registration, token refresh).
-pub trait TenantRegistrationClient: Clone + Send + Sync + 'static {
+///
+/// Dyn-compatible so hosts supply backends at runtime as `Arc<dyn TenantRegistrationClient>`.
+pub trait TenantRegistrationClient: Send + Sync + 'static {
     fn server_info<'a>(&'a self, endpoint: &'a str) -> SetupFuture<'a, DwnServerInfo>;
 
     fn register_tenant<'a>(&'a self, endpoint: &'a str, did: &'a str) -> SetupFuture<'a, ()>;
@@ -118,6 +120,33 @@ pub trait TenantRegistrationClient: Clone + Send + Sync + 'static {
         refresh_url: &'a str,
         refresh_token: &'a str,
     ) -> SetupFuture<'a, RegistrationTokenData>;
+}
+
+impl<T: ?Sized + TenantRegistrationClient> TenantRegistrationClient for Arc<T> {
+    fn server_info<'a>(&'a self, endpoint: &'a str) -> SetupFuture<'a, DwnServerInfo> {
+        (**self).server_info(endpoint)
+    }
+
+    fn register_tenant<'a>(&'a self, endpoint: &'a str, did: &'a str) -> SetupFuture<'a, ()> {
+        (**self).register_tenant(endpoint, did)
+    }
+
+    fn register_tenant_with_token<'a>(
+        &'a self,
+        endpoint: &'a str,
+        did: &'a str,
+        registration_token: &'a str,
+    ) -> SetupFuture<'a, ()> {
+        (**self).register_tenant_with_token(endpoint, did, registration_token)
+    }
+
+    fn refresh_registration_token<'a>(
+        &'a self,
+        refresh_url: &'a str,
+        refresh_token: &'a str,
+    ) -> SetupFuture<'a, RegistrationTokenData> {
+        (**self).refresh_registration_token(refresh_url, refresh_token)
+    }
 }
 
 /// Load persisted registration tokens; undecodable stored JSON falls back to an empty map.
@@ -264,7 +293,9 @@ fn unique_dids(dids: [String; 2]) -> Vec<String> {
 }
 
 /// Host seam for protocol install/query against a DWN (local engine or remote server).
-pub trait ProtocolEndpoint: Clone + Send + Sync + 'static {
+///
+/// Dyn-compatible so hosts supply backends at runtime as `Arc<dyn ProtocolEndpoint>`.
+pub trait ProtocolEndpoint: Send + Sync + 'static {
     fn query_protocol<'a>(
         &'a self,
         tenant: &'a str,
@@ -292,6 +323,24 @@ pub enum RestoreFlowStep {
     AgentDidSync,
     ProtocolInstall,
     ProtocolPush,
+}
+
+impl<T: ?Sized + ProtocolEndpoint> ProtocolEndpoint for Arc<T> {
+    fn query_protocol<'a>(
+        &'a self,
+        tenant: &'a str,
+        protocol: &'a str,
+    ) -> SetupFuture<'a, Option<Definition>> {
+        (**self).query_protocol(tenant, protocol)
+    }
+
+    fn configure_protocol<'a>(
+        &'a self,
+        tenant: &'a str,
+        definition: Definition,
+    ) -> SetupFuture<'a, ()> {
+        (**self).configure_protocol(tenant, definition)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
