@@ -67,7 +67,7 @@ pub struct GrantRevocation {
     pub date_revoked: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DerivedPrivateJwk {
     pub root_key_id: String,
@@ -75,6 +75,17 @@ pub struct DerivedPrivateJwk {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derivation_path: Vec<String>,
     pub derived_private_key: JWK,
+}
+
+impl std::fmt::Debug for DerivedPrivateJwk {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DerivedPrivateJwk")
+            .field("root_key_id", &self.root_key_id)
+            .field("derivation_scheme", &self.derivation_scheme)
+            .field("derivation_path", &self.derivation_path)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

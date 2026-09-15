@@ -220,7 +220,7 @@ pub struct DidMetadata {
     pub extra: BTreeMap<String, JsonValue>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortableDid {
     pub uri: String,
@@ -228,6 +228,17 @@ pub struct PortableDid {
     pub metadata: DidMetadata,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub private_keys: Vec<JWK>,
+}
+
+impl Debug for PortableDid {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PortableDid")
+            .field("uri", &self.uri)
+            .field("document", &self.document)
+            .field("metadata", &self.metadata)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,7 +258,7 @@ pub struct PortableIdentity {
     pub metadata: IdentityMetadata,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDerivedKeys {
     pub identity_private_jwk: JWK,
@@ -255,6 +266,14 @@ pub struct AgentDerivedKeys {
     pub encryption_private_jwk: JWK,
     pub vault_content_encryption_key: Vec<u8>,
     pub vault_unlock_salt: Vec<u8>,
+}
+
+impl Debug for AgentDerivedKeys {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentDerivedKeys")
+            .finish_non_exhaustive()
+    }
 }
 
 impl AgentDerivedKeys {
@@ -267,7 +286,7 @@ impl AgentDerivedKeys {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDidCreateRequest {
     pub identity_private_jwk: JWK,
@@ -277,7 +296,16 @@ pub struct AgentDidCreateRequest {
     pub dwn_endpoints: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for AgentDidCreateRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentDidCreateRequest")
+            .field("dwn_endpoints", &self.dwn_endpoints)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentIdentityInitializeRequest {
     pub recovery_phrase: Option<String>,
@@ -285,7 +313,17 @@ pub struct AgentIdentityInitializeRequest {
     pub dwn_endpoints: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl Debug for AgentIdentityInitializeRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentIdentityInitializeRequest")
+            .field("has_recovery_phrase", &self.recovery_phrase.is_some())
+            .field("dwn_endpoints", &self.dwn_endpoints)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentIdentityInitialization {
     pub recovery_phrase: String,
@@ -295,10 +333,22 @@ pub struct AgentIdentityInitialization {
     pub vault_unlock_salt: Vec<u8>,
 }
 
+impl Debug for AgentIdentityInitialization {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentIdentityInitialization")
+            .field("portable_did", &self.portable_did)
+            .field("key_uris", &self.key_uris)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Key/value secret backend for vault material (portable DID JSON, content-encryption key, salts, delegate keys).
 ///
 /// Unencrypted by itself; durability and at-rest protection are the host's job.
-pub trait SecretStore: Clone + Send + Sync + 'static {
+///
+/// Dyn-compatible so hosts supply backends at runtime as `Arc<dyn SecretStore>`.
+pub trait SecretStore: Send + Sync + 'static {
     fn get<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, Option<Vec<u8>>>;
     fn put<'a>(&'a self, key: &'a str, value: Vec<u8>) -> AgentIdentityFuture<'a, ()>;
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool>;
