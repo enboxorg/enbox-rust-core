@@ -18,7 +18,7 @@ pub const REGISTRATION_TOKENS_KEY: &str = "enbox:auth:registrationTokens";
 const PROVIDER_AUTH_V0: &str = "provider-auth-v0";
 const PROTOCOL_PATH_DERIVATION_SCHEME: &str = "protocolPath";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistrationTokenData {
     pub registration_token: String,
@@ -29,6 +29,17 @@ pub struct RegistrationTokenData {
     pub token_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_url: Option<String>,
+}
+
+impl std::fmt::Debug for RegistrationTokenData {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RegistrationTokenData")
+            .field("expires_at", &self.expires_at)
+            .field("token_url", &self.token_url)
+            .field("refresh_url", &self.refresh_url)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RegistrationTokenData {
