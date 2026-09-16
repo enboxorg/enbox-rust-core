@@ -86,6 +86,8 @@ pub(crate) fn relay_body(signed: &SignedPublish) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
     use ssi_claims_core::SignatureError;
@@ -110,11 +112,7 @@ mod tests {
     fn oversized_document(identity: &SigningKey) -> Document {
         let (did, _) = agent_document(identity);
         let did_string = did.to_string();
-        let x = {
-            use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-            use base64::Engine as _;
-            URL_SAFE_NO_PAD.encode(identity.verifying_key().as_bytes())
-        };
+        let x = URL_SAFE_NO_PAD.encode(identity.verifying_key().as_bytes());
         serde_json::from_value(json!({
             "id": did_string,
             "verificationMethod": [{
@@ -252,5 +250,73 @@ mod tests {
             serde_json::to_value(decoded).unwrap(),
             serde_json::to_value(document).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod pinned_fixture_tests {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use serde_json::Value;
+    use ssi_dids_core::DIDBuf;
+
+    use super::super::bep44::{decode_identity_key, parse_relay_payload, verify_bep44_message};
+    use super::super::codec::decode_document;
+
+    #[test]
+    fn reads_pinned_typescript_publish_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/interop/did-dht-publish.json"
+        )))
+        .unwrap();
+        assert_eq!(fixture["schemaVersion"], 1);
+        assert_eq!(fixture["oracle"], "enbox");
+        assert_eq!(fixture["source"]["repository"], "enboxorg/enbox");
+        assert_eq!(
+            fixture["source"]["commit"],
+            include_str!("../../../.enbox-version")
+                .lines()
+                .find(|line| !line.starts_with('#') && !line.trim().is_empty())
+                .unwrap()
+                .trim()
+        );
+
+        let vector = &fixture["vector"];
+        let did: DIDBuf = vector["didDocument"]["id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        // TypeScript to Rust: decode the exact DNS bytes.
+        let dns = URL_SAFE_NO_PAD
+            .decode(vector["dnsBytes"].as_str().unwrap())
+            .unwrap();
+        let (document, types) = decode_document(&did, &dns).unwrap();
+        assert_eq!(
+            serde_json::to_value(document).unwrap(),
+            vector["didDocument"]
+        );
+        assert_eq!(types, Some(vec![1, 2, 3]));
+
+        // The BEP44 envelope verifies under the DID identity key.
+        let sequence = vector["bep44"]["seq"].as_u64().unwrap();
+        let signature: [u8; 64] = URL_SAFE_NO_PAD
+            .decode(vector["bep44"]["sig"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let value: Vec<u8> = URL_SAFE_NO_PAD
+            .decode(vector["bep44"]["v"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(value, dns);
+        let mut envelope = Vec::with_capacity(72 + value.len());
+        envelope.extend_from_slice(&signature);
+        envelope.extend_from_slice(&sequence.to_be_bytes());
+        envelope.extend_from_slice(&value);
+        let message = parse_relay_payload(&envelope).unwrap();
+        assert_eq!(message.sequence, sequence);
+        verify_bep44_message(&decode_identity_key(&did).unwrap(), &message).unwrap();
     }
 }
