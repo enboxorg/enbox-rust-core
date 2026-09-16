@@ -9,11 +9,13 @@
 
 mod bep44;
 mod codec;
+mod encode;
 mod error;
 mod gateway;
 mod sequence;
 mod transport;
 
+pub use encode::validate_publishable_document;
 pub use error::DhtPublishError;
 pub use gateway::{DhtResolver, DhtResolverConfig, ResolvedDhtDocument};
 pub use sequence::next_sequence;
