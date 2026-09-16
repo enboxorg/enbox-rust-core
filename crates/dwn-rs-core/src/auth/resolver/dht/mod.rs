@@ -182,7 +182,7 @@ mod tests {
     use std::sync::Mutex;
 
     use bytes::Bytes;
-    use reqwest::header::HeaderMap;
+    use reqwest::header::{HeaderMap, HeaderValue, LOCATION};
     use reqwest::StatusCode;
     use ssi_dids_core::DIDBuf;
     use url::Url;
@@ -229,6 +229,16 @@ mod tests {
         HttpResponse {
             status,
             headers: HeaderMap::new(),
+            body: Bytes::new(),
+        }
+    }
+
+    fn redirect(location: &str) -> HttpResponse {
+        let mut headers = HeaderMap::new();
+        headers.insert(LOCATION, HeaderValue::from_str(location).unwrap());
+        HttpResponse {
+            status: StatusCode::FOUND,
+            headers,
             body: Bytes::new(),
         }
     }
@@ -308,6 +318,39 @@ mod tests {
             Err(ResolverError::NotFound)
         );
         assert_eq!(http.request_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn put_redirect_preserves_method_headers_and_body() {
+        let http = Arc::new(FakeExecutor::new([
+            Ok(redirect("/next")),
+            Ok(response(StatusCode::OK)),
+        ]));
+        let transport = NativeTransport { http: http.clone() };
+        let request = did_dht::RelayRequest {
+            method: did_dht::RelayMethod::Put,
+            url: Url::parse("https://example.com/put").unwrap(),
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/octet-stream".to_string(),
+            )],
+            body: Some(vec![1, 2, 3]),
+        };
+
+        let response = transport
+            .fetch(request, Duration::from_secs(30), 5, false)
+            .await
+            .unwrap();
+
+        assert_eq!(response.status, 200);
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].method, Method::PUT);
+        assert_eq!(
+            requests[1].headers["content-type"],
+            "application/octet-stream"
+        );
+        assert_eq!(requests[1].body, Some(Bytes::from_static(&[1, 2, 3])));
     }
 
     #[tokio::test]

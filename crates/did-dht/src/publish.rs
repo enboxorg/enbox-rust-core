@@ -89,53 +89,11 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;
     use ssi_claims_core::SignatureError;
-    use ssi_dids_core::DIDBuf;
     use ssi_jws::{JwsSigner, JwsSignerInfo};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     use super::super::codec::decode_document;
     use super::*;
-
-    struct TestSigner {
-        key: SigningKey,
-        calls: Arc<AtomicUsize>,
-        signature_len: Option<usize>,
-    }
-
-    impl TestSigner {
-        fn new(key: SigningKey) -> (Self, Arc<AtomicUsize>) {
-            let calls = Arc::new(AtomicUsize::new(0));
-            (
-                Self {
-                    key,
-                    calls: calls.clone(),
-                    signature_len: None,
-                },
-                calls,
-            )
-        }
-
-        fn wrong_length(mut self, len: usize) -> Self {
-            self.signature_len = Some(len);
-            self
-        }
-    }
-
-    impl JwsSigner for TestSigner {
-        async fn fetch_info(&self) -> Result<JwsSignerInfo, SignatureError> {
-            Err(SignatureError::MissingSigner)
-        }
-
-        async fn sign_bytes(&self, signing_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            let mut signature = self.key.sign(signing_bytes).to_bytes().to_vec();
-            if let Some(len) = self.signature_len {
-                signature.resize(len, 0);
-            }
-            Ok(signature)
-        }
-    }
+    use crate::test_support::{agent_document, TestSigner};
 
     struct FailingSigner;
 
@@ -149,46 +107,9 @@ mod tests {
         }
     }
 
-    fn agent_document(identity: &SigningKey) -> (String, Document) {
-        let did_string = format!(
-            "did:dht:{}",
-            z32::encode(identity.verifying_key().as_bytes())
-        );
-        let x = {
-            use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-            use base64::Engine as _;
-            URL_SAFE_NO_PAD.encode(identity.verifying_key().as_bytes())
-        };
-        // Decoder-normal input carries the thumbprint kid explicitly.
-        let kid = {
-            use ssi_jwk::{OctetParams, Params, JWK};
-            JWK::from(Params::OKP(OctetParams {
-                curve: "Ed25519".to_string(),
-                public_key: ssi_jwk::Base64urlUInt(identity.verifying_key().as_bytes().to_vec()),
-                private_key: None,
-            }))
-            .thumbprint()
-            .unwrap()
-        };
-        let document: Document = serde_json::from_value(json!({
-            "id": did_string,
-            "verificationMethod": [{
-                "id": format!("{did_string}#0"),
-                "type": "JsonWebKey",
-                "controller": did_string,
-                "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": x, "kid": kid, "alg": "EdDSA"},
-            }],
-            "authentication": [format!("{did_string}#0")],
-            "assertionMethod": [format!("{did_string}#0")],
-            "capabilityInvocation": [format!("{did_string}#0")],
-            "capabilityDelegation": [format!("{did_string}#0")],
-        }))
-        .unwrap();
-        (did_string, document)
-    }
-
     fn oversized_document(identity: &SigningKey) -> Document {
-        let (did_string, _) = agent_document(identity);
+        let (did, _) = agent_document(identity);
+        let did_string = did.to_string();
         let x = {
             use base64::engine::general_purpose::URL_SAFE_NO_PAD;
             use base64::Engine as _;
@@ -219,19 +140,18 @@ mod tests {
     #[tokio::test]
     async fn signs_the_exact_bep44_preimage() {
         let identity = SigningKey::from_bytes(&[7; 32]);
-        let (did_string, document) = agent_document(&identity);
-        let (signer, calls) = TestSigner::new(identity);
+        let (did, document) = agent_document(&identity);
+        let (signer, _) = TestSigner::new(identity);
 
         let signed = sign_publish(&document, &[], &[], 42, &signer)
             .await
             .unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(signer.call_count(), 1);
         assert_eq!(signed.sequence, 42);
         let expected_value = encode_document(&document, &[], &[]).unwrap();
         assert_eq!(signed.value, expected_value);
         let expected_preimage = bep44_signing_payload(42, &expected_value);
-        let did: DIDBuf = did_string.parse().unwrap();
         let key = decode_identity_key(&did).unwrap();
         verify_bep44_message(
             &key,
@@ -270,7 +190,7 @@ mod tests {
     async fn oversized_values_fail_before_signing() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let document = oversized_document(&identity);
-        let (signer, calls) = TestSigner::new(identity);
+        let (signer, _) = TestSigner::new(identity);
 
         let error = sign_publish(&document, &[], &[], 1, &signer)
             .await
@@ -279,20 +199,20 @@ mod tests {
             error,
             DhtPublishError::ValueTooLarge { found } if found > 1000
         ));
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(signer.call_count(), 0);
     }
 
     #[tokio::test]
     async fn mismatched_signer_fails_local_verification() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (_, document) = agent_document(&identity);
-        let (signer, calls) = TestSigner::new(SigningKey::from_bytes(&[8; 32]));
+        let (signer, _) = TestSigner::new(SigningKey::from_bytes(&[8; 32]));
 
         assert_eq!(
             sign_publish(&document, &[], &[], 1, &signer).await,
             Err(DhtPublishError::InvalidSignature)
         );
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(signer.call_count(), 1);
     }
 
     #[tokio::test]
@@ -323,11 +243,10 @@ mod tests {
     #[tokio::test]
     async fn signed_output_decodes_to_its_document() {
         let identity = SigningKey::from_bytes(&[7; 32]);
-        let (did_string, document) = agent_document(&identity);
+        let (did, document) = agent_document(&identity);
         let (signer, _) = TestSigner::new(identity);
 
         let signed = sign_publish(&document, &[], &[], 7, &signer).await.unwrap();
-        let did: DIDBuf = did_string.parse().unwrap();
         let (decoded, _) = decode_document(&did, &signed.value).unwrap();
         assert_eq!(
             serde_json::to_value(decoded).unwrap(),

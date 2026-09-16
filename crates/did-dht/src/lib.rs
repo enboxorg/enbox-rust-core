@@ -24,3 +24,6 @@ pub use sequence::next_sequence;
 pub use transport::{DhtTransport, RelayMethod, RelayRequest, RelayResponse};
 
 pub use ssi_jws::JwsSigner;
+
+#[cfg(test)]
+pub(crate) mod test_support;
