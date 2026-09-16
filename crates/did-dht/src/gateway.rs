@@ -260,6 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-001
     async fn resolves_a_signed_relay_document() {
         let (did, payload) = signed_relay_payload(42);
         let config = DhtResolverConfig {
@@ -286,6 +287,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-001
     async fn rejects_a_different_did_method_before_transport() {
         let (did, _) = signed_relay_payload(1);
         let web = "did:web:example.com".parse::<DIDBuf>().unwrap();
@@ -355,6 +357,7 @@ mod publish_tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-005
     async fn publishes_the_signed_envelope_and_returns_the_sequence() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (did, document) = agent_document(&identity);
@@ -398,6 +401,7 @@ mod publish_tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-005
     async fn rejections_carry_status_and_sequence() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (_, document) = agent_document(&identity);
@@ -419,6 +423,7 @@ mod publish_tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-003
     async fn publish_encodes_the_configured_gateway_as_ns() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (_, document) = agent_document(&identity);

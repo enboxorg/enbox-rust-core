@@ -1485,6 +1485,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-001, DID-DHT-006
     async fn did_dht_provider_builds_agent_shape_with_vault_uri() {
         let provider = DidDhtProvider::default();
         let derived = derive_agent_keys(RECOVERY_PHRASE).unwrap();
@@ -1557,6 +1558,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-006
     async fn did_dht_provider_omits_dwn_service_without_endpoints() {
         let provider = DidDhtProvider::default();
         let derived = derive_agent_keys(RECOVERY_PHRASE).unwrap();
@@ -1575,6 +1577,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-001
     async fn did_dht_provider_rejects_non_ed25519_identity() {
         let provider = DidDhtProvider::default();
         let derived = derive_agent_keys(RECOVERY_PHRASE).unwrap();

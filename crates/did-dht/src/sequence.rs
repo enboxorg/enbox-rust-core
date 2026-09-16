@@ -39,6 +39,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn initial_sequences_ceil_now() {
         assert_eq!(next_sequence(at(1_700_000_000, 0), None), Ok(1_700_000_000));
         assert_eq!(next_sequence(at(1_700_000_000, 1), None), Ok(1_700_000_001));
@@ -50,6 +51,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn previous_sequence_wins_when_newer() {
         // Equal previous still advances: exact retry reuses bytes, a changed
         // publication must supersede.
