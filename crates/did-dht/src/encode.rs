@@ -1235,3 +1235,130 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod blob_tests {
+    use super::super::codec::decode_document;
+    use super::*;
+
+    /// Checked-in Rust-encoded bytes for the pinned TypeScript decoder test.
+    ///
+    /// Run with `BLESS_DID_DHT_FIXTURES=1` to regenerate after an intended
+    /// encoding change; otherwise the checked-in bytes must match exactly.
+    /// Inputs mirror the TypeScript publish fixture shape (agent VMs plus a
+    /// DWN service) without sharing its seeds: the blob carries its own
+    /// document, so the consumer only proves decode acceptance.
+    #[test]
+    fn rust_publish_bytes_fixture() {
+        let blob = rust_publish_blob();
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/rust-publish-bytes.json"
+        );
+        if std::env::var("BLESS_DID_DHT_FIXTURES").is_ok() {
+            std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
+                .unwrap();
+            std::fs::write(path, serde_json::to_string_pretty(&blob).unwrap() + "\n").unwrap();
+        }
+        let checked_in: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(checked_in, blob);
+    }
+
+    fn rust_publish_blob() -> Value {
+        let identity = ed25519_key(&[0x51; 32]);
+        let signing = ed25519_key(&[0x52; 32]);
+        let document: Document = serde_json::from_value(serde_json::json!({
+            "id": did_string(&identity),
+            "verificationMethod": [
+                verification_jwk(&did_string(&identity), "0", &identity, "EdDSA"),
+                verification_jwk(&did_string(&identity), "sig", &signing, "EdDSA"),
+                x25519_jwk(&did_string(&identity)),
+            ],
+            "authentication": [format!("{}#0", did_string(&identity)), format!("{}#sig", did_string(&identity))],
+            "assertionMethod": [format!("{}#0", did_string(&identity)), format!("{}#sig", did_string(&identity))],
+            "capabilityInvocation": [format!("{}#0", did_string(&identity))],
+            "capabilityDelegation": [format!("{}#0", did_string(&identity))],
+            "keyAgreement": [format!("{}#enc", did_string(&identity))],
+            "service": [{"id": format!("{}#dwn", did_string(&identity)), "type": "DecentralizedWebNode",
+                         "serviceEndpoint": ["https://dwn.example"]}],
+        }))
+        .unwrap();
+        let gateways = ["https://gateway.example".parse().unwrap()];
+        let encoded = encode_document(&document, &[1, 2, 3], &gateways).unwrap();
+        // Self-check: the blob must decode to its own document.
+        let did: ssi_dids_core::DIDBuf = did_string(&identity).parse().unwrap();
+        let (decoded, types) = decode_document(&did, &encoded).unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap(),
+            serde_json::to_value(&document).unwrap()
+        );
+        assert_eq!(types, Some(vec![1, 2, 3]));
+        serde_json::json!({
+            "description": "Rust-encoded agent-shape did:dht document for the pinned TypeScript decoder test. Regenerate with BLESS_DID_DHT_FIXTURES=1.",
+            "didDocument": document,
+            "dnsBytes": base64_key(&encoded),
+            "types": [1, 2, 3],
+        })
+    }
+
+    fn ed25519_key(seed: &[u8; 32]) -> [u8; 32] {
+        use ed25519_dalek::SigningKey;
+        SigningKey::from_bytes(seed).verifying_key().to_bytes()
+    }
+
+    fn did_string(identity: &[u8; 32]) -> String {
+        format!("did:dht:{}", z32::encode(identity))
+    }
+
+    fn verification_jwk(did: &str, fragment: &str, public: &[u8; 32], alg: &str) -> Value {
+        serde_json::json!({
+            "id": format!("{did}#{fragment}"),
+            "type": "JsonWebKey",
+            "controller": did,
+            "publicKeyJwk": {
+                "kty": "OKP", "crv": "Ed25519",
+                "x": base64_key(public),
+                "kid": thumbprint_ed25519(public),
+                "alg": alg,
+            },
+        })
+    }
+
+    fn x25519_jwk(did: &str) -> Value {
+        let public = [0x53; 32];
+        serde_json::json!({
+            "id": format!("{did}#enc"),
+            "type": "JsonWebKey",
+            "controller": did,
+            "publicKeyJwk": {
+                "kty": "OKP", "crv": "X25519",
+                "x": base64_key(&public),
+                "kid": thumbprint_x25519(&public),
+                "alg": "ECDH-ES+A256KW",
+            },
+        })
+    }
+
+    fn thumbprint_ed25519(public: &[u8; 32]) -> String {
+        use ssi_jwk::{OctetParams, Params, JWK};
+        JWK::from(Params::OKP(OctetParams {
+            curve: "Ed25519".to_string(),
+            public_key: ssi_jwk::Base64urlUInt(public.to_vec()),
+            private_key: None,
+        }))
+        .thumbprint()
+        .unwrap()
+    }
+
+    fn thumbprint_x25519(public: &[u8; 32]) -> String {
+        use ssi_jwk::{OctetParams, Params, JWK};
+        JWK::from(Params::OKP(OctetParams {
+            curve: "X25519".to_string(),
+            public_key: ssi_jwk::Base64urlUInt(public.to_vec()),
+            private_key: None,
+        }))
+        .thumbprint()
+        .unwrap()
+    }
+}

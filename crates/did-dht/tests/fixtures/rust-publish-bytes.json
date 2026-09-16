@@ -1,0 +1,76 @@
+{
+  "description": "Rust-encoded agent-shape did:dht document for the pinned TypeScript decoder test. Regenerate with BLESS_DID_DHT_FIXTURES=1.",
+  "didDocument": {
+    "assertionMethod": [
+      "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#0",
+      "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#sig"
+    ],
+    "authentication": [
+      "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#0",
+      "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#sig"
+    ],
+    "capabilityDelegation": [
+      "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#0"
+    ],
+    "capabilityInvocation": [
+      "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#0"
+    ],
+    "id": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy",
+    "keyAgreement": [
+      "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#enc"
+    ],
+    "service": [
+      {
+        "id": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#dwn",
+        "serviceEndpoint": [
+          "https://dwn.example"
+        ],
+        "type": "DecentralizedWebNode"
+      }
+    ],
+    "verificationMethod": [
+      {
+        "controller": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy",
+        "id": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#0",
+        "publicKeyJwk": {
+          "alg": "EdDSA",
+          "crv": "Ed25519",
+          "kid": "hlqNnvnuw_g7uAgV8Sy2kR0hH3orMop9alO-BBtaWo4",
+          "kty": "OKP",
+          "x": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo"
+        },
+        "type": "JsonWebKey"
+      },
+      {
+        "controller": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy",
+        "id": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#sig",
+        "publicKeyJwk": {
+          "alg": "EdDSA",
+          "crv": "Ed25519",
+          "kid": "SWUejy55xcz8xgSi-GX15ERZzyuXnb6voSaopq2Jakw",
+          "kty": "OKP",
+          "x": "IBLLkMpg6OXY2vZuInLSIz4EhtVX6MZhQe2JIBd9frc"
+        },
+        "type": "JsonWebKey"
+      },
+      {
+        "controller": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy",
+        "id": "did:dht:abecka54eu7eckx96xgc3atob13sfjt7u8ci9tkbewug6o31etpy#enc",
+        "publicKeyJwk": {
+          "alg": "ECDH-ES+A256KW",
+          "crv": "X25519",
+          "kid": "Byr2JnTRWqirkn75P07KV_DR7-kR4jIiIQEfu_tAlIc",
+          "kty": "OKP",
+          "x": "U1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1M"
+        },
+        "type": "JsonWebKey"
+      }
+    ]
+  },
+  "dnsBytes": "AACEAAAAAAcAAAAAA19rMARfZGlkAAAQAAEAABwgADIxdD0wO2s9d0ZERlkzcEUtb1lwX19QTXpPSXdETE5pcGoyWjJWX0ZRVVVtYjBNeVJGbwNfazHAEAAQAAEAABwgADk4aWQ9c2lnO3Q9MDtrPUlCTExrTXBnNk9YWTJ2WnVJbkxTSXo0RWh0Vlg2TVpoUWUySklCZDlmcmMDX2sywBAAEAABAAAcIAA5OGlkPWVuYzt0PTM7az1VMU5UVTFOVFUxTlRVMU5UVTFOVFUxTlRVMU5UVTFOVFUxTlRVMU5UVTFNA19zMMAQABAAAQAAHCAANTRpZD1kd247dD1EZWNlbnRyYWxpemVkV2ViTm9kZTtzZT1odHRwczovL2R3bi5leGFtcGxlBF9kaWQ0YWJlY2thNTRldTdlY2t4OTZ4Z2MzYXRvYjEzc2ZqdDd1OGNpOXRrYmV3dWc2bzMxZXRweQAAEAABAAAcIABBQHY9MDt2bT1rMCxrMSxrMjthdXRoPWswLGsxO2FzbT1rMCxrMTtpbnY9azA7ZGVsPWswO2FnbT1rMjtzdmM9czAEX3R5cMAQABAAAQAAHCAACQhpZD0xLDIsM8EpAAIAAQAAHCAAEQdnYXRld2F5B2V4YW1wbGUA",
+  "types": [
+    1,
+    2,
+    3
+  ]
+}

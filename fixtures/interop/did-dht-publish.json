@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "oracle": "enbox",
+  "source": {
+    "repository": "enboxorg/enbox",
+    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "path": "packages/dids/src/methods/did-dht.ts",
+    "tool": "tools/interop/generate-did-dht-publish-fixture.ts"
+  },
+  "inputs": {
+    "identitySeed": "ERERERERERERERERERERERERERERERERERERERERERE",
+    "signingSeed": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+    "encryptionSeed": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+    "sequence": 1700000000,
+    "gatewayUri": "https://gateway.example",
+    "dwnEndpoints": [
+      "https://dwn.example"
+    ],
+    "types": [
+      1,
+      2,
+      3
+    ]
+  },
+  "vector": {
+    "didDocument": {
+      "id": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o",
+      "verificationMethod": [
+        {
+          "id": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#0",
+          "type": "JsonWebKey",
+          "controller": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o",
+          "publicKeyJwk": {
+            "crv": "Ed25519",
+            "kty": "OKP",
+            "x": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc",
+            "kid": "vaJPtef-vPnGAIWE19qlMPDYWGaER3zeeJM_3r1WO7E",
+            "alg": "EdDSA"
+          }
+        },
+        {
+          "id": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#sig",
+          "type": "JsonWebKey",
+          "controller": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o",
+          "publicKeyJwk": {
+            "crv": "Ed25519",
+            "kty": "OKP",
+            "x": "oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA",
+            "kid": "f3zNtNnYfgmEKsQyyHtmruOfJFzBi1lyb_D_2J9CDPo",
+            "alg": "EdDSA"
+          }
+        },
+        {
+          "id": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#enc",
+          "type": "JsonWebKey",
+          "controller": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o",
+          "publicKeyJwk": {
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": "ew1H2TQn-DERYHgcfHM_2J-IlwrvSQ2KoO4ZpMuKGxQ",
+            "kid": "Ob5udBakAHUQOW0Ul_aPN6ZjD0GB0j1TmotzTQ50P5c",
+            "alg": "ECDH-ES+A256KW"
+          }
+        }
+      ],
+      "authentication": [
+        "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#0",
+        "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#sig"
+      ],
+      "assertionMethod": [
+        "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#0",
+        "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#sig"
+      ],
+      "capabilityDelegation": [
+        "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#0"
+      ],
+      "capabilityInvocation": [
+        "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#0"
+      ],
+      "keyAgreement": [
+        "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#enc"
+      ],
+      "service": [
+        {
+          "id": "did:dht:4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o#dwn",
+          "type": "DecentralizedWebNode",
+          "serviceEndpoint": [
+            "https://dwn.example"
+          ]
+        }
+      ]
+    },
+    "didMetadata": {
+      "types": [
+        1,
+        2,
+        3
+      ]
+    },
+    "dnsRecords": [
+      {
+        "name": "_k0._did.",
+        "type": "TXT",
+        "ttl": 7200,
+        "rdata": "t=0;k=0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc"
+      },
+      {
+        "name": "_k1._did.",
+        "type": "TXT",
+        "ttl": 7200,
+        "rdata": "id=sig;t=0;k=oJql9HpnWYAv-VX43C0qFKXJnSO-l_hkEn_5ODRVpPA"
+      },
+      {
+        "name": "_k2._did.",
+        "type": "TXT",
+        "ttl": 7200,
+        "rdata": "id=enc;t=3;k=ew1H2TQn-DERYHgcfHM_2J-IlwrvSQ2KoO4ZpMuKGxQ"
+      },
+      {
+        "name": "_s0._did.",
+        "type": "TXT",
+        "ttl": 7200,
+        "rdata": "id=dwn;t=DecentralizedWebNode;se=https://dwn.example"
+      },
+      {
+        "name": "_typ._did.",
+        "type": "TXT",
+        "ttl": 7200,
+        "rdata": "id=1,2,3"
+      },
+      {
+        "name": "_did.4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o.",
+        "type": "TXT",
+        "ttl": 7200,
+        "rdata": "v=0;vm=k0,k1,k2;auth=k0,k1;asm=k0,k1;agm=k2;inv=k0;del=k0;svc=s0"
+      },
+      {
+        "name": "_did.4bfmrcuwfq4ksqoupn6wcfxrh5enr1izdeyszmhfrntuf1mzoh5o.",
+        "type": "NS",
+        "ttl": 7200,
+        "rdata": "https://gateway.example."
+      }
+    ],
+    "dnsBytes": "AACEAAAAAAcAAAAAA19rMARfZGlkAAAQAAEAABwgADIxdD0wO2s9MEVxeU1uUXJ0S3M2RTJpOVJoWGs1dEFpU3JjYUFXdXZoU0NqTXNsM2h6YwNfazEEX2RpZAAAEAABAAAcIAA5OGlkPXNpZzt0PTA7az1vSnFsOUhwbldZQXYtVlg0M0MwcUZLWEpuU08tbF9oa0VuXzVPRFJWcFBBA19rMgRfZGlkAAAQAAEAABwgADk4aWQ9ZW5jO3Q9MztrPWV3MUgyVFFuLURFUllIZ2NmSE1fMkotSWx3cnZTUTJLb080WnBNdUtHeFEDX3MwBF9kaWQAABAAAQAAHCAANTRpZD1kd247dD1EZWNlbnRyYWxpemVkV2ViTm9kZTtzZT1odHRwczovL2R3bi5leGFtcGxlBF90eXAEX2RpZAAAEAABAAAcIAAJCGlkPTEsMiwzBF9kaWQ0NGJmbXJjdXdmcTRrc3FvdXBuNndjZnhyaDVlbnIxaXpkZXlzem1oZnJudHVmMW16b2g1bwAAEAABAAAcIABBQHY9MDt2bT1rMCxrMSxrMjthdXRoPWswLGsxO2FzbT1rMCxrMTthZ209azI7aW52PWswO2RlbD1rMDtzdmM9czAEX2RpZDQ0YmZtcmN1d2ZxNGtzcW91cG42d2NmeHJoNWVucjFpemRleXN6bWhmcm50dWYxbXpvaDVvAAACAAEAABwgABkPaHR0cHM6Ly9nYXRld2F5B2V4YW1wbGUA",
+    "bep44": {
+      "seq": 1700000000,
+      "sig": "qMmPE4C1IdY3q1CsMODDNP2YxWeJ1pJFLxsrxeftm-ivlr_utKcCSSjS7NtZeQxmHzZVkuyytkCJQLNEieRSAw",
+      "v": "AACEAAAAAAcAAAAAA19rMARfZGlkAAAQAAEAABwgADIxdD0wO2s9MEVxeU1uUXJ0S3M2RTJpOVJoWGs1dEFpU3JjYUFXdXZoU0NqTXNsM2h6YwNfazEEX2RpZAAAEAABAAAcIAA5OGlkPXNpZzt0PTA7az1vSnFsOUhwbldZQXYtVlg0M0MwcUZLWEpuU08tbF9oa0VuXzVPRFJWcFBBA19rMgRfZGlkAAAQAAEAABwgADk4aWQ9ZW5jO3Q9MztrPWV3MUgyVFFuLURFUllIZ2NmSE1fMkotSWx3cnZTUTJLb080WnBNdUtHeFEDX3MwBF9kaWQAABAAAQAAHCAANTRpZD1kd247dD1EZWNlbnRyYWxpemVkV2ViTm9kZTtzZT1odHRwczovL2R3bi5leGFtcGxlBF90eXAEX2RpZAAAEAABAAAcIAAJCGlkPTEsMiwzBF9kaWQ0NGJmbXJjdXdmcTRrc3FvdXBuNndjZnhyaDVlbnIxaXpkZXlzem1oZnJudHVmMW16b2g1bwAAEAABAAAcIABBQHY9MDt2bT1rMCxrMSxrMjthdXRoPWswLGsxO2FzbT1rMCxrMTthZ209azI7aW52PWswO2RlbD1rMDtzdmM9czAEX2RpZDQ0YmZtcmN1d2ZxNGtzcW91cG42d2NmeHJoNWVucjFpemRleXN6bWhmcm50dWYxbXpvaDVvAAACAAEAABwgABkPaHR0cHM6Ly9nYXRld2F5B2V4YW1wbGUA"
+    }
+  }
+}
