@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use ssi_dids_core::{Document, DID};
+use ssi_jws::JwsSigner;
 use url::Url;
 
 use super::bep44::{
@@ -8,7 +9,14 @@ use super::bep44::{
 };
 use super::codec::decode_document;
 use super::error::DhtPublishError;
-use super::transport::{DhtTransport, RelayRequest};
+use super::publish::{relay_body, sign_publish};
+use super::transport::{DhtTransport, RelayMethod, RelayRequest};
+
+#[cfg(test)]
+use std::{collections::VecDeque, future::Future, pin::Pin, sync::Mutex};
+
+#[cfg(test)]
+use super::transport::RelayResponse;
 
 const DEFAULT_GATEWAY_URI: &str = "https://enbox-did-dht.fly.dev";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -97,15 +105,100 @@ impl DhtResolver {
             types,
         })
     }
+
+    /// Publish `document` through the configured gateway.
+    ///
+    /// Encodes with the configured gateway as the single authoritative NS
+    /// target, signs through `signer`, and PUTs the relay envelope. Success
+    /// returns the published sequence. Any terminal non-2xx — including a
+    /// concurrent writer's 409 — is a typed rejection carrying the submitted
+    /// sequence, never success. Callers retry explicitly: same sequence and
+    /// bytes for an exact retry, a fresh sequence for changed content.
+    pub async fn publish<S: JwsSigner>(
+        &self,
+        document: &Document,
+        types: &[u64],
+        sequence: u64,
+        signer: &S,
+    ) -> Result<u64, DhtPublishError> {
+        let signed = sign_publish(
+            document,
+            types,
+            std::slice::from_ref(&self.config.gateway_uri),
+            sequence,
+            signer,
+        )
+        .await?;
+        let url = gateway_identity_uri(&self.config.gateway_uri, &document.id)?;
+        let response = self
+            .transport
+            .fetch(
+                RelayRequest {
+                    method: RelayMethod::Put,
+                    url,
+                    headers: vec![(
+                        "Content-Type".to_string(),
+                        "application/octet-stream".to_string(),
+                    )],
+                    body: Some(relay_body(&signed)),
+                },
+                self.config.timeout,
+                self.config.max_redirects,
+                self.config.allow_private_gateway_uri,
+            )
+            .await?;
+
+        if (200..300).contains(&response.status) {
+            Ok(sequence)
+        } else {
+            Err(DhtPublishError::GatewayRejected {
+                status: response.status,
+                sequence,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct FakeTransport {
+    pub responses: Mutex<VecDeque<Result<RelayResponse, DhtPublishError>>>,
+    pub requests: Mutex<Vec<RelayRequest>>,
+}
+
+#[cfg(test)]
+impl FakeTransport {
+    pub(crate) fn new(
+        responses: impl IntoIterator<Item = Result<RelayResponse, DhtPublishError>>,
+    ) -> Self {
+        Self {
+            responses: Mutex::new(responses.into_iter().collect()),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl DhtTransport for FakeTransport {
+    fn fetch<'a>(
+        &'a self,
+        request: RelayRequest,
+        _timeout: Duration,
+        _max_redirects: usize,
+        _allow_private: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<RelayResponse, DhtPublishError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.requests.lock().unwrap().push(request);
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("fake response must be configured")
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::Mutex;
-
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine as _;
     use ed25519_dalek::{Signer, SigningKey};
@@ -115,42 +208,6 @@ mod tests {
 
     use super::super::transport::RelayResponse;
     use super::*;
-
-    struct FakeTransport {
-        responses: Mutex<VecDeque<Result<RelayResponse, DhtPublishError>>>,
-        requests: Mutex<Vec<RelayRequest>>,
-    }
-
-    impl FakeTransport {
-        fn new(
-            responses: impl IntoIterator<Item = Result<RelayResponse, DhtPublishError>>,
-        ) -> Self {
-            Self {
-                responses: Mutex::new(responses.into_iter().collect()),
-                requests: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    impl DhtTransport for FakeTransport {
-        fn fetch<'a>(
-            &'a self,
-            request: RelayRequest,
-            _timeout: Duration,
-            _max_redirects: usize,
-            _allow_private: bool,
-        ) -> Pin<Box<dyn Future<Output = Result<RelayResponse, DhtPublishError>> + Send + 'a>>
-        {
-            Box::pin(async move {
-                self.requests.lock().unwrap().push(request);
-                self.responses
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .expect("fake response must be configured")
-            })
-        }
-    }
 
     fn response(status: u16, body: Vec<u8>) -> RelayResponse {
         RelayResponse {
@@ -266,5 +323,161 @@ mod tests {
             Err(DhtPublishError::Transport("connection refused".to_string()))
         );
         assert_eq!(transport.requests.lock().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use std::sync::Arc;
+
+    use ed25519_dalek::SigningKey;
+    use simple_dns::rdata::RData;
+    use simple_dns::Packet;
+
+    use super::super::transport::{RelayMethod, RelayResponse};
+    use super::*;
+    use crate::test_support::{agent_document, TestSigner};
+
+    fn ok_response(status: u16) -> RelayResponse {
+        RelayResponse {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    fn publish_resolver(
+        config: DhtResolverConfig,
+        response: Result<RelayResponse, DhtPublishError>,
+    ) -> (DhtResolver, Arc<FakeTransport>) {
+        let transport = Arc::new(FakeTransport::new([response]));
+        (DhtResolver::new(config, transport.clone()), transport)
+    }
+
+    #[tokio::test]
+    async fn publishes_the_signed_envelope_and_returns_the_sequence() {
+        let identity = SigningKey::from_bytes(&[7; 32]);
+        let (did, document) = agent_document(&identity);
+        let config = DhtResolverConfig {
+            gateway_uri: Url::parse("https://gateway.example/pkarr").unwrap(),
+            ..DhtResolverConfig::default()
+        };
+        let (resolver, transport) = publish_resolver(config, Ok(ok_response(200)));
+
+        assert_eq!(
+            resolver
+                .publish(&document, &[], 42, &TestSigner::plain(identity))
+                .await,
+            Ok(42)
+        );
+
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.method, RelayMethod::Put);
+        assert_eq!(
+            request.url,
+            Url::parse(&format!(
+                "https://gateway.example/pkarr/{}",
+                did.method_specific_id()
+            ))
+            .unwrap()
+        );
+        assert!(request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "Content-Type" && value == "application/octet-stream"));
+        let body = request.body.as_ref().expect("relay body");
+        assert!(body.len() > 72);
+        assert_eq!(&body[64..72], &42u64.to_be_bytes());
+        let (decoded, _) = decode_document(&did, &body[72..]).unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap(),
+            serde_json::to_value(document).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn rejections_carry_status_and_sequence() {
+        let identity = SigningKey::from_bytes(&[7; 32]);
+        let (_, document) = agent_document(&identity);
+
+        for status in [400, 404, 409, 500] {
+            let (resolver, transport) =
+                publish_resolver(DhtResolverConfig::default(), Ok(ok_response(status)));
+            assert_eq!(
+                resolver
+                    .publish(&document, &[], 42, &TestSigner::plain(identity.clone()))
+                    .await,
+                Err(DhtPublishError::GatewayRejected {
+                    status,
+                    sequence: 42
+                })
+            );
+            assert_eq!(transport.requests.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_encodes_the_configured_gateway_as_ns() {
+        let identity = SigningKey::from_bytes(&[7; 32]);
+        let (_, document) = agent_document(&identity);
+        let config = DhtResolverConfig {
+            gateway_uri: Url::parse("https://gateway.example").unwrap(),
+            ..DhtResolverConfig::default()
+        };
+        let (resolver, transport) = publish_resolver(config, Ok(ok_response(200)));
+
+        resolver
+            .publish(&document, &[], 1, &TestSigner::plain(identity))
+            .await
+            .unwrap();
+
+        let requests = transport.requests.lock().unwrap();
+        let body = requests[0].body.as_ref().expect("relay body");
+        let packet = Packet::parse(&body[72..]).unwrap();
+        let ns = packet
+            .answers
+            .iter()
+            .filter_map(|answer| match &answer.rdata {
+                RData::NS(name) => Some(name.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ns, ["gateway.example"]);
+    }
+
+    #[tokio::test]
+    async fn transport_errors_propagate() {
+        let identity = SigningKey::from_bytes(&[7; 32]);
+        let (_, document) = agent_document(&identity);
+        let (resolver, _) = publish_resolver(
+            DhtResolverConfig::default(),
+            Err(DhtPublishError::Transport("connection refused".to_string())),
+        );
+
+        assert_eq!(
+            resolver
+                .publish(&document, &[], 1, &TestSigner::plain(identity))
+                .await,
+            Err(DhtPublishError::Transport("connection refused".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_documents_fail_before_transport() {
+        let identity = SigningKey::from_bytes(&[7; 32]);
+        let (_, mut document) = agent_document(&identity);
+        document.verification_method.clear();
+        let (resolver, transport) =
+            publish_resolver(DhtResolverConfig::default(), Ok(ok_response(200)));
+
+        assert!(matches!(
+            resolver
+                .publish(&document, &[], 1, &TestSigner::plain(identity))
+                .await,
+            Err(DhtPublishError::InvalidDocument(_))
+        ));
+        assert_eq!(transport.requests.lock().unwrap().len(), 0);
     }
 }
