@@ -15,6 +15,7 @@ sqlite = ["dep:dwn-rs-stores", "dep:rusqlite", "dwn-rs-stores/sqlite"]
 
 [dependencies]
 dwn-rs-core = { path = "../dwn-rs-core", default-features = false }
+did-dht = { path = "../did-dht" }
 dwn-rs-stores = { path = "../dwn-rs-stores", optional = true }
 rusqlite = { version = "0.39", optional = true }
 base64 = "0.23.1"
@@ -31,6 +32,7 @@ ssi-dids-core = "0.3.1"
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["secp256r1", "secp256k1", "ed25519"] }
 ulid = { version = "3.0.0", features = ["serde"] }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
+z32 = "1.3.0"
 
 [dev-dependencies]
 tokio = { version = "1.39.2", features = ["macros", "rt", "rt-multi-thread"] }
