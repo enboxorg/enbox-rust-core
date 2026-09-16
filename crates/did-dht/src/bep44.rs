@@ -121,6 +121,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn decodes_official_vector_identity_key() {
         let key = decode_identity_key(&did("dht", VECTOR_1_IDENTIFIER)).unwrap();
 
@@ -129,6 +130,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn rejects_a_different_did_method() {
         assert!(matches!(
             decode_identity_key(&did("web", "example.com")),
@@ -137,6 +139,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn rejects_invalid_zbase32() {
         // `0` is valid DID method-specific-id syntax but is not in the z-base-32 alphabet.
         assert_eq!(
@@ -146,6 +149,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn rejects_identity_keys_with_the_wrong_length() {
         for (bytes, expected_found) in [(vec![7; 31], 31), (vec![7; 33], 33)] {
             let identifier = z32::encode(&bytes);
@@ -161,6 +165,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn rejects_invalid_ed25519_key_material() {
         let invalid_key = (0..=u8::MAX)
             .map(|byte| [byte; 32])
@@ -175,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn parses_relay_payload_layout() {
         let signature = [0xa5; SIGNATURE_LEN];
         let sequence: u64 = 0x0102_0304_0506_0708;
@@ -192,6 +198,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn accepts_relay_payload_length_boundaries() {
         let minimum = vec![0; MIN_RELAY_PAYLOAD_LEN];
         let maximum = vec![0; MAX_RELAY_PAYLOAD_LEN];
@@ -201,6 +208,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn rejects_relay_payload_outside_length_boundaries() {
         for found in [MIN_RELAY_PAYLOAD_LEN - 1, MAX_RELAY_PAYLOAD_LEN + 1] {
             assert!(matches!(
@@ -215,6 +223,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn encodes_bep44_signing_payload_vectors() {
         let vectors: &[(u64, &[u8], &[u8])] = &[
             (0, b"", b"3:seqi0e1:v0:"),
@@ -228,6 +237,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn verifies_a_bep44_message() {
         let signing_key = SigningKey::from_bytes(&[7; 32]);
         let signature = signing_key.sign(b"3:seqi42e1:v5:hello").to_bytes();
@@ -244,6 +254,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-004
     fn rejects_tampered_bep44_messages() {
         let signing_key = SigningKey::from_bytes(&[7; 32]);
         let signature = signing_key.sign(b"3:seqi42e1:v5:hello").to_bytes();

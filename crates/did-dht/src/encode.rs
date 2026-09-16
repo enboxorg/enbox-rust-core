@@ -702,6 +702,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-007
     fn decoder_outputs_are_a_fixpoint() {
         let did = did();
         assert_fixpoint(
@@ -856,6 +857,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-006, DID-DHT-007
     fn agent_shaped_documents_encode_decoder_normal() {
         let (did_string, document) = agent_document();
 
@@ -868,6 +870,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-003
     fn txt_segments_never_split_utf8() {
         for (value, expected_segments) in [
             ("x".repeat(255), 1),
@@ -883,6 +886,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-003, DID-DHT-007
     fn multibyte_values_round_trip() {
         let mut value = doc_value(&base_doc());
         value["service"] = serde_json::json!([{
@@ -900,6 +904,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-003
     fn gateway_ns_rules() {
         let document = base_doc();
         let ns_targets = |bytes: &[u8]| {
@@ -944,6 +949,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-002
     fn types_round_trip_through_typ_record() {
         let document = base_doc();
         let encoded = encode_document(&document, &[1, 2], &[]).unwrap();
@@ -953,6 +959,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-002
     fn rejects_unrepresentable_documents() {
         let document = base_doc();
         let mutate = |f: fn(&mut Value)| {
@@ -1021,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn rejects_mismatched_identity_key() {
         let mut value = doc_value(&base_doc());
         let other_x =
@@ -1034,6 +1042,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-002
     fn rejects_duplicate_fragments() {
         let mut value = doc_value(&base_doc());
         let first = value["verificationMethod"][0].clone();
@@ -1049,6 +1058,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-003
     fn rejects_unsafe_delimiters_and_shapes() {
         let service_doc = |service: Value| {
             let mut value = doc_value(&base_doc());
@@ -1126,6 +1136,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001, DID-DHT-007
     fn identity_vm_encodes_first_regardless_of_input_order() {
         let (did_string, document) = agent_document();
         let mut value = doc_value(&document);
@@ -1178,6 +1189,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn identity_controller_must_be_represented() {
         let (_, document) = agent_document();
 
@@ -1201,6 +1213,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-006
     fn identity_is_required_in_mandatory_relationships() {
         let document = base_doc();
         for relationship in [
@@ -1224,6 +1237,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-002
     fn duplicate_service_ids_are_rejected() {
         let (_, document) = agent_document();
         let mut value = doc_value(&document);

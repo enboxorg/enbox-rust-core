@@ -347,6 +347,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001, DID-DHT-002, DID-DHT-006
     fn decodes_official_vector_one_shape() {
         let bytes = packet(&[
             (
@@ -387,6 +388,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-002
     fn decodes_all_registered_key_types_and_order_independent_relationships() {
         let secp256k1 = encoded(&[
             0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce,
@@ -462,6 +464,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-002, DID-DHT-003
     fn decodes_document_properties_services_and_metadata() {
         let root_name = format!("_did.{IDENTIFIER}.");
         let k0 = format!("t=0;k={ED25519_KEY}");
@@ -500,6 +503,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-001
     fn derives_additional_method_id_from_jwk_thumbprint() {
         let root_name = format!("_did.{IDENTIFIER}.");
         let key = format!("t=0;k={ED25519_KEY};c=did:example:controller;a=EdDSA");
@@ -523,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-002, DID-DHT-006
     fn decodes_upstream_parity_vector_two() {
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -574,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-003
     fn reassembles_chunked_txt_data() {
         let long_property = "x".repeat(300);
         let service = format!("id=test;t=Test;se=https://example.com;long={long_property}");

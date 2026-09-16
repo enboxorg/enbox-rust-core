@@ -136,6 +136,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-004
     async fn signs_the_exact_bep44_preimage() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (did, document) = agent_document(&identity);
@@ -175,6 +176,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-004
     async fn value_size_gate_accepts_1000_and_rejects_1001() {
         assert!(ensure_value_size(&vec![0; 999]).is_ok());
         assert!(ensure_value_size(&vec![0; 1000]).is_ok());
@@ -185,6 +187,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-004
     async fn oversized_values_fail_before_signing() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let document = oversized_document(&identity);
@@ -201,6 +204,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-004
     async fn mismatched_signer_fails_local_verification() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (_, document) = agent_document(&identity);
@@ -214,6 +218,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-004
     async fn wrong_length_signatures_fail() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (_, document) = agent_document(&identity);
@@ -239,6 +244,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Covers: DID-DHT-007
     async fn signed_output_decodes_to_its_document() {
         let identity = SigningKey::from_bytes(&[7; 32]);
         let (did, document) = agent_document(&identity);
@@ -264,6 +270,7 @@ mod pinned_fixture_tests {
     use super::super::codec::decode_document;
 
     #[test]
+    // Covers: DID-DHT-004, DID-DHT-005
     fn reads_pinned_typescript_publish_fixture() {
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
