@@ -12,11 +12,15 @@ mod codec;
 mod encode;
 mod error;
 mod gateway;
+mod publish;
 mod sequence;
 mod transport;
 
 pub use encode::validate_publishable_document;
 pub use error::DhtPublishError;
 pub use gateway::{DhtResolver, DhtResolverConfig, ResolvedDhtDocument};
+pub use publish::{sign_publish, SignedPublish};
 pub use sequence::next_sequence;
 pub use transport::{DhtTransport, RelayMethod, RelayRequest, RelayResponse};
+
+pub use ssi_jws::JwsSigner;
