@@ -41,7 +41,6 @@ impl AgentDerivedKeys {
     }
 }
 
-
 /// Derive the deterministic key set (vault, identity, signing, encryption) from a BIP-39 phrase.
 ///
 /// Pure: derives the same keys for the same phrase and persists nothing.
