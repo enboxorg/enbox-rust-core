@@ -203,7 +203,7 @@ impl PortableDidStore for MemoryPortableDidStore {
 #[deprecated(
     note = "use PortableDidStore; this stores agent-owned identities, not resolution results"
 )]
-pub use super::traits::PortableDidStore as DidResolverCache;
+pub use super::service::PortableDidStore as DidResolverCache;
 
 /// Deprecated name for [`MemoryPortableDidStore`].
 #[deprecated(note = "use MemoryPortableDidStore")]
