@@ -221,5 +221,4 @@ mod tests {
         assert!(store.delete("biometric-sealed").await.unwrap());
         assert_eq!(store.get("biometric-sealed").await.unwrap(), None);
     }
-
 }

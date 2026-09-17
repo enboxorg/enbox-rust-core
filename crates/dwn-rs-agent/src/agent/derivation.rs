@@ -162,7 +162,11 @@ fn hkdf_sha512(base_key: &[u8], info: &[u8], length: usize) -> AgentIdentityResu
     Ok(out)
 }
 
-pub(crate) fn hkdf_sha256(base_key: &[u8], info: &[u8], length: usize) -> AgentIdentityResult<Vec<u8>> {
+pub(crate) fn hkdf_sha256(
+    base_key: &[u8],
+    info: &[u8],
+    length: usize,
+) -> AgentIdentityResult<Vec<u8>> {
     let hkdf = hkdf::Hkdf::<Sha256>::new(Some(&[]), base_key);
     let mut out = vec![0u8; length];
     hkdf.expand(info, &mut out)
@@ -227,5 +231,4 @@ mod tests {
         assert_eq!(error.code(), "AgentIdentityInvalidKeyMaterial");
         assert!(error.detail().contains("X25519"));
     }
-
 }
