@@ -1,7 +1,7 @@
 use super::{
-    AgentDerivedKeys, AgentIdentityError, AgentIdentityResult, PortableDid, ed25519_private_jwk,
-    ed25519_public_key_bytes, jwk_curve, relationship_contains, verification_method_jwk,
-    x25519_private_jwk,
+    ed25519_private_jwk, ed25519_public_key_bytes, jwk_curve, relationship_contains,
+    verification_method_jwk, x25519_private_jwk, AgentDerivedKeys, AgentIdentityError,
+    AgentIdentityResult, PortableDid,
 };
 
 use bip39::{Language, Mnemonic};

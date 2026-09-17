@@ -1,9 +1,8 @@
 use super::{
-    AgentDidCreateRequest, AgentIdentityError, AgentIdentityFuture, DidMetadata, DidProvider,
-    PortableDid, ProviderDidMap, dht_public_jwk, did_jwk_uri, did_method_with_jwk_value,
-    did_service, did_verification_method, ed25519_public_bytes, parse_did,
-    parse_verification_reference, validate_agent_did_key_requirements, with_key_id,
-    x25519_public_bytes,
+    dht_public_jwk, did_jwk_uri, did_method_with_jwk_value, did_service, did_verification_method,
+    ed25519_public_bytes, parse_did, parse_verification_reference,
+    validate_agent_did_key_requirements, with_key_id, x25519_public_bytes, AgentDidCreateRequest,
+    AgentIdentityError, AgentIdentityFuture, DidMetadata, DidProvider, PortableDid, ProviderDidMap,
 };
 use std::collections::BTreeMap;
 
