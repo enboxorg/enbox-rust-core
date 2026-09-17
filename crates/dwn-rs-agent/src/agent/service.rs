@@ -156,9 +156,6 @@ mod tests {
     use super::super::*;
 
 
-    const RECOVERY_PHRASE: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
     #[tokio::test]
     async fn initialize_from_recovery_creates_stable_agent_did_and_stores_boundaries() {
         let identity_service = service();

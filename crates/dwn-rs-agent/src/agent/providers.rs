@@ -189,9 +189,6 @@ mod tests {
     use super::super::*;
     use ssi_jwk::JWK;
 
-    const RECOVERY_PHRASE: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
     #[tokio::test]
     // Covers: DID-DHT-001, DID-DHT-006
     async fn did_dht_provider_builds_agent_shape_with_vault_uri() {
