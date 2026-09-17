@@ -197,9 +197,6 @@ pub(crate) fn fixed_32(bytes: &[u8]) -> AgentIdentityResult<[u8; 32]> {
 mod tests {
     use super::super::*;
 
-    const RECOVERY_PHRASE: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
     #[test]
     fn recovery_phrase_derives_stable_agent_key_material() {
         let first = derive_agent_keys(RECOVERY_PHRASE).unwrap();
