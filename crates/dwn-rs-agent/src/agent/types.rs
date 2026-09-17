@@ -1,4 +1,10 @@
-use super::*;
+use std::collections::BTreeMap;
+use std::fmt::Debug;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use ssi_dids_core::Document;
+use ssi_jwk::JWK;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

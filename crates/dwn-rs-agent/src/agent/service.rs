@@ -1,4 +1,14 @@
-use super::*;
+use super::{
+    AgentDidCreateRequest, AgentIdentityError, AgentIdentityInitialization,
+    AgentIdentityInitializeRequest, AgentIdentityResult, AgentKeyManager, DidProvider, PortableDid,
+    PortableDidStore, SecretStore, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY,
+    VAULT_UNLOCK_SALT_KEY, derive_agent_keys, validate_agent_did_key_requirements,
+    validate_recovery_phrase,
+};
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+
+use bip39::{Language, Mnemonic};
 
 /// Agent identity orchestrator: derivation, vault persistence, and DID lifecycle.
 ///
@@ -143,7 +153,8 @@ impl ProviderDidMap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::*;
+
 
     const RECOVERY_PHRASE: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";

@@ -1,4 +1,7 @@
-use super::*;
+use super::{AgentDidCreateRequest, AgentIdentityFuture, PortableDid};
+use std::sync::Arc;
+
+use ssi_jwk::JWK;
 
 /// Key/value secret backend for vault material (portable DID JSON, content-encryption key, salts, delegate keys).
 ///
