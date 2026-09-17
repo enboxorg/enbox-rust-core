@@ -1,4 +1,12 @@
-use super::*;
+use super::{
+    AgentDerivedKeys, AgentIdentityError, AgentIdentityResult, PortableDid, ed25519_private_jwk,
+    ed25519_public_key_bytes, jwk_curve, relationship_contains, verification_method_jwk,
+    x25519_private_jwk,
+};
+
+use bip39::{Language, Mnemonic};
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::{Sha256, Sha512};
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -187,7 +195,7 @@ pub(crate) fn fixed_32(bytes: &[u8]) -> AgentIdentityResult<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::*;
 
     const RECOVERY_PHRASE: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";

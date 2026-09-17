@@ -1,4 +1,6 @@
-use super::*;
+use std::fmt::Display;
+use std::future::Future;
+use std::pin::Pin;
 
 pub type AgentIdentityResult<T> = Result<T, AgentIdentityError>;
 pub type AgentIdentityFuture<'a, T> =
@@ -211,7 +213,7 @@ impl AgentIdentityError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::*;
 
     #[test]
     fn error_codes_are_stable() {

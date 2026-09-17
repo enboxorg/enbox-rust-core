@@ -1,4 +1,16 @@
-use super::*;
+use super::{AgentIdentityError, AgentIdentityResult, PortableDid, fixed_32};
+use std::collections::BTreeMap;
+
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
+use serde_json::Value as JsonValue;
+use sha2::{Digest, Sha256};
+use ssi_dids_core::document::verification_method::ValueOrReference;
+use ssi_dids_core::document::{DIDVerificationMethod, Service};
+use ssi_dids_core::{DIDBuf, Document};
+use ssi_jwk::{Algorithm, Base64urlUInt, OctetParams, Params, JWK};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
 pub(crate) fn ed25519_public_bytes(jwk: &JWK) -> AgentIdentityResult<[u8; 32]> {
     match &jwk.to_public().params {

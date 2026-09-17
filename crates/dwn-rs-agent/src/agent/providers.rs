@@ -1,4 +1,15 @@
-use super::*;
+use super::{
+    AgentDidCreateRequest, AgentIdentityError, AgentIdentityFuture, DidMetadata, DidProvider,
+    PortableDid, ProviderDidMap, dht_public_jwk, did_jwk_uri, did_method_with_jwk_value,
+    did_service, did_verification_method, ed25519_public_bytes, parse_did,
+    parse_verification_reference, validate_agent_did_key_requirements, with_key_id,
+    x25519_public_bytes,
+};
+use std::collections::BTreeMap;
+
+use serde_json::Value as JsonValue;
+use ssi_dids_core::document::VerificationRelationships;
+use ssi_dids_core::Document;
 
 #[derive(Clone, Default)]
 pub struct DeterministicDidJwkProvider {
@@ -175,7 +186,8 @@ impl DidProvider for DidDhtProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::*;
+    use ssi_jwk::JWK;
 
     const RECOVERY_PHRASE: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
