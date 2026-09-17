@@ -1,9 +1,9 @@
 use super::{
+    derive_agent_keys, validate_agent_did_key_requirements, validate_recovery_phrase,
     AgentDidCreateRequest, AgentIdentityError, AgentIdentityInitialization,
     AgentIdentityInitializeRequest, AgentIdentityResult, AgentKeyManager, DidProvider, PortableDid,
     PortableDidStore, SecretStore, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY,
-    VAULT_UNLOCK_SALT_KEY, derive_agent_keys, validate_agent_did_key_requirements,
-    validate_recovery_phrase,
+    VAULT_UNLOCK_SALT_KEY,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
@@ -154,7 +154,6 @@ impl ProviderDidMap {
 #[cfg(test)]
 mod tests {
     use super::super::*;
-
 
     #[tokio::test]
     async fn initialize_from_recovery_creates_stable_agent_did_and_stores_boundaries() {

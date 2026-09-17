@@ -1,4 +1,4 @@
-use super::{AgentIdentityError, AgentIdentityResult, PortableDid, fixed_32};
+use super::{fixed_32, AgentIdentityError, AgentIdentityResult, PortableDid};
 use std::collections::BTreeMap;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

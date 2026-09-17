@@ -1,6 +1,6 @@
 use super::{
-    AgentIdentityError, AgentIdentityFuture, AgentKeyManager, PortableDid, PortableDidStore,
-    SecretStore, fixed_32, hkdf_sha256, key_uri_for_jwk, okp_params, x25519_private_jwk,
+    fixed_32, hkdf_sha256, key_uri_for_jwk, okp_params, x25519_private_jwk, AgentIdentityError,
+    AgentIdentityFuture, AgentKeyManager, PortableDid, PortableDidStore, SecretStore,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
@@ -212,7 +212,6 @@ pub type MemoryDidResolverCache = MemoryPortableDidStore;
 #[cfg(test)]
 mod tests {
     use super::super::*;
-
 
     #[tokio::test]
     async fn secret_store_is_pluggable_for_native_vaults() {
