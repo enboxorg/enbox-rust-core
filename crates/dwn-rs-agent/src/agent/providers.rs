@@ -289,5 +289,4 @@ mod tests {
 
         assert_eq!(error.code(), "AgentIdentityInvalidKeyMaterial");
     }
-
 }

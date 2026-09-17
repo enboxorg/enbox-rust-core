@@ -20,7 +20,10 @@ pub(crate) fn x25519_public_bytes(jwk: &JWK) -> AgentIdentityResult<[u8; 32]> {
 
 /// Decoder-normal public JWK value: thumbprint kid with the default
 /// algorithm filled in, so construction output already matches decode output.
-pub(crate) fn dht_public_jwk(private_jwk: &JWK, default_alg: &str) -> AgentIdentityResult<JsonValue> {
+pub(crate) fn dht_public_jwk(
+    private_jwk: &JWK,
+    default_alg: &str,
+) -> AgentIdentityResult<JsonValue> {
     let public_jwk = private_jwk.to_public();
     let kid = public_jwk
         .thumbprint()

@@ -197,7 +197,6 @@ mod tests {
         }
     }
 
-
     fn service() -> AgentIdentityService<
         DeterministicDidJwkProvider,
         MemoryKeyManager,
