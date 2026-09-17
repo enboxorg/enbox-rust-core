@@ -1,13 +1,14 @@
 use super::{
     derive_agent_keys, validate_agent_did_key_requirements, validate_recovery_phrase,
-    AgentDidCreateRequest, AgentIdentityError, AgentIdentityFuture, AgentIdentityInitialization,
-    AgentIdentityInitializeRequest, AgentIdentityResult, PortableDid,
-    VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY, VAULT_UNLOCK_SALT_KEY,
+    AgentDidCreateRequest, AgentIdentityError, AgentIdentityFuture, AgentIdentityResult,
+    PortableDid, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY, VAULT_UNLOCK_SALT_KEY,
 };
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 
 use bip39::{Language, Mnemonic};
+use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
 
 /// Key/value secret backend for vault material (portable DID JSON, content-encryption key, salts, delegate keys).
@@ -138,6 +139,44 @@ impl<T: ?Sized + DidProvider> DidProvider for Arc<T> {
     }
     fn export_did<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, Option<PortableDid>> {
         (**self).export_did(did_uri)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentIdentityInitializeRequest {
+    pub recovery_phrase: Option<String>,
+    #[serde(default)]
+    pub dwn_endpoints: Vec<String>,
+}
+
+impl Debug for AgentIdentityInitializeRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentIdentityInitializeRequest")
+            .field("has_recovery_phrase", &self.recovery_phrase.is_some())
+            .field("dwn_endpoints", &self.dwn_endpoints)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentIdentityInitialization {
+    pub recovery_phrase: String,
+    pub portable_did: PortableDid,
+    pub key_uris: Vec<String>,
+    pub vault_content_encryption_key: Vec<u8>,
+    pub vault_unlock_salt: Vec<u8>,
+}
+
+impl Debug for AgentIdentityInitialization {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentIdentityInitialization")
+            .field("portable_did", &self.portable_did)
+            .field("key_uris", &self.key_uris)
+            .finish_non_exhaustive()
     }
 }
 
