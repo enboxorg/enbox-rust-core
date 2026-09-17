@@ -1,14 +1,46 @@
 use super::{
     ed25519_private_jwk, ed25519_public_key_bytes, jwk_curve, relationship_contains,
-    verification_method_jwk, x25519_private_jwk, AgentDerivedKeys, AgentIdentityError,
-    AgentIdentityResult, PortableDid,
+    verification_method_jwk, x25519_private_jwk, AgentIdentityError, AgentIdentityResult,
+    PortableDid,
 };
+use std::fmt::Debug;
 
 use bip39::{Language, Mnemonic};
 use hmac::{Hmac, KeyInit, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Sha512};
+use ssi_jwk::JWK;
 
 type HmacSha512 = Hmac<Sha512>;
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDerivedKeys {
+    pub identity_private_jwk: JWK,
+    pub signing_private_jwk: JWK,
+    pub encryption_private_jwk: JWK,
+    pub vault_content_encryption_key: Vec<u8>,
+    pub vault_unlock_salt: Vec<u8>,
+}
+
+impl Debug for AgentDerivedKeys {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentDerivedKeys")
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentDerivedKeys {
+    pub fn private_jwks(&self) -> Vec<JWK> {
+        vec![
+            self.identity_private_jwk.clone(),
+            self.signing_private_jwk.clone(),
+            self.encryption_private_jwk.clone(),
+        ]
+    }
+}
+
 
 /// Derive the deterministic key set (vault, identity, signing, encryption) from a BIP-39 phrase.
 ///
