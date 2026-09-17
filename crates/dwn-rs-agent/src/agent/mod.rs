@@ -4,7 +4,6 @@ mod errors;
 mod memory;
 mod providers;
 mod service;
-mod traits;
 mod types;
 
 pub use self::derivation::*;
@@ -13,7 +12,6 @@ pub use self::errors::*;
 pub use self::memory::*;
 pub use self::providers::*;
 pub use self::service::*;
-pub use self::traits::*;
 pub use self::types::*;
 
 #[cfg(test)]
