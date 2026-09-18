@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use dwn_rs_agent::agent::{
     derive_agent_keys, AgentDidCreateRequest, AgentIdentityError, AgentIdentityInitializeRequest,
-    AgentIdentityService, AgentKeyManager, DeterministicDidJwkProvider, DidProvider,
-    IdentityMetadata, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore, PortableDid,
-    PortableDidStore, PortableIdentity, SecretStore, VAULT_PORTABLE_DID_KEY,
+    AgentIdentityService, AgentKeyManager, DeterministicDidJwkProvider, DidDhtProvider,
+    DidProvider, IdentityMetadata, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
+    PortableDid, PortableDidStore, PortableIdentity, SecretStore, VAULT_PORTABLE_DID_KEY,
 };
 use dwn_rs_agent::auth::connect::{
     derive_context_key, derive_delegate_keys, write_context_key_record, ConnectPermissionRequest,
@@ -37,13 +37,18 @@ fn derivation_golden_vector() {
     );
     assert_eq!(
         hex(&keys.vault_unlock_salt),
-        "b19bdb50f65b597dd0b4b341dca2eeb00d0b8935854e9b800a7fb68f7b7fdc0f"
+        "cf6389ce23de14b02e05413e1bcc3715f6fed4c2b0eda9412701279288f37d20"
     );
 }
 
 #[tokio::test]
 async fn recovery_golden_did_uri() {
-    let service = concrete_service();
+    let service = AgentIdentityService::new(
+        DidDhtProvider::default(),
+        MemoryKeyManager::default(),
+        MemorySecretStore::default(),
+        MemoryPortableDidStore::default(),
+    );
     let init = service
         .initialize_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
@@ -53,7 +58,7 @@ async fn recovery_golden_did_uri() {
         .unwrap();
     assert_eq!(
         init.portable_did.uri,
-        "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6ImNXTC0zXzQ3Mk5LQ1dKRHJQdTJtMnRHRzVNT0p2SXZnMktIMS1nLWVoTU0ifQ"
+        "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo"
     );
 }
 

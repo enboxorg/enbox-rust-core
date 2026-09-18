@@ -3,6 +3,7 @@ use super::{
     verification_method_jwk, x25519_private_jwk, AgentIdentityError, AgentIdentityResult,
     PortableDid,
 };
+use std::borrow::Cow;
 use std::fmt::Debug;
 
 use bip39::{Language, Mnemonic};
@@ -45,14 +46,14 @@ impl AgentDerivedKeys {
 ///
 /// Pure: derives the same keys for the same phrase and persists nothing.
 pub fn derive_agent_keys(recovery_phrase: &str) -> AgentIdentityResult<AgentDerivedKeys> {
-    let mnemonic = Mnemonic::parse_in(Language::English, recovery_phrase)
-        .map_err(|err| AgentIdentityError::invalid_mnemonic(err.to_string()))?;
+    let mnemonic = parse_recovery_phrase(recovery_phrase)?;
     let seed = mnemonic.to_seed("");
     let vault = derive_slip10_ed25519(&seed, "m/44'/0'/0'/0'/0'")?;
     let identity = derive_slip10_ed25519(&seed, "m/44'/0'/1708523827'/0'/0'")?;
     let signing = derive_slip10_ed25519(&seed, "m/44'/0'/1708523827'/0'/1'")?;
     let encryption = derive_slip10_ed25519(&seed, "m/44'/0'/1708523827'/0'/2'")?;
-    let vault_public = ed25519_public_key_bytes(vault.private_key);
+    let mut vault_public = [0; 33];
+    vault_public[1..].copy_from_slice(&ed25519_public_key_bytes(vault.private_key));
 
     Ok(AgentDerivedKeys {
         identity_private_jwk: ed25519_private_jwk(identity.private_key, None),
@@ -129,8 +130,18 @@ pub fn validate_agent_did_key_requirements(portable_did: &PortableDid) -> AgentI
 }
 
 pub(crate) fn validate_recovery_phrase(recovery_phrase: &str) -> AgentIdentityResult<()> {
-    Mnemonic::parse_in(Language::English, recovery_phrase)
-        .map(|_| ())
+    parse_recovery_phrase(recovery_phrase).map(|_| ())
+}
+
+fn parse_recovery_phrase(recovery_phrase: &str) -> AgentIdentityResult<Mnemonic> {
+    let mut normalized = Cow::Borrowed(recovery_phrase);
+    Mnemonic::normalize_utf8_cow(&mut normalized);
+    if normalized.split_whitespace().collect::<Vec<_>>().join(" ") != normalized {
+        return Err(AgentIdentityError::invalid_mnemonic(
+            "invalid recovery phrase separators",
+        ));
+    }
+    Mnemonic::parse_in_normalized(Language::English, &normalized)
         .map_err(|err| AgentIdentityError::invalid_mnemonic(err.to_string()))
 }
 
@@ -227,6 +238,7 @@ pub(crate) fn fixed_32(bytes: &[u8]) -> AgentIdentityResult<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::super::*;
+    use bip39::{Language, Mnemonic};
 
     #[test]
     fn recovery_phrase_derives_stable_agent_key_material() {
@@ -238,6 +250,42 @@ mod tests {
         assert_eq!(jwk_curve(&first.encryption_private_jwk), Some("X25519"));
         assert_eq!(first.vault_content_encryption_key.len(), 32);
         assert_eq!(first.vault_unlock_salt.len(), 32);
+    }
+
+    #[test]
+    fn recovery_phrase_acceptance_matches_english_bip39() {
+        for entropy_bytes in [16, 20, 24, 28, 32] {
+            let phrase = Mnemonic::from_entropy_in(Language::English, &vec![0; entropy_bytes])
+                .unwrap()
+                .to_string();
+            assert!(derive_agent_keys(&phrase).is_ok(), "{entropy_bytes} bytes");
+        }
+
+        let expected = derive_agent_keys(RECOVERY_PHRASE).unwrap();
+        for separator in ['\u{a0}', '\u{3000}'] {
+            let phrase = RECOVERY_PHRASE.replacen(' ', &separator.to_string(), 1);
+            assert_eq!(derive_agent_keys(&phrase).unwrap(), expected);
+        }
+
+        for phrase in [
+            RECOVERY_PHRASE.to_uppercase(),
+            RECOVERY_PHRASE.replacen(' ', "  ", 1),
+            format!(" {RECOVERY_PHRASE}"),
+            format!("{RECOVERY_PHRASE} "),
+            RECOVERY_PHRASE.replacen(' ', "\t", 1),
+            RECOVERY_PHRASE.replacen(' ', "\n", 1),
+            format!("{RECOVERY_PHRASE} about"),
+            RECOVERY_PHRASE.replace("about", "abandon"),
+            RECOVERY_PHRASE.replace("about", "notaword"),
+            String::new(),
+            "  ".to_string(),
+        ] {
+            assert_eq!(
+                derive_agent_keys(&phrase).unwrap_err().code(),
+                "AgentIdentityInvalidMnemonic",
+                "{phrase:?}"
+            );
+        }
     }
 
     #[tokio::test]

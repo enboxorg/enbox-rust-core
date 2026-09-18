@@ -374,6 +374,67 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn invalid_recovery_phrase_writes_nothing() {
+        for phrase in [
+            RECOVERY_PHRASE.to_uppercase(),
+            RECOVERY_PHRASE.replacen(' ', "  ", 1),
+            format!(" {RECOVERY_PHRASE}"),
+            format!("{RECOVERY_PHRASE} "),
+            RECOVERY_PHRASE.replacen(' ', "\t", 1),
+            RECOVERY_PHRASE.replacen(' ', "\n", 1),
+            format!("{RECOVERY_PHRASE} about"),
+            RECOVERY_PHRASE.replace("about", "abandon"),
+            RECOVERY_PHRASE.replace("about", "notaword"),
+            String::new(),
+            "  ".to_string(),
+        ] {
+            let identity_service = service();
+            let error = identity_service
+                .initialize_from_recovery(AgentIdentityInitializeRequest {
+                    recovery_phrase: Some(phrase),
+                    dwn_endpoints: Vec::new(),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "AgentIdentityInvalidMnemonic");
+            assert!(identity_service.stored_agent_did().await.unwrap().is_none());
+            assert!(identity_service
+                .secret_store()
+                .get(VAULT_CONTENT_ENCRYPTION_KEY)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(identity_service
+                .secret_store()
+                .get(VAULT_UNLOCK_SALT_KEY)
+                .await
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_recovery_phrase_generates_twelve_words() {
+        let result = service()
+            .initialize_from_recovery(AgentIdentityInitializeRequest {
+                recovery_phrase: None,
+                dwn_endpoints: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.recovery_phrase.split(' ').count(), 12);
+        assert!(derive_agent_keys(&result.recovery_phrase).is_ok());
+        let recovered = service()
+            .initialize_from_recovery(AgentIdentityInitializeRequest {
+                recovery_phrase: Some(result.recovery_phrase),
+                dwn_endpoints: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.portable_did.uri, recovered.portable_did.uri);
+    }
+
     fn service() -> AgentIdentityService<
         DeterministicDidJwkProvider,
         MemoryKeyManager,
