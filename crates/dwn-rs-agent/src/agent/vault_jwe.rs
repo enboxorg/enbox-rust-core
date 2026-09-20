@@ -4,7 +4,9 @@
 //! codec owns neither derivation nor storage: the B1 salt and work factor
 //! arrive as parameters, and callers persist the resulting strings.
 
-use super::{AgentIdentityError, AgentIdentityResult};
+use super::{
+    validate_agent_did_key_requirements, AgentIdentityError, AgentIdentityResult, PortableDid,
+};
 use aes::cipher::{array::Array, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use aes_gcm::{
     aead::{Aead, KeyInit as GcmKeyInit},
@@ -126,6 +128,15 @@ pub fn wrap_cek(
     let cek_jwk = oct_jwk(cek)?;
     let plaintext = serde_json::to_vec(&cek_jwk)
         .map_err(|err| AgentIdentityError::vault(format!("invalid vault key: {err}")))?;
+    wrap_raw_plaintext(password, salt, p2c, &plaintext)
+}
+
+fn wrap_raw_plaintext(
+    password: &[u8],
+    salt: &[u8; 32],
+    p2c: u32,
+    plaintext: &[u8],
+) -> AgentIdentityResult<String> {
     let p2s = base64url.encode(salt);
     let header = CekProtectedHeader {
         alg: PBES2_ALG,
@@ -145,7 +156,7 @@ pub fn wrap_cek(
     getrandom::fill(&mut content_key)
         .map_err(|err| AgentIdentityError::vault(format!("vault randomness failed: {err}")))?;
     let encrypted_key = aes_kw_wrap(&wrapping_key, &content_key)?;
-    let (iv, ciphertext, tag) = aes_gcm_encrypt(&content_key, &encoded, &plaintext)?;
+    let (iv, ciphertext, tag) = aes_gcm_encrypt(&content_key, &encoded, plaintext)?;
 
     Ok(format!(
         "{encoded}.{}.{}.{}.{}",
@@ -230,9 +241,15 @@ pub fn encrypt_did(portable_did_json: &[u8], cek: &[u8; 32]) -> AgentIdentityRes
     )
 }
 
-/// Decrypt a DID JWE; accepts only JWE direct encryption (alg "dir") with A256GCM.
+/// Decrypt a DID JWE; accepts only JWE direct encryption (alg "dir") with A256GCM
+/// and rejects payloads that are not usable agent DIDs.
 pub fn decrypt_did(jwe: &str, cek: &[u8; 32]) -> AgentIdentityResult<Vec<u8>> {
-    decrypt_direct(jwe, cek)
+    let bytes = decrypt_direct(jwe, cek)?;
+    let did: PortableDid = serde_json::from_slice(&bytes)
+        .map_err(|_| AgentIdentityError::vault("invalid portable DID".to_string()))?;
+    validate_agent_did_key_requirements(&did)
+        .map_err(|_| AgentIdentityError::vault("invalid portable DID".to_string()))?;
+    Ok(bytes)
 }
 
 /// Encrypt arbitrary bytes under the vault CEK with JWE direct encryption
@@ -318,9 +335,11 @@ fn split_compact(jwe: &str) -> AgentIdentityResult<CompactParts> {
     else {
         return Err(AgentIdentityError::vault("invalid vault JWE".to_string()));
     };
-    if protected.is_empty() || iv.is_empty() || ciphertext.is_empty() || tag.is_empty() {
+    if protected.is_empty() || iv.is_empty() || tag.is_empty() {
         return Err(AgentIdentityError::vault("invalid vault JWE".to_string()));
     }
+    // The ciphertext segment may be empty (empty plaintext); it still
+    // authenticates through the tag.
     let encrypted_key = if enc_key.is_empty() {
         None
     } else {
@@ -548,5 +567,191 @@ fn aes_kw_unwrap(kek: &[u8; 32], wrapped: &[u8]) -> AgentIdentityResult<[u8; 32]
 fn xor_counter(a: &mut [u8; 8], counter: u64) {
     for (left, right) in a.iter_mut().zip(counter.to_be_bytes()) {
         *left ^= right;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PASSWORD: &[u8] = b"vault-interop-password";
+    const CEK: [u8; 32] = [0x42; 32];
+    const SALT: [u8; 32] = [0x11; 32];
+
+    fn header_of(jwe: &str) -> serde_json::Value {
+        let protected = jwe.split('.').next().unwrap();
+        serde_json::from_slice(&base64url.decode(protected).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn cek_round_trip_returns_stored_header_parameters() {
+        let jwe = wrap_cek(PASSWORD, &CEK, &SALT, 1).unwrap();
+        let (cek, header) = unwrap_cek(&jwe, PASSWORD).unwrap();
+        assert_eq!(cek, CEK);
+        assert_eq!(header.p2c, 1);
+        assert_eq!(header.p2s, SALT);
+        assert_eq!(header.cty.as_deref(), Some("text/plain"));
+    }
+
+    #[test]
+    fn cek_writer_shape_matches_contract() {
+        let jwe = wrap_cek(PASSWORD, &CEK, &SALT, 10_000).unwrap();
+        let header = header_of(&jwe);
+        assert_eq!(header["alg"], PBES2_ALG);
+        assert_eq!(header["enc"], A256GCM);
+        assert_eq!(header["cty"], "text/plain");
+        assert_eq!(header["p2c"], 10_000);
+        assert_eq!(header["p2s"], base64url.encode(SALT));
+
+        let segments: Vec<&str> = jwe.split('.').collect();
+        assert_eq!(segments.len(), 5);
+        assert_eq!(base64url.decode(segments[2]).unwrap().len(), GCM_IV_LEN);
+
+        let (cek, _) = unwrap_cek(&jwe, PASSWORD).unwrap();
+        assert_eq!(cek, CEK);
+        // Unwrap already proves the embedded oct JWK carries matching
+        // `k`/`kty`/`kid`; the thumbprint itself is 43 base64url chars.
+        assert_eq!(oct_thumbprint(&base64url.encode(CEK)).len(), 43);
+    }
+
+    #[test]
+    fn pbes2_work_factor_variants_open_with_stored_count() {
+        for p2c in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
+            let jwe = wrap_cek(PASSWORD, &CEK, &SALT, p2c).unwrap();
+            assert_eq!(header_of(&jwe)["p2c"], p2c);
+            let (cek, header) = unwrap_cek(&jwe, PASSWORD).unwrap();
+            assert_eq!(cek, CEK);
+            assert_eq!(header.p2c, p2c);
+        }
+    }
+
+    #[test]
+    fn non_default_salt_opens() {
+        let salt = [0x77; 32];
+        let jwe = wrap_cek(PASSWORD, &CEK, &salt, 1).unwrap();
+        let (cek, header) = unwrap_cek(&jwe, PASSWORD).unwrap();
+        assert_eq!(cek, CEK);
+        assert_eq!(header.p2s, salt);
+    }
+
+    #[test]
+    fn writer_rejects_non_positive_work_factor() {
+        assert!(wrap_cek(PASSWORD, &CEK, &SALT, 0).is_err());
+    }
+
+    #[test]
+    fn wrong_password_fails_closed() {
+        let jwe = wrap_cek(PASSWORD, &CEK, &SALT, 1).unwrap();
+        assert!(unwrap_cek(&jwe, b"wrong-password").is_err());
+    }
+
+    #[test]
+    fn invalid_key_plaintexts_are_unusable() {
+        let k = base64url.encode([0x42; 32]);
+        let kid = oct_thumbprint(&k);
+        for plaintext in [
+            serde_json::json!({"k": k, "kty": "EC", "kid": kid}).to_string(),
+            serde_json::json!({"k": base64url.encode([0x42; 16]), "kty": "oct", "kid": kid})
+                .to_string(),
+            serde_json::json!({"k": k, "kty": "oct", "kid": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"})
+                .to_string(),
+            "not json".to_string(),
+        ] {
+            let jwe =
+                wrap_raw_plaintext(PASSWORD, &SALT, 1, plaintext.as_bytes()).unwrap();
+            assert!(unwrap_cek(&jwe, PASSWORD).is_err(), "{plaintext}");
+        }
+    }
+
+    #[test]
+    fn data_round_trips_arbitrary_bytes() {
+        for plaintext in [b"hello".as_slice(), b"", &[0, 1, 2, 250, 255, 16, 32]] {
+            let jwe = encrypt_data(plaintext, &CEK).unwrap();
+            assert_eq!(decrypt_data(&jwe, &CEK).unwrap(), plaintext);
+        }
+    }
+
+    #[test]
+    fn passwords_are_raw_bytes_without_normalization() {
+        // NFC "é" (2 bytes) vs NFD "e" + combining accent (3 bytes).
+        let nfc = "passé".as_bytes().to_vec();
+        let mut nfd = "passe".as_bytes().to_vec();
+        nfd.extend_from_slice(&[0xcc, 0x81]);
+        assert_ne!(nfc, nfd);
+        let jwe = wrap_cek(&nfc, &CEK, &SALT, 1).unwrap();
+        assert!(unwrap_cek(&jwe, &nfd).is_err());
+        assert_eq!(unwrap_cek(&jwe, &nfc).unwrap().0, CEK);
+    }
+
+    #[test]
+    fn status_missing_maps_to_uninitialized() {
+        assert_eq!(
+            VaultStatus::parse(None).unwrap(),
+            VaultStatus::uninitialized()
+        );
+    }
+
+    #[test]
+    fn status_round_trip_keeps_explicit_nulls() {
+        let status = VaultStatus {
+            initialized: true,
+            last_backup: None,
+            last_restore: Some("2026-09-20T00:00:00Z".to_string()),
+        };
+        let bytes = status.encode().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["initialized"], true);
+        assert_eq!(value["lastBackup"], serde_json::Value::Null);
+        assert_eq!(value["lastRestore"], "2026-09-20T00:00:00Z");
+        assert_eq!(VaultStatus::parse(Some(&bytes)).unwrap(), status);
+    }
+
+    #[test]
+    fn status_rejects_malformed_values() {
+        for raw in [
+            "not json",
+            "{}",
+            r#"{"initialized": "yes", "lastBackup": null, "lastRestore": null}"#,
+            r#"{"initialized": true, "lastBackup": 7, "lastRestore": null}"#,
+        ] {
+            assert!(VaultStatus::parse(Some(raw.as_bytes())).is_err(), "{raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn did_round_trip_through_provider_did() {
+        use super::super::{
+            derive_agent_keys, AgentDidCreateRequest, DidDhtProvider, DidProvider, RECOVERY_PHRASE,
+        };
+
+        let derived = derive_agent_keys(RECOVERY_PHRASE).unwrap();
+        let portable_did = DidDhtProvider::default()
+            .create_did(AgentDidCreateRequest {
+                identity_private_jwk: derived.identity_private_jwk,
+                signing_private_jwk: derived.signing_private_jwk,
+                encryption_private_jwk: derived.encryption_private_jwk,
+                dwn_endpoints: vec!["https://dwn.example".to_string()],
+            })
+            .await
+            .unwrap();
+        let cek: [u8; 32] = derived
+            .vault_content_encryption_key
+            .as_slice()
+            .try_into()
+            .unwrap();
+        let json = serde_json::to_vec(&portable_did).unwrap();
+        let jwe = encrypt_did(&json, &cek).unwrap();
+        let header = header_of(&jwe);
+        assert_eq!(header["alg"], DIRECT_ALG);
+        assert_eq!(header["enc"], A256GCM);
+        assert_eq!(header["cty"], "json");
+        assert_eq!(decrypt_did(&jwe, &cek).unwrap(), json);
+
+        // Payloads that are not usable agent DIDs fail at the codec boundary.
+        let not_did = encrypt_data(br#"{"uri": "did:example:1"}"#, &cek).unwrap();
+        assert!(decrypt_did(&not_did, &cek).is_err());
+        let not_object = encrypt_data(b"[1, 2]", &cek).unwrap();
+        assert!(decrypt_did(&not_object, &cek).is_err());
+        assert!(encrypt_did(b"[1, 2]", &cek).is_err());
     }
 }
