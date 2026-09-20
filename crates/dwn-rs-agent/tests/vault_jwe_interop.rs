@@ -8,7 +8,8 @@ use base64::prelude::BASE64_URL_SAFE_NO_PAD as base64url;
 use base64::Engine as _;
 use dwn_rs_agent::agent::{
     decrypt_data, decrypt_did, derive_agent_keys, encrypt_data, encrypt_did, unwrap_cek, wrap_cek,
-    AgentDidCreateRequest, DidDhtProvider, DidProvider, VaultStatus,
+    AgentDidCreateRequest, DidDhtProvider, DidProvider, MemorySecretStore, SecretStore,
+    VaultStatus, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use serde_json::Value;
 
@@ -84,18 +85,53 @@ fn fixture() -> Value {
     serde_json::from_str(&std::fs::read_to_string(FIXTURE_PATH).unwrap()).unwrap()
 }
 
-#[test]
-fn ts_vault_values_open_in_rust() {
+/// The three values cross the storage seam opaquely: load the pinned
+/// values into a `SecretStore` under the vault keys, read them back, and
+/// only then run the codec. This proves the interchange boundary is the
+/// persisted bytes, not in-memory codec inputs.
+async fn ts_values_open_through_store(store: &impl SecretStore) {
     let fixture = fixture();
+    store
+        .put(
+            VAULT_CEK_JWE_KEY,
+            fixture["vector"]["contentEncryptionKey"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+        )
+        .await
+        .unwrap();
+    store
+        .put(
+            VAULT_DID_JWE_KEY,
+            fixture["vector"]["did"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+        )
+        .await
+        .unwrap();
+    store
+        .put(
+            VAULT_STATUS_KEY,
+            fixture["vector"]["vaultStatus"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+        )
+        .await
+        .unwrap();
+
     let password = fixture["inputs"]["password"].as_str().unwrap().as_bytes();
-    let (cek, header) = unwrap_cek(
-        fixture["vector"]["contentEncryptionKey"].as_str().unwrap(),
-        password,
-    )
-    .unwrap();
+    let cek_jwe = String::from_utf8(store.get(VAULT_CEK_JWE_KEY).await.unwrap().unwrap()).unwrap();
+    let (cek, header) = unwrap_cek(&cek_jwe, password).unwrap();
     assert_eq!(header.p2c, 1);
 
-    let did_bytes = decrypt_did(fixture["vector"]["did"].as_str().unwrap(), &cek).unwrap();
+    let did_jwe = String::from_utf8(store.get(VAULT_DID_JWE_KEY).await.unwrap().unwrap()).unwrap();
+    let did_bytes = decrypt_did(&did_jwe, &cek).unwrap();
     let did: Value = serde_json::from_slice(&did_bytes).unwrap();
     assert_eq!(
         did["uri"].as_str().unwrap(),
@@ -106,21 +142,39 @@ fn ts_vault_values_open_in_rust() {
         ("dataJwe", "dataPlaintext"),
         ("binaryJwe", "binaryPlaintext"),
     ] {
-        let plaintext = decrypt_data(fixture["vector"][jwe_key].as_str().unwrap(), &cek).unwrap();
-        assert_eq!(
-            b64(&plaintext),
-            fixture["inputs"][plain_key].as_str().unwrap()
-        );
+        let expected = base64url
+            .decode(fixture["inputs"][plain_key].as_str().unwrap())
+            .unwrap();
+        // Fresh Rust encryption under the unwrapped CEK round-trips, and the
+        // pinned data decrypts under the same CEK.
+        let data_jwe = encrypt_data(&expected, &cek).unwrap();
+        assert_eq!(decrypt_data(&data_jwe, &cek).unwrap(), expected);
+        let pinned = decrypt_data(fixture["vector"][jwe_key].as_str().unwrap(), &cek).unwrap();
+        assert_eq!(b64(&pinned), fixture["inputs"][plain_key].as_str().unwrap());
     }
 
-    let status = VaultStatus::parse(Some(
-        fixture["vector"]["vaultStatus"]
-            .as_str()
-            .unwrap()
-            .as_bytes(),
-    ))
-    .unwrap();
+    let status = VaultStatus::parse(store.get(VAULT_STATUS_KEY).await.unwrap().as_deref()).unwrap();
     assert!(status.initialized);
+}
+
+#[tokio::test]
+async fn ts_vault_values_open_through_memory_store() {
+    ts_values_open_through_store(&MemorySecretStore::default()).await;
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn ts_vault_values_open_through_sqlite_store() {
+    use dwn_rs_agent::SqliteSecretStore;
+    use dwn_rs_core::stores::wake::WakePublishHandler;
+    use dwn_rs_core::stores::MessageStore;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("vault.sqlite");
+    let mut sqlite = dwn_rs_stores::SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
+    MessageStore::open(&mut sqlite).await.unwrap();
+    ts_values_open_through_store(&SqliteSecretStore::new(&sqlite)).await;
 }
 
 #[test]
