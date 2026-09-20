@@ -1,0 +1,54 @@
+name: Knowledge drift
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  checklist:
+    name: Propose the knowledge review checklist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check out the knowledge repository
+        uses: actions/checkout@v7
+        with:
+          repository: enboxorg/knowledge
+          path: .knowledge
+          token: ${{ secrets.KNOWLEDGE_REPO_TOKEN || github.token }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Rank invariants and pages against this change
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          git diff "origin/${{ github.base_ref }}...HEAD" \
+            | python .knowledge/tools/check_knowledge_drift.py --diff - --title "$PR_TITLE" --pages \
+            | tee checklist.md
+
+      - name: Post the checklist on the pull request
+        if: hashFiles('checklist.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Nothing ranked means nothing to say; the freshness rule still asks the
+          # author to state why knowledge is unaffected.
+          grep -q '^- \[ \]' checklist.md || exit 0
+          {
+            cat checklist.md
+            echo
+            echo "Resolve each page with a same-change update, a linked follow-up, or a note in this PR saying why it is unaffected. The ranking is advisory: an invariant it missed is still in scope."
+          } > comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last --create-if-none \
+            || gh pr comment "$PR" --body-file comment.md
