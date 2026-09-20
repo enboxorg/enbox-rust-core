@@ -65,7 +65,12 @@ impl VaultStatus {
             .ok_or_else(|| AgentIdentityError::vault("invalid vault status".to_string()))?;
         let opt_string = |key: &str| -> AgentIdentityResult<Option<String>> {
             match value.get(key) {
-                None | Some(serde_json::Value::Null) => Ok(None),
+                // Absent keys are rejected: only a wholly absent status entry
+                // defaults; a present entry must carry both timestamp keys.
+                None => Err(AgentIdentityError::vault(
+                    "invalid vault status".to_string(),
+                )),
+                Some(serde_json::Value::Null) => Ok(None),
                 Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
                 Some(_) => Err(AgentIdentityError::vault(
                     "invalid vault status".to_string(),
@@ -114,10 +119,13 @@ struct DirectProtectedHeader<'a> {
 }
 
 /// Wrap a 32-byte vault CEK as a PBES2 compact JWE under the raw password bytes.
+///
+/// The salt is opaque bytes: fresh wraps pass the 32-byte derivation salt,
+/// while password changes echo the stored salt of any length back verbatim.
 pub fn wrap_cek(
     password: &[u8],
     cek: &[u8; 32],
-    salt: &[u8; 32],
+    salt: &[u8],
     p2c: u32,
 ) -> AgentIdentityResult<String> {
     if p2c < 1 {
@@ -125,15 +133,32 @@ pub fn wrap_cek(
             "invalid vault work factor".to_string(),
         ));
     }
+    wrap_raw_plaintext(password, salt, p2c, &oct_jwk_bytes(cek)?)
+}
+
+/// Re-wrap the CEK inside an existing CEK JWE under a new password.
+///
+/// Verifies the old password by unwrapping, then wraps the same CEK while
+/// echoing the stored salt, work factor, and content type verbatim. Pure:
+/// touches no storage; the caller owns the atomic swap.
+pub fn rewrap_cek(
+    old_password: &[u8],
+    new_password: &[u8],
+    cek_jwe: &str,
+) -> AgentIdentityResult<String> {
+    let (cek, header) = unwrap_cek(cek_jwe, old_password)?;
+    wrap_raw_plaintext(new_password, &header.p2s, header.p2c, &oct_jwk_bytes(&cek)?)
+}
+
+fn oct_jwk_bytes(cek: &[u8; 32]) -> AgentIdentityResult<Vec<u8>> {
     let cek_jwk = oct_jwk(cek)?;
-    let plaintext = serde_json::to_vec(&cek_jwk)
-        .map_err(|err| AgentIdentityError::vault(format!("invalid vault key: {err}")))?;
-    wrap_raw_plaintext(password, salt, p2c, &plaintext)
+    serde_json::to_vec(&cek_jwk)
+        .map_err(|err| AgentIdentityError::vault(format!("invalid vault key: {err}")))
 }
 
 fn wrap_raw_plaintext(
     password: &[u8],
-    salt: &[u8; 32],
+    salt: &[u8],
     p2c: u32,
     plaintext: &[u8],
 ) -> AgentIdentityResult<String> {
@@ -635,6 +660,21 @@ mod tests {
     }
 
     #[test]
+    fn rewrap_preserves_stored_salt_and_count() {
+        // Short non-default salt: the stored bytes echo back verbatim even
+        // though fresh wraps always use the 32-byte derivation salt.
+        let salt = [0x77; 5];
+        let jwe = wrap_cek(PASSWORD, &CEK, &salt, 10_000).unwrap();
+        let rewrapped = rewrap_cek(PASSWORD, b"new-password", &jwe).unwrap();
+        let (cek, header) = unwrap_cek(&rewrapped, b"new-password").unwrap();
+        assert_eq!(cek, CEK);
+        assert_eq!(header.p2s, salt);
+        assert_eq!(header.p2c, 10_000);
+        assert!(unwrap_cek(&rewrapped, PASSWORD).is_err());
+        assert!(rewrap_cek(b"wrong", b"new-password", &jwe).is_err());
+    }
+
+    #[test]
     fn writer_rejects_non_positive_work_factor() {
         assert!(wrap_cek(PASSWORD, &CEK, &SALT, 0).is_err());
     }
@@ -713,6 +753,9 @@ mod tests {
             "{}",
             r#"{"initialized": "yes", "lastBackup": null, "lastRestore": null}"#,
             r#"{"initialized": true, "lastBackup": 7, "lastRestore": null}"#,
+            r#"{"initialized": true, "lastRestore": null}"#,
+            r#"{"initialized": true, "lastBackup": null}"#,
+            r#"{"initialized": false, "lastBackup": null}"#,
         ] {
             assert!(VaultStatus::parse(Some(raw.as_bytes())).is_err(), "{raw}");
         }
