@@ -101,6 +101,28 @@ pub struct CekHeader {
     pub cty: Option<String>,
 }
 
+/// Why a CEK JWE could not be opened.
+///
+/// Separates "the password is wrong or the entry was tampered with" from
+/// "the entry is not a well-formed CEK JWE", which callers must report with
+/// different error codes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CekDecodeError {
+    /// AES key wrap or GCM authentication failed.
+    Authentication,
+    /// The JWE, protected header, or embedded key is structurally invalid.
+    Corrupt,
+}
+
+fn cek_decode_error(error: CekDecodeError) -> AgentIdentityError {
+    match error {
+        CekDecodeError::Authentication => {
+            AgentIdentityError::vault("vault authentication failed".to_string())
+        }
+        CekDecodeError::Corrupt => AgentIdentityError::vault("invalid vault JWE".to_string()),
+    }
+}
+
 #[derive(Serialize)]
 struct CekProtectedHeader<'a> {
     alg: &'a str,
@@ -194,33 +216,32 @@ fn wrap_raw_plaintext(
 
 /// Unwrap a CEK JWE; returns the raw CEK and the stored header parameters.
 pub fn unwrap_cek(jwe: &str, password: &[u8]) -> AgentIdentityResult<([u8; 32], CekHeader)> {
-    let parts = split_compact(jwe)?;
-    let header_value = decode_header(&parts.protected)?;
-    require_alg_enc(&header_value, PBES2_ALG, A256GCM)?;
+    unwrap_cek_typed(jwe, password).map_err(cek_decode_error)
+}
+
+/// Unwrap a CEK JWE, distinguishing authentication failures from corruption.
+pub fn unwrap_cek_typed(
+    jwe: &str,
+    password: &[u8],
+) -> Result<([u8; 32], CekHeader), CekDecodeError> {
+    let parts = split_compact(jwe).map_err(|_| CekDecodeError::Corrupt)?;
+    let header_value = decode_header(&parts.protected).map_err(|_| CekDecodeError::Corrupt)?;
+    require_alg_enc(&header_value, PBES2_ALG, A256GCM).map_err(|_| CekDecodeError::Corrupt)?;
     let p2c = header_value
         .get("p2c")
         .and_then(serde_json::Value::as_u64)
         .filter(|v| *v >= 1 && *v <= u32::MAX as u64)
         .map(|v| v as u32)
-        .ok_or_else(|| AgentIdentityError::vault("invalid vault iteration count".to_string()))?;
+        .ok_or(CekDecodeError::Corrupt)?;
     let p2s = header_value
         .get("p2s")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| AgentIdentityError::vault("invalid vault salt".to_string()))?;
-    let salt = base64url
-        .decode(p2s)
-        .map_err(|_| AgentIdentityError::vault("invalid vault salt".to_string()))?;
-    let encrypted_key = parts.encrypted_key.ok_or_else(|| {
-        AgentIdentityError::vault("invalid vault JWE: missing encrypted key".to_string())
-    })?;
+        .ok_or(CekDecodeError::Corrupt)?;
+    let salt = base64url.decode(p2s).map_err(|_| CekDecodeError::Corrupt)?;
+    let encrypted_key = parts.encrypted_key.ok_or(CekDecodeError::Corrupt)?;
 
-    let wrapping_key = derive_pbes2_kek(password, p2s, p2c)?;
-    let content_key = aes_kw_unwrap(&wrapping_key, &encrypted_key)
-        .map_err(|_| AgentIdentityError::vault("vault authentication failed".to_string()))?;
-    let cek_bytes: [u8; 32] = content_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| AgentIdentityError::vault("vault authentication failed".to_string()))?;
+    let wrapping_key = derive_pbes2_kek(password, p2s, p2c).map_err(|_| CekDecodeError::Corrupt)?;
+    let cek_bytes = aes_kw_unwrap(&wrapping_key, &encrypted_key)?;
     let plaintext = aes_gcm_decrypt(
         &cek_bytes,
         &parts.protected,
@@ -228,8 +249,8 @@ pub fn unwrap_cek(jwe: &str, password: &[u8]) -> AgentIdentityResult<([u8; 32], 
         &parts.ciphertext,
         &parts.tag,
     )
-    .map_err(|_| AgentIdentityError::vault("vault authentication failed".to_string()))?;
-    let cek = parse_oct_jwk(&plaintext)?;
+    .map_err(|_| CekDecodeError::Authentication)?;
+    let cek = parse_oct_jwk(&plaintext).map_err(|_| CekDecodeError::Corrupt)?;
     Ok((
         cek,
         CekHeader {
@@ -554,12 +575,11 @@ fn aes_kw_wrap(kek: &[u8; 32], plaintext: &[u8; 32]) -> AgentIdentityResult<Vec<
     Ok(out)
 }
 
-fn aes_kw_unwrap(kek: &[u8; 32], wrapped: &[u8]) -> AgentIdentityResult<[u8; 32]> {
+fn aes_kw_unwrap(kek: &[u8; 32], wrapped: &[u8]) -> Result<[u8; 32], CekDecodeError> {
     if wrapped.len() != 40 {
-        return Err(AgentIdentityError::vault("invalid vault key".to_string()));
+        return Err(CekDecodeError::Corrupt);
     }
-    let cipher = aes::Aes256::new_from_slice(kek)
-        .map_err(|_| AgentIdentityError::vault("invalid vault key".to_string()))?;
+    let cipher = aes::Aes256::new_from_slice(kek).map_err(|_| CekDecodeError::Corrupt)?;
     let mut a = [0u8; 8];
     a.copy_from_slice(&wrapped[..8]);
     let mut blocks = [[0u8; 8]; 4];
@@ -580,7 +600,7 @@ fn aes_kw_unwrap(kek: &[u8; 32], wrapped: &[u8]) -> AgentIdentityResult<[u8; 32]
         }
     }
     if a != [0xa6u8; 8] {
-        return Err(AgentIdentityError::vault("invalid vault key".to_string()));
+        return Err(CekDecodeError::Authentication);
     }
     let mut out = [0u8; 32];
     for (i, block) in blocks.iter().enumerate() {
