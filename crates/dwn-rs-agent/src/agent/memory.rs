@@ -1,6 +1,6 @@
 use super::{
     fixed_32, hkdf_sha256, key_uri_for_jwk, okp_params, x25519_private_jwk, AgentIdentityError,
-    AgentIdentityFuture, AgentKeyManager, PortableDid, PortableDidStore, SecretStore,
+    AgentIdentityFuture, AgentKeyManager, PortableDid, PortableDidStore, SecretStore, SecretWrite,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
@@ -49,6 +49,27 @@ impl SecretStore for MemorySecretStore {
                 .map_err(AgentIdentityError::lock_poisoned)?
                 .remove(key)
                 .is_some())
+        })
+    }
+
+    fn apply<'a>(&'a self, writes: Vec<SecretWrite>) -> AgentIdentityFuture<'a, ()> {
+        Box::pin(async move {
+            // One write-lock section: readers never observe a partial batch.
+            let mut values = self
+                .values
+                .write()
+                .map_err(AgentIdentityError::lock_poisoned)?;
+            for write in writes {
+                match write {
+                    SecretWrite::Put { key, value } => {
+                        values.insert(key, value);
+                    }
+                    SecretWrite::Delete { key } => {
+                        values.remove(&key);
+                    }
+                }
+            }
+            Ok(())
         })
     }
 }
