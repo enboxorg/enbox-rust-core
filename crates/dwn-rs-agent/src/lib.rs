@@ -8,7 +8,8 @@
 //! Owned surfaces:
 //!
 //! - [`agent`] owns agent identity and the vault key lifecycle (BIP-39
-//!   derivation, portable DIDs, key manager and secret-store traits).
+//!   derivation, portable DIDs, the password vault, key manager and
+//!   secret-store traits).
 //! - [`auth`] owns tenant registration/setup and the legacy
 //!   connect/delegate-grant helpers.
 //! - [`SqliteSecretStore`] (feature `sqlite`) owns the SQLite secret-store
@@ -41,9 +42,11 @@
 //! access for DWN state. Secret and key-material seams stay separate from DWN
 //! store seams.
 //!
-//! [`SqliteSecretStore`] is an unencrypted key/value backend. Unlike the
-//! TypeScript `SecretStore`, it does not encrypt at rest; the host binds the
-//! database file to platform storage.
+//! [`SqliteSecretStore`] is an unencrypted key/value backend. On its own it
+//! does not encrypt at rest; the host binds the database file to platform
+//! storage. The password vault ([`agent::IdentityVault`]) layers at-rest
+//! protection over it by persisting only password-wrapped and CEK-encrypted
+//! values, and commits each mutation through [`agent::SecretStore::apply`].
 //!
 //! Runtime conventions for agent work:
 //!

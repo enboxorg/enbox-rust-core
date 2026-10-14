@@ -36,6 +36,22 @@ pub enum AgentIdentityError {
     LockPoisoned { detail: String },
     #[error("AgentVaultError: {detail}")]
     AgentVault { detail: String },
+    #[error("AgentVaultUninitialized: {detail}")]
+    AgentVaultUninitialized { detail: String },
+    #[error("AgentVaultAlreadyInitialized: {detail}")]
+    AgentVaultAlreadyInitialized { detail: String },
+    #[error("AgentVaultLocked: {detail}")]
+    AgentVaultLocked { detail: String },
+    #[error("AgentVaultInvalidPassword: {detail}")]
+    AgentVaultInvalidPassword { detail: String },
+    #[error("AgentVaultBlankPassword: {detail}")]
+    AgentVaultBlankPassword { detail: String },
+    #[error("AgentVaultInvalidBackup: {detail}")]
+    AgentVaultInvalidBackup { detail: String },
+    #[error("AgentVaultCorrupt: {detail}")]
+    AgentVaultCorrupt { detail: String },
+    #[error("HD_IDENTITY_VAULT_RECOVERY_PHRASE_MISMATCH: {detail}")]
+    HdIdentityVaultRecoveryPhraseMismatch { detail: String },
     #[error("RegistrationTokenStoreInvalid: {detail}")]
     RegistrationTokenStore { detail: String },
     #[error("DelegateSecretInvalid: {detail}")]
@@ -73,6 +89,16 @@ impl AgentIdentityError {
             "AgentIdentityVaultError" => Self::Vault { detail },
             "AgentIdentityLockPoisoned" => Self::LockPoisoned { detail },
             "AgentVaultError" => Self::AgentVault { detail },
+            "AgentVaultUninitialized" => Self::AgentVaultUninitialized { detail },
+            "AgentVaultAlreadyInitialized" => Self::AgentVaultAlreadyInitialized { detail },
+            "AgentVaultLocked" => Self::AgentVaultLocked { detail },
+            "AgentVaultInvalidPassword" => Self::AgentVaultInvalidPassword { detail },
+            "AgentVaultBlankPassword" => Self::AgentVaultBlankPassword { detail },
+            "AgentVaultInvalidBackup" => Self::AgentVaultInvalidBackup { detail },
+            "AgentVaultCorrupt" => Self::AgentVaultCorrupt { detail },
+            "HD_IDENTITY_VAULT_RECOVERY_PHRASE_MISMATCH" => {
+                Self::HdIdentityVaultRecoveryPhraseMismatch { detail }
+            }
             "RegistrationTokenStoreInvalid" => Self::RegistrationTokenStore { detail },
             "DelegateSecretInvalid" => Self::DelegateSecret { detail },
             "DelegateKeyMissingKeyAgreement" => Self::DelegateKeyAgreement { detail },
@@ -94,6 +120,16 @@ impl AgentIdentityError {
             Self::Vault { .. } => "AgentIdentityVaultError",
             Self::LockPoisoned { .. } => "AgentIdentityLockPoisoned",
             Self::AgentVault { .. } => "AgentVaultError",
+            Self::AgentVaultUninitialized { .. } => "AgentVaultUninitialized",
+            Self::AgentVaultAlreadyInitialized { .. } => "AgentVaultAlreadyInitialized",
+            Self::AgentVaultLocked { .. } => "AgentVaultLocked",
+            Self::AgentVaultInvalidPassword { .. } => "AgentVaultInvalidPassword",
+            Self::AgentVaultBlankPassword { .. } => "AgentVaultBlankPassword",
+            Self::AgentVaultInvalidBackup { .. } => "AgentVaultInvalidBackup",
+            Self::AgentVaultCorrupt { .. } => "AgentVaultCorrupt",
+            Self::HdIdentityVaultRecoveryPhraseMismatch { .. } => {
+                "HD_IDENTITY_VAULT_RECOVERY_PHRASE_MISMATCH"
+            }
             Self::RegistrationTokenStore { .. } => "RegistrationTokenStoreInvalid",
             Self::DelegateSecret { .. } => "DelegateSecretInvalid",
             Self::DelegateKeyAgreement { .. } => "DelegateKeyMissingKeyAgreement",
@@ -115,6 +151,14 @@ impl AgentIdentityError {
             | Self::Vault { detail }
             | Self::LockPoisoned { detail }
             | Self::AgentVault { detail }
+            | Self::AgentVaultUninitialized { detail }
+            | Self::AgentVaultAlreadyInitialized { detail }
+            | Self::AgentVaultLocked { detail }
+            | Self::AgentVaultInvalidPassword { detail }
+            | Self::AgentVaultBlankPassword { detail }
+            | Self::AgentVaultInvalidBackup { detail }
+            | Self::AgentVaultCorrupt { detail }
+            | Self::HdIdentityVaultRecoveryPhraseMismatch { detail }
             | Self::RegistrationTokenStore { detail }
             | Self::DelegateSecret { detail }
             | Self::DelegateKeyAgreement { detail }
@@ -164,6 +208,54 @@ impl AgentIdentityError {
 
     pub(crate) fn agent_vault(detail: impl Into<String>) -> Self {
         Self::AgentVault {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn vault_uninitialized(detail: impl Into<String>) -> Self {
+        Self::AgentVaultUninitialized {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn vault_already_initialized(detail: impl Into<String>) -> Self {
+        Self::AgentVaultAlreadyInitialized {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn vault_locked(detail: impl Into<String>) -> Self {
+        Self::AgentVaultLocked {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn vault_invalid_password(detail: impl Into<String>) -> Self {
+        Self::AgentVaultInvalidPassword {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn vault_blank_password(detail: impl Into<String>) -> Self {
+        Self::AgentVaultBlankPassword {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn vault_invalid_backup(detail: impl Into<String>) -> Self {
+        Self::AgentVaultInvalidBackup {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn vault_corrupt(detail: impl Into<String>) -> Self {
+        Self::AgentVaultCorrupt {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn recovery_phrase_mismatch(detail: impl Into<String>) -> Self {
+        Self::HdIdentityVaultRecoveryPhraseMismatch {
             detail: detail.into(),
         }
     }
@@ -218,7 +310,7 @@ mod tests {
     #[test]
     fn error_codes_are_stable() {
         type ErrorCase = (fn(String) -> AgentIdentityError, &'static str);
-        let cases: [ErrorCase; 14] = [
+        let cases: [ErrorCase; 22] = [
             (
                 AgentIdentityError::invalid_mnemonic,
                 "AgentIdentityInvalidMnemonic",
@@ -238,6 +330,32 @@ mod tests {
                 "AgentIdentityLockPoisoned",
             ),
             (AgentIdentityError::agent_vault, "AgentVaultError"),
+            (
+                AgentIdentityError::vault_uninitialized,
+                "AgentVaultUninitialized",
+            ),
+            (
+                AgentIdentityError::vault_already_initialized,
+                "AgentVaultAlreadyInitialized",
+            ),
+            (AgentIdentityError::vault_locked, "AgentVaultLocked"),
+            (
+                AgentIdentityError::vault_invalid_password,
+                "AgentVaultInvalidPassword",
+            ),
+            (
+                AgentIdentityError::vault_blank_password,
+                "AgentVaultBlankPassword",
+            ),
+            (
+                AgentIdentityError::vault_invalid_backup,
+                "AgentVaultInvalidBackup",
+            ),
+            (AgentIdentityError::vault_corrupt, "AgentVaultCorrupt"),
+            (
+                AgentIdentityError::recovery_phrase_mismatch,
+                "HD_IDENTITY_VAULT_RECOVERY_PHRASE_MISMATCH",
+            ),
             (
                 AgentIdentityError::registration_token_store,
                 "RegistrationTokenStoreInvalid",
