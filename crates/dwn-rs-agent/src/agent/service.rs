@@ -11,6 +11,26 @@ use bip39::{Language, Mnemonic};
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
 
+/// One mutation to apply inside an atomic [`SecretStore::apply`] batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecretWrite {
+    Put { key: String, value: Vec<u8> },
+    Delete { key: String },
+}
+
+impl SecretWrite {
+    pub fn put(key: impl Into<String>, value: Vec<u8>) -> Self {
+        Self::Put {
+            key: key.into(),
+            value,
+        }
+    }
+
+    pub fn delete(key: impl Into<String>) -> Self {
+        Self::Delete { key: key.into() }
+    }
+}
+
 /// Key/value secret backend for vault material (portable DID JSON, content-encryption key, salts, delegate keys).
 ///
 /// Unencrypted by itself; durability and at-rest protection are the host's job.
@@ -20,6 +40,16 @@ pub trait SecretStore: Send + Sync + 'static {
     fn get<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, Option<Vec<u8>>>;
     fn put<'a>(&'a self, key: &'a str, value: Vec<u8>) -> AgentIdentityFuture<'a, ()>;
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool>;
+    /// Apply every write as one atomic commit.
+    ///
+    /// A reopened backend must observe all or none of the batch, even after a
+    /// process kill at any point in the commit. Backends that cannot commit
+    /// atomically must fail this call rather than falling back to sequential
+    /// `put`/`delete`.
+    ///
+    /// Required even for single-key mutations: callers depend on the guarantee,
+    /// not on the batch size.
+    fn apply<'a>(&'a self, writes: Vec<SecretWrite>) -> AgentIdentityFuture<'a, ()>;
 }
 
 impl<T: ?Sized + SecretStore> SecretStore for Arc<T> {
@@ -31,6 +61,9 @@ impl<T: ?Sized + SecretStore> SecretStore for Arc<T> {
     }
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool> {
         (**self).delete(key)
+    }
+    fn apply<'a>(&'a self, writes: Vec<SecretWrite>) -> AgentIdentityFuture<'a, ()> {
+        (**self).apply(writes)
     }
 }
 
