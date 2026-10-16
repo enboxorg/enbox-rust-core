@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use base64::prelude::{Engine as _, BASE64_URL_SAFE_NO_PAD as base64url};
 use dwn_rs_agent::agent::{
-    derive_agent_keys, encrypt_data, AgentDidCreateRequest, AgentIdentityError,
+    derive_agent_keys, encrypt_data, encrypt_did, AgentDidCreateRequest, AgentIdentityError,
     AgentIdentityFuture, AgentIdentityResult, DidDhtProvider, DidProvider, IdentityVault,
     IdentityVaultBackup, MemorySecretStore, PortableDid, SecretStore, SecretWrite, VaultStatus,
     DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
@@ -91,6 +91,32 @@ fn assert_iso_millis(value: &str) {
             _ => assert!(byte.is_ascii_digit(), "{value}"),
         }
     }
+}
+
+fn with_p2c(jwe: &str, p2c: u64) -> String {
+    let mut parts: Vec<String> = jwe.split('.').map(str::to_string).collect();
+    let mut header: Value = serde_json::from_slice(&base64url.decode(&parts[0]).unwrap()).unwrap();
+    header["p2c"] = Value::Number(p2c.into());
+    parts[0] = base64url.encode(serde_json::to_vec(&header).unwrap());
+    parts.join(".")
+}
+
+/// A present status entry missing `lastBackup`; only a wholly absent entry is
+/// a valid uninitialized vault.
+const CORRUPT_STATUS: &[u8] = br#"{"initialized":true,"lastRestore":null}"#;
+
+async fn initialized_vault_with_corrupt_status() -> (Arc<IdentityVault>, Arc<MemorySecretStore>) {
+    let (vault, store) = memory_vault();
+    vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    assert!(!vault.is_locked().await);
+    store
+        .put(VAULT_STATUS_KEY, CORRUPT_STATUS.to_vec())
+        .await
+        .unwrap();
+    (vault, store)
 }
 
 #[derive(Clone, Default)]
@@ -709,84 +735,151 @@ async fn restore_onto_fresh_vault_succeeds() {
 }
 
 #[tokio::test]
-async fn restore_failures_lock_and_preserve_store() {
+async fn restore_failure_matrix_on_initialized_and_fresh() {
+    let (source, source_store) = memory_vault();
+    source
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    let backup = source.backup().await.unwrap();
+    let valid_data = backup.data.clone();
+    let cek_entry = read_string(&*source_store, VAULT_CEK_JWE_KEY).await;
+    let cek: [u8; 32] = derive_agent_keys(PHRASE)
+        .unwrap()
+        .vault_content_encryption_key
+        .as_slice()
+        .try_into()
+        .unwrap();
+
+    // A DID entry that decrypts under the recovered CEK but fails agent-DID
+    // validation (no X25519 key agreement or private material).
+    let mut invalid_did = source.get_did().await.unwrap();
+    invalid_did.private_keys.clear();
+    invalid_did
+        .document
+        .verification_relationships
+        .key_agreement
+        .clear();
+    let invalid_did_entry = encrypt_did(&serde_json::to_vec(&invalid_did).unwrap(), &cek).unwrap();
+
+    let data_with = |did: &str, status: Option<Value>| {
+        let mut value = serde_json::json!({
+            "did": did,
+            "contentEncryptionKey": cek_entry.clone(),
+        });
+        if let Some(status) = status {
+            value["status"] = status;
+        }
+        base64url.encode(serde_json::to_vec(&value).unwrap())
+    };
+
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        // missing `size`
+        (
+            br#"{"dateCreated":"x","data":"y"}"#.to_vec(),
+            "AgentVaultInvalidBackup",
+        ),
+        // `size` mistyped as a string
+        (
+            serde_json::to_vec(&serde_json::json!({
+                "dateCreated": "x", "size": "5", "data": valid_data,
+            }))
+            .unwrap(),
+            "AgentVaultInvalidBackup",
+        ),
+        // `data` is not base64url
+        (
+            serde_json::to_vec(&serde_json::json!({
+                "dateCreated": "x", "size": 1, "data": "!!!",
+            }))
+            .unwrap(),
+            "AgentVaultInvalidBackup",
+        ),
+        // status without `initialized:true`
+        (
+            serde_json::to_vec(&serde_json::json!({
+                "dateCreated": "x",
+                "size": 1,
+                "data": data_with("x", Some(serde_json::json!({"initialized": false}))),
+            }))
+            .unwrap(),
+            "AgentVaultInvalidBackup",
+        ),
+        // status member missing entirely
+        (
+            serde_json::to_vec(&serde_json::json!({
+                "dateCreated": "x", "size": 1, "data": data_with("x", None),
+            }))
+            .unwrap(),
+            "AgentVaultInvalidBackup",
+        ),
+        // DID entry that is not a JWE at all
+        (
+            serde_json::to_vec(&serde_json::json!({
+                "dateCreated": "x",
+                "size": 1,
+                "data": data_with("garbage", Some(serde_json::json!({"initialized": true}))),
+            }))
+            .unwrap(),
+            "AgentVaultInvalidBackup",
+        ),
+        // DID entry decrypts but fails agent-DID validation
+        (
+            serde_json::to_vec(&serde_json::json!({
+                "dateCreated": "x",
+                "size": 1,
+                "data": data_with(&invalid_did_entry, Some(serde_json::json!({"initialized": true}))),
+            }))
+            .unwrap(),
+            "AgentVaultInvalidBackup",
+        ),
+    ];
+
+    for (backup_json, expected) in &cases {
+        let (vault, store) = memory_vault();
+        vault
+            .initialize(PASSWORD, Some(PHRASE), vec![])
+            .await
+            .unwrap();
+        let before = snapshot(&*store).await;
+        assert_eq!(
+            vault
+                .restore_json(backup_json, PASSWORD)
+                .await
+                .unwrap_err()
+                .code(),
+            *expected
+        );
+        assert!(vault.is_locked().await);
+        assert_eq!(snapshot(&*store).await, before);
+
+        let (fresh, store) = memory_vault();
+        assert_eq!(
+            fresh
+                .restore_json(backup_json, PASSWORD)
+                .await
+                .unwrap_err()
+                .code(),
+            *expected
+        );
+        assert!(fresh.is_locked().await);
+        assert!(!fresh.status().await.unwrap().initialized);
+        assert!(snapshot(&*store).await.is_empty());
+    }
+
+    // Wrong password on both an initialized and a fresh store.
     let (vault, store) = memory_vault();
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
         .unwrap();
-    let backup = vault.backup().await.unwrap();
     let before = snapshot(&*store).await;
-
     assert_eq!(
         vault.restore(&backup, "wrong").await.unwrap_err().code(),
         "AgentVaultInvalidPassword"
     );
     assert!(vault.is_locked().await);
     assert_eq!(snapshot(&*store).await, before);
-
-    let mut undecodable = backup.clone();
-    undecodable.data = "!!!not-base64!!!".to_string();
-    assert_eq!(
-        vault
-            .restore(&undecodable, PASSWORD)
-            .await
-            .unwrap_err()
-            .code(),
-        "AgentVaultInvalidBackup"
-    );
-    assert!(vault.is_locked().await);
-    assert_eq!(snapshot(&*store).await, before);
-
-    let mut no_initialized = backup.clone();
-    no_initialized.data = base64url
-        .encode(br#"{"did":"x","contentEncryptionKey":"y","status":{"initialized":false}}"#);
-    assert_eq!(
-        vault
-            .restore(&no_initialized, PASSWORD)
-            .await
-            .unwrap_err()
-            .code(),
-        "AgentVaultInvalidBackup"
-    );
-
-    let cek_entry = read_string(&*store, VAULT_CEK_JWE_KEY).await;
-    let mut bad_did = backup.clone();
-    bad_did.data = base64url.encode(
-        serde_json::to_vec(&serde_json::json!({
-            "did": "garbage",
-            "contentEncryptionKey": cek_entry,
-            "status": {"initialized": true},
-        }))
-        .unwrap(),
-    );
-    assert_eq!(
-        vault.restore(&bad_did, PASSWORD).await.unwrap_err().code(),
-        "AgentVaultInvalidBackup"
-    );
-    assert!(vault.is_locked().await);
-    assert_eq!(snapshot(&*store).await, before);
-
-    assert_eq!(
-        vault
-            .restore_json(br#"{"dateCreated":"x","data":"y"}"#, PASSWORD)
-            .await
-            .unwrap_err()
-            .code(),
-        "AgentVaultInvalidBackup"
-    );
-    assert!(vault.is_locked().await);
-    assert_eq!(snapshot(&*store).await, before);
-}
-
-#[tokio::test]
-async fn failed_restore_on_fresh_vault_stays_uninitialized() {
-    let (source, _) = memory_vault();
-    source
-        .initialize(PASSWORD, Some(PHRASE), vec![])
-        .await
-        .unwrap();
-    let backup = source.backup().await.unwrap();
 
     let (fresh, store) = memory_vault();
     assert_eq!(
@@ -1026,6 +1119,236 @@ async fn legacy_plaintext_keys_are_never_read_or_removed() {
     }
 }
 
+#[tokio::test]
+async fn corrupt_status_locks_key_material() {
+    let (vault, _) = initialized_vault_with_corrupt_status().await;
+    assert_eq!(
+        vault.unlock(PASSWORD).await.unwrap_err().code(),
+        "AgentVaultCorrupt"
+    );
+    assert!(vault.is_locked().await);
+
+    let (vault, _) = initialized_vault_with_corrupt_status().await;
+    assert_eq!(vault.lock().await.unwrap_err().code(), "AgentVaultCorrupt");
+    assert!(vault.is_locked().await);
+
+    let (vault, _) = initialized_vault_with_corrupt_status().await;
+    assert_eq!(
+        vault
+            .change_password(PASSWORD, PASSWORD_2)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultCorrupt"
+    );
+    assert!(vault.is_locked().await);
+
+    let (vault, _) = initialized_vault_with_corrupt_status().await;
+    assert_eq!(
+        vault
+            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultCorrupt"
+    );
+    assert!(vault.is_locked().await);
+
+    let (vault, _) = initialized_vault_with_corrupt_status().await;
+    assert_eq!(
+        vault.backup().await.unwrap_err().code(),
+        "AgentVaultCorrupt"
+    );
+    assert!(vault.is_locked().await);
+}
+
+#[tokio::test]
+async fn change_password_commit_failure_keeps_store_and_locks() {
+    let store = Arc::new(FaultyStore::default());
+    let vault = Arc::new(IdentityVault::new(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+    ));
+    vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    let before = snapshot(&*store).await;
+
+    store.fail_apply.store(true, Ordering::SeqCst);
+    assert_eq!(
+        vault
+            .change_password(PASSWORD, PASSWORD_2)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultError"
+    );
+    assert!(vault.is_locked().await);
+    assert_eq!(snapshot(&*store).await, before);
+
+    store.fail_apply.store(false, Ordering::SeqCst);
+    vault.change_password(PASSWORD, PASSWORD_2).await.unwrap();
+    vault.lock().await.unwrap();
+    vault.unlock(PASSWORD_2).await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_commit_failure_keeps_store_and_locks() {
+    let store = Arc::new(FaultyStore::default());
+    let vault = Arc::new(IdentityVault::new(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+    ));
+    vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    vault.lock().await.unwrap();
+    let before = snapshot(&*store).await;
+
+    store.fail_apply.store(true, Ordering::SeqCst);
+    assert_eq!(
+        vault
+            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultError"
+    );
+    assert!(vault.is_locked().await);
+    assert_eq!(snapshot(&*store).await, before);
+
+    store.fail_apply.store(false, Ordering::SeqCst);
+    vault
+        .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+        .await
+        .unwrap();
+    vault.lock().await.unwrap();
+    vault.unlock(PASSWORD_2).await.unwrap();
+}
+
+#[tokio::test]
+async fn restore_commit_failure_keeps_store_and_locks() {
+    let (source, _) = memory_vault();
+    source
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    let backup = source.backup().await.unwrap();
+
+    let store = Arc::new(FaultyStore::default());
+    let vault = Arc::new(IdentityVault::new(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+    ));
+    vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    vault.change_password(PASSWORD, PASSWORD_2).await.unwrap();
+    let before = snapshot(&*store).await;
+
+    store.fail_apply.store(true, Ordering::SeqCst);
+    assert_eq!(
+        vault.restore(&backup, PASSWORD).await.unwrap_err().code(),
+        "AgentVaultError"
+    );
+    assert!(vault.is_locked().await);
+    assert_eq!(snapshot(&*store).await, before);
+
+    store.fail_apply.store(false, Ordering::SeqCst);
+    vault.restore(&backup, PASSWORD).await.unwrap();
+    assert!(!vault.is_locked().await);
+}
+
+#[tokio::test]
+async fn configured_work_factor_is_written_and_opens() {
+    let store = memory_store();
+    let vault = Arc::new(IdentityVault::with_work_factor(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        10_000,
+    ));
+    vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    assert_eq!(
+        header(&read_string(&*store, VAULT_CEK_JWE_KEY).await)["p2c"],
+        10_000
+    );
+
+    vault.lock().await.unwrap();
+    vault.unlock(PASSWORD).await.unwrap();
+}
+
+#[tokio::test]
+async fn non_positive_work_factor_is_corrupt() {
+    let (vault, store) = memory_vault();
+    vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    vault.lock().await.unwrap();
+
+    let tampered = with_p2c(&read_string(&*store, VAULT_CEK_JWE_KEY).await, 0);
+    store
+        .put(VAULT_CEK_JWE_KEY, tampered.into_bytes())
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.unlock(PASSWORD).await.unwrap_err().code(),
+        "AgentVaultCorrupt"
+    );
+    assert!(vault.is_locked().await);
+}
+
+#[tokio::test]
+async fn reset_validation_and_precedence() {
+    let (vault, store) = memory_vault();
+    vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    let before = snapshot(&*store).await;
+
+    assert_eq!(
+        vault
+            .reset_password_with_recovery_phrase(PHRASE, "\t")
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultBlankPassword"
+    );
+    assert!(vault.is_locked().await);
+    assert_eq!(snapshot(&*store).await, before);
+
+    // A blank password is reported before the invalid phrase.
+    vault.unlock(PASSWORD).await.unwrap();
+    assert_eq!(
+        vault
+            .reset_password_with_recovery_phrase("not a phrase", " ")
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultBlankPassword"
+    );
+    assert!(vault.is_locked().await);
+
+    vault.unlock(PASSWORD).await.unwrap();
+    assert_eq!(
+        vault
+            .reset_password_with_recovery_phrase("not a phrase", PASSWORD_2)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentIdentityInvalidMnemonic"
+    );
+    assert!(vault.is_locked().await);
+    assert_eq!(snapshot(&*store).await, before);
+}
+
 #[cfg(feature = "sqlite")]
 mod sqlite {
     use super::*;
@@ -1099,6 +1422,55 @@ mod sqlite {
 
         assert_eq!(store.get("existing").await.unwrap(), Some(b"keep".to_vec()));
         assert_eq!(store.get("partial").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn apply_rolls_back_the_whole_batch_when_one_statement_fails() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("batch.sqlite");
+        let sqlite = open(&path).await;
+        let store = SqliteSecretStore::new(&sqlite);
+        store.put("existing", b"keep".to_vec()).await.unwrap();
+
+        // A trigger that aborts a later statement in the batch, so `apply`
+        // exercises a mid-batch failure on the real backend rather than raw
+        // rusqlite.
+        sqlite
+            .connection()
+            .await
+            .unwrap()
+            .with_writer(|connection| -> Result<(), StoreError> {
+                connection
+                    .execute(
+                        "CREATE TRIGGER reject_boom AFTER INSERT ON agent_secrets \
+                         WHEN NEW.key = 'boom' BEGIN SELECT RAISE(ABORT, 'injected'); END",
+                        [],
+                    )
+                    .map_err(|err| StoreError::InternalException(err.to_string()))?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let error = store
+            .apply(vec![
+                SecretWrite::put("existing", b"changed".to_vec()),
+                SecretWrite::put("boom", b"nope".to_vec()),
+                SecretWrite::put("added", b"new".to_vec()),
+            ])
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "AgentVaultError");
+
+        // Reopen the file: a commit-per-statement implementation would have
+        // left `existing` changed and `added` present.
+        drop(store);
+        drop(sqlite);
+        let sqlite = open(&path).await;
+        let store = SqliteSecretStore::new(&sqlite);
+        assert_eq!(store.get("existing").await.unwrap(), Some(b"keep".to_vec()));
+        assert_eq!(store.get("boom").await.unwrap(), None);
+        assert_eq!(store.get("added").await.unwrap(), None);
     }
 
     #[tokio::test]
