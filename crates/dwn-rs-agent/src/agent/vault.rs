@@ -68,6 +68,11 @@ struct VaultState {
 /// Lock state is per instance and in memory only. Operations are serialized
 /// through one async mutex, so mutations never interleave their
 /// read-check-write sequences.
+///
+/// Password-stretching runs synchronously inside the operation, so a call holds
+/// its executor thread for the duration of the PBKDF2 work. Hosts on a
+/// single-threaded or latency-sensitive runtime should schedule vault calls on a
+/// dedicated thread.
 pub struct IdentityVault {
     store: Arc<dyn SecretStore>,
     did_provider: Arc<dyn DidProvider>,
@@ -124,7 +129,7 @@ impl IdentityVault {
         dwn_endpoints: Vec<String>,
     ) -> AgentIdentityResult<VaultInitialization> {
         let mut state = self.state.lock().await;
-        let (status, _) = self.read_status().await?;
+        let (status, _) = self.read_status_locking_on_error(&mut state).await?;
         if status.initialized {
             return Err(already_initialized());
         }
@@ -183,7 +188,7 @@ impl IdentityVault {
     /// Unlock with the password, replacing any in-memory CEK. Never writes.
     pub async fn unlock(&self, password: &str) -> AgentIdentityResult<()> {
         let mut state = self.state.lock().await;
-        let (status, _) = self.read_status().await?;
+        let (status, _) = self.read_status_locking_on_error(&mut state).await?;
         if !status.initialized {
             return Err(uninitialized());
         }
@@ -197,7 +202,7 @@ impl IdentityVault {
     /// Lock an initialized vault, clearing the in-memory CEK. Idempotent.
     pub async fn lock(&self) -> AgentIdentityResult<()> {
         let mut state = self.state.lock().await;
-        let (status, _) = self.read_status().await?;
+        let (status, _) = self.read_status_locking_on_error(&mut state).await?;
         if !status.initialized {
             return Err(uninitialized());
         }
@@ -218,7 +223,7 @@ impl IdentityVault {
     /// Re-wrap the CEK under `new`, preserving the stored salt and work factor.
     pub async fn change_password(&self, old: &str, new: &str) -> AgentIdentityResult<()> {
         let mut state = self.state.lock().await;
-        let (status, _) = self.read_status().await?;
+        let (status, _) = self.read_status_locking_on_error(&mut state).await?;
         if !status.initialized {
             return Err(uninitialized());
         }
@@ -253,7 +258,7 @@ impl IdentityVault {
         password: &str,
     ) -> AgentIdentityResult<()> {
         let mut state = self.state.lock().await;
-        let (status, _) = self.read_status().await?;
+        let (status, _) = self.read_status_locking_on_error(&mut state).await?;
         if !status.initialized {
             return Err(uninitialized());
         }
@@ -304,8 +309,8 @@ impl IdentityVault {
 
     /// Export the currently stored values as a portable backup blob.
     pub async fn backup(&self) -> AgentIdentityResult<IdentityVaultBackup> {
-        let state = self.state.lock().await;
-        let (status, status_bytes) = self.read_status().await?;
+        let mut state = self.state.lock().await;
+        let (status, status_bytes) = self.read_status_locking_on_error(&mut state).await?;
         if !status.initialized {
             return Err(uninitialized());
         }
@@ -439,6 +444,23 @@ impl IdentityVault {
         let status = VaultStatus::parse(bytes.as_deref())
             .map_err(|_| corrupt("stored vault status is invalid"))?;
         Ok((status, bytes))
+    }
+
+    /// Read status, dropping the in-memory CEK if the read fails.
+    ///
+    /// Key hygiene outranks the error's exact origin: a vault whose status
+    /// cannot be trusted must not stay unlocked.
+    async fn read_status_locking_on_error(
+        &self,
+        state: &mut VaultState,
+    ) -> AgentIdentityResult<(VaultStatus, Option<Vec<u8>>)> {
+        match self.read_status().await {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                state.cek = None;
+                Err(error)
+            }
+        }
     }
 
     async fn read_secret_string(&self, key: &str) -> AgentIdentityResult<String> {
