@@ -9,7 +9,7 @@
 //! TPM. This impl provides durability across `open()` calls so a freshly
 //! restored agent can drive [`crate::agent::AgentIdentityService::stored_agent_did`].
 
-use crate::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore};
+use crate::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore, SecretWrite};
 use dwn_rs_core::errors::StoreError;
 use dwn_rs_stores::SqliteStore;
 use rusqlite::{params, OptionalExtension};
@@ -94,6 +94,44 @@ impl SecretStore for SqliteSecretStore {
                         .execute("DELETE FROM agent_secrets WHERE key = ?1", params![key])
                         .map_err(|err| StoreError::InternalException(err.to_string()))?;
                     Ok(affected > 0)
+                })
+                .await
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))
+        })
+    }
+
+    fn apply<'a>(&'a self, writes: Vec<SecretWrite>) -> AgentIdentityFuture<'a, ()> {
+        Box::pin(async move {
+            self.store
+                .connection()
+                .await
+                .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))?
+                .with_writer(move |connection| {
+                    let tx = connection
+                        .transaction()
+                        .map_err(|err| StoreError::InternalException(err.to_string()))?;
+                    for write in &writes {
+                        match write {
+                            SecretWrite::Put { key, value } => {
+                                tx.execute(
+                                    "INSERT OR REPLACE INTO agent_secrets (key, value) VALUES (?1, ?2)",
+                                    params![key, value],
+                                )
+                                .map_err(|err| StoreError::InternalException(err.to_string()))?;
+                            }
+                            SecretWrite::Delete { key } => {
+                                tx.execute("DELETE FROM agent_secrets WHERE key = ?1", params![key])
+                                    .map_err(|err| {
+                                        StoreError::InternalException(err.to_string())
+                                    })?;
+                            }
+                        }
+                    }
+                    // Commit is the atomicity boundary: an error or a dropped
+                    // transaction leaves every write uncommitted.
+                    tx.commit()
+                        .map_err(|err| StoreError::InternalException(err.to_string()))?;
+                    Ok(())
                 })
                 .await
                 .map_err(|err| AgentIdentityError::agent_vault(err.to_string()))

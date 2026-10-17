@@ -4,6 +4,7 @@ mod errors;
 mod memory;
 mod providers;
 mod service;
+mod vault;
 mod vault_jwe;
 
 pub use self::derivation::*;
@@ -12,6 +13,7 @@ pub use self::errors::*;
 pub use self::memory::*;
 pub use self::providers::*;
 pub use self::service::*;
+pub use self::vault::*;
 pub use self::vault_jwe::*;
 
 #[cfg(test)]
