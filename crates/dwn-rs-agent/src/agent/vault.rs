@@ -7,10 +7,10 @@
 
 use super::{
     decrypt_did, derive_agent_keys, encrypt_did, unwrap_cek_typed,
-    validate_agent_did_key_requirements, validate_recovery_phrase, wrap_cek, AgentDidCreateRequest,
-    AgentIdentityError, AgentIdentityResult, CekDecodeError, CekHeader, DidProvider, PortableDid,
-    SecretStore, SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY,
-    VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
+    validate_agent_did_key_requirements, validate_recovery_phrase, wrap_cek, AgentDerivedKeys,
+    AgentDidCreateRequest, AgentIdentityError, AgentIdentityResult, CekDecodeError, CekHeader,
+    DidProvider, PortableDid, SecretStore, SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS,
+    VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -146,21 +146,34 @@ impl IdentityVault {
         };
 
         let derived = derive_agent_keys(&recovery_phrase)?;
-        let cek = fixed_cek(&derived.vault_content_encryption_key)?;
-        let salt = derived.vault_unlock_salt;
+        let AgentDerivedKeys {
+            identity_private_jwk,
+            signing_private_jwk,
+            encryption_private_jwk,
+            vault_content_encryption_key,
+            vault_unlock_salt,
+        } = derived;
+        let vault_content_encryption_key = Zeroizing::new(vault_content_encryption_key);
+        let cek = Zeroizing::new(fixed_cek(&vault_content_encryption_key)?);
+        let salt = vault_unlock_salt;
         let portable_did = self
             .did_provider
             .create_did(AgentDidCreateRequest {
-                identity_private_jwk: derived.identity_private_jwk,
-                signing_private_jwk: derived.signing_private_jwk,
-                encryption_private_jwk: derived.encryption_private_jwk,
+                identity_private_jwk,
+                signing_private_jwk,
+                encryption_private_jwk,
                 dwn_endpoints,
             })
             .await?;
         validate_agent_did_key_requirements(&portable_did)?;
 
-        let cek_entry =
-            wrap_cek_blocking(password.as_bytes().to_vec(), cek, salt, self.work_factor).await?;
+        let cek_entry = wrap_cek_blocking(
+            Zeroizing::new(password.as_bytes().to_vec()),
+            *cek,
+            salt,
+            self.work_factor,
+        )
+        .await?;
         let did_json = serde_json::to_vec(&portable_did)
             .map_err(|err| AgentIdentityError::vault(format!("invalid portable DID: {err}")))?;
         let did_entry = encrypt_did(&did_json, &cek)?;
@@ -178,7 +191,7 @@ impl IdentityVault {
             ])
             .await?;
 
-        state.cek = Some(Zeroizing::new(cek));
+        state.cek = Some(cek);
         Ok(VaultInitialization {
             recovery_phrase,
             portable_did,
@@ -194,11 +207,14 @@ impl IdentityVault {
         }
         state.cek = None;
         let cek_entry = self.read_secret_string(VAULT_CEK_JWE_KEY).await?;
-        let (cek, _) = match unwrap_cek_blocking(cek_entry, password.as_bytes().to_vec()).await? {
-            Ok(opened) => opened,
-            Err(CekDecodeError::Authentication) => return Err(invalid_password()),
-            Err(CekDecodeError::Corrupt) => return Err(corrupt("stored vault key is invalid")),
-        };
+        let (cek, _) =
+            match unwrap_cek_blocking(cek_entry, Zeroizing::new(password.as_bytes().to_vec()))
+                .await?
+            {
+                Ok(opened) => opened,
+                Err(CekDecodeError::Authentication) => return Err(invalid_password()),
+                Err(CekDecodeError::Corrupt) => return Err(corrupt("stored vault key is invalid")),
+            };
         state.cek = Some(Zeroizing::new(cek));
         Ok(())
     }
@@ -221,6 +237,7 @@ impl IdentityVault {
         let did_entry = self.read_secret_string(VAULT_DID_JWE_KEY).await?;
         let did_bytes =
             decrypt_did(&did_entry, cek).map_err(|_| corrupt("stored vault DID is invalid"))?;
+        let did_bytes = Zeroizing::new(did_bytes);
         serde_json::from_slice(&did_bytes).map_err(|_| corrupt("stored vault DID is invalid"))
     }
 
@@ -237,13 +254,20 @@ impl IdentityVault {
         state.cek = None;
 
         let cek_entry = self.read_secret_string(VAULT_CEK_JWE_KEY).await?;
-        let (cek, header) = match unwrap_cek_blocking(cek_entry, old.as_bytes().to_vec()).await? {
-            Ok(opened) => opened,
-            Err(CekDecodeError::Authentication) => return Err(invalid_password()),
-            Err(CekDecodeError::Corrupt) => return Err(corrupt("stored vault key is invalid")),
-        };
-        let new_cek_entry =
-            wrap_cek_blocking(new.as_bytes().to_vec(), cek, header.p2s, header.p2c).await?;
+        let (cek, header) =
+            match unwrap_cek_blocking(cek_entry, Zeroizing::new(old.as_bytes().to_vec())).await? {
+                Ok(opened) => opened,
+                Err(CekDecodeError::Authentication) => return Err(invalid_password()),
+                Err(CekDecodeError::Corrupt) => return Err(corrupt("stored vault key is invalid")),
+            };
+        let cek = Zeroizing::new(cek);
+        let new_cek_entry = wrap_cek_blocking(
+            Zeroizing::new(new.as_bytes().to_vec()),
+            *cek,
+            header.p2s,
+            header.p2c,
+        )
+        .await?;
 
         self.store
             .apply(vec![SecretWrite::put(
@@ -251,7 +275,7 @@ impl IdentityVault {
                 new_cek_entry.into_bytes(),
             )])
             .await?;
-        state.cek = Some(Zeroizing::new(cek));
+        state.cek = Some(cek);
         Ok(())
     }
 
@@ -274,8 +298,16 @@ impl IdentityVault {
         validate_recovery_phrase(recovery_phrase)?;
 
         let derived = derive_agent_keys(recovery_phrase)?;
-        let derived_cek = fixed_cek(&derived.vault_content_encryption_key)?;
-        let salt = derived.vault_unlock_salt;
+        let AgentDerivedKeys {
+            identity_private_jwk,
+            signing_private_jwk,
+            encryption_private_jwk,
+            vault_content_encryption_key,
+            vault_unlock_salt,
+        } = derived;
+        let vault_content_encryption_key = Zeroizing::new(vault_content_encryption_key);
+        let derived_cek = Zeroizing::new(fixed_cek(&vault_content_encryption_key)?);
+        let salt = vault_unlock_salt;
 
         let stored_did = self
             .store
@@ -285,14 +317,15 @@ impl IdentityVault {
         let did_entry = String::from_utf8(stored_did).map_err(|_| recovery_phrase_mismatch())?;
         let did_bytes =
             decrypt_did(&did_entry, &derived_cek).map_err(|_| recovery_phrase_mismatch())?;
+        let did_bytes = Zeroizing::new(did_bytes);
         let stored_did: PortableDid =
             serde_json::from_slice(&did_bytes).map_err(|_| recovery_phrase_mismatch())?;
         let derived_did = self
             .did_provider
             .create_did(AgentDidCreateRequest {
-                identity_private_jwk: derived.identity_private_jwk,
-                signing_private_jwk: derived.signing_private_jwk,
-                encryption_private_jwk: derived.encryption_private_jwk,
+                identity_private_jwk,
+                signing_private_jwk,
+                encryption_private_jwk,
                 dwn_endpoints: Vec::new(),
             })
             .await
@@ -302,8 +335,8 @@ impl IdentityVault {
         }
 
         let cek_entry = wrap_cek_blocking(
-            password.as_bytes().to_vec(),
-            derived_cek,
+            Zeroizing::new(password.as_bytes().to_vec()),
+            *derived_cek,
             salt,
             self.work_factor,
         )
@@ -314,7 +347,7 @@ impl IdentityVault {
                 cek_entry.into_bytes(),
             )])
             .await?;
-        state.cek = Some(Zeroizing::new(derived_cek));
+        state.cek = Some(derived_cek);
         Ok(())
     }
 
@@ -413,12 +446,17 @@ impl IdentityVault {
             .map(str::to_string);
 
         let (current, _) = self.read_status().await?;
-        let recovered_cek =
-            match unwrap_cek_blocking(cek_entry.clone(), password.as_bytes().to_vec()).await? {
-                Ok((cek, _)) => cek,
-                Err(CekDecodeError::Authentication) => return Err(invalid_password()),
-                Err(CekDecodeError::Corrupt) => return Err(invalid_backup()),
-            };
+        let recovered_cek = match unwrap_cek_blocking(
+            cek_entry.clone(),
+            Zeroizing::new(password.as_bytes().to_vec()),
+        )
+        .await?
+        {
+            Ok((cek, _)) => cek,
+            Err(CekDecodeError::Authentication) => return Err(invalid_password()),
+            Err(CekDecodeError::Corrupt) => return Err(invalid_backup()),
+        };
+        let recovered_cek = Zeroizing::new(recovered_cek);
         decrypt_did(&did_entry, &recovered_cek).map_err(|_| invalid_backup())?;
 
         let status = VaultStatus {
@@ -433,7 +471,7 @@ impl IdentityVault {
                 SecretWrite::put(VAULT_STATUS_KEY, status.encode()?),
             ])
             .await?;
-        state.cek = Some(Zeroizing::new(recovered_cek));
+        state.cek = Some(recovered_cek);
         Ok(())
     }
 
@@ -487,20 +525,23 @@ impl IdentityVault {
 
 /// Wrap the CEK off the async executor: PBKDF2 is CPU-bound.
 async fn wrap_cek_blocking(
-    password: Vec<u8>,
+    password: Zeroizing<Vec<u8>>,
     cek: [u8; 32],
     salt: Vec<u8>,
     p2c: u32,
 ) -> AgentIdentityResult<String> {
-    tokio::task::spawn_blocking(move || wrap_cek(&password, &cek, &salt, p2c))
-        .await
-        .map_err(join_error)?
+    tokio::task::spawn_blocking(move || {
+        let cek = Zeroizing::new(cek);
+        wrap_cek(&password, &cek, &salt, p2c)
+    })
+    .await
+    .map_err(join_error)?
 }
 
 /// Unwrap the CEK off the async executor, preserving the codec's failure class.
 async fn unwrap_cek_blocking(
     jwe: String,
-    password: Vec<u8>,
+    password: Zeroizing<Vec<u8>>,
 ) -> AgentIdentityResult<Result<([u8; 32], CekHeader), CekDecodeError>> {
     tokio::task::spawn_blocking(move || unwrap_cek_typed(&jwe, &password))
         .await

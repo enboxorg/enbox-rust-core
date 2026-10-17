@@ -15,6 +15,7 @@ use aes_gcm::{
 use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD as base64url};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
+use zeroize::Zeroizing;
 
 /// Secret-store key for the password-wrapped CEK compact JWE.
 pub const VAULT_CEK_JWE_KEY: &str = "agent:vault:cekJwe";
@@ -155,7 +156,8 @@ pub fn wrap_cek(
             "invalid vault work factor".to_string(),
         ));
     }
-    wrap_raw_plaintext(password, salt, p2c, &oct_jwk_bytes(cek)?)
+    let plaintext = Zeroizing::new(oct_jwk_bytes(cek)?);
+    wrap_raw_plaintext(password, salt, p2c, &plaintext)
 }
 
 /// Re-wrap the CEK inside an existing CEK JWE under a new password.
@@ -169,7 +171,8 @@ pub fn rewrap_cek(
     cek_jwe: &str,
 ) -> AgentIdentityResult<String> {
     let (cek, header) = unwrap_cek(cek_jwe, old_password)?;
-    wrap_raw_plaintext(new_password, &header.p2s, header.p2c, &oct_jwk_bytes(&cek)?)
+    let plaintext = Zeroizing::new(oct_jwk_bytes(&cek)?);
+    wrap_raw_plaintext(new_password, &header.p2s, header.p2c, &plaintext)
 }
 
 fn oct_jwk_bytes(cek: &[u8; 32]) -> AgentIdentityResult<Vec<u8>> {
@@ -198,10 +201,11 @@ fn wrap_raw_plaintext(
                 AgentIdentityError::vault(format!("invalid vault header: {err}"))
             })?);
 
-    let wrapping_key = derive_pbes2_kek(password, &p2s, p2c)?;
+    let wrapping_key = Zeroizing::new(derive_pbes2_kek(password, &p2s, p2c)?);
     let mut content_key = [0u8; 32];
     getrandom::fill(&mut content_key)
         .map_err(|err| AgentIdentityError::vault(format!("vault randomness failed: {err}")))?;
+    let content_key = Zeroizing::new(content_key);
     let encrypted_key = aes_kw_wrap(&wrapping_key, &content_key)?;
     let (iv, ciphertext, tag) = aes_gcm_encrypt(&content_key, &encoded, plaintext)?;
 
@@ -240,7 +244,8 @@ pub fn unwrap_cek_typed(
     let salt = base64url.decode(p2s).map_err(|_| CekDecodeError::Corrupt)?;
     let encrypted_key = parts.encrypted_key.ok_or(CekDecodeError::Corrupt)?;
 
-    let wrapping_key = derive_pbes2_kek(password, p2s, p2c).map_err(|_| CekDecodeError::Corrupt)?;
+    let wrapping_key =
+        Zeroizing::new(derive_pbes2_kek(password, p2s, p2c).map_err(|_| CekDecodeError::Corrupt)?);
     let cek_bytes = aes_kw_unwrap(&wrapping_key, &encrypted_key)?;
     let plaintext = aes_gcm_decrypt(
         &cek_bytes,
@@ -250,6 +255,7 @@ pub fn unwrap_cek_typed(
         &parts.tag,
     )
     .map_err(|_| CekDecodeError::Authentication)?;
+    let plaintext = Zeroizing::new(plaintext);
     let cek = parse_oct_jwk(&plaintext).map_err(|_| CekDecodeError::Corrupt)?;
     Ok((
         cek,
@@ -476,9 +482,11 @@ fn parse_oct_jwk(plaintext: &[u8]) -> AgentIdentityResult<[u8; 32]> {
     if jwk.kty != "oct" {
         return Err(AgentIdentityError::vault("invalid vault key".to_string()));
     }
-    let raw = base64url
-        .decode(&jwk.k)
-        .map_err(|_| AgentIdentityError::vault("invalid vault key".to_string()))?;
+    let raw = Zeroizing::new(
+        base64url
+            .decode(&jwk.k)
+            .map_err(|_| AgentIdentityError::vault("invalid vault key".to_string()))?,
+    );
     let bytes: [u8; 32] = raw
         .as_slice()
         .try_into()
