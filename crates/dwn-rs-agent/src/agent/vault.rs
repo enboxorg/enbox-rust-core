@@ -8,9 +8,9 @@
 use super::{
     decrypt_did, derive_agent_keys, encrypt_did, unwrap_cek_typed,
     validate_agent_did_key_requirements, validate_recovery_phrase, wrap_cek, AgentDidCreateRequest,
-    AgentIdentityError, AgentIdentityResult, CekDecodeError, DidProvider, PortableDid, SecretStore,
-    SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY,
-    VAULT_STATUS_KEY,
+    AgentIdentityError, AgentIdentityResult, CekDecodeError, CekHeader, DidProvider, PortableDid,
+    SecretStore, SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY,
+    VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -69,10 +69,9 @@ struct VaultState {
 /// through one async mutex, so mutations never interleave their
 /// read-check-write sequences.
 ///
-/// Password-stretching runs synchronously inside the operation, so a call holds
-/// its executor thread for the duration of the PBKDF2 work. Hosts on a
-/// single-threaded or latency-sensitive runtime should schedule vault calls on a
-/// dedicated thread.
+/// Password-stretching is offloaded to a blocking thread, so key derivation does
+/// not stall the async executor. An operation still holds the vault's lock for
+/// its whole duration, as required for linearizable state.
 pub struct IdentityVault {
     store: Arc<dyn SecretStore>,
     did_provider: Arc<dyn DidProvider>,
@@ -160,7 +159,8 @@ impl IdentityVault {
             .await?;
         validate_agent_did_key_requirements(&portable_did)?;
 
-        let cek_entry = wrap_cek(password.as_bytes(), &cek, &salt, self.work_factor)?;
+        let cek_entry =
+            wrap_cek_blocking(password.as_bytes().to_vec(), cek, salt, self.work_factor).await?;
         let did_json = serde_json::to_vec(&portable_did)
             .map_err(|err| AgentIdentityError::vault(format!("invalid portable DID: {err}")))?;
         let did_entry = encrypt_did(&did_json, &cek)?;
@@ -194,7 +194,11 @@ impl IdentityVault {
         }
         state.cek = None;
         let cek_entry = self.read_secret_string(VAULT_CEK_JWE_KEY).await?;
-        let cek = open_cek(&cek_entry, password)?;
+        let (cek, _) = match unwrap_cek_blocking(cek_entry, password.as_bytes().to_vec()).await? {
+            Ok(opened) => opened,
+            Err(CekDecodeError::Authentication) => return Err(invalid_password()),
+            Err(CekDecodeError::Corrupt) => return Err(corrupt("stored vault key is invalid")),
+        };
         state.cek = Some(Zeroizing::new(cek));
         Ok(())
     }
@@ -233,12 +237,13 @@ impl IdentityVault {
         state.cek = None;
 
         let cek_entry = self.read_secret_string(VAULT_CEK_JWE_KEY).await?;
-        let (cek, header) = match unwrap_cek_typed(&cek_entry, old.as_bytes()) {
+        let (cek, header) = match unwrap_cek_blocking(cek_entry, old.as_bytes().to_vec()).await? {
             Ok(opened) => opened,
             Err(CekDecodeError::Authentication) => return Err(invalid_password()),
             Err(CekDecodeError::Corrupt) => return Err(corrupt("stored vault key is invalid")),
         };
-        let new_cek_entry = wrap_cek(new.as_bytes(), &cek, &header.p2s, header.p2c)?;
+        let new_cek_entry =
+            wrap_cek_blocking(new.as_bytes().to_vec(), cek, header.p2s, header.p2c).await?;
 
         self.store
             .apply(vec![SecretWrite::put(
@@ -296,7 +301,13 @@ impl IdentityVault {
             return Err(recovery_phrase_mismatch());
         }
 
-        let cek_entry = wrap_cek(password.as_bytes(), &derived_cek, &salt, self.work_factor)?;
+        let cek_entry = wrap_cek_blocking(
+            password.as_bytes().to_vec(),
+            derived_cek,
+            salt,
+            self.work_factor,
+        )
+        .await?;
         self.store
             .apply(vec![SecretWrite::put(
                 VAULT_CEK_JWE_KEY,
@@ -402,11 +413,12 @@ impl IdentityVault {
             .map(str::to_string);
 
         let (current, _) = self.read_status().await?;
-        let recovered_cek = match unwrap_cek_typed(&cek_entry, password.as_bytes()) {
-            Ok((cek, _)) => cek,
-            Err(CekDecodeError::Authentication) => return Err(invalid_password()),
-            Err(CekDecodeError::Corrupt) => return Err(invalid_backup()),
-        };
+        let recovered_cek =
+            match unwrap_cek_blocking(cek_entry.clone(), password.as_bytes().to_vec()).await? {
+                Ok((cek, _)) => cek,
+                Err(CekDecodeError::Authentication) => return Err(invalid_password()),
+                Err(CekDecodeError::Corrupt) => return Err(invalid_backup()),
+            };
         decrypt_did(&did_entry, &recovered_cek).map_err(|_| invalid_backup())?;
 
         let status = VaultStatus {
@@ -473,12 +485,30 @@ impl IdentityVault {
     }
 }
 
-fn open_cek(cek_entry: &str, password: &str) -> AgentIdentityResult<[u8; 32]> {
-    match unwrap_cek_typed(cek_entry, password.as_bytes()) {
-        Ok((cek, _)) => Ok(cek),
-        Err(CekDecodeError::Authentication) => Err(invalid_password()),
-        Err(CekDecodeError::Corrupt) => Err(corrupt("stored vault key is invalid")),
-    }
+/// Wrap the CEK off the async executor: PBKDF2 is CPU-bound.
+async fn wrap_cek_blocking(
+    password: Vec<u8>,
+    cek: [u8; 32],
+    salt: Vec<u8>,
+    p2c: u32,
+) -> AgentIdentityResult<String> {
+    tokio::task::spawn_blocking(move || wrap_cek(&password, &cek, &salt, p2c))
+        .await
+        .map_err(join_error)?
+}
+
+/// Unwrap the CEK off the async executor, preserving the codec's failure class.
+async fn unwrap_cek_blocking(
+    jwe: String,
+    password: Vec<u8>,
+) -> AgentIdentityResult<Result<([u8; 32], CekHeader), CekDecodeError>> {
+    tokio::task::spawn_blocking(move || unwrap_cek_typed(&jwe, &password))
+        .await
+        .map_err(join_error)
+}
+
+fn join_error(error: tokio::task::JoinError) -> AgentIdentityError {
+    AgentIdentityError::vault(format!("vault key derivation task failed: {error}"))
 }
 
 fn fixed_cek(bytes: &[u8]) -> AgentIdentityResult<[u8; 32]> {
