@@ -93,7 +93,7 @@ The Rust sync engine writes durable `SyncCheckpoint` rows in SQLite, so a `deadl
 
 ### 3. Replace the identity vault
 
-Move identity initialization off the TypeScript `AgentKeyManager` / `Web5UserAgent` paths. The Rust `SqliteSecretStore` persists keys directly in the same SQLite database opened by `EnboxCore.open`.
+Move identity initialization off the TypeScript `AgentKeyManager` / `Web5UserAgent` paths. The Rust `SqliteSecretStore` is the raw persistence backend in the same SQLite database opened by `EnboxCore.open`. The legacy identity initialization path below remains separate from the password vault used for auth credentials.
 
 ```typescript
 const portableDidJson = await core.initializeAgentIdentity(JSON.stringify({
@@ -110,7 +110,11 @@ const grantJson   = await core.createDelegateGrant(JSON.stringify(grant));
 const revokeJson  = await core.createGrantRevocation(JSON.stringify(revocation));
 ```
 
-Persisted delegate decryption / context keys round-trip through `save_delegate_decryption_keys` / `load_delegate_decryption_keys` (and the corresponding context-key methods) so a recovered agent re-derives the same keys on every device.
+Before persisting registration tokens or delegate keys, call `initialize_credential_vault(password, recovery_phrase)` once. Supply the existing recovery phrase to retain its derived vault key; the method returns the phrase for the host to keep securely. On reopen, call `unlock_credential_vault(password)`. This initializes and unlocks local credential storage without publishing a DID or migrating the separate legacy identity entries.
+
+Persisted delegate decryption / context keys round-trip through `save_delegate_decryption_keys` / `load_delegate_decryption_keys` (and the corresponding context-key methods). Those methods and registration with `persistTokens: true` require the shared credential vault to be unlocked. `lock()` clears its in-memory key; passwordless `unlock()` and `unlock_with_reason()` affect the runtime flag only and cannot decrypt credentials.
+
+Rust registration and delegate helpers now accept `CredentialStore`, not the raw `SecretStore`. Construct `VaultBackedSecretStore` with the shared `Arc<IdentityVault>` and raw backend; reuse that credential-store instance across callers. Persisted values are UTF-8 JSON envelopes containing `jwe` and optional `expiresAt`. Existing plaintext auth values fail with `AgentSecretInvalidEnvelope`; there is no automatic migration or plaintext fallback. Explicitly delete or replace such entries after obtaining fresh credentials.
 
 ### 4. Wire the mobile runtime status
 
@@ -164,7 +168,7 @@ Encrypted records remain decryptable only if the agent identity migrates first. 
 Identity migration runs independently of DWN store migration:
 
 - Portable DID material and BIP-39 recovery phrases round-trip through `derive_agent_keys_from_phrase` and `initialize_agent_identity`. Both Ed25519 signing keys and X25519 key-agreement keys survive.
-- `SqliteSecretStore` is the durable vault; the host never sees raw private keys outside the `PortableDid` JSON the user explicitly exports.
+- `SqliteSecretStore` is a raw backend. `IdentityVault` protects its key material, and `VaultBackedSecretStore` encrypts auth credentials before persistence. The legacy `initialize_agent_identity` storage path is separate and has not been migrated by the credential cutover.
 - Wallet recovery must prove that encrypted protocol records can be decrypted after restoring the seed/vault. The integration test `crates/dwn-rs-agent/tests/wallet_recovery.rs` exercises this exact flow.
 - Data migration must not introduce a plaintext fallback for records whose protocol requires encryption. The Rust handler enforces the encryption requirement on every `RecordsWrite`.
 

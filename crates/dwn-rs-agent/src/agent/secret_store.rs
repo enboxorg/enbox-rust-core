@@ -19,6 +19,23 @@ pub trait CredentialStore: Send + Sync {
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool>;
 }
 
+impl<T: CredentialStore + ?Sized> CredentialStore for Arc<T> {
+    fn put<'a>(
+        &'a self,
+        key: &'a str,
+        value: Vec<u8>,
+        expires_at: Option<String>,
+    ) -> AgentIdentityFuture<'a, ()> {
+        (**self).put(key, value, expires_at)
+    }
+    fn get<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, Option<Vec<u8>>> {
+        (**self).get(key)
+    }
+    fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool> {
+        (**self).delete(key)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Envelope {

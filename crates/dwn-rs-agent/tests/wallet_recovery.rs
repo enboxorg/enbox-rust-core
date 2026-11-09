@@ -102,7 +102,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
     );
     let registration = register_with_dwn_endpoints(
         &registration_client,
-        None::<&MemorySecretStore>,
+        None::<&dyn dwn_rs_agent::agent::CredentialStore>,
         TenantRegistrationRequest {
             dwn_endpoints: vec!["https://remote.example".to_string()],
             agent_did: restored.portable_did.uri.clone(),
@@ -165,7 +165,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
 struct RecoveredAgent {
     portable_did: dwn_rs_agent::agent::PortableDid,
     key_manager: MemoryKeyManager,
-    secret_store: MemorySecretStore,
+    secret_store: dwn_rs_agent::agent::VaultBackedSecretStore,
 }
 
 async fn recovered_agent(recovery_phrase: &str) -> RecoveredAgent {
@@ -184,6 +184,17 @@ async fn recovered_agent(recovery_phrase: &str) -> RecoveredAgent {
         })
         .await
         .unwrap();
+    let raw_store = Arc::new(secret_store);
+    let vault = Arc::new(dwn_rs_agent::agent::IdentityVault::with_work_factor(
+        raw_store.clone(),
+        Arc::new(DeterministicDidJwkProvider::default()),
+        1,
+    ));
+    vault
+        .initialize("test-password", Some(recovery_phrase), vec![])
+        .await
+        .unwrap();
+    let secret_store = dwn_rs_agent::agent::VaultBackedSecretStore::new(vault, raw_store);
     RecoveredAgent {
         portable_did: initialization.portable_did,
         key_manager,

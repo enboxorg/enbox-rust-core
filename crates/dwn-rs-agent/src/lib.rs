@@ -25,7 +25,7 @@
 //!   `agent_secrets` table schema stays owned by the `dwn-rs-stores`
 //!   migration.
 //! - Host applications inject storage and network capability through the
-//!   traits in [`agent`] (`SecretStore`, `AgentKeyManager`,
+//!   traits in [`agent`] (`SecretStore`, `CredentialStore`, `AgentKeyManager`,
 //!   `PortableDidStore`, `DidProvider`) and [`auth`] (`TenantRegistrationClient`,
 //!   `ProtocolEndpoint`). There is no composed runtime type.
 //!
@@ -47,6 +47,9 @@
 //! storage. The password vault ([`agent::IdentityVault`]) layers at-rest
 //! protection over it by persisting only password-wrapped and CEK-encrypted
 //! values, and commits each mutation through [`agent::SecretStore::apply`].
+//! Auth credential helpers take [`agent::CredentialStore`]; use
+//! [`agent::VaultBackedSecretStore`] with the same shared vault to encrypt
+//! credential values before they reach the raw backend.
 //!
 //! Runtime conventions for agent work:
 //!

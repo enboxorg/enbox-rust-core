@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use dwn_rs_agent::agent::{
     derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
-    DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, PortableDid,
+    DeterministicDidJwkProvider, DidDhtProvider, IdentityVault, MemoryKeyManager,
+    MemoryPortableDidStore, PortableDid, VaultBackedSecretStore,
 };
 use dwn_rs_agent::auth::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
@@ -137,6 +138,9 @@ type AgentService = AgentIdentityService<
 
 #[derive(uniffi::Object)]
 pub struct EnboxCore {
+    credential_vault: Arc<IdentityVault>,
+    credentials: Arc<VaultBackedSecretStore>,
+    credential_lifecycle: Mutex<()>,
     runtime: tokio::runtime::Runtime,
     state: Arc<Mutex<CoreState>>,
 }
@@ -369,22 +373,29 @@ impl EnboxCore {
     }
 
     pub fn lock(&self) {
+        let _lifecycle = self
+            .credential_lifecycle
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         if let Ok(mut state) = self.state.lock() {
             state.locked = true;
             state.last_unlock_reason = None;
         }
+        // The uninitialized case also has no CEK to retain.
+        let _ = self.runtime.block_on(self.credential_vault.lock());
     }
 
-    /// Mark the vault unlocked without recording a reason. Prefer
-    /// [`Self::unlock_with_reason`] from mobile hosts so audit logs can
-    /// distinguish user-initiated unlocks from background-task wakes.
+    /// Mark the runtime unlocked; this does not unlock encrypted credentials.
+    ///
+    /// Use [`Self::unlock_credential_vault`] with a password for credential access.
     pub fn unlock(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.locked = false;
         }
     }
 
-    /// Mark the vault unlocked and record `reason` on the runtime status.
+    /// Mark the runtime unlocked and record `reason`; encrypted credentials
+    /// remain locked until [`Self::unlock_credential_vault`] succeeds.
     ///
     /// Mirrors `MobileBiometricVault::unlock(reason)` in `dwn-rs-core`:
     /// Rust does not perform the biometric check itself, so the host
@@ -396,6 +407,44 @@ impl EnboxCore {
         })?;
         state.locked = false;
         state.last_unlock_reason = Some(reason);
+        Ok(())
+    }
+
+    /// Initialize the credential vault, returning its recovery phrase.
+    ///
+    /// Supply the existing agent recovery phrase to retain its derived CEK.
+    /// This does not migrate the separate legacy agent identity storage.
+    pub fn initialize_credential_vault(
+        &self,
+        password: String,
+        recovery_phrase: Option<String>,
+    ) -> Result<String, EnboxError> {
+        let _lifecycle = self
+            .credential_lifecycle
+            .lock()
+            .map_err(|_| EnboxError::Store {
+                detail: "credential lifecycle lock poisoned".into(),
+            })?;
+        self.require_secret_store()?;
+        let result = self.runtime.block_on(self.credential_vault.initialize(
+            &password,
+            recovery_phrase.as_deref(),
+            vec![],
+        ))?;
+        Ok(result.recovery_phrase)
+    }
+
+    /// Unlock encrypted credentials with the vault password and enable runtime access.
+    pub fn unlock_credential_vault(&self, password: String) -> Result<(), EnboxError> {
+        let _lifecycle = self
+            .credential_lifecycle
+            .lock()
+            .map_err(|_| EnboxError::Store {
+                detail: "credential lifecycle lock poisoned".into(),
+            })?;
+        self.runtime
+            .block_on(self.credential_vault.unlock(&password))?;
+        self.unlock();
         Ok(())
     }
 
@@ -860,7 +909,7 @@ impl EnboxCore {
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
-        let secret_store = self.require_secret_store()?;
+        let secret_store = self.require_credential_store()?;
         let client = HttpTenantRegistrationClient::new()?;
         let secret_store_ref = if request.persist_tokens {
             Some(&secret_store)
@@ -1049,7 +1098,7 @@ impl EnboxCore {
     /// Persist the agent's delegate decryption keys to the secret store.
     ///
     /// Input is a JSON array of `DelegateDecryptionKey`. The keys are
-    /// stored under the fixed `agent/delegate-decryption-keys` slot so
+    /// encrypted under `enbox:auth:delegateDecryptionKeys` so
     /// subsequent `load_delegate_decryption_keys` calls return the same
     /// set. Replaces any previously stored keys.
     pub fn save_delegate_decryption_keys(&self, keys_json: String) -> Result<(), EnboxError> {
@@ -1057,7 +1106,7 @@ impl EnboxCore {
             serde_json::from_str(&keys_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
-        let secret_store = self.require_secret_store()?;
+        let secret_store = self.require_credential_store()?;
         self.runtime
             .block_on(save_delegate_decryption_keys(&secret_store, &keys))?;
         Ok(())
@@ -1069,7 +1118,7 @@ impl EnboxCore {
     /// vector is returned when nothing has been stored yet, matching the
     /// `dwn-rs-core::connect` helper contract.
     pub fn load_delegate_decryption_keys(&self) -> Result<String, EnboxError> {
-        let secret_store = self.require_secret_store()?;
+        let secret_store = self.require_credential_store()?;
         let keys = self
             .runtime
             .block_on(load_delegate_decryption_keys(&secret_store))?;
@@ -1081,14 +1130,14 @@ impl EnboxCore {
     /// Persist the agent's delegate context keys to the secret store.
     ///
     /// Input is a JSON array of `DelegateContextKey`. Stored under the
-    /// fixed `agent/delegate-context-keys` slot. Replaces any previously
+    /// encrypted `enbox:auth:delegateContextKeys` slot. Replaces any previously
     /// stored keys.
     pub fn save_delegate_context_keys(&self, keys_json: String) -> Result<(), EnboxError> {
         let keys: Vec<DelegateContextKey> =
             serde_json::from_str(&keys_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
-        let secret_store = self.require_secret_store()?;
+        let secret_store = self.require_credential_store()?;
         self.runtime
             .block_on(save_delegate_context_keys(&secret_store, &keys))?;
         Ok(())
@@ -1099,7 +1148,7 @@ impl EnboxCore {
     /// Returns a JSON-serialized `Vec<DelegateContextKey>`; an empty
     /// vector is returned when nothing has been stored yet.
     pub fn load_delegate_context_keys(&self) -> Result<String, EnboxError> {
-        let secret_store = self.require_secret_store()?;
+        let secret_store = self.require_credential_store()?;
         let keys = self
             .runtime
             .block_on(load_delegate_context_keys(&secret_store))?;
@@ -1294,6 +1343,16 @@ impl EnboxCore {
         Ok(key_manager)
     }
 
+    fn require_credential_store(&self) -> Result<Arc<VaultBackedSecretStore>, EnboxError> {
+        let state = self.state.lock().map_err(|_| EnboxError::Store {
+            detail: "core state lock poisoned".into(),
+        })?;
+        if state.locked {
+            return Err(EnboxError::Locked);
+        }
+        Ok(self.credentials.clone())
+    }
+
     fn require_secret_store(&self) -> Result<SqliteSecretStore, EnboxError> {
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
@@ -1326,7 +1385,19 @@ impl EnboxCore {
                 detail: err.to_string(),
             })?;
         let secret_store = SqliteSecretStore::new(node.store());
+        let raw_store = Arc::new(secret_store.clone());
+        let credential_vault = Arc::new(IdentityVault::new(
+            raw_store.clone(),
+            Arc::new(DidDhtProvider::default()),
+        ));
+        let credentials = Arc::new(VaultBackedSecretStore::new(
+            credential_vault.clone(),
+            raw_store,
+        ));
         Ok(Arc::new(Self {
+            credential_vault,
+            credentials,
+            credential_lifecycle: Mutex::new(()),
             runtime,
             state: Arc::new(Mutex::new(CoreState {
                 locked: false,
@@ -2105,6 +2176,148 @@ mod tests {
         assert_eq!(derived["signingPrivateJwk"]["crv"], "Ed25519");
     }
 
+    fn initialize_test_credential_vault(core: &EnboxCore) {
+        use dwn_rs_agent::agent::{
+            SecretStore, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
+        };
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
+        let raw = core.require_secret_store().unwrap();
+        core.runtime.block_on(async {
+            for (key, value) in [
+                (VAULT_CEK_JWE_KEY, "contentEncryptionKey"),
+                (VAULT_DID_JWE_KEY, "did"),
+                (VAULT_STATUS_KEY, "vaultStatus"),
+            ] {
+                raw.put(
+                    key,
+                    fixture["vector"][value]
+                        .as_str()
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
+                )
+                .await
+                .unwrap();
+            }
+        });
+        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
+            .unwrap();
+    }
+
+    #[test]
+    fn credential_vault_initialization_and_password_gate() {
+        let core = EnboxCore::open_in_memory().unwrap();
+        let error = core.load_delegate_context_keys().unwrap_err();
+        assert!(matches!(error, EnboxError::Agent { code, .. } if code == "AgentVaultLocked"));
+        let phrase = core
+            .initialize_credential_vault("password".into(), Some(TEST_RECOVERY_PHRASE.into()))
+            .unwrap();
+        assert_eq!(phrase, TEST_RECOVERY_PHRASE);
+        core.save_delegate_context_keys("[]".into()).unwrap();
+        assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
+        core.lock();
+        assert!(core.runtime.block_on(core.credential_vault.is_locked()));
+        core.unlock();
+        assert!(
+            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
+        );
+        core.unlock_with_reason("biometric".into()).unwrap();
+        assert!(
+            matches!(core.save_delegate_context_keys("[]".into()).unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
+        );
+        core.unlock_credential_vault("password".into()).unwrap();
+        assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
+        assert!(
+            matches!(core.unlock_credential_vault("wrong".into()).unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultInvalidPassword")
+        );
+        assert!(
+            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
+        );
+    }
+
+    #[test]
+    fn host_credentials_persist_as_envelopes_and_legacy_errors_propagate() {
+        use dwn_rs_agent::agent::SecretStore;
+        use dwn_rs_agent::auth::{connect::*, setup::*};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("credentials.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        let password = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../fixtures/interop/vault-jwe.json"
+        ))
+        .unwrap()["inputs"]["password"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let tokens = std::collections::BTreeMap::from([(
+            "https://example.com".into(),
+            RegistrationTokenData {
+                registration_token: "private-token".into(),
+                refresh_token: Some("private-refresh".into()),
+                expires_at: None,
+                token_url: "https://example.com/token".into(),
+                refresh_url: None,
+            },
+        )]);
+        {
+            let core = EnboxCore::open(path.clone()).unwrap();
+            initialize_test_credential_vault(&core);
+            core.save_delegate_decryption_keys("[]".into()).unwrap();
+            core.save_delegate_context_keys("[]".into()).unwrap();
+            core.runtime
+                .block_on(save_registration_tokens(&core.credentials, &tokens))
+                .unwrap();
+            core.register_tenant(serde_json::json!({"dwnEndpoints":[], "agentDid":"did:example:agent", "connectedDid":"did:example:owner", "persistTokens":true}).to_string()).unwrap();
+            let raw = core.require_secret_store().unwrap();
+            for key in [
+                REGISTRATION_TOKENS_KEY,
+                DELEGATE_DECRYPTION_KEYS_KEY,
+                DELEGATE_CONTEXT_KEYS_KEY,
+            ] {
+                let bytes = core.runtime.block_on(raw.get(key)).unwrap().unwrap();
+                let envelope: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert!(envelope["jwe"].is_string());
+                assert!(!String::from_utf8(bytes).unwrap().contains("private-token"));
+            }
+            core.lock();
+        }
+        let core = EnboxCore::open(path).unwrap();
+        assert!(
+            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
+        );
+        core.unlock_credential_vault(password).unwrap();
+        assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
+        assert_eq!(core.load_delegate_decryption_keys().unwrap(), "[]");
+        assert_eq!(
+            core.runtime
+                .block_on(load_registration_tokens(&core.credentials))
+                .unwrap(),
+            tokens
+        );
+        let raw = core.require_secret_store().unwrap();
+        for key in [
+            REGISTRATION_TOKENS_KEY,
+            DELEGATE_DECRYPTION_KEYS_KEY,
+            DELEGATE_CONTEXT_KEYS_KEY,
+        ] {
+            core.runtime.block_on(raw.put(key, b"[]".to_vec())).unwrap();
+        }
+        assert!(
+            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentSecretInvalidEnvelope")
+        );
+        assert!(
+            matches!(core.load_delegate_decryption_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentSecretInvalidEnvelope")
+        );
+        let error = core.register_tenant(serde_json::json!({"dwnEndpoints":[], "agentDid":"did:example:agent", "connectedDid":"did:example:owner", "persistTokens":true}).to_string()).unwrap_err();
+        assert!(
+            matches!(error, EnboxError::Agent { code, .. } if code == "AgentSecretInvalidEnvelope")
+        );
+    }
+
     fn initialized_core_with_did() -> (Arc<EnboxCore>, serde_json::Value) {
         let core = EnboxCore::open_in_memory().expect("core opens");
         let init_raw = core
@@ -2417,6 +2630,7 @@ mod tests {
     #[test]
     fn delegate_decryption_keys_roundtrip_through_secret_store() {
         let (core, portable_did) = initialized_core_with_did();
+        initialize_test_credential_vault(&core);
         let derived_raw = core
             .derive_delegate_keys(
                 serde_json::json!({
@@ -2450,6 +2664,7 @@ mod tests {
     #[test]
     fn delegate_context_keys_roundtrip_through_secret_store() {
         let (core, portable_did) = initialized_core_with_did();
+        initialize_test_credential_vault(&core);
         let derived_raw = core
             .derive_context_key(
                 serde_json::json!({
@@ -2475,6 +2690,7 @@ mod tests {
     #[test]
     fn load_delegate_decryption_keys_returns_empty_array_when_unset() {
         let (core, _) = initialized_core_with_did();
+        initialize_test_credential_vault(&core);
         let raw = core
             .load_delegate_decryption_keys()
             .expect("load when unset");
@@ -2485,6 +2701,7 @@ mod tests {
     #[test]
     fn load_delegate_context_keys_returns_empty_array_when_unset() {
         let (core, _) = initialized_core_with_did();
+        initialize_test_credential_vault(&core);
         let raw = core.load_delegate_context_keys().expect("load when unset");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("load json");
         assert!(parsed.as_array().is_some_and(Vec::is_empty));
