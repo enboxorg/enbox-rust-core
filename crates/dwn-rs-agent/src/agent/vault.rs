@@ -201,11 +201,11 @@ impl IdentityVault {
     /// Unlock with the password, replacing any in-memory CEK. Never writes.
     pub async fn unlock(&self, password: &str) -> AgentIdentityResult<()> {
         let mut state = self.state.lock().await;
+        state.cek = None;
         let (status, _) = self.read_status_locking_on_error(&mut state).await?;
         if !status.initialized {
             return Err(uninitialized());
         }
-        state.cek = None;
         let cek_entry = self.read_secret_string(VAULT_CEK_JWE_KEY).await?;
         let (cek, _) =
             match unwrap_cek_blocking(cek_entry, Zeroizing::new(password.as_bytes().to_vec()))
@@ -222,11 +222,11 @@ impl IdentityVault {
     /// Lock an initialized vault, clearing the in-memory CEK. Idempotent.
     pub async fn lock(&self) -> AgentIdentityResult<()> {
         let mut state = self.state.lock().await;
+        state.cek = None;
         let (status, _) = self.read_status_locking_on_error(&mut state).await?;
         if !status.initialized {
             return Err(uninitialized());
         }
-        state.cek = None;
         Ok(())
     }
 

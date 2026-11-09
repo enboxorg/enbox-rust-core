@@ -3,7 +3,10 @@
 //! Raw persistence for the vault's wrapped material and encrypted credential
 //! envelopes in the SQLite database shared with the native node. Use
 //! [`crate::agent::VaultBackedSecretStore`] for classified credential values;
-//! this backend performs no encryption itself.
+//! this backend performs no encryption itself. The legacy identity initializer
+//! still writes plaintext private material here, including a raw CEK that can
+//! decrypt envelopes derived from the same recovery phrase. Envelopes alone
+//! provide no database-reader confidentiality while that material remains.
 
 use crate::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore, SecretWrite};
 use dwn_rs_core::errors::StoreError;
