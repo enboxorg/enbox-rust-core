@@ -48,6 +48,8 @@ struct Envelope {
 ///
 /// Share this instance through `Arc` to serialize reads, replacements and expiry
 /// purges. Independent instances over the same backend are not coordinated.
+/// Keys in the reserved `agent:vault:` namespace are rejected to protect the
+/// vault material when the credential and vault backends share storage.
 pub struct VaultBackedSecretStore {
     vault: Arc<IdentityVault>,
     store: Arc<dyn SecretStore>,
@@ -99,6 +101,7 @@ impl CredentialStore for VaultBackedSecretStore {
         Box::pin(async move {
             let _operation = self.operations.lock().await;
             self.require_unlocked().await?;
+            validate_key(key)?;
             if let Some(expiry) = &expires_at {
                 parse_expiry(expiry)?;
             }
@@ -115,6 +118,7 @@ impl CredentialStore for VaultBackedSecretStore {
         Box::pin(async move {
             let _operation = self.operations.lock().await;
             self.require_unlocked().await?;
+            validate_key(key)?;
             let Some(raw) = self.store.get(key).await? else {
                 return Ok(None);
             };
@@ -139,9 +143,17 @@ impl CredentialStore for VaultBackedSecretStore {
     fn delete<'a>(&'a self, key: &'a str) -> AgentIdentityFuture<'a, bool> {
         Box::pin(async move {
             let _operation = self.operations.lock().await;
+            validate_key(key)?;
             self.store.delete(key).await
         })
     }
+}
+
+fn validate_key(key: &str) -> AgentIdentityResult<()> {
+    if key.starts_with("agent:vault:") {
+        return Err(invalid_envelope());
+    }
+    Ok(())
 }
 
 fn parse_expiry(value: &str) -> AgentIdentityResult<DateTime<Utc>> {

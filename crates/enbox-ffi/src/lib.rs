@@ -381,7 +381,7 @@ impl EnboxCore {
             state.locked = true;
             state.last_unlock_reason = None;
         }
-        // The uninitialized case also has no CEK to retain.
+        // Key clearing precedes status validation, including on errors.
         let _ = self.runtime.block_on(self.credential_vault.lock());
     }
 
@@ -924,6 +924,18 @@ impl EnboxCore {
         serde_json::to_string(&result).map_err(|err| EnboxError::Json {
             detail: err.to_string(),
         })
+    }
+
+    /// Remove persisted registration tokens, including legacy plaintext values.
+    /// Works while locked; returns whether an entry was removed.
+    pub fn delete_registration_tokens(&self) -> Result<bool, EnboxError> {
+        use dwn_rs_agent::agent::CredentialStore;
+        self.runtime
+            .block_on(
+                self.credentials
+                    .delete(dwn_rs_agent::auth::setup::REGISTRATION_TOKENS_KEY),
+            )
+            .map_err(Into::into)
     }
 
     /// Push a protocol to a remote `@enbox/dwn-server` HTTP endpoint.
@@ -2263,11 +2275,22 @@ mod tests {
                 refresh_url: None,
             },
         )]);
+        let decryption;
+        let context;
         {
             let core = EnboxCore::open(path.clone()).unwrap();
             initialize_test_credential_vault(&core);
-            core.save_delegate_decryption_keys("[]".into()).unwrap();
-            core.save_delegate_context_keys("[]".into()).unwrap();
+            let did = core
+                .runtime
+                .block_on(core.credential_vault.get_did())
+                .unwrap();
+            let derived = serde_json::json!({"rootKeyId":"root", "derivationScheme":"protocolPath", "derivedPrivateKey":did.private_keys.last().unwrap()});
+            decryption = serde_json::json!([{"protocol":"https://example.com/protocol", "scope":{"kind":"protocol"}, "derivedPrivateKey":derived}]);
+            context = serde_json::json!([{"protocol":"https://example.com/protocol", "contextId":"context", "derivedPrivateKey":derived}]);
+            core.save_delegate_decryption_keys(decryption.to_string())
+                .unwrap();
+            core.save_delegate_context_keys(context.to_string())
+                .unwrap();
             core.runtime
                 .block_on(save_registration_tokens(&core.credentials, &tokens))
                 .unwrap();
@@ -2281,6 +2304,14 @@ mod tests {
                 let bytes = core.runtime.block_on(raw.get(key)).unwrap().unwrap();
                 let envelope: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 assert!(envelope["jwe"].is_string());
+                let plaintext = core
+                    .runtime
+                    .block_on(
+                        core.credential_vault
+                            .decrypt_data(envelope["jwe"].as_str().unwrap()),
+                    )
+                    .unwrap();
+                assert_ne!(bytes, plaintext);
                 assert!(!String::from_utf8(bytes).unwrap().contains("private-token"));
             }
             core.lock();
@@ -2290,8 +2321,18 @@ mod tests {
             matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
         );
         core.unlock_credential_vault(password).unwrap();
-        assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
-        assert_eq!(core.load_delegate_decryption_keys().unwrap(), "[]");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&core.load_delegate_context_keys().unwrap())
+                .unwrap(),
+            context
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &core.load_delegate_decryption_keys().unwrap()
+            )
+            .unwrap(),
+            decryption
+        );
         assert_eq!(
             core.runtime
                 .block_on(load_registration_tokens(&core.credentials))
@@ -2316,6 +2357,66 @@ mod tests {
         assert!(
             matches!(error, EnboxError::Agent { code, .. } if code == "AgentSecretInvalidEnvelope")
         );
+    }
+
+    #[test]
+    fn host_can_delete_legacy_registration_tokens_while_locked() {
+        use dwn_rs_agent::agent::SecretStore;
+        use dwn_rs_agent::auth::setup::REGISTRATION_TOKENS_KEY;
+        let core = EnboxCore::open_in_memory().unwrap();
+        initialize_test_credential_vault(&core);
+        let raw = core.require_secret_store().unwrap();
+        core.runtime
+            .block_on(raw.put(REGISTRATION_TOKENS_KEY, br#"{"legacy":"token"}"#.to_vec()))
+            .unwrap();
+        core.lock();
+        assert!(core.delete_registration_tokens().unwrap());
+        assert!(!core.delete_registration_tokens().unwrap());
+        assert!(core
+            .runtime
+            .block_on(raw.get(REGISTRATION_TOKENS_KEY))
+            .unwrap()
+            .is_none());
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
+        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
+            .unwrap();
+        core.register_tenant(serde_json::json!({"dwnEndpoints":[], "agentDid":"did:example:agent", "connectedDid":"did:example:owner", "persistTokens":true}).to_string()).unwrap();
+        let bytes = core
+            .runtime
+            .block_on(raw.get(REGISTRATION_TOKENS_KEY))
+            .unwrap()
+            .unwrap();
+        assert!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["jwe"].is_string());
+        core.lock();
+        assert!(core.delete_registration_tokens().unwrap());
+    }
+
+    #[test]
+    fn host_lock_and_password_unlock_serialize() {
+        let core = EnboxCore::open_in_memory().unwrap();
+        initialize_test_credential_vault(&core);
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
+        let password = fixture["inputs"]["password"].as_str().unwrap().to_string();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                core.lock();
+            });
+            scope.spawn(|| {
+                barrier.wait();
+                core.unlock_credential_vault(password).unwrap();
+            });
+        });
+        assert_eq!(
+            core.status().locked,
+            core.runtime.block_on(core.credential_vault.is_locked())
+        );
+        core.lock();
+        core.unlock();
+        assert!(core.runtime.block_on(core.credential_vault.is_locked()));
     }
 
     fn initialized_core_with_did() -> (Arc<EnboxCore>, serde_json::Value) {

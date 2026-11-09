@@ -1529,3 +1529,33 @@ mod sqlite {
         assert!(fresh.get_did().await.unwrap().uri.starts_with("did:dht:"));
     }
 }
+
+#[tokio::test]
+async fn missing_or_uninitialized_status_cannot_retain_a_loaded_key() {
+    for unlock_attempt in [false, true] {
+        for status in [None, Some(VaultStatus::uninitialized().encode().unwrap())] {
+            let (vault, store) = memory_vault();
+            vault
+                .initialize(PASSWORD, Some(PHRASE), vec![])
+                .await
+                .unwrap();
+            match status {
+                Some(bytes) => store.put(VAULT_STATUS_KEY, bytes).await.unwrap(),
+                None => {
+                    store.delete(VAULT_STATUS_KEY).await.unwrap();
+                }
+            }
+            let result = if unlock_attempt {
+                vault.unlock(PASSWORD).await
+            } else {
+                vault.lock().await
+            };
+            assert_eq!(result.unwrap_err().code(), "AgentVaultUninitialized");
+            assert!(vault.is_locked().await);
+            assert_eq!(
+                vault.encrypt_data(b"secret").await.unwrap_err().code(),
+                "AgentVaultLocked"
+            );
+        }
+    }
+}

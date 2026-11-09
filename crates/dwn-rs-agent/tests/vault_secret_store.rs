@@ -676,3 +676,109 @@ async fn auth_helpers_preserve_backend_error_identity() {
         "AgentVaultError"
     );
 }
+
+#[tokio::test]
+async fn credential_keys_cannot_modify_vault_entries() {
+    let (raw, vault, secrets, _) = setup().await;
+    for key in [
+        VAULT_CEK_JWE_KEY,
+        VAULT_DID_JWE_KEY,
+        VAULT_STATUS_KEY,
+        "agent:vault:unknown",
+    ] {
+        let before = raw.get(key).await.unwrap();
+        assert_eq!(
+            secrets.get(key).await.unwrap_err().code(),
+            "AgentSecretInvalidEnvelope"
+        );
+        assert_eq!(
+            secrets.put(key, vec![1], None).await.unwrap_err().code(),
+            "AgentSecretInvalidEnvelope"
+        );
+        assert_eq!(
+            secrets.delete(key).await.unwrap_err().code(),
+            "AgentSecretInvalidEnvelope"
+        );
+        vault.lock().await.unwrap();
+        assert_eq!(
+            secrets.get(key).await.unwrap_err().code(),
+            "AgentVaultLocked"
+        );
+        assert_eq!(
+            secrets.put(key, vec![1], None).await.unwrap_err().code(),
+            "AgentVaultLocked"
+        );
+        assert_eq!(
+            secrets.delete(key).await.unwrap_err().code(),
+            "AgentSecretInvalidEnvelope"
+        );
+        assert_eq!(raw.get(key).await.unwrap(), before);
+        vault.unlock("password").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn auth_key_families_and_locked_expiry_use_the_same_envelope_contract() {
+    use dwn_rs_agent::auth::connect::{
+        DELEGATE_MULTI_PARTY_PROTOCOLS_KEY, SESSION_REVOCATIONS_KEY,
+    };
+    let (raw, vault, secrets, _) = setup().await;
+    for key in [DELEGATE_MULTI_PARTY_PROTOCOLS_KEY, SESSION_REVOCATIONS_KEY] {
+        secrets.put(key, b"secret".to_vec(), None).await.unwrap();
+        assert!(
+            serde_json::from_slice::<Value>(&raw.get(key).await.unwrap().unwrap()).unwrap()["jwe"]
+                .is_string()
+        );
+        assert_eq!(secrets.get(key).await.unwrap(), Some(b"secret".to_vec()));
+    }
+    for bytes in [
+        br#"{"jwe":"broken","expiresAt":"1970-01-01T00:00:00Z"}"#.to_vec(),
+        b"malformed".to_vec(),
+    ] {
+        raw.put(KEY, bytes.clone()).await.unwrap();
+        vault.lock().await.unwrap();
+        assert_eq!(
+            secrets.put(KEY, vec![9], None).await.unwrap_err().code(),
+            "AgentVaultLocked"
+        );
+        assert_eq!(
+            secrets.get(KEY).await.unwrap_err().code(),
+            "AgentVaultLocked"
+        );
+        assert_eq!(raw.get(KEY).await.unwrap(), Some(bytes));
+        assert!(secrets.delete(KEY).await.unwrap());
+        vault.unlock("password").await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn tampered_envelopes_preserve_codec_errors_and_stored_bytes() {
+    use base64::{prelude::BASE64_URL_SAFE_NO_PAD as base64url, Engine as _};
+    let (raw, vault, secrets, _) = setup().await;
+    let jwe = vault.encrypt_data(b"secret").await.unwrap();
+    let parts: Vec<_> = jwe.split('.').collect();
+    let mut bad_tag = parts[4].as_bytes().to_vec();
+    bad_tag[0] = if bad_tag[0] == b'A' { b'B' } else { b'A' };
+    let mut bad_parts = parts.clone();
+    let tag = String::from_utf8(bad_tag).unwrap();
+    bad_parts[4] = &tag;
+    let mut variants = vec![bad_parts.join("."), "invalid.segment".into()];
+    for header in [
+        json!({"alg":"wrong","enc":"A256GCM"}),
+        json!({"alg":"dir","enc":"wrong"}),
+    ] {
+        let header = base64url.encode(serde_json::to_vec(&header).unwrap());
+        let mut bad_parts = parts.clone();
+        bad_parts[0] = &header;
+        variants.push(bad_parts.join("."));
+    }
+    for jwe in variants {
+        let bytes = serde_json::to_vec(&json!({"jwe":jwe})).unwrap();
+        raw.put(KEY, bytes.clone()).await.unwrap();
+        assert_eq!(
+            secrets.get(KEY).await.unwrap_err().code(),
+            "AgentIdentityVaultError"
+        );
+        assert_eq!(raw.get(KEY).await.unwrap(), Some(bytes));
+    }
+}
