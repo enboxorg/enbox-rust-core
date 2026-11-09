@@ -9,7 +9,7 @@ use ulid::Ulid;
 
 use crate::agent::{
     key_agreement_root_key_id, now_utc, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
-    DidProvider, PortableDid, SecretStore,
+    CredentialStore, DidProvider, PortableDid,
 };
 use dwn_rs_core::interfaces::messages::protocols::Definition;
 use dwn_rs_core::permissions::{PermissionScope, RecordsMethod, RecordsScope};
@@ -390,7 +390,7 @@ pub async fn save_delegate_decryption_keys<S>(
     keys: &[DelegateDecryptionKey],
 ) -> AgentIdentityResult<()>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
 {
     save_json_secret(secret_store, DELEGATE_DECRYPTION_KEYS_KEY, keys).await
 }
@@ -400,7 +400,7 @@ pub async fn load_delegate_decryption_keys<S>(
     secret_store: &S,
 ) -> AgentIdentityResult<Vec<DelegateDecryptionKey>>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
 {
     load_json_secret(secret_store, DELEGATE_DECRYPTION_KEYS_KEY).await
 }
@@ -411,7 +411,7 @@ pub async fn save_delegate_context_keys<S>(
     keys: &[DelegateContextKey],
 ) -> AgentIdentityResult<()>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
 {
     save_json_secret(secret_store, DELEGATE_CONTEXT_KEYS_KEY, keys).await
 }
@@ -421,14 +421,14 @@ pub async fn load_delegate_context_keys<S>(
     secret_store: &S,
 ) -> AgentIdentityResult<Vec<DelegateContextKey>>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
 {
     load_json_secret(secret_store, DELEGATE_CONTEXT_KEYS_KEY).await
 }
 
 async fn save_json_secret<S, T>(secret_store: &S, key: &str, value: &T) -> AgentIdentityResult<()>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
     T: Serialize + Sync + ?Sized,
 {
     secret_store
@@ -436,13 +436,14 @@ where
             key,
             serde_json::to_vec(value)
                 .map_err(|err| AgentIdentityError::delegate_secret(err.to_string()))?,
+            None,
         )
         .await
 }
 
 async fn load_json_secret<S, T>(secret_store: &S, key: &str) -> AgentIdentityResult<T>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
     T: for<'de> Deserialize<'de> + Default,
 {
     let Some(bytes) = secret_store.get(key).await? else {

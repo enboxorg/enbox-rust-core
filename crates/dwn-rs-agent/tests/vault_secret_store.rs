@@ -459,3 +459,220 @@ async fn encrypted_write_can_finish_after_lock_and_delete_is_ordered() {
     assert!(delete.await.unwrap());
     assert_eq!(raw.get(KEY).await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn auth_helpers_use_envelopes_and_propagate_lock_and_legacy_errors() {
+    use dwn_rs_agent::auth::{connect::*, setup::*};
+    let (raw, vault, secrets, _) = setup().await;
+    let private_key = vault
+        .get_did()
+        .await
+        .unwrap()
+        .private_keys
+        .last()
+        .unwrap()
+        .clone();
+    let derived = DerivedPrivateJwk {
+        root_key_id: "test-key".into(),
+        derivation_scheme: "protocolPath".into(),
+        derivation_path: vec![],
+        derived_private_key: private_key,
+    };
+    let decryption = vec![DelegateDecryptionKey {
+        protocol: "https://example.com/protocol".into(),
+        scope: DelegateDecryptionScope::Protocol,
+        derived_private_key: derived.clone(),
+    }];
+    let context = vec![DelegateContextKey {
+        protocol: "https://example.com/protocol".into(),
+        context_id: "context".into(),
+        derived_private_key: derived,
+    }];
+    let tokens = std::collections::BTreeMap::from([(
+        "https://example.com".into(),
+        RegistrationTokenData {
+            registration_token: "bearer-secret".into(),
+            refresh_token: Some("refresh-secret".into()),
+            expires_at: None,
+            token_url: "https://example.com/token".into(),
+            refresh_url: None,
+        },
+    )]);
+    save_registration_tokens(&secrets, &tokens).await.unwrap();
+    save_delegate_decryption_keys(&secrets, &decryption)
+        .await
+        .unwrap();
+    save_delegate_context_keys(&secrets, &context)
+        .await
+        .unwrap();
+    assert_eq!(load_registration_tokens(&secrets).await.unwrap(), tokens);
+    assert_eq!(
+        load_delegate_decryption_keys(&secrets).await.unwrap(),
+        decryption
+    );
+    assert_eq!(load_delegate_context_keys(&secrets).await.unwrap(), context);
+    for (key, expected) in [
+        (
+            REGISTRATION_TOKENS_KEY,
+            serde_json::to_value(&tokens).unwrap(),
+        ),
+        (
+            DELEGATE_DECRYPTION_KEYS_KEY,
+            serde_json::to_value(&decryption).unwrap(),
+        ),
+        (
+            DELEGATE_CONTEXT_KEYS_KEY,
+            serde_json::to_value(&context).unwrap(),
+        ),
+    ] {
+        let bytes = raw.get(key).await.unwrap().unwrap();
+        let envelope: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(envelope.as_object().unwrap().len(), 1);
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &vault
+                    .decrypt_data(envelope["jwe"].as_str().unwrap())
+                    .await
+                    .unwrap()
+            )
+            .unwrap(),
+            expected
+        );
+        assert_ne!(bytes, serde_json::to_vec(&expected).unwrap());
+    }
+    vault.lock().await.unwrap();
+    assert_eq!(
+        load_registration_tokens(&secrets).await.unwrap_err().code(),
+        "AgentVaultLocked"
+    );
+    assert_eq!(
+        load_delegate_decryption_keys(&secrets)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultLocked"
+    );
+    assert_eq!(
+        load_delegate_context_keys(&secrets)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultLocked"
+    );
+    assert_eq!(
+        save_registration_tokens(&secrets, &tokens)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultLocked"
+    );
+    assert_eq!(
+        save_delegate_decryption_keys(&secrets, &decryption)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultLocked"
+    );
+    assert_eq!(
+        save_delegate_context_keys(&secrets, &context)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultLocked"
+    );
+    vault.unlock("password").await.unwrap();
+    for key in [
+        REGISTRATION_TOKENS_KEY,
+        DELEGATE_DECRYPTION_KEYS_KEY,
+        DELEGATE_CONTEXT_KEYS_KEY,
+    ] {
+        raw.put(key, b"[]".to_vec()).await.unwrap();
+    }
+    assert_eq!(
+        load_registration_tokens(&secrets).await.unwrap_err().code(),
+        "AgentSecretInvalidEnvelope"
+    );
+    assert_eq!(
+        load_delegate_decryption_keys(&secrets)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentSecretInvalidEnvelope"
+    );
+    assert_eq!(
+        load_delegate_context_keys(&secrets)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentSecretInvalidEnvelope"
+    );
+    // Domain JSON defaults remain distinct from invalid outer envelopes.
+    for key in [
+        REGISTRATION_TOKENS_KEY,
+        DELEGATE_DECRYPTION_KEYS_KEY,
+        DELEGATE_CONTEXT_KEYS_KEY,
+    ] {
+        secrets
+            .put(key, b"malformed domain JSON".to_vec(), None)
+            .await
+            .unwrap();
+    }
+    assert!(load_registration_tokens(&secrets).await.unwrap().is_empty());
+    assert!(load_delegate_decryption_keys(&secrets)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(load_delegate_context_keys(&secrets)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn auth_helpers_preserve_backend_error_identity() {
+    use dwn_rs_agent::auth::{connect::*, setup::*};
+    let (raw, vault, _, _) = setup().await;
+    let controlled = Arc::new(ControlledStore::new(raw));
+    let secrets = VaultBackedSecretStore::new(vault, controlled.clone());
+    controlled.fail.store(1, Ordering::SeqCst);
+    assert_eq!(
+        load_registration_tokens(&secrets).await.unwrap_err().code(),
+        "AgentVaultError"
+    );
+    assert_eq!(
+        load_delegate_decryption_keys(&secrets)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultError"
+    );
+    assert_eq!(
+        load_delegate_context_keys(&secrets)
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultError"
+    );
+    controlled.fail.store(3, Ordering::SeqCst);
+    assert_eq!(
+        save_registration_tokens(&secrets, &Default::default())
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultError"
+    );
+    assert_eq!(
+        save_delegate_decryption_keys(&secrets, &[])
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultError"
+    );
+    assert_eq!(
+        save_delegate_context_keys(&secrets, &[])
+            .await
+            .unwrap_err()
+            .code(),
+        "AgentVaultError"
+    );
+}

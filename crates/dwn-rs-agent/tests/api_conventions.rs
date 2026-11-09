@@ -180,7 +180,7 @@ async fn backend_failure_from_registration_client_surfaces_unchanged() {
     let client = FailingRegistrationClient;
     let error = register_with_dwn_endpoints(
         &client,
-        None::<&MemorySecretStore>,
+        None::<&dyn dwn_rs_agent::agent::CredentialStore>,
         TenantRegistrationRequest {
             dwn_endpoints: vec!["https://dwn.example".to_string()],
             agent_did: "did:example:agent".to_string(),
@@ -227,15 +227,27 @@ async fn arc_dyn_backends_match_concrete_backends() {
     let stored = service.stored_agent_did().await.unwrap().unwrap();
     assert_eq!(stored.uri, concrete.portable_did.uri);
 
+    let vault = Arc::new(dwn_rs_agent::agent::IdentityVault::with_work_factor(
+        secret_store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        1,
+    ));
+    vault
+        .initialize("test-password", Some(RECOVERY_PHRASE), vec![])
+        .await
+        .unwrap();
+    let credentials: Arc<dyn dwn_rs_agent::agent::CredentialStore> = Arc::new(
+        dwn_rs_agent::agent::VaultBackedSecretStore::new(vault, secret_store.clone()),
+    );
     let client: Arc<dyn TenantRegistrationClient> = Arc::new(EmptyRegistrationClient);
     let registration = register_with_dwn_endpoints(
         &client,
-        Some(&secret_store),
+        Some(&credentials),
         TenantRegistrationRequest {
             dwn_endpoints: vec!["https://dwn.example".to_string()],
             agent_did: dynamic.portable_did.uri.clone(),
             connected_did: dynamic.portable_did.uri.clone(),
-            persist_tokens: false,
+            persist_tokens: true,
             registration_tokens: BTreeMap::new(),
         },
     )

@@ -1,13 +1,9 @@
 //! SQLite-backed [`SecretStore`] for the agent vault.
 //!
-//! Persists agent vault secrets (portable DID JSON, vault content encryption
-//! key, vault unlock salt, and delegate decryption/context keys) in the same
-//! SQLite database used by the native node.
-//!
-//! **Not encryption at rest.** The host is still responsible for binding
-//! the underlying database file to a platform keychain / Secure Enclave /
-//! TPM. This impl provides durability across `open()` calls so a freshly
-//! restored agent can drive [`crate::agent::AgentIdentityService::stored_agent_did`].
+//! Raw persistence for the vault's wrapped material and encrypted credential
+//! envelopes in the SQLite database shared with the native node. Use
+//! [`crate::agent::VaultBackedSecretStore`] for classified credential values;
+//! this backend performs no encryption itself.
 
 use crate::agent::{AgentIdentityError, AgentIdentityFuture, SecretStore, SecretWrite};
 use dwn_rs_core::errors::StoreError;

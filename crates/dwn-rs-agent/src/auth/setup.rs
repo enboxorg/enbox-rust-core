@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::agent::{
     key_agreement_root_key_id, now_utc, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
-    PortableDid, SecretStore,
+    CredentialStore, PortableDid,
 };
 use dwn_rs_core::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
 use serde::{Deserialize, Serialize};
@@ -164,7 +164,7 @@ pub async fn load_registration_tokens<S>(
     secret_store: &S,
 ) -> AgentIdentityResult<BTreeMap<String, RegistrationTokenData>>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
 {
     let Some(bytes) = secret_store.get(REGISTRATION_TOKENS_KEY).await? else {
         return Ok(BTreeMap::new());
@@ -178,11 +178,11 @@ pub async fn save_registration_tokens<S>(
     tokens: &BTreeMap<String, RegistrationTokenData>,
 ) -> AgentIdentityResult<()>
 where
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
 {
     let bytes = serde_json::to_vec(tokens)
         .map_err(|err| AgentIdentityError::registration_token_store(err.to_string()))?;
-    secret_store.put(REGISTRATION_TOKENS_KEY, bytes).await
+    secret_store.put(REGISTRATION_TOKENS_KEY, bytes, None).await
 }
 
 /// Register the agent and connected DIDs against each endpoint, refreshing provider-auth tokens as needed.
@@ -193,7 +193,7 @@ pub async fn register_with_dwn_endpoints<C, S>(
 ) -> AgentIdentityResult<TenantRegistrationResult>
 where
     C: TenantRegistrationClient,
-    S: SecretStore,
+    S: CredentialStore + ?Sized,
 {
     let mut tokens = if request.persist_tokens {
         match secret_store {
@@ -629,7 +629,17 @@ mod tests {
             token_url: String::new(),
             refresh_url: None,
         });
-        let secret_store = MemorySecretStore::default();
+        let raw_store = Arc::new(MemorySecretStore::default());
+        let vault = Arc::new(crate::agent::IdentityVault::with_work_factor(
+            raw_store.clone(),
+            Arc::new(DeterministicDidJwkProvider::default()),
+            1,
+        ));
+        vault
+            .initialize("test-password", Some(crate::agent::RECOVERY_PHRASE), vec![])
+            .await
+            .unwrap();
+        let secret_store = crate::agent::VaultBackedSecretStore::new(vault, raw_store.clone());
         save_registration_tokens(
             &secret_store,
             &BTreeMap::from([(
@@ -680,6 +690,15 @@ mod tests {
                 ),
             ]
         );
+        use crate::agent::SecretStore;
+        let bytes = raw_store
+            .get(REGISTRATION_TOKENS_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        let envelope: JsonValue = serde_json::from_slice(&bytes).unwrap();
+        assert!(envelope["jwe"].is_string());
+        assert!(!String::from_utf8(bytes).unwrap().contains("fresh-token"));
         let saved = load_registration_tokens(&secret_store).await.unwrap();
         assert_eq!(
             saved["https://dwn.example"].registration_token,
