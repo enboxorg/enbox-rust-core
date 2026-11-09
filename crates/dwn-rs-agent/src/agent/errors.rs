@@ -22,6 +22,8 @@ pub const VAULT_UNLOCK_SALT_KEY: &str = "agent:vault:unlockSalt";
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AgentIdentityError {
+    #[error("AgentSecretInvalidEnvelope: {detail}")]
+    AgentSecretInvalidEnvelope { detail: String },
     #[error("AgentIdentityInvalidMnemonic: {detail}")]
     InvalidMnemonic { detail: String },
     #[error("AgentIdentityInvalidKeyMaterial: {detail}")]
@@ -82,6 +84,7 @@ impl AgentIdentityError {
         let code = code.into();
         let detail: String = detail.into();
         match code.as_str() {
+            "AgentSecretInvalidEnvelope" => Self::AgentSecretInvalidEnvelope { detail },
             "AgentIdentityInvalidMnemonic" => Self::InvalidMnemonic { detail },
             "AgentIdentityInvalidKeyMaterial" => Self::InvalidKeyMaterial { detail },
             "AgentIdentityDidError" => Self::Did { detail },
@@ -113,6 +116,7 @@ impl AgentIdentityError {
     /// Stable machine-readable code for this failure.
     pub fn code(&self) -> &str {
         match self {
+            Self::AgentSecretInvalidEnvelope { .. } => "AgentSecretInvalidEnvelope",
             Self::InvalidMnemonic { .. } => "AgentIdentityInvalidMnemonic",
             Self::InvalidKeyMaterial { .. } => "AgentIdentityInvalidKeyMaterial",
             Self::Did { .. } => "AgentIdentityDidError",
@@ -144,7 +148,8 @@ impl AgentIdentityError {
     /// Human-readable detail. Never contains key material, salts, or tokens.
     pub fn detail(&self) -> &str {
         match self {
-            Self::InvalidMnemonic { detail }
+            Self::AgentSecretInvalidEnvelope { detail }
+            | Self::InvalidMnemonic { detail }
             | Self::InvalidKeyMaterial { detail }
             | Self::Did { detail }
             | Self::KeyManager { detail }
