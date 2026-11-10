@@ -15,6 +15,9 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `poll_reconcile(request_json)` | Pull-only poll reconciliation (live-degraded HTTP fallback) |
 | `sync_status(query_json)` | Last sync outcome (in-progress flag, status, error, counters) |
 | `initialize_agent_identity(request_json)` | Create or recover an agent identity from a BIP-39 recovery phrase; persists `PortableDid` + vault keys |
+| `initialize_credential_vault(password, recovery_phrase)` | Initialize password-protected credential storage; returns its recovery phrase |
+| `unlock_credential_vault(password)` | Unlock encrypted credentials and enable runtime access |
+| `delete_registration_tokens()` | Delete the persisted token entry while locked or unlocked; returns whether it existed |
 | `current_agent_identity()` | Return the persisted `PortableDid` JSON, or `None` if none initialized |
 | `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
 | `install_protocol(tenant_did_json, definition_json)` | Install a protocol on the local DWN (signs a `ProtocolsConfigure`, injects encryption when required); idempotent |
@@ -27,13 +30,21 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `create_grant_revocation(request_json)` | Build a `GrantRevocation` for an existing grant; pure |
 | `derive_delegate_keys(request_json)` | Derive `DelegateDecryptionKey` batch for a connect request; key manager rehydrated from `ownerDid` |
 | `derive_context_key(request_json)` | Derive a context-scoped `DelegateContextKey`; key manager rehydrated from `ownerDid` |
-| `save_delegate_decryption_keys(keys_json)` | Persist `DelegateDecryptionKey[]` to the agent secret store |
-| `load_delegate_decryption_keys()` | Load persisted `DelegateDecryptionKey[]` (empty array when unset) |
-| `save_delegate_context_keys(keys_json)` | Persist `DelegateContextKey[]` to the agent secret store |
-| `load_delegate_context_keys()` | Load persisted `DelegateContextKey[]` (empty array when unset) |
-| `lock()` / `unlock()` | Block message/sync processing while vault is locked |
+| `save_delegate_decryption_keys(keys_json)` | Encrypt and persist `DelegateDecryptionKey[]`; requires an unlocked credential vault |
+| `load_delegate_decryption_keys()` | Decrypt `DelegateDecryptionKey[]`; requires an unlocked credential vault (empty array when unset) |
+| `save_delegate_context_keys(keys_json)` | Encrypt and persist `DelegateContextKey[]`; requires an unlocked credential vault |
+| `load_delegate_context_keys()` | Decrypt `DelegateContextKey[]`; requires an unlocked credential vault (empty array when unset) |
+| `lock()` / `unlock()` | Lock clears the credential CEK and gates runtime access; passwordless unlock changes only the runtime flag |
 
-Typed errors (`EnboxError`) cross the FFI boundary without panics.
+Typed errors (`EnboxError`) cross the FFI boundary. These methods are synchronous; Rust async callers must dispatch them to a blocking thread. Calls may wait for an in-flight vault lifecycle operation.
+
+## Credential vault release boundary
+
+This is an incremental credential cutover, not yet a database-reader confidentiality guarantee. [Legacy key cleanup (#327)](https://github.com/enboxorg/enbox-rust-core/issues/327) and [legacy writer retirement (#328)](https://github.com/enboxorg/enbox-rust-core/issues/328) are release prerequisites. `initialize_agent_identity` still persists a raw CEK and private DID material. Reusing its recovery phrase for the credential vault derives that same CEK, so the database alone can decrypt credentials in either initialization order while the raw key remains.
+
+Cleanup must cover already-initialized vaults as well as legacy-only stores. SQL deletion makes entries logically absent; it does not by itself erase recoverable bytes in database pages or WAL files, and cannot revoke old copies or previously learned keys. The cleanup/storage policy must address that before claiming confidentiality.
+
+Initialize credential storage once with `initialize_credential_vault(password, recovery_phrase)` and unlock it after reopen with `unlock_credential_vault(password)`. Persisted registration and delegate-key methods require that shared vault to be unlocked. Passwordless `unlock()` or `unlock_with_reason()` cannot decrypt credentials. If legacy registration bytes cause `AgentSecretInvalidEnvelope`, explicitly call `delete_registration_tokens()` (works while locked), unlock, and obtain fresh credentials; deletion is not secure erasure.
 
 ## Agent identity workflow
 
@@ -45,11 +56,11 @@ Typed errors (`EnboxError`) cross the FFI boundary without panics.
      "dwnEndpoints": ["https://dwn.example/"]
    })
    ```
-   Returns JSON `AgentIdentityInitialization` (PortableDid + vault CEK + unlock salt + recovery phrase). The host displays the recovery phrase **once**; the Rust core persists the `PortableDid` to the SQLite-backed `agent_secrets` table.
+   Returns JSON `AgentIdentityInitialization` (PortableDid + vault CEK + unlock salt + recovery phrase). The host displays the recovery phrase **once**; the legacy path persists the `PortableDid` with private keys, raw CEK and unlock salt to the SQLite-backed `agent_secrets` table. This path is subject to the release boundary above.
 3. On subsequent launches, `current_agent_identity()` returns the persisted `PortableDid` JSON (or `null` if missing).
 4. For recovery-screen validation before committing, call `derive_agent_keys_from_phrase(phrase)` — this is pure and does not persist anything.
 
-`PortableDid` and `AgentIdentityInitialization` shapes follow [`agent.rs`](../dwn-rs-agent/src/agent.rs). The secret store layer is `SqliteSecretStore` ([`dwn-rs-agent/src/secrets_store.rs`](../dwn-rs-agent/src/secrets_store.rs), feature `sqlite`), which shares the SQLite database used for DWN data.
+`PortableDid` and `AgentIdentityInitialization` shapes follow [`agent/service.rs`](../dwn-rs-agent/src/agent/service.rs). The secret store layer is `SqliteSecretStore` ([`dwn-rs-agent/src/secrets_store.rs`](../dwn-rs-agent/src/secrets_store.rs), feature `sqlite`), which shares the SQLite database used for DWN data.
 
 ## Protocol install workflow
 
@@ -93,7 +104,7 @@ For HTTP-backed registration and protocol push (closes #145), three additional m
      "persistTokens": true
    })
    ```
-   The agent calls `GET <endpoint>/info` to discover requirements, refreshes any expired `provider-auth-v0` tokens (`POST <refreshUrl>`), then `POST <endpoint>/registration` per DID. When `persistTokens: true`, the token map is read from and written back to the agent secret store under `agent/registration-tokens`. Returns a `TenantRegistrationResult` (per-endpoint `records` + final token map).
+   The agent calls `GET <endpoint>/info` to discover requirements, refreshes any expired `provider-auth-v0` tokens (`POST <refreshUrl>`), then `POST <endpoint>/registration` per DID. When `persistTokens: true`, the token map is read from and written back to the agent secret store as a vault envelope under `enbox:auth:registrationTokens` (the credential vault must be unlocked). Returns a `TenantRegistrationResult` (per-endpoint `records` + final token map).
 2. Push a protocol to a remote DWN:
    ```json
    push_protocol({
@@ -128,7 +139,7 @@ The connect FFI mirrors [`dwn_rs_agent::auth::connect`](../dwn-rs-agent/src/auth
    ```
    Returns `DelegateKeyDerivationResult` (`decryptionKeys`, `contextKeys`, `multiPartyProtocols`).
 4. For multi-party protocols, derive a context key per record context: `derive_context_key({ ownerDid, protocol, contextId })`.
-5. Persist the derived keys to the agent secret store for re-use across launches:
+5. Initialize/unlock the credential vault, then persist the derived keys as encrypted envelopes for re-use across launches:
    `save_delegate_decryption_keys(keys_json)` / `save_delegate_context_keys(keys_json)`.
    Re-load them with `load_delegate_decryption_keys()` / `load_delegate_context_keys()` (each returns `[]` when nothing is stored yet).
 6. To revoke a grant later, compose `create_grant_revocation({ grant, revocationGrantId })` and push it through `process_message` once the host has chosen a transport.
@@ -143,7 +154,7 @@ The Rust facade tracks the bookkeeping a mobile host needs to coordinate biometr
 |---|---|
 | `initialize_runtime(json)` | Record `deviceId`, `appGroup`, optional `databasePath` override, and `backgroundRefreshEnabled` (matches [`MobileInitializeRequest`](../dwn-rs-core/src/mobile.rs)). |
 | `unlock_with_reason(reason)` | Same effect as `unlock()`, but records the reason on the runtime status for audit logs. Use after a successful Face ID / Touch ID / `BiometricPrompt`. |
-| `lock()` | Mark vault locked; clears `last_unlock_reason`. |
+| `lock()` | Clear the credential CEK, gate runtime access, and clear `last_unlock_reason`. |
 | `begin_background_task(taskId)` | Returns `true` if the id was newly registered, `false` if it was already active. Mirrors `MobileCore::track_background_task` idempotency expected by WorkManager / `BGTaskScheduler`. |
 | `end_background_task(taskId)` | Returns `true` if removed, `false` if unknown. Safe to call from expiration / cleanup paths. |
 | `status()` | Returns `EnboxRuntimeStatus` with `initialized`, `locked`, `databasePath`, `deviceId`, `appGroup`, `backgroundRefreshEnabled`, `lastUnlockReason`, `activeBackgroundTasks`. |
