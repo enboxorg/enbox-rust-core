@@ -14,11 +14,11 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `sync_once(request_json)` | Run one sync cycle against a remote DWN URL |
 | `poll_reconcile(request_json)` | Pull-only poll reconciliation (live-degraded HTTP fallback) |
 | `sync_status(query_json)` | Last sync outcome (in-progress flag, status, error, counters) |
-| `initialize_agent_identity(request_json)` | Create or recover an agent identity from a BIP-39 recovery phrase; persists `PortableDid` + vault keys |
+| `initialize_agent_identity(request_json)` | Initialize the shared password vault and its `did:dht` identity |
 | `initialize_credential_vault(password, recovery_phrase)` | Initialize password-protected credential storage; returns its recovery phrase |
 | `unlock_credential_vault(password)` | Unlock encrypted credentials and enable runtime access |
 | `delete_registration_tokens()` | Delete the persisted token entry while locked or unlocked; returns whether it existed |
-| `current_agent_identity()` | Return the persisted `PortableDid` JSON, or `None` if none initialized |
+| `current_agent_identity()` | Decrypt the shared vault’s `PortableDid` JSON, or `None` before initialization |
 | `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
 | `install_protocol(tenant_did_json, definition_json)` | Install a protocol on the local DWN (signs a `ProtocolsConfigure`, injects encryption when required); idempotent |
 | `inject_protocol_encryption(tenant_did_json, definition_json)` | Augment a protocol `Definition` with per-path key-agreement encryption; pure (no I/O) |
@@ -36,11 +36,11 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `load_delegate_context_keys()` | Decrypt `DelegateContextKey[]`; requires an unlocked credential vault (empty array when unset) |
 | `lock()` / `unlock()` | Lock clears the credential CEK and gates runtime access; passwordless unlock changes only the runtime flag |
 
-Typed errors (`EnboxError`) cross the FFI boundary. These methods are synchronous; Rust async callers must dispatch them to a blocking thread. Calls may wait for an in-flight vault lifecycle operation.
+Typed errors (`EnboxError`) cross the FFI boundary. These methods are synchronous; Rust async callers must dispatch them to a blocking thread, except `lock()`, which supports async caller contexts. Calls may wait for an in-flight vault lifecycle operation.
 
 ## Credential vault release boundary
 
-This is an incremental credential cutover, not yet a database-reader confidentiality guarantee. [Legacy key cleanup (#327)](https://github.com/enboxorg/enbox-rust-core/issues/327) and [legacy writer retirement (#328)](https://github.com/enboxorg/enbox-rust-core/issues/328) are release prerequisites. `initialize_agent_identity` still persists a raw CEK and private DID material. Reusing its recovery phrase for the credential vault derives that same CEK, so the database alone can decrypt credentials in either initialization order while the raw key remains.
+This is an incremental credential cutover, not yet a database-reader confidentiality guarantee. [Legacy key cleanup (#327)](https://github.com/enboxorg/enbox-rust-core/issues/327) and [legacy writer retirement (#328)](https://github.com/enboxorg/enbox-rust-core/issues/328) are release prerequisites. The FFI identity initializer now uses the shared encrypted vault. Retirement of the underlying legacy Rust writer is tracked separately below; existing databases may still contain raw CEK and private DID material. Reusing its recovery phrase for the credential vault derives that same CEK, so the database alone can decrypt credentials in either initialization order while the raw key remains.
 
 Cleanup must cover already-initialized vaults as well as legacy-only stores. SQL deletion makes entries logically absent; it does not by itself erase recoverable bytes in database pages or WAL files, and cannot revoke old copies or previously learned keys. The cleanup/storage policy must address that before claiming confidentiality.
 
@@ -52,15 +52,16 @@ Initialize credential storage once with `initialize_credential_vault(password, r
 2. Initialize or recover an identity:
    ```json
    initialize_agent_identity({
+     "password": "<vault password>",
      "recoveryPhrase": "<12-word BIP-39 phrase, optional>",
      "dwnEndpoints": ["https://dwn.example/"]
    })
    ```
-   Returns JSON `AgentIdentityInitialization` (PortableDid + vault CEK + unlock salt + recovery phrase). The host displays the recovery phrase **once**; the legacy path persists the `PortableDid` with private keys, raw CEK and unlock salt to the SQLite-backed `agent_secrets` table. This path is subject to the release boundary above.
-3. On subsequent launches, `current_agent_identity()` returns the persisted `PortableDid` JSON (or `null` if missing).
+   Returns JSON `VaultInitialization` (`portableDid` + `recoveryPhrase`), without raw vault keys. The host displays the recovery phrase **once**. Identity and credentials use the same password vault; choose either initializer once, since a second initialization returns `AgentVaultAlreadyInitialized`. Missing passwords fail JSON validation and blank passwords fail vault validation.
+3. On subsequent launches, call `unlock_credential_vault(password)` before `current_agent_identity()`. Identity access fails with `AgentVaultLocked` until password unlock; before initialization it returns `null`. Runtime-only `unlock()` cannot expose the identity.
 4. For recovery-screen validation before committing, call `derive_agent_keys_from_phrase(phrase)` — this is pure and does not persist anything.
 
-`PortableDid` and `AgentIdentityInitialization` shapes follow [`agent/service.rs`](../dwn-rs-agent/src/agent/service.rs). The secret store layer is `SqliteSecretStore` ([`dwn-rs-agent/src/secrets_store.rs`](../dwn-rs-agent/src/secrets_store.rs), feature `sqlite`), which shares the SQLite database used for DWN data.
+`PortableDid` follows [`agent/service.rs`](../dwn-rs-agent/src/agent/service.rs); `VaultInitialization` follows [`agent/vault.rs`](../dwn-rs-agent/src/agent/vault.rs). The secret store layer is `SqliteSecretStore` ([`dwn-rs-agent/src/secrets_store.rs`](../dwn-rs-agent/src/secrets_store.rs), feature `sqlite`), which shares the SQLite database used for DWN data.
 
 ## Protocol install workflow
 
