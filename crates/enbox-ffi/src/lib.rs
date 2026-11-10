@@ -58,7 +58,8 @@ pub struct EnboxRuntimeStatus {
     pub app_group: Option<String>,
     /// Whether the host has enabled background sync wake hooks.
     pub background_refresh_enabled: bool,
-    /// Last reason supplied to `unlock_with_reason`. Cleared on `lock()`.
+    /// Last reason supplied to `unlock_with_reason`.
+    /// Cleared on `lock()` or successful password unlock.
     pub last_unlock_reason: Option<String>,
     /// IDs of background tasks currently checked out via
     /// `begin_background_task`. Sorted for deterministic comparison.
@@ -452,7 +453,11 @@ impl EnboxCore {
             })?;
         self.runtime
             .block_on(self.credential_vault.unlock(&password))?;
-        self.unlock();
+        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
+            detail: format!("core state lock poisoned: {err}"),
+        })?;
+        state.locked = false;
+        state.last_unlock_reason = None;
         Ok(())
     }
 
@@ -2317,6 +2322,29 @@ mod tests {
         });
         core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
             .unwrap();
+    }
+
+    #[test]
+    fn password_unlock_clears_previous_reason_only_on_success() {
+        let core = EnboxCore::open_in_memory().unwrap();
+        initialize_test_credential_vault(&core);
+        core.unlock_with_reason("push_notification".into()).unwrap();
+        assert!(matches!(
+            core.unlock_credential_vault("wrong".into()),
+            Err(EnboxError::Agent { code, .. }) if code == "AgentVaultInvalidPassword"
+        ));
+        assert_eq!(
+            core.status().last_unlock_reason.as_deref(),
+            Some("push_notification")
+        );
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
+        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
+            .unwrap();
+        let status = core.status();
+        assert!(!status.locked);
+        assert!(status.last_unlock_reason.is_none());
+        assert!(!core.runtime.block_on(core.credential_vault.is_locked()));
     }
 
     #[test]
