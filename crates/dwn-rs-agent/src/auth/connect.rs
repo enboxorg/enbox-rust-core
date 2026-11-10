@@ -632,7 +632,7 @@ mod tests {
     use super::*;
     use crate::agent::{
         jwk_curve, AgentIdentityInitializeRequest, AgentIdentityService,
-        DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
+        DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore,
     };
     use dwn_rs_core::interfaces::messages::protocols::{
         Action, ActionWho, Can, RuleSet, Type, Who,
@@ -770,11 +770,10 @@ mod tests {
         let service = AgentIdentityService::new(
             DeterministicDidJwkProvider::default(),
             key_manager.clone(),
-            MemorySecretStore::default(),
             MemoryPortableDidStore::default(),
         );
         let initialization = service
-            .initialize_from_recovery(AgentIdentityInitializeRequest {
+            .derive_from_recovery(AgentIdentityInitializeRequest {
                 recovery_phrase: Some(
                     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
                         .to_string(),

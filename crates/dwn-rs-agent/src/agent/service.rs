@@ -1,7 +1,7 @@
 use super::{
     derive_agent_keys, validate_agent_did_key_requirements, validate_recovery_phrase,
     AgentDidCreateRequest, AgentIdentityError, AgentIdentityFuture, AgentIdentityResult,
-    PortableDid, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY, VAULT_UNLOCK_SALT_KEY,
+    PortableDid,
 };
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -213,35 +213,35 @@ impl Debug for AgentIdentityInitialization {
     }
 }
 
-/// Agent identity orchestrator: derivation, vault persistence, and DID lifecycle.
+/// Agent identity derivation and key import without vault persistence.
+/// Use [`super::IdentityVault`] for password-protected durable identity storage.
 ///
 /// Holds no process-global state; independently constructed services in one
 /// process do not observe each other.
 #[derive(Clone)]
-pub struct AgentIdentityService<D, K, S, R> {
+pub struct AgentIdentityService<D, K, R> {
     did_provider: D,
     key_manager: K,
-    secret_store: S,
     resolver_cache: R,
 }
 
-impl<D, K, S, R> AgentIdentityService<D, K, S, R>
+impl<D, K, R> AgentIdentityService<D, K, R>
 where
     D: DidProvider,
     K: AgentKeyManager,
-    S: SecretStore,
     R: PortableDidStore,
 {
-    pub fn new(did_provider: D, key_manager: K, secret_store: S, resolver_cache: R) -> Self {
+    pub fn new(did_provider: D, key_manager: K, resolver_cache: R) -> Self {
         Self {
             did_provider,
             key_manager,
-            secret_store,
             resolver_cache,
         }
     }
 
-    pub async fn initialize_from_recovery(
+    /// Derive an identity and import keys into the supplied provider, manager and cache.
+    /// This service has no raw secret-store access; durable vaults use IdentityVault.
+    pub async fn derive_from_recovery(
         &self,
         request: AgentIdentityInitializeRequest,
     ) -> AgentIdentityResult<AgentIdentityInitialization> {
@@ -274,25 +274,6 @@ where
                     .await?,
             );
         }
-        self.secret_store
-            .put(
-                VAULT_PORTABLE_DID_KEY,
-                serde_json::to_vec(&portable_did)
-                    .map_err(|err| AgentIdentityError::vault(err.to_string()))?,
-            )
-            .await?;
-        self.secret_store
-            .put(
-                VAULT_CONTENT_ENCRYPTION_KEY,
-                derived_keys.vault_content_encryption_key.clone(),
-            )
-            .await?;
-        self.secret_store
-            .put(
-                VAULT_UNLOCK_SALT_KEY,
-                derived_keys.vault_unlock_salt.clone(),
-            )
-            .await?;
         self.resolver_cache.put_did(portable_did.clone()).await?;
 
         Ok(AgentIdentityInitialization {
@@ -304,21 +285,8 @@ where
         })
     }
 
-    pub async fn stored_agent_did(&self) -> AgentIdentityResult<Option<PortableDid>> {
-        let Some(bytes) = self.secret_store.get(VAULT_PORTABLE_DID_KEY).await? else {
-            return Ok(None);
-        };
-        serde_json::from_slice(&bytes).map(Some).map_err(|err| {
-            AgentIdentityError::vault(format!("stored portable DID is invalid: {err}"))
-        })
-    }
-
     pub fn key_manager(&self) -> &K {
         &self.key_manager
-    }
-
-    pub fn secret_store(&self) -> &S {
-        &self.secret_store
     }
 
     pub fn resolver_cache(&self) -> &R {
@@ -359,18 +327,18 @@ mod tests {
     use super::super::*;
 
     #[tokio::test]
-    async fn initialize_from_recovery_creates_stable_agent_did_and_stores_boundaries() {
+    async fn derive_from_recovery_creates_stable_agent_did_and_imports_keys() {
         let identity_service = service();
 
         let first = identity_service
-            .initialize_from_recovery(AgentIdentityInitializeRequest {
+            .derive_from_recovery(AgentIdentityInitializeRequest {
                 recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
                 dwn_endpoints: vec!["https://dwn.example".to_string()],
             })
             .await
             .unwrap();
         let second = service()
-            .initialize_from_recovery(AgentIdentityInitializeRequest {
+            .derive_from_recovery(AgentIdentityInitializeRequest {
                 recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
                 dwn_endpoints: vec!["https://dwn.example".to_string()],
             })
@@ -390,7 +358,6 @@ mod tests {
             1
         );
         assert_eq!(first.portable_did.document.service.len(), 1);
-        assert!(identity_service.stored_agent_did().await.unwrap().is_some());
         assert!(identity_service
             .resolver_cache()
             .get_did(&first.portable_did.uri)
@@ -408,7 +375,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_recovery_phrase_writes_nothing() {
+    async fn invalid_recovery_phrase_is_rejected() {
         for phrase in [
             RECOVERY_PHRASE.to_uppercase(),
             RECOVERY_PHRASE.replacen(' ', "  ", 1),
@@ -424,33 +391,20 @@ mod tests {
         ] {
             let identity_service = service();
             let error = identity_service
-                .initialize_from_recovery(AgentIdentityInitializeRequest {
+                .derive_from_recovery(AgentIdentityInitializeRequest {
                     recovery_phrase: Some(phrase),
                     dwn_endpoints: Vec::new(),
                 })
                 .await
                 .unwrap_err();
             assert_eq!(error.code(), "AgentIdentityInvalidMnemonic");
-            assert!(identity_service.stored_agent_did().await.unwrap().is_none());
-            assert!(identity_service
-                .secret_store()
-                .get(VAULT_CONTENT_ENCRYPTION_KEY)
-                .await
-                .unwrap()
-                .is_none());
-            assert!(identity_service
-                .secret_store()
-                .get(VAULT_UNLOCK_SALT_KEY)
-                .await
-                .unwrap()
-                .is_none());
         }
     }
 
     #[tokio::test]
     async fn missing_recovery_phrase_generates_twelve_words() {
         let result = service()
-            .initialize_from_recovery(AgentIdentityInitializeRequest {
+            .derive_from_recovery(AgentIdentityInitializeRequest {
                 recovery_phrase: None,
                 dwn_endpoints: Vec::new(),
             })
@@ -459,7 +413,7 @@ mod tests {
         assert_eq!(result.recovery_phrase.split(' ').count(), 12);
         assert!(derive_agent_keys(&result.recovery_phrase).is_ok());
         let recovered = service()
-            .initialize_from_recovery(AgentIdentityInitializeRequest {
+            .derive_from_recovery(AgentIdentityInitializeRequest {
                 recovery_phrase: Some(result.recovery_phrase),
                 dwn_endpoints: Vec::new(),
             })
@@ -468,16 +422,12 @@ mod tests {
         assert_eq!(result.portable_did.uri, recovered.portable_did.uri);
     }
 
-    fn service() -> AgentIdentityService<
-        DeterministicDidJwkProvider,
-        MemoryKeyManager,
-        MemorySecretStore,
-        MemoryPortableDidStore,
-    > {
+    fn service(
+    ) -> AgentIdentityService<DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore>
+    {
         AgentIdentityService::new(
             DeterministicDidJwkProvider::default(),
             MemoryKeyManager::default(),
-            MemorySecretStore::default(),
             MemoryPortableDidStore::default(),
         )
     }

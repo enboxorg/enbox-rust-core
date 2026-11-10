@@ -928,11 +928,10 @@ mod tests {
         let service = AgentIdentityService::new(
             DeterministicDidJwkProvider::default(),
             key_manager.clone(),
-            MemorySecretStore::default(),
             MemoryPortableDidStore::default(),
         );
         let initialization = service
-            .initialize_from_recovery(AgentIdentityInitializeRequest {
+            .derive_from_recovery(AgentIdentityInitializeRequest {
                 recovery_phrase: Some(
                     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
                         .to_string(),

@@ -174,11 +174,10 @@ async fn recovered_agent(recovery_phrase: &str) -> RecoveredAgent {
     let service = AgentIdentityService::new(
         DeterministicDidJwkProvider::default(),
         key_manager.clone(),
-        secret_store.clone(),
         MemoryPortableDidStore::default(),
     );
     let initialization = service
-        .initialize_from_recovery(AgentIdentityInitializeRequest {
+        .derive_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(recovery_phrase.to_string()),
             dwn_endpoints: Vec::new(),
         })
