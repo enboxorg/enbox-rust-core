@@ -7,9 +7,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use dwn_rs_agent::agent::{
-    derive_agent_keys, AgentIdentityInitializeRequest, AgentIdentityService,
-    DeterministicDidJwkProvider, DidDhtProvider, IdentityVault, MemoryKeyManager,
-    MemoryPortableDidStore, PortableDid, VaultBackedSecretStore,
+    derive_agent_keys, DidDhtProvider, IdentityVault, MemoryKeyManager, PortableDid,
+    VaultBackedSecretStore,
 };
 use dwn_rs_agent::auth::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
@@ -129,12 +128,14 @@ struct CoreState {
     active_background_tasks: BTreeSet<String>,
 }
 
-type AgentService = AgentIdentityService<
-    DeterministicDidJwkProvider,
-    MemoryKeyManager,
-    SqliteSecretStore,
-    MemoryPortableDidStore,
->;
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentIdentityInitializeRequest {
+    password: String,
+    recovery_phrase: Option<String>,
+    #[serde(default)]
+    dwn_endpoints: Vec<String>,
+}
 
 #[derive(uniffi::Object)]
 pub struct EnboxCore {
@@ -774,43 +775,56 @@ impl EnboxCore {
         })
     }
 
-    /// Initialize (or recover) an agent identity from a BIP-39 recovery phrase.
+    /// Initialize the shared password vault with a fresh or recovered agent identity.
     ///
-    /// `request_json` is JSON-encoded [`AgentIdentityInitializeRequest`]
-    /// (`{ "recoveryPhrase"?: string, "dwnEndpoints": string[] }`). When the
-    /// phrase is omitted a fresh 12-word English mnemonic is generated.
-    ///
-    /// Persists the resulting [`PortableDid`], vault content encryption key,
-    /// and unlock salt to the SQLite-backed [`SqliteSecretStore`]. Returns
-    /// JSON-encoded [`AgentIdentityInitialization`].
+    /// Accepts `{ "password": string, "recoveryPhrase"?: string,
+    /// "dwnEndpoints"?: string[] }`. Returns the recovery phrase and encrypted
+    /// vault's `portableDid`; initialization never returns raw vault keys.
     pub fn initialize_agent_identity(&self, request_json: String) -> Result<String, EnboxError> {
         let request: AgentIdentityInitializeRequest =
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
-        let secret_store = self.require_secret_store()?;
-        let service = self.build_agent_service(secret_store)?;
-        let initialization = self
-            .runtime
-            .block_on(service.initialize_from_recovery(request))?;
+        let _lifecycle = self
+            .credential_lifecycle
+            .lock()
+            .map_err(|_| EnboxError::Store {
+                detail: "credential lifecycle lock poisoned".into(),
+            })?;
+        self.require_secret_store()?;
+        let initialization = self.runtime.block_on(self.credential_vault.initialize(
+            &request.password,
+            request.recovery_phrase.as_deref(),
+            request.dwn_endpoints,
+        ))?;
         serde_json::to_string(&initialization).map_err(|err| EnboxError::Json {
             detail: err.to_string(),
         })
     }
 
-    /// Return the persisted agent [`PortableDid`] as JSON, or `None` if no
-    /// identity has been initialized on this database.
+    /// Return the shared vault's decrypted agent DID, or `None` before initialization.
+    /// Requires password unlock after reopening or locking the vault.
     pub fn current_agent_identity(&self) -> Result<Option<String>, EnboxError> {
-        let secret_store = self.require_secret_store()?;
-        let service = self.build_agent_service(secret_store)?;
-        let Some(portable_did) = self.runtime.block_on(service.stored_agent_did())? else {
-            return Ok(None);
-        };
-        serde_json::to_string(&portable_did)
-            .map(Some)
-            .map_err(|err| EnboxError::Json {
-                detail: err.to_string(),
+        let _lifecycle = self
+            .credential_lifecycle
+            .lock()
+            .map_err(|_| EnboxError::Store {
+                detail: "credential lifecycle lock poisoned".into(),
+            })?;
+        self.require_secret_store()?;
+        let portable_did = self.runtime.block_on(async {
+            if !self.credential_vault.status().await?.initialized {
+                return Ok(None);
+            }
+            self.credential_vault.get_did().await.map(Some)
+        })?;
+        portable_did
+            .map(|did| {
+                serde_json::to_string(&did).map_err(|err| EnboxError::Json {
+                    detail: err.to_string(),
+                })
             })
+            .transpose()
     }
 
     /// Derive the four-key set (vault, identity, signing, encryption) for the
@@ -1437,45 +1451,6 @@ impl EnboxCore {
             })),
         }))
     }
-
-    /// Build an [`AgentIdentityService`] backed by the SQLite secret store and
-    /// rehydrated from any previously persisted [`PortableDid`].
-    ///
-    /// The key manager and DID resolver cache are rebuilt on every call. This
-    /// keeps the FFI surface stateless: the only durable state is the
-    /// [`SqliteSecretStore`] backed by the same SQLite file used for DWN data.
-    fn build_agent_service(
-        &self,
-        secret_store: SqliteSecretStore,
-    ) -> Result<AgentService, EnboxError> {
-        let service = AgentIdentityService::new(
-            DeterministicDidJwkProvider::default(),
-            MemoryKeyManager::default(),
-            secret_store,
-            MemoryPortableDidStore::default(),
-        );
-        if let Some(portable_did) = self.runtime.block_on(service.stored_agent_did())? {
-            self.runtime
-                .block_on(import_existing_identity(&service, &portable_did))?;
-        }
-        Ok(service)
-    }
-}
-
-pub(crate) async fn import_existing_identity(
-    service: &AgentService,
-    portable_did: &PortableDid,
-) -> Result<(), dwn_rs_agent::agent::AgentIdentityError> {
-    use dwn_rs_agent::agent::{DidProvider, PortableDidStore};
-    service
-        .did_provider()
-        .import_did(portable_did.clone())
-        .await?;
-    service
-        .resolver_cache()
-        .put_did(portable_did.clone())
-        .await?;
-    import_private_keys(service.key_manager(), portable_did).await
 }
 
 pub(crate) async fn import_private_keys(
@@ -2079,7 +2054,8 @@ mod tests {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     #[test]
-    fn initialize_agent_identity_is_deterministic_for_a_given_phrase() {
+    // Covers: DID-DHT-006
+    fn initialize_agent_identity_uses_shared_vault_across_reopen() {
         // Serialize file-backed tests process-wide.
         // Plain `#[test]`: no runtime is running on this thread yet, so
         // blocking acquisition is safe.
@@ -2094,6 +2070,7 @@ mod tests {
         let raw = core
             .initialize_agent_identity(
                 serde_json::json!({
+                    "password": "test-password",
                     "recoveryPhrase": TEST_RECOVERY_PHRASE,
                     "dwnEndpoints": ["https://dwn.example/"]
                 })
@@ -2106,10 +2083,17 @@ mod tests {
             .as_str()
             .expect("did uri present")
             .to_string();
-        assert!(did_uri.starts_with("did:jwk:"), "got {did_uri}");
+        assert!(did_uri.starts_with("did:dht:"), "got {did_uri}");
         assert_eq!(parsed["recoveryPhrase"], TEST_RECOVERY_PHRASE);
-        assert!(parsed["vaultContentEncryptionKey"].is_array());
-        assert!(parsed["vaultUnlockSalt"].is_array());
+        assert!(parsed.get("vaultContentEncryptionKey").is_none());
+        assert!(parsed.get("vaultUnlockSalt").is_none());
+        assert_eq!(
+            core.runtime
+                .block_on(core.credential_vault.get_did())
+                .unwrap()
+                .uri,
+            did_uri
+        );
 
         let current = core
             .current_agent_identity()
@@ -2124,6 +2108,12 @@ mod tests {
 
         drop(core);
         let reopened = EnboxCore::open(path).expect("reopen core");
+        assert!(
+            matches!(reopened.current_agent_identity(), Err(EnboxError::Agent { ref code, .. }) if code == "AgentVaultLocked")
+        );
+        reopened
+            .unlock_credential_vault("test-password".into())
+            .unwrap();
         let reopened_raw = reopened
             .current_agent_identity()
             .expect("current identity on reopened core")
@@ -2134,10 +2124,57 @@ mod tests {
     }
 
     #[test]
+    // Covers: DID-DHT-006
+    fn credential_initializer_and_identity_accessor_share_one_vault() {
+        let core = EnboxCore::open_in_memory().unwrap();
+        initialize_test_credential_vault(&core);
+        let expected = core
+            .runtime
+            .block_on(core.credential_vault.get_did())
+            .unwrap();
+        let actual: PortableDid =
+            serde_json::from_str(&core.current_agent_identity().unwrap().unwrap()).unwrap();
+        assert_eq!(actual, expected);
+        assert!(actual.uri.starts_with("did:dht:"));
+        let error = core
+            .initialize_agent_identity(
+                serde_json::json!({
+                    "password": "test-password", "recoveryPhrase": TEST_RECOVERY_PHRASE
+                })
+                .to_string(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, EnboxError::Agent { code, .. } if code == "AgentVaultAlreadyInitialized")
+        );
+        core.lock();
+        core.unlock();
+        assert!(
+            matches!(core.current_agent_identity(), Err(EnboxError::Agent { code, .. }) if code == "AgentVaultLocked")
+        );
+    }
+
+    #[test]
+    fn identity_initialization_requires_password_without_writing() {
+        let core = EnboxCore::open_in_memory().unwrap();
+        assert!(matches!(
+            core.initialize_agent_identity("{}".into()),
+            Err(EnboxError::Json { .. })
+        ));
+        assert!(core.current_agent_identity().unwrap().is_none());
+        assert!(matches!(core.initialize_agent_identity(serde_json::json!({
+            "password": " "
+        }).to_string()), Err(EnboxError::Agent { code, .. }) if code == "AgentVaultBlankPassword"));
+        assert!(core.current_agent_identity().unwrap().is_none());
+    }
+
+    #[test]
     fn initialize_agent_identity_without_phrase_generates_random_did() {
         let core = EnboxCore::open_in_memory().expect("core opens");
         let raw = core
-            .initialize_agent_identity(serde_json::json!({ "dwnEndpoints": [] }).to_string())
+            .initialize_agent_identity(
+                serde_json::json!({ "password": "test-password", "dwnEndpoints": [] }).to_string(),
+            )
             .expect("initialize agent");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("init json");
         let phrase = parsed["recoveryPhrase"].as_str().expect("generated phrase");
@@ -2176,7 +2213,9 @@ mod tests {
         let core = EnboxCore::open_in_memory().expect("core opens");
         core.lock();
         let err = core
-            .initialize_agent_identity(serde_json::json!({ "dwnEndpoints": [] }).to_string())
+            .initialize_agent_identity(
+                serde_json::json!({ "password": "test-password", "dwnEndpoints": [] }).to_string(),
+            )
             .expect_err("locked initialize must fail");
         assert!(matches!(err, EnboxError::Locked));
         let err = core
@@ -2455,6 +2494,7 @@ mod tests {
         let init_raw = core
             .initialize_agent_identity(
                 serde_json::json!({
+                    "password": "test-password",
                     "recoveryPhrase": TEST_RECOVERY_PHRASE,
                     "dwnEndpoints": []
                 })
@@ -3432,6 +3472,7 @@ mod tests {
             let core = EnboxCore::open_in_memory().expect("core opens");
             core.initialize_agent_identity(
                 serde_json::json!({
+                    "password": "test-password",
                     "recoveryPhrase": TEST_RECOVERY_PHRASE,
                     "dwnEndpoints": []
                 })
