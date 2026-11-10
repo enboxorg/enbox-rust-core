@@ -382,7 +382,12 @@ impl EnboxCore {
             state.last_unlock_reason = None;
         }
         // Key clearing precedes status validation, including on errors.
-        let _ = self.runtime.block_on(self.credential_vault.lock());
+        let _ = std::thread::scope(|scope| {
+            scope
+                .spawn(|| self.runtime.block_on(self.credential_vault.lock()))
+                .join()
+                .expect("vault lock worker panicked")
+        });
     }
 
     /// Mark the runtime unlocked; this does not unlock encrypted credentials.
@@ -2393,6 +2398,29 @@ mod tests {
         assert!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["jwe"].is_string());
         core.lock();
         assert!(core.delete_registration_tokens().unwrap());
+    }
+
+    #[test]
+    fn lock_from_async_context_clears_key_without_poisoning_lifecycle() {
+        let core = EnboxCore::open_in_memory().unwrap();
+        initialize_test_credential_vault(&core);
+        let caller = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        caller.block_on(async {
+            core.lock();
+        });
+        assert!(core.credential_lifecycle.lock().is_ok());
+        assert!(core.runtime.block_on(core.credential_vault.is_locked()));
+        core.unlock();
+        assert!(
+            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
+        );
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
+        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
+            .unwrap();
+        assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
     }
 
     #[test]
