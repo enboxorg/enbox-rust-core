@@ -412,8 +412,11 @@ impl EnboxCore {
 
     /// Initialize the credential vault, returning its recovery phrase.
     ///
-    /// Supply the existing agent recovery phrase to retain its derived CEK.
-    /// This does not migrate the separate legacy agent identity storage.
+    /// Reusing the agent recovery phrase derives the same CEK as legacy identity
+    /// initialization, which still stores that key in plaintext. Cleanup of
+    /// legacy key material and retirement of the legacy writer are release
+    /// prerequisites for database-reader confidentiality. This method does
+    /// not migrate or erase legacy identity storage.
     pub fn initialize_credential_vault(
         &self,
         password: String,
