@@ -144,8 +144,8 @@ mod tests {
 
     use super::*;
     use crate::agent::{
-        AgentIdentityInitializeRequest, AgentIdentityService, DeterministicDidJwkProvider,
-        MemoryKeyManager, MemoryPortableDidStore, PortableDid, VAULT_PORTABLE_DID_KEY,
+        DidDhtProvider, IdentityVault, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY,
+        VAULT_UNLOCK_SALT_KEY,
     };
     use dwn_rs_core::stores::wake::WakePublishHandler;
     use dwn_rs_core::stores::MessageStore;
@@ -191,38 +191,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_identity_persists_portable_did_across_reopen() {
-        // Serialize file-backed tests process-wide.
+    async fn vault_identity_reopens_without_plaintext_material() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("agent.sqlite");
-
-        let first_did_uri = {
+        let first = {
             let store = opened_store(&path).await;
-            let vault = SqliteSecretStore::new(&store);
-            let service = AgentIdentityService::new(
-                DeterministicDidJwkProvider::default(),
-                MemoryKeyManager::default(),
-                vault,
-                MemoryPortableDidStore::default(),
+            let raw = Arc::new(SqliteSecretStore::new(&store));
+            let vault = IdentityVault::with_work_factor(
+                raw.clone(),
+                Arc::new(DidDhtProvider::default()),
+                1,
             );
-            let initialization = service
-                .initialize_from_recovery(AgentIdentityInitializeRequest {
-                    recovery_phrase: Some(TEST_RECOVERY_PHRASE.to_string()),
-                    dwn_endpoints: vec![],
-                })
+            let initialized = vault
+                .initialize("test-password", Some(TEST_RECOVERY_PHRASE), vec![])
                 .await
-                .expect("initialize");
-            initialization.portable_did.uri
+                .unwrap();
+            for key in [
+                VAULT_PORTABLE_DID_KEY,
+                VAULT_CONTENT_ENCRYPTION_KEY,
+                VAULT_UNLOCK_SALT_KEY,
+            ] {
+                assert!(raw.get(key).await.unwrap().is_none());
+            }
+            initialized.portable_did
         };
-
         let store = opened_store(&path).await;
-        let vault = SqliteSecretStore::new(&store);
-        let raw = vault
-            .get(VAULT_PORTABLE_DID_KEY)
-            .await
-            .expect("get vault did")
-            .expect("vault did persisted");
-        let restored: PortableDid = serde_json::from_slice(&raw).expect("vault json");
-        assert_eq!(restored.uri, first_did_uri);
+        let vault = IdentityVault::with_work_factor(
+            Arc::new(SqliteSecretStore::new(&store)),
+            Arc::new(DidDhtProvider::default()),
+            1,
+        );
+        vault.unlock("test-password").await.unwrap();
+        assert_eq!(vault.get_did().await.unwrap(), first);
     }
 }

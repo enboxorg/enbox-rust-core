@@ -418,11 +418,10 @@ impl EnboxCore {
 
     /// Initialize the credential vault, returning its recovery phrase.
     ///
-    /// Reusing the agent recovery phrase derives the same CEK as legacy identity
-    /// initialization, which still stores that key in plaintext. Cleanup of
-    /// legacy key material and retirement of the legacy writer are release
-    /// prerequisites for database-reader confidentiality. This method does
-    /// not migrate or erase legacy identity storage.
+    /// Shares identity and key state with initialize_agent_identity. Legacy
+    /// plaintext key material from older versions requires separate cleanup
+    /// before database-reader confidentiality can be claimed for those stores.
+    /// This method does not migrate or erase legacy identity storage.
     pub fn initialize_credential_vault(
         &self,
         password: String,
@@ -2166,6 +2165,62 @@ mod tests {
             "password": " "
         }).to_string()), Err(EnboxError::Agent { code, .. }) if code == "AgentVaultBlankPassword"));
         assert!(core.current_agent_identity().unwrap().is_none());
+    }
+
+    #[test]
+    fn host_initializers_never_store_plaintext_identity_material() {
+        use dwn_rs_agent::agent::{
+            SecretStore, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY,
+            VAULT_UNLOCK_SALT_KEY,
+        };
+        for credentials_first in [false, true] {
+            let core = EnboxCore::open_in_memory().unwrap();
+            let identity_request = serde_json::json!({
+                "password": "test-password", "recoveryPhrase": TEST_RECOVERY_PHRASE
+            })
+            .to_string();
+            let error = if credentials_first {
+                core.initialize_credential_vault(
+                    "test-password".into(),
+                    Some(TEST_RECOVERY_PHRASE.into()),
+                )
+                .unwrap();
+                core.initialize_agent_identity(identity_request)
+                    .unwrap_err()
+            } else {
+                core.initialize_agent_identity(identity_request).unwrap();
+                core.initialize_credential_vault(
+                    "test-password".into(),
+                    Some(TEST_RECOVERY_PHRASE.into()),
+                )
+                .unwrap_err()
+            };
+            assert!(
+                matches!(error, EnboxError::Agent { code, .. } if code == "AgentVaultAlreadyInitialized")
+            );
+            core.save_delegate_context_keys("[]".into()).unwrap();
+            let raw = core.require_secret_store().unwrap();
+            for key in [
+                VAULT_PORTABLE_DID_KEY,
+                VAULT_CONTENT_ENCRYPTION_KEY,
+                VAULT_UNLOCK_SALT_KEY,
+            ] {
+                assert!(core.runtime.block_on(raw.get(key)).unwrap().is_none());
+            }
+            let envelope = core
+                .runtime
+                .block_on(raw.get("enbox:auth:delegateContextKeys"))
+                .unwrap()
+                .unwrap();
+            assert!(
+                serde_json::from_slice::<serde_json::Value>(&envelope).unwrap()["jwe"].is_string()
+            );
+            core.lock();
+            core.unlock_credential_vault("test-password".into())
+                .unwrap();
+            assert!(core.current_agent_identity().unwrap().is_some());
+            assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
+        }
     }
 
     #[test]

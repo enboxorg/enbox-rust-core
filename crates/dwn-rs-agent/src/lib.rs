@@ -46,9 +46,9 @@
 //! does not encrypt at rest; the host binds the database file to platform
 //! storage. The password vault ([`agent::IdentityVault`]) persists wrapped and
 //! encrypted vault values through [`agent::SecretStore::apply`]. This does not
-//! establish database-reader confidentiality while the legacy initializer can
-//! store the same CEK in plaintext; cleanup and retirement of that writer are
-//! release prerequisites. Logical deletion alone does not erase SQLite residue.
+//! establish database-reader confidentiality for databases containing legacy
+//! plaintext key material. Legacy writers have been removed; cleanup remains
+//! a release prerequisite. Logical deletion alone does not erase SQLite residue.
 //! Auth credential helpers take [`agent::CredentialStore`]; use
 //! [`agent::VaultBackedSecretStore`] with the same shared vault to encrypt
 //! credential values before they reach the raw backend.

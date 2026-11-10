@@ -40,11 +40,11 @@ Typed errors (`EnboxError`) cross the FFI boundary. These methods are synchronou
 
 ## Credential vault release boundary
 
-This is an incremental credential cutover, not yet a database-reader confidentiality guarantee. [Legacy key cleanup (#327)](https://github.com/enboxorg/enbox-rust-core/issues/327) and [legacy writer retirement (#328)](https://github.com/enboxorg/enbox-rust-core/issues/328) are release prerequisites. The FFI identity initializer now uses the shared encrypted vault. Retirement of the underlying legacy Rust writer is tracked separately below; existing databases may still contain raw CEK and private DID material. Reusing its recovery phrase for the credential vault derives that same CEK, so the database alone can decrypt credentials in either initialization order while the raw key remains.
+This is an incremental credential cutover, not yet a database-reader confidentiality guarantee. [Legacy key cleanup (#327)](https://github.com/enboxorg/enbox-rust-core/issues/327) remains a release prerequisite for upgraded stores. The FFI initializer uses the shared encrypted vault, and the underlying plaintext writer has been removed. Existing databases may still contain raw CEK and private DID material. Reusing a legacy recovery phrase for the credential vault derives that same CEK, so the database alone can decrypt credentials in either initialization order while the raw key remains.
 
 Cleanup must cover already-initialized vaults as well as legacy-only stores. SQL deletion makes entries logically absent; it does not by itself erase recoverable bytes in database pages or WAL files, and cannot revoke old copies or previously learned keys. The cleanup/storage policy must address that before claiming confidentiality.
 
-Initialize credential storage once with `initialize_credential_vault(password, recovery_phrase)` and unlock it after reopen with `unlock_credential_vault(password)`. Persisted registration and delegate-key methods require that shared vault to be unlocked. Passwordless `unlock()` or `unlock_with_reason()` cannot decrypt credentials. If legacy registration bytes cause `AgentSecretInvalidEnvelope`, explicitly call `delete_registration_tokens()` (works while locked), unlock, and obtain fresh credentials; deletion is not secure erasure.
+Initialize the shared vault once with `initialize_agent_identity` (with password and optional endpoints), or `initialize_credential_vault(password, recovery_phrase)` and unlock it after reopen with `unlock_credential_vault(password)`. Persisted registration and delegate-key methods require that shared vault to be unlocked. Passwordless `unlock()` or `unlock_with_reason()` cannot decrypt credentials. If legacy registration bytes cause `AgentSecretInvalidEnvelope`, explicitly call `delete_registration_tokens()` (works while locked), unlock, and obtain fresh credentials; deletion is not secure erasure.
 
 ## Agent identity workflow
 
@@ -62,6 +62,12 @@ Initialize credential storage once with `initialize_credential_vault(password, r
 4. For recovery-screen validation before committing, call `derive_agent_keys_from_phrase(phrase)` — this is pure and does not persist anything.
 
 `PortableDid` follows [`agent/service.rs`](../dwn-rs-agent/src/agent/service.rs); `VaultInitialization` follows [`agent/vault.rs`](../dwn-rs-agent/src/agent/vault.rs). The secret store layer is `SqliteSecretStore` ([`dwn-rs-agent/src/secrets_store.rs`](../dwn-rs-agent/src/secrets_store.rs), feature `sqlite`), which shares the SQLite database used for DWN data.
+
+The Rust `AgentIdentityService` is now an in-memory derivation/key-import service: use
+`derive_from_recovery` and its three-argument constructor (provider, key manager,
+resolver cache). Its raw-store constructor argument, `initialize_from_recovery`,
+and `stored_agent_did` are removed. Durable identity creation and reads belong to
+`IdentityVault`; hosts must unlock it with a password rather than read legacy rows.
 
 ## Protocol install workflow
 

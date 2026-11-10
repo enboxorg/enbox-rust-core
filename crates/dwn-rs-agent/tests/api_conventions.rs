@@ -5,7 +5,7 @@ use dwn_rs_agent::agent::{
     derive_agent_keys, AgentDidCreateRequest, AgentIdentityError, AgentIdentityInitializeRequest,
     AgentIdentityService, AgentKeyManager, DeterministicDidJwkProvider, DidDhtProvider,
     DidProvider, IdentityMetadata, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
-    PortableDid, PortableDidStore, PortableIdentity, SecretStore, VAULT_PORTABLE_DID_KEY,
+    PortableDid, PortableDidStore, PortableIdentity, SecretStore,
 };
 use dwn_rs_agent::auth::connect::{
     derive_context_key, derive_delegate_keys, write_context_key_record, ConnectPermissionRequest,
@@ -46,11 +46,10 @@ async fn recovery_golden_did_uri() {
     let service = AgentIdentityService::new(
         DidDhtProvider::default(),
         MemoryKeyManager::default(),
-        MemorySecretStore::default(),
         MemoryPortableDidStore::default(),
     );
     let init = service
-        .initialize_from_recovery(AgentIdentityInitializeRequest {
+        .derive_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
             dwn_endpoints: Vec::new(),
         })
@@ -91,23 +90,6 @@ async fn key_manager_failures_keep_codes_and_hide_secrets() {
         .unwrap_err();
     assert_eq!(error.code(), "AgentIdentityKeyManagerError");
     assert!(error.detail().contains("urn:jwk:missing"));
-}
-
-#[tokio::test]
-async fn corrupt_stored_did_keeps_vault_code() {
-    let store = MemorySecretStore::default();
-    store
-        .put(VAULT_PORTABLE_DID_KEY, b"not-json".to_vec())
-        .await
-        .unwrap();
-    let service = AgentIdentityService::new(
-        DeterministicDidJwkProvider::default(),
-        MemoryKeyManager::default(),
-        store,
-        MemoryPortableDidStore::default(),
-    );
-    let error = service.stored_agent_did().await.unwrap_err();
-    assert_eq!(error.code(), "AgentIdentityVaultError");
 }
 
 #[tokio::test]
@@ -198,7 +180,7 @@ async fn backend_failure_from_registration_client_surfaces_unchanged() {
 #[tokio::test]
 async fn arc_dyn_backends_match_concrete_backends() {
     let concrete = concrete_service()
-        .initialize_from_recovery(AgentIdentityInitializeRequest {
+        .derive_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
             dwn_endpoints: Vec::new(),
         })
@@ -209,9 +191,9 @@ async fn arc_dyn_backends_match_concrete_backends() {
     let key_manager: Arc<dyn AgentKeyManager> = Arc::new(MemoryKeyManager::default());
     let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
     let did_store: Arc<dyn PortableDidStore> = Arc::new(MemoryPortableDidStore::default());
-    let service = AgentIdentityService::new(provider, key_manager, secret_store.clone(), did_store);
+    let service = AgentIdentityService::new(provider, key_manager, did_store);
     let dynamic = service
-        .initialize_from_recovery(AgentIdentityInitializeRequest {
+        .derive_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
             dwn_endpoints: Vec::new(),
         })
@@ -224,8 +206,6 @@ async fn arc_dyn_backends_match_concrete_backends() {
         dynamic.portable_did.document.verification_method.len(),
         concrete.portable_did.document.verification_method.len()
     );
-    let stored = service.stored_agent_did().await.unwrap().unwrap();
-    assert_eq!(stored.uri, concrete.portable_did.uri);
 
     let vault = Arc::new(dwn_rs_agent::agent::IdentityVault::with_work_factor(
         secret_store.clone(),
@@ -336,7 +316,7 @@ async fn debug_omits_secrets_but_keeps_identifiers() {
 
     let service = concrete_service();
     let init = service
-        .initialize_from_recovery(AgentIdentityInitializeRequest {
+        .derive_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
             dwn_endpoints: Vec::new(),
         })
@@ -440,16 +420,11 @@ fn serde_still_carries_secrets() {
     assert_eq!(json["registrationToken"], "registration-secret");
 }
 
-fn concrete_service() -> AgentIdentityService<
-    DeterministicDidJwkProvider,
-    MemoryKeyManager,
-    MemorySecretStore,
-    MemoryPortableDidStore,
-> {
+fn concrete_service(
+) -> AgentIdentityService<DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore> {
     AgentIdentityService::new(
         DeterministicDidJwkProvider::default(),
         MemoryKeyManager::default(),
-        MemorySecretStore::default(),
         MemoryPortableDidStore::default(),
     )
 }
@@ -459,11 +434,10 @@ async fn agent_did_with_keys() -> (PortableDid, MemoryKeyManager) {
     let service = AgentIdentityService::new(
         DeterministicDidJwkProvider::default(),
         key_manager.clone(),
-        MemorySecretStore::default(),
         MemoryPortableDidStore::default(),
     );
     let init = service
-        .initialize_from_recovery(AgentIdentityInitializeRequest {
+        .derive_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
             dwn_endpoints: Vec::new(),
         })
@@ -477,11 +451,10 @@ async fn agent_did_with_non_x25519_agreement() -> (PortableDid, MemoryKeyManager
     let service = AgentIdentityService::new(
         DeterministicDidJwkProvider::default(),
         key_manager.clone(),
-        MemorySecretStore::default(),
         MemoryPortableDidStore::default(),
     );
     let init = service
-        .initialize_from_recovery(AgentIdentityInitializeRequest {
+        .derive_from_recovery(AgentIdentityInitializeRequest {
             recovery_phrase: Some(RECOVERY_PHRASE.to_string()),
             dwn_endpoints: Vec::new(),
         })
