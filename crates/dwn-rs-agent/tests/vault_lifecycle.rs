@@ -911,9 +911,13 @@ async fn ts_vault_values_restore_through_the_vault() {
         data,
     };
 
-    let (fresh, _) = memory_vault();
+    let (fresh, store) = memory_vault();
     fresh.restore(&backup, password).await.unwrap();
     assert_eq!(fresh.get_did().await.unwrap().uri, uri);
+    assert_eq!(
+        header(&read_string(&*store, VAULT_CEK_JWE_KEY).await)["p2c"],
+        fixture["inputs"]["keyDerivationWorkFactor"]
+    );
 
     // The same TS-produced values overwrite an already-initialized vault.
     let (initialized, _) = memory_vault();
@@ -1227,24 +1231,86 @@ async fn restore_commit_failure_keeps_store_and_locks() {
 }
 
 #[tokio::test]
-async fn configured_work_factor_is_written_and_opens() {
+async fn configured_work_factor_is_written_on_initialize_and_reset() {
+    for work_factor in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
+        let store = memory_store();
+        let vault = Arc::new(IdentityVault::with_work_factor(
+            store.clone(),
+            Arc::new(DidDhtProvider::default()),
+            work_factor,
+        ));
+        vault
+            .initialize(PASSWORD, Some(PHRASE), vec![])
+            .await
+            .unwrap();
+        assert_eq!(
+            header(&read_string(&*store, VAULT_CEK_JWE_KEY).await)["p2c"],
+            work_factor
+        );
+
+        vault.lock().await.unwrap();
+        vault
+            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+            .await
+            .unwrap();
+        assert_eq!(
+            header(&read_string(&*store, VAULT_CEK_JWE_KEY).await)["p2c"],
+            work_factor
+        );
+    }
+}
+
+#[tokio::test]
+async fn stored_work_factor_opens_under_any_configuration() {
+    for written in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
+        let store = memory_store();
+        let writer = Arc::new(IdentityVault::with_work_factor(
+            store.clone(),
+            Arc::new(DidDhtProvider::default()),
+            written,
+        ));
+        writer
+            .initialize(PASSWORD, Some(PHRASE), vec![])
+            .await
+            .unwrap();
+
+        for configured in [1, DEFAULT_PBES2_ITERATIONS] {
+            let reader = Arc::new(IdentityVault::with_work_factor(
+                store.clone(),
+                Arc::new(DidDhtProvider::default()),
+                configured,
+            ));
+            reader.unlock(PASSWORD).await.unwrap();
+            assert_eq!(reader.get_did().await.unwrap().uri, DID_URI);
+            reader.lock().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn change_password_preserves_work_factor_from_configuration() {
     let store = memory_store();
-    let vault = Arc::new(IdentityVault::with_work_factor(
+    let writer = Arc::new(IdentityVault::with_work_factor(
         store.clone(),
         Arc::new(DidDhtProvider::default()),
         10_000,
     ));
-    vault
+    writer
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
         .unwrap();
+
+    let vault = Arc::new(IdentityVault::with_work_factor(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        1,
+    ));
+    vault.unlock(PASSWORD).await.unwrap();
+    vault.change_password(PASSWORD, PASSWORD_2).await.unwrap();
     assert_eq!(
         header(&read_string(&*store, VAULT_CEK_JWE_KEY).await)["p2c"],
         10_000
     );
-
-    vault.lock().await.unwrap();
-    vault.unlock(PASSWORD).await.unwrap();
 }
 
 #[tokio::test]
