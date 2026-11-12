@@ -6,13 +6,6 @@ pub type AgentIdentityResult<T> = Result<T, AgentIdentityError>;
 pub type AgentIdentityFuture<'a, T> =
     Pin<Box<dyn Future<Output = AgentIdentityResult<T>> + Send + 'a>>;
 
-/// Legacy plaintext portable-DID storage key; retained for migration tooling.
-pub const VAULT_PORTABLE_DID_KEY: &str = "agent:vault:portableDid";
-/// Legacy plaintext CEK storage key; retained for migration tooling.
-pub const VAULT_CONTENT_ENCRYPTION_KEY: &str = "agent:vault:contentEncryptionKey";
-/// Legacy unlock-salt storage key; retained for migration tooling.
-pub const VAULT_UNLOCK_SALT_KEY: &str = "agent:vault:unlockSalt";
-
 /// Agent error with a stable machine-readable code and human detail.
 ///
 /// Each variant preserves the code string previously carried in the

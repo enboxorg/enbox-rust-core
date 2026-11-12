@@ -2174,10 +2174,7 @@ mod tests {
 
     #[test]
     fn host_initializers_never_store_plaintext_identity_material() {
-        use dwn_rs_agent::agent::{
-            SecretStore, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY,
-            VAULT_UNLOCK_SALT_KEY,
-        };
+        use dwn_rs_agent::agent::SecretStore;
         for credentials_first in [false, true] {
             let core = EnboxCore::open_in_memory().unwrap();
             let identity_request = serde_json::json!({
@@ -2206,9 +2203,9 @@ mod tests {
             core.save_delegate_context_keys("[]".into()).unwrap();
             let raw = core.require_secret_store().unwrap();
             for key in [
-                VAULT_PORTABLE_DID_KEY,
-                VAULT_CONTENT_ENCRYPTION_KEY,
-                VAULT_UNLOCK_SALT_KEY,
+                "agent:vault:portableDid",
+                "agent:vault:contentEncryptionKey",
+                "agent:vault:unlockSalt",
             ] {
                 assert!(core.runtime.block_on(raw.get(key)).unwrap().is_none());
             }
