@@ -7,7 +7,9 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | Method | Purpose |
 |--------|---------|
 | `EnboxCore.open_in_memory()` | Ephemeral SQLite node for tests |
+| `EnboxCore.open_in_memory_with_work_factor(work_factor)` | Ephemeral node with a host-chosen PBES2 work factor |
 | `EnboxCore.open(database_path)` | Durable SQLite node at a filesystem path |
+| `EnboxCore.open_with_work_factor(database_path, work_factor)` | Durable node with a host-chosen PBES2 work factor (0 rejected) |
 | `process_message(tenant, message_json)` | Dispatch a DWN message; returns JSON `DwnReply` |
 | `configure_sync_signer(signer_json)` | Install a private JWK for signing HTTP sync requests |
 | `register_sync_identity(identity_json)` | Register tenant DID + protocol scope for sync |
@@ -40,9 +42,9 @@ Typed errors (`EnboxError`) cross the FFI boundary. These methods are synchronou
 
 ## Credential vault release boundary
 
-This is an incremental credential cutover, not yet a database-reader confidentiality guarantee. [Legacy key cleanup (#327)](https://github.com/enboxorg/enbox-rust-core/issues/327) remains a release prerequisite for upgraded stores. The FFI initializer uses the shared encrypted vault, and the underlying plaintext writer has been removed. Existing databases may still contain raw CEK and private DID material. Reusing a legacy recovery phrase for the credential vault derives that same CEK, so the database alone can decrypt credentials in either initialization order while the raw key remains.
+The plaintext identity path was never released, so no host database holds raw CEK, unlock-salt or private-DID material, and no migration or cleanup step exists. The vault stores only password-wrapped entries. `derive_agent_keys_from_phrase` still returns the vault CEK and unlock salt to the caller; the host must not persist them.
 
-Cleanup must cover already-initialized vaults as well as legacy-only stores. SQL deletion makes entries logically absent; it does not by itself erase recoverable bytes in database pages or WAL files, and cannot revoke old copies or previously learned keys. The cleanup/storage policy must address that before claiming confidentiality.
+The PBES2 work factor defaults to 210 000. A host can choose it when it opens the core with `open_with_work_factor(database_path, work_factor)` or `open_in_memory_with_work_factor(work_factor)`; 0 is rejected with `AgentVaultError`. Any stored entry opens at any work factor of 1 or more, so a vault written by another host or by the TypeScript agent opens unchanged.
 
 Initialize the shared vault once with `initialize_agent_identity` (with password and optional endpoints), or `initialize_credential_vault(password, recovery_phrase)` and unlock it after reopen with `unlock_credential_vault(password)`. Persisted registration and delegate-key methods require that shared vault to be unlocked. Passwordless `unlock()` or `unlock_with_reason()` cannot decrypt credentials. If legacy registration bytes cause `AgentSecretInvalidEnvelope`, explicitly call `delete_registration_tokens()` (works while locked), unlock, and obtain fresh credentials; deletion is not secure erasure.
 
