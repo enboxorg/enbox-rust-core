@@ -45,10 +45,9 @@
 //! [`SqliteSecretStore`] is an unencrypted key/value backend. On its own it
 //! does not encrypt at rest; the host binds the database file to platform
 //! storage. The password vault ([`agent::IdentityVault`]) persists wrapped and
-//! encrypted vault values through [`agent::SecretStore::apply`]. This does not
-//! establish database-reader confidentiality for databases containing legacy
-//! plaintext key material. Legacy writers have been removed; cleanup remains
-//! a release prerequisite. Logical deletion alone does not erase SQLite residue.
+//! encrypted vault values through [`agent::SecretStore::apply`]. The vault
+//! stores only password-wrapped entries; the plaintext identity path was never
+//! released, so no legacy material or cleanup step exists.
 //! Auth credential helpers take [`agent::CredentialStore`]; use
 //! [`agent::VaultBackedSecretStore`] with the same shared vault to encrypt
 //! credential values before they reach the raw backend.

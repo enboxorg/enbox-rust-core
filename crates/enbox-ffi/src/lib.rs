@@ -438,10 +438,9 @@ impl EnboxCore {
 
     /// Initialize the credential vault, returning its recovery phrase.
     ///
-    /// Shares identity and key state with initialize_agent_identity. Legacy
-    /// plaintext key material from older versions requires separate cleanup
-    /// before database-reader confidentiality can be claimed for those stores.
-    /// This method does not migrate or erase legacy identity storage.
+    /// Shares identity and key state with initialize_agent_identity. The vault
+    /// stores only password-wrapped entries; the plaintext identity path was
+    /// never released, so there is no legacy material to migrate or erase.
     pub fn initialize_credential_vault(
         &self,
         password: String,
