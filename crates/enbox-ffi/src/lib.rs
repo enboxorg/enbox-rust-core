@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use dwn_rs_agent::agent::{
     derive_agent_keys, DidDhtProvider, IdentityVault, MemoryKeyManager, PortableDid,
-    VaultBackedSecretStore,
+    VaultBackedSecretStore, DEFAULT_PBES2_ITERATIONS,
 };
 use dwn_rs_agent::auth::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
@@ -356,21 +356,40 @@ fn default_sync_direction() -> SyncDirection {
 impl EnboxCore {
     #[uniffi::constructor]
     pub fn open_in_memory() -> Result<Arc<Self>, EnboxError> {
+        Self::open_in_memory_with_work_factor(DEFAULT_PBES2_ITERATIONS)
+    }
+
+    /// Open an in-memory node with an explicit PBES2 work factor for the
+    /// credential vault.
+    #[uniffi::constructor]
+    pub fn open_in_memory_with_work_factor(work_factor: u32) -> Result<Arc<Self>, EnboxError> {
         Self::open_with_resolver(
             SqliteNativeDwn::open_in_memory,
             StaticPublicKeyResolver::default(),
             None,
+            work_factor,
         )
     }
 
     /// Open a durable SQLite-backed DWN at `database_path`.
     #[uniffi::constructor]
     pub fn open(database_path: String) -> Result<Arc<Self>, EnboxError> {
+        Self::open_with_work_factor(database_path, DEFAULT_PBES2_ITERATIONS)
+    }
+
+    /// Open a durable SQLite-backed DWN at `database_path` with an explicit
+    /// PBES2 work factor for the credential vault.
+    #[uniffi::constructor]
+    pub fn open_with_work_factor(
+        database_path: String,
+        work_factor: u32,
+    ) -> Result<Arc<Self>, EnboxError> {
         let path = database_path.clone();
         Self::open_with_resolver(
             move |resolver| SqliteNativeDwn::open_at(path, resolver),
             StaticPublicKeyResolver::default(),
             Some(database_path),
+            work_factor,
         )
     }
 
@@ -1405,12 +1424,20 @@ impl EnboxCore {
         dwn: F,
         resolver: StaticPublicKeyResolver,
         database_path: Option<String>,
+        work_factor: u32,
     ) -> Result<Arc<Self>, EnboxError>
     where
         F: FnOnce(StaticPublicKeyResolver) -> Fut,
         Fut: std::future::Future<Output = Result<SqliteNativeDwn, E>>,
         E: std::fmt::Display,
     {
+        if work_factor == 0 {
+            return Err(dwn_rs_agent::agent::AgentIdentityError::new(
+                "AgentVaultError",
+                "invalid vault work factor",
+            )
+            .into());
+        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -1424,9 +1451,10 @@ impl EnboxCore {
             })?;
         let secret_store = SqliteSecretStore::new(node.store());
         let raw_store = Arc::new(secret_store.clone());
-        let credential_vault = Arc::new(IdentityVault::new(
+        let credential_vault = Arc::new(IdentityVault::with_work_factor(
             raw_store.clone(),
             Arc::new(DidDhtProvider::default()),
+            work_factor,
         ));
         let credentials = Arc::new(VaultBackedSecretStore::new(
             credential_vault.clone(),
@@ -2223,6 +2251,61 @@ mod tests {
             assert!(core.current_agent_identity().unwrap().is_some());
             assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
         }
+    }
+
+    fn stored_vault_work_factor(core: &EnboxCore, password: &str) -> u32 {
+        use dwn_rs_agent::agent::{unwrap_cek_typed, SecretStore, VAULT_CEK_JWE_KEY};
+        let raw = core.require_secret_store().unwrap();
+        let jwe = core
+            .runtime
+            .block_on(raw.get(VAULT_CEK_JWE_KEY))
+            .unwrap()
+            .expect("vault CEK entry");
+        let (_, header) = unwrap_cek_typed(std::str::from_utf8(&jwe).unwrap(), password.as_bytes())
+            .expect("stored CEK opens");
+        header.p2c
+    }
+
+    #[test]
+    fn host_selects_the_pbes2_work_factor_at_open() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let durable_path = temp
+            .path()
+            .join("agent.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        let cores = [
+            (EnboxCore::open_in_memory().expect("core opens"), 210_000),
+            (
+                EnboxCore::open_in_memory_with_work_factor(1).expect("core opens"),
+                1,
+            ),
+            (
+                EnboxCore::open_with_work_factor(durable_path, 10_000).expect("core opens"),
+                10_000,
+            ),
+        ];
+        for (core, expected) in cores {
+            core.initialize_agent_identity(
+                serde_json::json!({
+                    "password": "test-password", "recoveryPhrase": TEST_RECOVERY_PHRASE
+                })
+                .to_string(),
+            )
+            .expect("initialize agent");
+            assert_eq!(stored_vault_work_factor(&core, "test-password"), expected);
+        }
+    }
+
+    #[test]
+    fn zero_work_factor_is_rejected_before_opening_the_database() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("agent.sqlite");
+        let error = EnboxCore::open_with_work_factor(path.to_string_lossy().into_owned(), 0)
+            .err()
+            .expect("zero work factor rejected");
+        assert!(matches!(error, EnboxError::Agent { ref code, .. } if code == "AgentVaultError"));
+        assert!(!path.exists());
     }
 
     #[test]
