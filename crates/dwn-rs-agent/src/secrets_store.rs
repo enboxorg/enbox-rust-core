@@ -143,10 +143,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::agent::{
-        DidDhtProvider, IdentityVault, VAULT_CONTENT_ENCRYPTION_KEY, VAULT_PORTABLE_DID_KEY,
-        VAULT_UNLOCK_SALT_KEY,
-    };
+    use crate::agent::{DidDhtProvider, IdentityVault};
     use dwn_rs_core::stores::wake::WakePublishHandler;
     use dwn_rs_core::stores::MessageStore;
     use tempfile::tempdir;
@@ -207,9 +204,9 @@ mod tests {
                 .await
                 .unwrap();
             for key in [
-                VAULT_PORTABLE_DID_KEY,
-                VAULT_CONTENT_ENCRYPTION_KEY,
-                VAULT_UNLOCK_SALT_KEY,
+                "agent:vault:portableDid",
+                "agent:vault:contentEncryptionKey",
+                "agent:vault:unlockSalt",
             ] {
                 assert!(raw.get(key).await.unwrap().is_none());
             }

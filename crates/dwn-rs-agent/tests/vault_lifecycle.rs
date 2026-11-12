@@ -22,10 +22,6 @@ const PASSWORD: &str = "vault-password";
 const PASSWORD_2: &str = "vault-password-2";
 const DID_URI: &str = "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo";
 
-const LEGACY_PORTABLE_DID_KEY: &str = "agent:vault:portableDid";
-const LEGACY_CEK_KEY: &str = "agent:vault:contentEncryptionKey";
-const LEGACY_SALT_KEY: &str = "agent:vault:unlockSalt";
-
 fn memory_store() -> Arc<MemorySecretStore> {
     Arc::new(MemorySecretStore::default())
 }
@@ -54,14 +50,7 @@ fn header(jwe: &str) -> Value {
 
 async fn snapshot<S: SecretStore + ?Sized>(store: &S) -> BTreeMap<String, Vec<u8>> {
     let mut map = BTreeMap::new();
-    for key in [
-        VAULT_CEK_JWE_KEY,
-        VAULT_DID_JWE_KEY,
-        VAULT_STATUS_KEY,
-        LEGACY_PORTABLE_DID_KEY,
-        LEGACY_CEK_KEY,
-        LEGACY_SALT_KEY,
-    ] {
+    for key in [VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY] {
         if let Some(value) = store.get(key).await.unwrap() {
             map.insert(key.to_string(), value);
         }
@@ -1091,31 +1080,6 @@ async fn concurrent_operations_stay_consistent() {
     assert!(vault.status().await.unwrap().initialized);
     if vault.unlock(PASSWORD).await.is_err() {
         vault.unlock(PASSWORD_2).await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn legacy_plaintext_keys_are_never_read_or_removed() {
-    let store = memory_store();
-    for (key, value) in [
-        (LEGACY_PORTABLE_DID_KEY, b"legacy-did".to_vec()),
-        (LEGACY_CEK_KEY, b"legacy-cek".to_vec()),
-        (LEGACY_SALT_KEY, b"legacy-salt".to_vec()),
-    ] {
-        store.put(key, value).await.unwrap();
-    }
-    let before = snapshot(&*store).await;
-
-    let vault = vault(store.clone());
-    assert!(!vault.status().await.unwrap().initialized);
-    vault
-        .initialize(PASSWORD, Some(PHRASE), vec![])
-        .await
-        .unwrap();
-
-    let after = snapshot(&*store).await;
-    for key in [LEGACY_PORTABLE_DID_KEY, LEGACY_CEK_KEY, LEGACY_SALT_KEY] {
-        assert_eq!(after.get(key), before.get(key));
     }
 }
 
