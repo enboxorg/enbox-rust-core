@@ -1515,13 +1515,13 @@ impl AgentDidNetwork for TestDidNetwork {
                 }],
             }))
             .expect("valid test DID document");
-            Ok(dwn_rs_agent::agent::DidResolution::Found(
+            Ok(dwn_rs_agent::agent::DidResolution::Found(Box::new(
                 dwn_rs_agent::agent::ResolvedAgentDid {
                     document,
                     sequence: 1,
                     types: None,
                 },
-            ))
+            )))
         })
     }
 

@@ -29,9 +29,8 @@ pub(crate) fn system_clock() -> AgentClock {
     Arc::new(now_utc)
 }
 
-pub(crate) fn clock_system_time(clock: &AgentClock) -> AgentIdentityResult<SystemTime> {
-    SystemTime::try_from(clock())
-        .map_err(|_| AgentIdentityError::did("time is before the unix epoch"))
+pub(crate) fn clock_system_time(clock: &AgentClock) -> SystemTime {
+    SystemTime::from(clock())
 }
 
 fn did_error(error: DhtPublishError) -> AgentIdentityError {
@@ -65,7 +64,7 @@ impl ResolvedAgentDid {
 /// Outcome of a fresh agent DID lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DidResolution {
-    Found(ResolvedAgentDid),
+    Found(Box<ResolvedAgentDid>),
     NotFound,
 }
 
@@ -161,11 +160,11 @@ impl AgentDidNetwork for DidDhtNetwork {
                 AgentIdentityError::did(format!("invalid DID {did_uri}: {error}"))
             })?;
             match self.resolver.resolve(&did).await {
-                Ok(resolved) => Ok(DidResolution::Found(ResolvedAgentDid {
+                Ok(resolved) => Ok(DidResolution::Found(Box::new(ResolvedAgentDid {
                     document: resolved.document,
                     sequence: resolved.sequence,
                     types: resolved.types,
-                })),
+                }))),
                 Err(DhtPublishError::NotFound) => Ok(DidResolution::NotFound),
                 Err(error) => Err(did_error(error)),
             }
