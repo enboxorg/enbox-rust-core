@@ -186,7 +186,11 @@ async fn recovered_agent(recovery_phrase: &str) -> RecoveredAgent {
         .await
         .unwrap();
     let raw_store = Arc::new(secret_store);
-    let vault = Arc::new(common::offline_vault(raw_store.clone(), Arc::new(DeterministicDidJwkProvider::default()), 1));
+    let vault = Arc::new(common::offline_vault(
+        raw_store.clone(),
+        Arc::new(DeterministicDidJwkProvider::default()),
+        1,
+    ));
     vault
         .initialize("test-password", Some(recovery_phrase), vec![])
         .await

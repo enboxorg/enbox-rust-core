@@ -7,12 +7,13 @@
 
 use super::{
     clock_system_time, copy_resolved_dwn_service, decrypt_did, derive_agent_keys,
-    dwn_endpoint_status, encrypt_did, replace_dwn_service_endpoint_urls, system_clock, unwrap_cek_typed,
-    validate_agent_did_key_requirements, validate_recovery_phrase, wrap_cek, AgentClock,
-    AgentDerivedKeys, AgentDidCreateRequest, AgentDidNetwork, AgentDidSigner, AgentIdentityError,
-    AgentIdentityResult, CekDecodeError, CekHeader, DerivedIdentitySigner, DidDhtNetwork,
-    DidProvider, DidResolution, DwnEndpointStatus, PortableDid, SecretStore, SecretWrite,
-    VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
+    dwn_endpoint_status, encrypt_did, normalize_dwn_endpoints, replace_dwn_service_endpoint_urls,
+    system_clock, unwrap_cek_typed, validate_agent_did_key_requirements, validate_recovery_phrase,
+    wrap_cek, AgentClock, AgentDerivedKeys, AgentDidCreateRequest, AgentDidNetwork, AgentDidSigner,
+    AgentIdentityError, AgentIdentityResult, CekDecodeError, CekHeader, DerivedIdentitySigner,
+    DidDhtNetwork, DidProvider, DidResolution, DwnEndpointStatus, PortableDid, SecretStore,
+    SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY,
+    VAULT_STATUS_KEY,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -143,10 +144,7 @@ impl IdentityVault {
     }
 
     /// Read time through a host-supplied clock.
-    pub fn with_clock(
-        mut self,
-        clock: impl Fn() -> DateTime<Utc> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn with_clock(mut self, clock: impl Fn() -> DateTime<Utc> + Send + Sync + 'static) -> Self {
         self.clock = Arc::new(clock);
         self
     }
@@ -178,6 +176,15 @@ impl IdentityVault {
             return Err(blank_password());
         }
         let is_recovery = recovery_phrase.is_some();
+        let dwn_endpoints = if dwn_endpoints.is_empty() {
+            Vec::new()
+        } else {
+            normalize_dwn_endpoints(&dwn_endpoints).ok_or_else(|| {
+                AgentIdentityError::did(
+                    "DWN endpoint URL must use HTTP(S) without a query or fragment.",
+                )
+            })?
+        };
         let recovery_phrase = match recovery_phrase {
             Some(phrase) => {
                 validate_recovery_phrase(phrase)?;
@@ -454,19 +461,12 @@ impl IdentityVault {
             self.work_factor,
         )
         .await?;
-        let mut writes = vec![SecretWrite::put(
-            VAULT_CEK_JWE_KEY,
-            cek_entry.into_bytes(),
-        )];
+        let mut writes = vec![SecretWrite::put(VAULT_CEK_JWE_KEY, cek_entry.into_bytes())];
         if reconcile {
-            let did_json = serde_json::to_vec(&stored_did).map_err(|err| {
-                AgentIdentityError::vault(format!("invalid portable DID: {err}"))
-            })?;
+            let did_json = serde_json::to_vec(&stored_did)
+                .map_err(|err| AgentIdentityError::vault(format!("invalid portable DID: {err}")))?;
             let did_entry = encrypt_did(&did_json, &derived_cek)?;
-            writes.push(SecretWrite::put(
-                VAULT_DID_JWE_KEY,
-                did_entry.into_bytes(),
-            ));
+            writes.push(SecretWrite::put(VAULT_DID_JWE_KEY, did_entry.into_bytes()));
         }
         self.store.apply(writes).await?;
         state.cek = Some(derived_cek);
@@ -755,10 +755,15 @@ impl IdentityVault {
         })
     }
 
-    fn identity_signer(&self, identity_private_jwk: &JWK) -> AgentIdentityResult<Arc<dyn AgentDidSigner>> {
+    fn identity_signer(
+        &self,
+        identity_private_jwk: &JWK,
+    ) -> AgentIdentityResult<Arc<dyn AgentDidSigner>> {
         match &self.signer {
             Some(signer) => Ok(signer.clone()),
-            None => Ok(Arc::new(DerivedIdentitySigner::from_jwk(identity_private_jwk)?)),
+            None => Ok(Arc::new(DerivedIdentitySigner::from_jwk(
+                identity_private_jwk,
+            )?)),
         }
     }
 
@@ -890,4 +895,177 @@ fn corrupt(detail: impl Into<String>) -> AgentIdentityError {
 
 fn recovery_phrase_mismatch() -> AgentIdentityError {
     AgentIdentityError::recovery_phrase_mismatch("recovery phrase does not match the stored vault")
+}
+
+#[cfg(test)]
+mod deferred_reconcile_tests {
+    use super::*;
+    use crate::agent::test_support::ready_document;
+    use crate::agent::{
+        derive_agent_keys, encrypt_did, AgentIdentityFuture, DidDhtProvider, DidResolution,
+        MemorySecretStore, ResolvedAgentDid,
+    };
+    use ssi_dids_core::Document;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use chrono::{TimeZone, Utc};
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const PASSWORD: &str = "vault-password";
+    const PASSWORD_2: &str = "vault-password-2";
+
+    struct RecordingNetwork {
+        resolution: Mutex<DidResolution>,
+        publishes: AtomicUsize,
+    }
+
+    impl RecordingNetwork {
+        fn not_found() -> Self {
+            Self {
+                resolution: Mutex::new(DidResolution::NotFound),
+                publishes: AtomicUsize::new(0),
+            }
+        }
+
+        fn set(&self, resolution: DidResolution) {
+            *self.resolution.lock().unwrap() = resolution;
+        }
+
+        fn publishes(&self) -> usize {
+            self.publishes.load(Ordering::SeqCst)
+        }
+    }
+
+    impl AgentDidNetwork for RecordingNetwork {
+        fn resolve<'a>(&'a self, _did_uri: &'a str) -> AgentIdentityFuture<'a, DidResolution> {
+            let resolution = self.resolution.lock().unwrap().clone();
+            Box::pin(async move { Ok(resolution) })
+        }
+
+        fn publish<'a>(
+            &'a self,
+            _document: &'a Document,
+            _types: &'a [u64],
+            sequence: u64,
+            _signer: &'a dyn AgentDidSigner,
+        ) -> AgentIdentityFuture<'a, u64> {
+            self.publishes.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(sequence) })
+        }
+    }
+
+    fn vault(network: Arc<RecordingNetwork>) -> IdentityVault {
+        IdentityVault::with_did_network(
+            Arc::new(MemorySecretStore::default()),
+            Arc::new(DidDhtProvider::default()),
+            1,
+            network,
+        )
+        .with_clock(|| {
+            Utc.timestamp_opt(1_700_000_000, 0)
+                .single()
+                .expect("valid timestamp")
+        })
+    }
+
+    async fn seeded(network: Arc<RecordingNetwork>) -> IdentityVault {
+        let vault = vault(network);
+        vault
+            .initialize(
+                PASSWORD,
+                Some(PHRASE),
+                vec!["https://stored.example".to_string()],
+            )
+            .await
+            .unwrap();
+        vault
+    }
+
+    // Covers: DID-DHT-006
+    #[tokio::test]
+    async fn deferred_ready_reset_stores_the_resolved_service_without_publishing() {
+        let network = Arc::new(RecordingNetwork::not_found());
+        let vault = seeded(network.clone()).await;
+        network.set(DidResolution::Found(ResolvedAgentDid {
+            document: ready_document(
+                "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo",
+            ),
+            sequence: 9,
+            types: None,
+        }));
+
+        vault
+            .reset_password_with_recovery_phrase_deferred(
+                PHRASE,
+                PASSWORD_2,
+                Some(vec!["https://caller.example".to_string()]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(network.publishes(), 1);
+        let stored = vault.get_did().await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&stored.document).unwrap()["service"][0]["serviceEndpoint"],
+            serde_json::json!(["https://dwn.example"])
+        );
+    }
+
+    // Covers: DID-DHT-006
+    #[tokio::test]
+    async fn deferred_not_found_reset_republishes_the_stored_shape() {
+        let network = Arc::new(RecordingNetwork::not_found());
+        let vault = seeded(network.clone()).await;
+
+        vault
+            .reset_password_with_recovery_phrase_deferred(PHRASE, PASSWORD_2, None)
+            .await
+            .unwrap();
+
+        assert_eq!(network.publishes(), 2);
+        let stored = vault.get_did().await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&stored.document).unwrap()["service"][0]["serviceEndpoint"],
+            serde_json::json!(["https://stored.example"])
+        );
+    }
+
+    // Covers: DID-DHT-006
+    #[tokio::test]
+    async fn deferred_not_found_reset_with_unusable_stored_publishes_the_replacement() {
+        let network = Arc::new(RecordingNetwork::not_found());
+        let vault = seeded(network.clone()).await;
+
+        let derived = derive_agent_keys(PHRASE).unwrap();
+        let cek: [u8; 32] = derived
+            .vault_content_encryption_key
+            .as_slice()
+            .try_into()
+            .unwrap();
+        let mut stored = vault.get_did().await.unwrap();
+        stored.document.service.clear();
+        let entry = encrypt_did(&serde_json::to_vec(&stored).unwrap(), &cek).unwrap();
+        vault
+            .store
+            .put(VAULT_DID_JWE_KEY, entry.into_bytes())
+            .await
+            .unwrap();
+
+        vault
+            .reset_password_with_recovery_phrase_deferred(
+                PHRASE,
+                PASSWORD_2,
+                Some(vec!["https://replacement.example".to_string()]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(network.publishes(), 2);
+        let stored = vault.get_did().await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&stored.document).unwrap()["service"][0]["serviceEndpoint"],
+            serde_json::json!(["https://replacement.example"])
+        );
+    }
 }

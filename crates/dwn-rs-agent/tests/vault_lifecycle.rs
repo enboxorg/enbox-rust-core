@@ -75,7 +75,11 @@ fn memory_store() -> Arc<MemorySecretStore> {
 }
 
 fn vault(store: Arc<dyn SecretStore>) -> Arc<IdentityVault> {
-    Arc::new(offline_vault(store, Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS))
+    Arc::new(offline_vault(
+        store,
+        Arc::new(DidDhtProvider::default()),
+        DEFAULT_PBES2_ITERATIONS,
+    ))
 }
 
 fn memory_vault() -> (Arc<IdentityVault>, Arc<MemorySecretStore>) {
@@ -373,7 +377,11 @@ async fn initialize_twice_keeps_store_byte_identical() {
 #[tokio::test]
 async fn initialize_did_failure_leaves_store_empty_and_locked() {
     let store = memory_store();
-    let vault = Arc::new(offline_vault(store.clone(), Arc::new(FailingDidProvider), DEFAULT_PBES2_ITERATIONS));
+    let vault = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(FailingDidProvider),
+        DEFAULT_PBES2_ITERATIONS,
+    ));
     let error = vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -705,7 +713,11 @@ async fn backup_encodes_stored_entries_and_updates_status() {
 #[tokio::test]
 async fn backup_commit_failure_leaves_status_unchanged() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
+    let vault = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        DEFAULT_PBES2_ITERATIONS,
+    ));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -985,7 +997,11 @@ async fn rust_backup_carries_the_ts_backup_shape() {
 #[tokio::test]
 async fn interrupted_initialize_leaves_store_untouched_and_retry_succeeds() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
+    let vault = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        DEFAULT_PBES2_ITERATIONS,
+    ));
     store.fail_apply.store(true, Ordering::SeqCst);
     assert_eq!(
         vault
@@ -1169,7 +1185,11 @@ async fn corrupt_status_locks_key_material() {
 #[tokio::test]
 async fn change_password_commit_failure_keeps_store_and_locks() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
+    let vault = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        DEFAULT_PBES2_ITERATIONS,
+    ));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -1197,7 +1217,11 @@ async fn change_password_commit_failure_keeps_store_and_locks() {
 #[tokio::test]
 async fn reset_commit_failure_keeps_store_and_locks() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
+    let vault = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        DEFAULT_PBES2_ITERATIONS,
+    ));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -1236,7 +1260,11 @@ async fn restore_commit_failure_keeps_store_and_locks() {
     let backup = source.backup().await.unwrap();
 
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
+    let vault = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        DEFAULT_PBES2_ITERATIONS,
+    ));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -1261,7 +1289,11 @@ async fn restore_commit_failure_keeps_store_and_locks() {
 async fn configured_work_factor_is_written_on_initialize_and_reset() {
     for work_factor in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
         let store = memory_store();
-        let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), work_factor));
+        let vault = Arc::new(offline_vault(
+            store.clone(),
+            Arc::new(DidDhtProvider::default()),
+            work_factor,
+        ));
         vault
             .initialize(PASSWORD, Some(PHRASE), vec![])
             .await
@@ -1287,14 +1319,22 @@ async fn configured_work_factor_is_written_on_initialize_and_reset() {
 async fn stored_work_factor_opens_under_any_configuration() {
     for written in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
         let store = memory_store();
-        let writer = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), written));
+        let writer = Arc::new(offline_vault(
+            store.clone(),
+            Arc::new(DidDhtProvider::default()),
+            written,
+        ));
         writer
             .initialize(PASSWORD, Some(PHRASE), vec![])
             .await
             .unwrap();
 
         for configured in [1, DEFAULT_PBES2_ITERATIONS] {
-            let reader = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), configured));
+            let reader = Arc::new(offline_vault(
+                store.clone(),
+                Arc::new(DidDhtProvider::default()),
+                configured,
+            ));
             reader.unlock(PASSWORD).await.unwrap();
             assert_eq!(reader.get_did().await.unwrap().uri, DID_URI);
             reader.lock().await.unwrap();
@@ -1305,13 +1345,21 @@ async fn stored_work_factor_opens_under_any_configuration() {
 #[tokio::test]
 async fn change_password_preserves_work_factor_from_configuration() {
     let store = memory_store();
-    let writer = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), 10_000));
+    let writer = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        10_000,
+    ));
     writer
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
         .unwrap();
 
-    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), 1));
+    let vault = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        1,
+    ));
     vault.unlock(PASSWORD).await.unwrap();
     vault.change_password(PASSWORD, PASSWORD_2).await.unwrap();
     assert_eq!(
@@ -1404,7 +1452,11 @@ mod sqlite {
 
     async fn sqlite_vault(sqlite: &SqliteStore) -> Arc<IdentityVault> {
         let store = Arc::new(SqliteSecretStore::new(sqlite));
-        Arc::new(offline_vault(store, Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS))
+        Arc::new(offline_vault(
+            store,
+            Arc::new(DidDhtProvider::default()),
+            DEFAULT_PBES2_ITERATIONS,
+        ))
     }
 
     #[tokio::test]

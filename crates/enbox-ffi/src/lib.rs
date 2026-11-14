@@ -1504,10 +1504,7 @@ impl AgentDidNetwork for TestDidNetwork {
     fn resolve<'a>(
         &'a self,
         did_uri: &'a str,
-    ) -> dwn_rs_agent::agent::AgentIdentityFuture<
-        'a,
-        dwn_rs_agent::agent::DidResolution,
-    > {
+    ) -> dwn_rs_agent::agent::AgentIdentityFuture<'a, dwn_rs_agent::agent::DidResolution> {
         Box::pin(async move {
             let document: ssi_dids_core::Document = serde_json::from_value(serde_json::json!({
                 "id": did_uri,
@@ -1539,7 +1536,8 @@ impl AgentDidNetwork for TestDidNetwork {
     }
 }
 
-pub(crate) async fn import_private_keys(    key_manager: &MemoryKeyManager,
+pub(crate) async fn import_private_keys(
+    key_manager: &MemoryKeyManager,
     portable_did: &PortableDid,
 ) -> Result<(), dwn_rs_agent::agent::AgentIdentityError> {
     use dwn_rs_agent::agent::AgentKeyManager;

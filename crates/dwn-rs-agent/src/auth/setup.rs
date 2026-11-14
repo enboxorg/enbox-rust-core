@@ -630,7 +630,11 @@ mod tests {
             refresh_url: None,
         });
         let raw_store = Arc::new(MemorySecretStore::default());
-        let vault = Arc::new(crate::agent::test_support::offline_vault(raw_store.clone(), Arc::new(DeterministicDidJwkProvider::default()), 1));
+        let vault = Arc::new(crate::agent::test_support::offline_vault(
+            raw_store.clone(),
+            Arc::new(DeterministicDidJwkProvider::default()),
+            1,
+        ));
         vault
             .initialize("test-password", Some(crate::agent::RECOVERY_PHRASE), vec![])
             .await
