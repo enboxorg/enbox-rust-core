@@ -26,10 +26,10 @@ impl DwnEndpointStatus {
 
 /// The ids accepted as the canonical DWN service.
 ///
-/// The `did:dht` wire decoder expands a relative record id such as `dwn` to
-/// `<did>#dwn`, so the typed `Document` boundary only carries absolute ids.
-/// This matcher accepts every spelling because not every document source is
-/// the wire decoder.
+/// The native `did:dht` decoder expands a relative record id such as `dwn` to
+/// `<did>#dwn`; host-supplied typed `Document` values must already carry
+/// absolute ids. This matcher compares plain strings, so it accepts the
+/// relative spellings as well.
 fn is_dwn_service_id(id: &str, did_uri: &str) -> bool {
     id == format!("{did_uri}#dwn") || id == "#dwn" || id == "dwn"
 }
@@ -224,6 +224,38 @@ mod tests {
                 DwnEndpointStatus::ServiceMalformed(_)
             ));
         }
+    }
+
+    // Covers: DID-DHT-006
+    #[test]
+    fn host_documents_must_use_absolute_service_ids() {
+        // Relative ids are expanded by the native DNS decoder, not by the
+        // vault seam: a host-supplied Document cannot carry them.
+        for id in ["#dwn", "dwn"] {
+            let rejected: Result<Document, _> = serde_json::from_value(json!({
+                "id": DID,
+                "service": [{
+                    "id": id,
+                    "type": "DecentralizedWebNode",
+                    "serviceEndpoint": ["https://dwn.example"],
+                }],
+            }));
+            assert!(rejected.is_err(), "{id} must not enter a typed document");
+        }
+
+        let absolute: Document = serde_json::from_value(json!({
+            "id": DID,
+            "service": [{
+                "id": format!("{DID}#dwn"),
+                "type": "DecentralizedWebNode",
+                "serviceEndpoint": ["https://dwn.example"],
+            }],
+        }))
+        .unwrap();
+        assert!(matches!(
+            dwn_endpoint_status(&absolute, DID),
+            DwnEndpointStatus::Ready(_)
+        ));
     }
 
     // Covers: DID-DHT-006
