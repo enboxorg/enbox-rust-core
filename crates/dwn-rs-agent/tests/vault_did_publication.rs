@@ -22,6 +22,7 @@ use dwn_rs_agent::agent::{
 };
 use dwn_rs_core::auth::PrivateJwkSigner;
 use serde_json::{json, Value};
+use simple_dns::rdata::RData;
 use ssi_dids_core::{DIDBuf, Document};
 use ssi_jwk::Algorithm;
 use url::Url;
@@ -529,6 +530,89 @@ async fn recovery_ready_without_replacement_adopts_the_resolved_service() {
 
 #[tokio::test]
 // Covers: DID-DHT-006
+async fn relative_service_ids_are_expanded_at_the_wire_boundary() {
+    let keys = derive_agent_keys(PHRASE).unwrap();
+    let remote = derived_document(&keys, vec!["https://resolved.example".to_string()]).await;
+    let body = signed_envelope(&remote, &[], 11, &keys.identity_private_jwk).await;
+
+    // The wire service record ids are relative to the DID.
+    let packet = simple_dns::Packet::parse(&body[72..]).unwrap();
+    let service_record = packet
+        .answers
+        .iter()
+        .find_map(|answer| match &answer.rdata {
+            RData::TXT(txt) if answer.name.to_string().starts_with("_s") => {
+                Some(String::try_from(txt.clone()).unwrap())
+            }
+            _ => None,
+        })
+        .expect("service record");
+    assert!(service_record.contains("id=dwn"), "{service_record}");
+
+    // The resolver boundary expands the id before a Document reaches the vault.
+    let decoded = decode_envelope(body.clone(), DID_URI).await;
+    let expanded = decoded
+        .document
+        .service
+        .iter()
+        .find(|service| service.id.as_str().ends_with("#dwn"))
+        .expect("expanded service");
+    assert_eq!(expanded.id.as_str(), format!("{DID_URI}#dwn"));
+
+    // Adoption, then replacement, both operate on the expanded document.
+    let harness = harness();
+    harness.transport.push_get(Ok(RelayResponse {
+        status: 200,
+        headers: Vec::new(),
+        body: body.clone(),
+    }));
+    let initialization = harness
+        .vault
+        .initialize(PASSWORD, Some(PHRASE), vec![])
+        .await
+        .unwrap();
+    assert!(harness.transport.puts().is_empty());
+    assert_eq!(
+        endpoints(&initialization.portable_did.document),
+        Some(json!(["https://resolved.example"]))
+    );
+    assert!(initialization
+        .portable_did
+        .document
+        .service
+        .iter()
+        .all(|service| service.id.as_str().starts_with(DID_URI)));
+
+    harness.transport.push_get(Ok(RelayResponse {
+        status: 200,
+        headers: Vec::new(),
+        body,
+    }));
+    harness
+        .vault
+        .reset_password_with_recovery_phrase(
+            PHRASE,
+            PASSWORD_2,
+            Some(vec!["https://new.example".to_string()]),
+        )
+        .await
+        .unwrap();
+    let puts = harness.transport.puts();
+    assert_eq!(puts.len(), 1);
+    let published = decode_envelope(puts[0].body.clone().unwrap(), DID_URI).await;
+    assert_eq!(
+        endpoints(&published.document),
+        Some(json!(["https://new.example"]))
+    );
+    assert!(published
+        .document
+        .service
+        .iter()
+        .all(|service| service.id.as_str().starts_with(DID_URI)));
+}
+
+#[tokio::test]
+// Covers: DID-DHT-006
 async fn recovery_initialize_always_defers_endpoint_replacement() {
     let keys = derive_agent_keys(PHRASE).unwrap();
     let remote = derived_document(&keys, vec!["https://resolved.example".to_string()]).await;
@@ -692,10 +776,10 @@ async fn resolution_failures_are_not_treated_as_not_found() {
 }
 
 #[tokio::test]
-async fn an_empty_success_body_is_not_found() {
+async fn an_empty_success_body_is_a_resolution_failure() {
     let harness = harness();
     harness.transport.push_get(Ok(response(200)));
-    let initialization = harness
+    let error = harness
         .vault
         .initialize(
             PASSWORD,
@@ -703,9 +787,45 @@ async fn an_empty_success_body_is_not_found() {
             vec!["https://dwn.example".to_string()],
         )
         .await
+        .unwrap_err();
+    assert_eq!(error.code(), "AgentIdentityDidError");
+    assert!(
+        error.detail().contains("invalid document length"),
+        "{error}"
+    );
+    assert!(harness.transport.puts().is_empty());
+    assert!(harness.snapshot().await.is_empty());
+    assert!(!harness.vault.status().await.unwrap().initialized);
+}
+
+#[tokio::test]
+async fn an_empty_success_body_during_reset_keeps_stored_state() {
+    let harness = harness();
+    harness
+        .vault
+        .initialize(
+            PASSWORD,
+            Some(PHRASE),
+            vec!["https://stored.example".to_string()],
+        )
+        .await
         .unwrap();
-    assert_eq!(initialization.portable_did.uri, DID_URI);
-    assert_eq!(harness.transport.puts().len(), 1);
+    let before = harness.snapshot().await;
+    let puts_before = harness.transport.puts().len();
+    harness.transport.push_get(Ok(response(200)));
+
+    let error = harness
+        .vault
+        .reset_password_with_recovery_phrase(
+            PHRASE,
+            PASSWORD_2,
+            Some(vec!["https://new.example".to_string()]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "AgentIdentityDidError");
+    assert_eq!(harness.snapshot().await, before);
+    assert_eq!(harness.transport.puts().len(), puts_before);
 }
 
 #[tokio::test]

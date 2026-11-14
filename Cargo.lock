@@ -1504,6 +1504,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "simple-dns",
  "ssi-claims-core",
  "ssi-dids-core",
  "ssi-jwk",

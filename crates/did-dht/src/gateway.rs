@@ -78,6 +78,10 @@ impl DhtResolver {
     }
 
     /// Resolve a `did:dht` identifier through the configured gateway.
+    ///
+    /// A non-2xx response is not-found unless the gateway is throttling or
+    /// unavailable. A 2xx body that is empty or too short is a malformed
+    /// resolution result, never evidence that the record is absent.
     pub async fn resolve(&self, did: &DID) -> Result<ResolvedDhtDocument, DhtPublishError> {
         if did.method_name() != "dht" {
             return Err(DhtPublishError::MethodNotSupported(
@@ -106,10 +110,6 @@ impl DhtResolver {
             } else {
                 DhtPublishError::NotFound
             });
-        }
-
-        if response.body.is_empty() {
-            return Err(DhtPublishError::NotFound);
         }
 
         let key = decode_identity_key(did)?;
@@ -331,11 +331,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn treats_an_empty_success_body_as_not_found() {
+    async fn rejects_an_empty_success_body_as_malformed() {
         let (did, _) = signed_relay_payload(1);
         let (resolver, _) = resolver(DhtResolverConfig::default(), Ok(response(200, Vec::new())));
 
-        assert_eq!(resolver.resolve(&did).await, Err(DhtPublishError::NotFound));
+        assert_eq!(
+            resolver.resolve(&did).await,
+            Err(DhtPublishError::InvalidDocumentLength {
+                min: 72,
+                max: 1072,
+                found: 0,
+            })
+        );
     }
 
     #[tokio::test]
