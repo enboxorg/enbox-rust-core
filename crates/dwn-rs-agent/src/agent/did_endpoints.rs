@@ -25,6 +25,11 @@ impl DwnEndpointStatus {
 }
 
 /// The ids accepted as the canonical DWN service.
+///
+/// The `did:dht` wire decoder expands a relative record id such as `dwn` to
+/// `<did>#dwn`, so the typed `Document` boundary only carries absolute ids.
+/// This matcher accepts every spelling because not every document source is
+/// the wire decoder.
 fn is_dwn_service_id(id: &str, did_uri: &str) -> bool {
     id == format!("{did_uri}#dwn") || id == "#dwn" || id == "dwn"
 }
