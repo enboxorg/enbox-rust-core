@@ -505,6 +505,15 @@ async fn recovery_ready_without_replacement_adopts_the_resolved_service() {
 
     assert!(harness.transport.puts().is_empty());
     assert_eq!(
+        harness
+            .transport
+            .requests()
+            .into_iter()
+            .filter(|request| request.method == RelayMethod::Get)
+            .count(),
+        1
+    );
+    assert_eq!(
         endpoints(&initialization.portable_did.document),
         Some(json!(["https://resolved.example"]))
     );

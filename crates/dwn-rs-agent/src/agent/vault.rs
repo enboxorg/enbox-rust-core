@@ -176,15 +176,6 @@ impl IdentityVault {
             return Err(blank_password());
         }
         let is_recovery = recovery_phrase.is_some();
-        let dwn_endpoints = if dwn_endpoints.is_empty() {
-            Vec::new()
-        } else {
-            normalize_dwn_endpoints(&dwn_endpoints).ok_or_else(|| {
-                AgentIdentityError::did(
-                    "DWN endpoint URL must use HTTP(S) without a query or fragment.",
-                )
-            })?
-        };
         let recovery_phrase = match recovery_phrase {
             Some(phrase) => {
                 validate_recovery_phrase(phrase)?;
@@ -193,6 +184,15 @@ impl IdentityVault {
             None => Mnemonic::generate_in(Language::English, 12)
                 .map_err(|err| AgentIdentityError::invalid_mnemonic(err.to_string()))?
                 .to_string(),
+        };
+        let dwn_endpoints = if dwn_endpoints.is_empty() {
+            Vec::new()
+        } else {
+            normalize_dwn_endpoints(&dwn_endpoints).ok_or_else(|| {
+                AgentIdentityError::did(
+                    "DWN endpoint URL must use HTTP(S) without a query or fragment.",
+                )
+            })?
         };
 
         let derived = derive_agent_keys(&recovery_phrase)?;
