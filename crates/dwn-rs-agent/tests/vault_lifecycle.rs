@@ -7,12 +7,14 @@ use std::sync::Arc;
 
 use base64::prelude::{Engine as _, BASE64_URL_SAFE_NO_PAD as base64url};
 use dwn_rs_agent::agent::{
-    derive_agent_keys, encrypt_data, encrypt_did, AgentDidCreateRequest, AgentIdentityError,
-    AgentIdentityFuture, AgentIdentityResult, DidDhtProvider, DidProvider, IdentityVault,
-    IdentityVaultBackup, MemorySecretStore, PortableDid, SecretStore, SecretWrite, VaultStatus,
-    DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
+    derive_agent_keys, encrypt_data, encrypt_did, AgentDidCreateRequest, AgentDidNetwork,
+    AgentDidSigner, AgentIdentityError, AgentIdentityFuture, AgentIdentityResult, DidDhtProvider,
+    DidProvider, DidResolution, IdentityVault, IdentityVaultBackup, MemorySecretStore, PortableDid,
+    ResolvedAgentDid, SecretStore, SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS,
+    VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use serde_json::Value;
+use ssi_dids_core::Document;
 
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -22,15 +24,58 @@ const PASSWORD: &str = "vault-password";
 const PASSWORD_2: &str = "vault-password-2";
 const DID_URI: &str = "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo";
 
+/// A gateway that is always reachable and already has a ready document, so
+/// password lifecycle tests never touch the network.
+struct ReadyNetwork;
+
+impl AgentDidNetwork for ReadyNetwork {
+    fn resolve<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, DidResolution> {
+        Box::pin(async move {
+            Ok(DidResolution::Found(ResolvedAgentDid {
+                document: ready_document(did_uri),
+                sequence: 1,
+                types: None,
+            }))
+        })
+    }
+
+    fn publish<'a>(
+        &'a self,
+        _document: &'a Document,
+        _types: &'a [u64],
+        _sequence: u64,
+        _signer: &'a dyn AgentDidSigner,
+    ) -> AgentIdentityFuture<'a, u64> {
+        Box::pin(async move { Ok(1) })
+    }
+}
+
+fn ready_document(did_uri: &str) -> Document {
+    serde_json::from_value(serde_json::json!({
+        "id": did_uri,
+        "service": [{
+            "id": format!("{did_uri}#dwn"),
+            "type": "DecentralizedWebNode",
+            "serviceEndpoint": ["https://dwn.example"],
+        }],
+    }))
+    .unwrap()
+}
+
+fn offline_vault(
+    store: Arc<dyn SecretStore>,
+    did_provider: Arc<dyn DidProvider>,
+    work_factor: u32,
+) -> IdentityVault {
+    IdentityVault::with_did_network(store, did_provider, work_factor, Arc::new(ReadyNetwork))
+}
+
 fn memory_store() -> Arc<MemorySecretStore> {
     Arc::new(MemorySecretStore::default())
 }
 
 fn vault(store: Arc<dyn SecretStore>) -> Arc<IdentityVault> {
-    Arc::new(IdentityVault::new(
-        store,
-        Arc::new(DidDhtProvider::default()),
-    ))
+    Arc::new(offline_vault(store, Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS))
 }
 
 fn memory_vault() -> (Arc<IdentityVault>, Arc<MemorySecretStore>) {
@@ -198,7 +243,7 @@ async fn uninitialized_operations_keep_their_codes() {
     assert_eq!(
         code(
             vault
-                .reset_password_with_recovery_phrase(PHRASE, PASSWORD)
+                .reset_password_with_recovery_phrase(PHRASE, PASSWORD, None)
                 .await
         ),
         "AgentVaultUninitialized"
@@ -328,10 +373,7 @@ async fn initialize_twice_keeps_store_byte_identical() {
 #[tokio::test]
 async fn initialize_did_failure_leaves_store_empty_and_locked() {
     let store = memory_store();
-    let vault = Arc::new(IdentityVault::new(
-        store.clone(),
-        Arc::new(FailingDidProvider),
-    ));
+    let vault = Arc::new(offline_vault(store.clone(), Arc::new(FailingDidProvider), DEFAULT_PBES2_ITERATIONS));
     let error = vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -593,7 +635,7 @@ async fn reset_with_matching_phrase_rewraps_cek_and_keeps_entries() {
     vault.lock().await.unwrap();
 
     vault
-        .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+        .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2, None)
         .await
         .unwrap();
     assert!(!vault.is_locked().await);
@@ -622,7 +664,7 @@ async fn reset_with_other_phrase_is_mismatch_and_locks() {
         .unwrap();
     let before = snapshot(&*store).await;
     let error = vault
-        .reset_password_with_recovery_phrase(PHRASE_B, PASSWORD_2)
+        .reset_password_with_recovery_phrase(PHRASE_B, PASSWORD_2, None)
         .await
         .unwrap_err();
     assert_eq!(error.code(), "HD_IDENTITY_VAULT_RECOVERY_PHRASE_MISMATCH");
@@ -663,10 +705,7 @@ async fn backup_encodes_stored_entries_and_updates_status() {
 #[tokio::test]
 async fn backup_commit_failure_leaves_status_unchanged() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(IdentityVault::new(
-        store.clone(),
-        Arc::new(DidDhtProvider::default()),
-    ));
+    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -946,10 +985,7 @@ async fn rust_backup_carries_the_ts_backup_shape() {
 #[tokio::test]
 async fn interrupted_initialize_leaves_store_untouched_and_retry_succeeds() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(IdentityVault::new(
-        store.clone(),
-        Arc::new(DidDhtProvider::default()),
-    ));
+    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
     store.fail_apply.store(true, Ordering::SeqCst);
     assert_eq!(
         vault
@@ -1006,7 +1042,7 @@ async fn failures_leave_no_reachable_key_material() {
     vault.unlock(PASSWORD).await.unwrap();
     assert_eq!(
         vault
-            .reset_password_with_recovery_phrase(PHRASE_B, PASSWORD_2)
+            .reset_password_with_recovery_phrase(PHRASE_B, PASSWORD_2, None)
             .await
             .unwrap_err()
             .code(),
@@ -1114,7 +1150,7 @@ async fn corrupt_status_locks_key_material() {
     let (vault, _) = initialized_vault_with_corrupt_status().await;
     assert_eq!(
         vault
-            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2, None)
             .await
             .unwrap_err()
             .code(),
@@ -1133,10 +1169,7 @@ async fn corrupt_status_locks_key_material() {
 #[tokio::test]
 async fn change_password_commit_failure_keeps_store_and_locks() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(IdentityVault::new(
-        store.clone(),
-        Arc::new(DidDhtProvider::default()),
-    ));
+    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -1164,10 +1197,7 @@ async fn change_password_commit_failure_keeps_store_and_locks() {
 #[tokio::test]
 async fn reset_commit_failure_keeps_store_and_locks() {
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(IdentityVault::new(
-        store.clone(),
-        Arc::new(DidDhtProvider::default()),
-    ));
+    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -1178,7 +1208,7 @@ async fn reset_commit_failure_keeps_store_and_locks() {
     store.fail_apply.store(true, Ordering::SeqCst);
     assert_eq!(
         vault
-            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2, None)
             .await
             .unwrap_err()
             .code(),
@@ -1189,7 +1219,7 @@ async fn reset_commit_failure_keeps_store_and_locks() {
 
     store.fail_apply.store(false, Ordering::SeqCst);
     vault
-        .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+        .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2, None)
         .await
         .unwrap();
     vault.lock().await.unwrap();
@@ -1206,10 +1236,7 @@ async fn restore_commit_failure_keeps_store_and_locks() {
     let backup = source.backup().await.unwrap();
 
     let store = Arc::new(FaultyStore::default());
-    let vault = Arc::new(IdentityVault::new(
-        store.clone(),
-        Arc::new(DidDhtProvider::default()),
-    ));
+    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS));
     vault
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
@@ -1234,11 +1261,7 @@ async fn restore_commit_failure_keeps_store_and_locks() {
 async fn configured_work_factor_is_written_on_initialize_and_reset() {
     for work_factor in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
         let store = memory_store();
-        let vault = Arc::new(IdentityVault::with_work_factor(
-            store.clone(),
-            Arc::new(DidDhtProvider::default()),
-            work_factor,
-        ));
+        let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), work_factor));
         vault
             .initialize(PASSWORD, Some(PHRASE), vec![])
             .await
@@ -1250,7 +1273,7 @@ async fn configured_work_factor_is_written_on_initialize_and_reset() {
 
         vault.lock().await.unwrap();
         vault
-            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+            .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2, None)
             .await
             .unwrap();
         assert_eq!(
@@ -1264,22 +1287,14 @@ async fn configured_work_factor_is_written_on_initialize_and_reset() {
 async fn stored_work_factor_opens_under_any_configuration() {
     for written in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
         let store = memory_store();
-        let writer = Arc::new(IdentityVault::with_work_factor(
-            store.clone(),
-            Arc::new(DidDhtProvider::default()),
-            written,
-        ));
+        let writer = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), written));
         writer
             .initialize(PASSWORD, Some(PHRASE), vec![])
             .await
             .unwrap();
 
         for configured in [1, DEFAULT_PBES2_ITERATIONS] {
-            let reader = Arc::new(IdentityVault::with_work_factor(
-                store.clone(),
-                Arc::new(DidDhtProvider::default()),
-                configured,
-            ));
+            let reader = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), configured));
             reader.unlock(PASSWORD).await.unwrap();
             assert_eq!(reader.get_did().await.unwrap().uri, DID_URI);
             reader.lock().await.unwrap();
@@ -1290,21 +1305,13 @@ async fn stored_work_factor_opens_under_any_configuration() {
 #[tokio::test]
 async fn change_password_preserves_work_factor_from_configuration() {
     let store = memory_store();
-    let writer = Arc::new(IdentityVault::with_work_factor(
-        store.clone(),
-        Arc::new(DidDhtProvider::default()),
-        10_000,
-    ));
+    let writer = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), 10_000));
     writer
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
         .unwrap();
 
-    let vault = Arc::new(IdentityVault::with_work_factor(
-        store.clone(),
-        Arc::new(DidDhtProvider::default()),
-        1,
-    ));
+    let vault = Arc::new(offline_vault(store.clone(), Arc::new(DidDhtProvider::default()), 1));
     vault.unlock(PASSWORD).await.unwrap();
     vault.change_password(PASSWORD, PASSWORD_2).await.unwrap();
     assert_eq!(
@@ -1345,7 +1352,7 @@ async fn reset_validation_and_precedence() {
 
     assert_eq!(
         vault
-            .reset_password_with_recovery_phrase(PHRASE, "\t")
+            .reset_password_with_recovery_phrase(PHRASE, "\t", None)
             .await
             .unwrap_err()
             .code(),
@@ -1358,7 +1365,7 @@ async fn reset_validation_and_precedence() {
     vault.unlock(PASSWORD).await.unwrap();
     assert_eq!(
         vault
-            .reset_password_with_recovery_phrase("not a phrase", " ")
+            .reset_password_with_recovery_phrase("not a phrase", " ", None)
             .await
             .unwrap_err()
             .code(),
@@ -1369,7 +1376,7 @@ async fn reset_validation_and_precedence() {
     vault.unlock(PASSWORD).await.unwrap();
     assert_eq!(
         vault
-            .reset_password_with_recovery_phrase("not a phrase", PASSWORD_2)
+            .reset_password_with_recovery_phrase("not a phrase", PASSWORD_2, None)
             .await
             .unwrap_err()
             .code(),
@@ -1397,10 +1404,7 @@ mod sqlite {
 
     async fn sqlite_vault(sqlite: &SqliteStore) -> Arc<IdentityVault> {
         let store = Arc::new(SqliteSecretStore::new(sqlite));
-        Arc::new(IdentityVault::new(
-            store,
-            Arc::new(DidDhtProvider::default()),
-        ))
+        Arc::new(offline_vault(store, Arc::new(DidDhtProvider::default()), DEFAULT_PBES2_ITERATIONS))
     }
 
     #[tokio::test]
@@ -1542,7 +1546,7 @@ mod sqlite {
                 .unwrap();
             let backup = vault.backup().await.unwrap();
             vault
-                .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2)
+                .reset_password_with_recovery_phrase(PHRASE, PASSWORD_2, None)
                 .await
                 .unwrap();
             (backup, temp.path().join("fresh.sqlite"))

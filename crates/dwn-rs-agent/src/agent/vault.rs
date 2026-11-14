@@ -6,19 +6,24 @@
 //! built by the injected [`DidProvider`].
 
 use super::{
-    decrypt_did, derive_agent_keys, encrypt_did, unwrap_cek_typed,
-    validate_agent_did_key_requirements, validate_recovery_phrase, wrap_cek, AgentDerivedKeys,
-    AgentDidCreateRequest, AgentIdentityError, AgentIdentityResult, CekDecodeError, CekHeader,
-    DidProvider, PortableDid, SecretStore, SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS,
-    VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
+    clock_system_time, copy_resolved_dwn_service, decrypt_did, derive_agent_keys,
+    dwn_endpoint_status, encrypt_did, replace_dwn_service_endpoint_urls, system_clock, unwrap_cek_typed,
+    validate_agent_did_key_requirements, validate_recovery_phrase, wrap_cek, AgentClock,
+    AgentDerivedKeys, AgentDidCreateRequest, AgentDidNetwork, AgentDidSigner, AgentIdentityError,
+    AgentIdentityResult, CekDecodeError, CekHeader, DerivedIdentitySigner, DidDhtNetwork,
+    DidProvider, DidResolution, DwnEndpointStatus, PortableDid, SecretStore, SecretWrite,
+    VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use base64::prelude::{Engine as _, BASE64_URL_SAFE_NO_PAD as base64url};
 use bip39::{Language, Mnemonic};
-use chrono::SecondsFormat;
+use chrono::{DateTime, SecondsFormat, Utc};
+use did_dht::next_sequence;
 use serde::{Deserialize, Serialize};
+use ssi_dids_core::Document;
+use ssi_jwk::JWK;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
@@ -75,6 +80,9 @@ struct VaultState {
 pub struct IdentityVault {
     store: Arc<dyn SecretStore>,
     did_provider: Arc<dyn DidProvider>,
+    did_network: Arc<dyn AgentDidNetwork>,
+    signer: Option<Arc<dyn AgentDidSigner>>,
+    clock: AgentClock,
     work_factor: u32,
     state: Mutex<VaultState>,
 }
@@ -84,13 +92,14 @@ impl Debug for IdentityVault {
         formatter
             .debug_struct("IdentityVault")
             .field("work_factor", &self.work_factor)
+            .field("has_signer", &self.signer.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl IdentityVault {
     /// Build a vault over the given store and DID provider using the default
-    /// work factor.
+    /// work factor and the native `did:dht` gateway.
     pub fn new(store: Arc<dyn SecretStore>, did_provider: Arc<dyn DidProvider>) -> Self {
         Self::with_work_factor(store, did_provider, DEFAULT_PBES2_ITERATIONS)
     }
@@ -101,12 +110,45 @@ impl IdentityVault {
         did_provider: Arc<dyn DidProvider>,
         work_factor: u32,
     ) -> Self {
-        Self {
+        Self::with_did_network(
             store,
             did_provider,
             work_factor,
+            Arc::new(DidDhtNetwork::native()),
+        )
+    }
+
+    /// Build a vault over explicit DID resolution and publication seams.
+    pub fn with_did_network(
+        store: Arc<dyn SecretStore>,
+        did_provider: Arc<dyn DidProvider>,
+        work_factor: u32,
+        did_network: Arc<dyn AgentDidNetwork>,
+    ) -> Self {
+        Self {
+            store,
+            did_provider,
+            did_network,
+            signer: None,
+            clock: system_clock(),
+            work_factor,
             state: Mutex::new(VaultState::default()),
         }
+    }
+
+    /// Sign publications through a host-supplied identity-key signer.
+    pub fn with_signer(mut self, signer: Arc<dyn AgentDidSigner>) -> Self {
+        self.signer = Some(signer);
+        self
+    }
+
+    /// Read time through a host-supplied clock.
+    pub fn with_clock(
+        mut self,
+        clock: impl Fn() -> DateTime<Utc> + Send + Sync + 'static,
+    ) -> Self {
+        self.clock = Arc::new(clock);
+        self
     }
 
     /// Whether the vault currently holds no in-memory CEK.
@@ -135,6 +177,7 @@ impl IdentityVault {
         if password.trim().is_empty() {
             return Err(blank_password());
         }
+        let is_recovery = recovery_phrase.is_some();
         let recovery_phrase = match recovery_phrase {
             Some(phrase) => {
                 validate_recovery_phrase(phrase)?;
@@ -153,19 +196,43 @@ impl IdentityVault {
             vault_content_encryption_key,
             vault_unlock_salt,
         } = derived;
+        let identity_private_jwk = identity_private_jwk.clone();
         let vault_content_encryption_key = Zeroizing::new(vault_content_encryption_key);
         let cek = Zeroizing::new(fixed_cek(&vault_content_encryption_key)?);
         let salt = vault_unlock_salt;
-        let portable_did = self
+        let created = self
             .did_provider
             .create_did(AgentDidCreateRequest {
-                identity_private_jwk,
+                identity_private_jwk: identity_private_jwk.clone(),
                 signing_private_jwk,
                 encryption_private_jwk,
-                dwn_endpoints,
+                dwn_endpoints: dwn_endpoints.clone(),
             })
             .await?;
-        validate_agent_did_key_requirements(&portable_did)?;
+        validate_agent_did_key_requirements(&created)?;
+
+        // Publication and reconciliation complete before the first write, so a
+        // failure leaves a fresh vault uninitialized.
+        let portable_did = if is_recovery {
+            self.reconcile_recovered_did(
+                &created,
+                replacement_endpoints(&dwn_endpoints),
+                true,
+                false,
+                &identity_private_jwk,
+            )
+            .await?
+        } else {
+            self.publish_document(
+                &created,
+                created.document.clone(),
+                created.document.clone(),
+                None,
+                &[],
+                &identity_private_jwk,
+            )
+            .await?
+        };
 
         let cek_entry = wrap_cek_blocking(
             Zeroizing::new(password.as_bytes().to_vec()),
@@ -281,10 +348,41 @@ impl IdentityVault {
 
     /// Reset the password from the recovery phrase, requiring the stored DID
     /// to match the phrase.
+    ///
+    /// Supplying `dwn_endpoints` opts into reconciliation against the
+    /// authoritative document. Without them, and without the internal defer
+    /// flag, only the password-wrapped key is replaced and no network access
+    /// happens.
     pub async fn reset_password_with_recovery_phrase(
         &self,
         recovery_phrase: &str,
         password: &str,
+        dwn_endpoints: Option<Vec<String>>,
+    ) -> AgentIdentityResult<()> {
+        self.reset_password_inner(recovery_phrase, password, dwn_endpoints, false)
+            .await
+    }
+
+    /// Reset with DWN endpoint replacement deferred to the caller.
+    ///
+    /// The flag stays crate-internal; orchestration decides when to defer.
+    #[allow(dead_code)]
+    pub(crate) async fn reset_password_with_recovery_phrase_deferred(
+        &self,
+        recovery_phrase: &str,
+        password: &str,
+        dwn_endpoints: Option<Vec<String>>,
+    ) -> AgentIdentityResult<()> {
+        self.reset_password_inner(recovery_phrase, password, dwn_endpoints, true)
+            .await
+    }
+
+    async fn reset_password_inner(
+        &self,
+        recovery_phrase: &str,
+        password: &str,
+        dwn_endpoints: Option<Vec<String>>,
+        defer_replacement: bool,
     ) -> AgentIdentityResult<()> {
         let mut state = self.state.lock().await;
         let (status, _) = self.read_status_locking_on_error(&mut state).await?;
@@ -305,6 +403,7 @@ impl IdentityVault {
             vault_content_encryption_key,
             vault_unlock_salt,
         } = derived;
+        let identity_private_jwk = identity_private_jwk.clone();
         let vault_content_encryption_key = Zeroizing::new(vault_content_encryption_key);
         let derived_cek = Zeroizing::new(fixed_cek(&vault_content_encryption_key)?);
         let salt = vault_unlock_salt;
@@ -323,7 +422,7 @@ impl IdentityVault {
         let derived_did = self
             .did_provider
             .create_did(AgentDidCreateRequest {
-                identity_private_jwk,
+                identity_private_jwk: identity_private_jwk.clone(),
                 signing_private_jwk,
                 encryption_private_jwk,
                 dwn_endpoints: Vec::new(),
@@ -334,6 +433,20 @@ impl IdentityVault {
             return Err(recovery_phrase_mismatch());
         }
 
+        let reconcile = dwn_endpoints.is_some() || defer_replacement;
+        let stored_did = if reconcile {
+            self.reconcile_recovered_did(
+                &stored_did,
+                dwn_endpoints,
+                defer_replacement,
+                true,
+                &identity_private_jwk,
+            )
+            .await?
+        } else {
+            stored_did
+        };
+
         let cek_entry = wrap_cek_blocking(
             Zeroizing::new(password.as_bytes().to_vec()),
             *derived_cek,
@@ -341,12 +454,21 @@ impl IdentityVault {
             self.work_factor,
         )
         .await?;
-        self.store
-            .apply(vec![SecretWrite::put(
-                VAULT_CEK_JWE_KEY,
-                cek_entry.into_bytes(),
-            )])
-            .await?;
+        let mut writes = vec![SecretWrite::put(
+            VAULT_CEK_JWE_KEY,
+            cek_entry.into_bytes(),
+        )];
+        if reconcile {
+            let did_json = serde_json::to_vec(&stored_did).map_err(|err| {
+                AgentIdentityError::vault(format!("invalid portable DID: {err}"))
+            })?;
+            let did_entry = encrypt_did(&did_json, &derived_cek)?;
+            writes.push(SecretWrite::put(
+                VAULT_DID_JWE_KEY,
+                did_entry.into_bytes(),
+            ));
+        }
+        self.store.apply(writes).await?;
         state.cek = Some(derived_cek);
         Ok(())
     }
@@ -380,7 +502,7 @@ impl IdentityVault {
         let data = base64url.encode(&data_bytes);
         let size = data.chars().count();
 
-        let date_created = now_iso_millis();
+        let date_created = self.now_iso_millis();
         let updated = VaultStatus {
             initialized: true,
             last_backup: Some(date_created.clone()),
@@ -462,7 +584,7 @@ impl IdentityVault {
         let status = VaultStatus {
             initialized: true,
             last_backup: backup_last_backup.or(current.last_backup),
-            last_restore: Some(now_iso_millis()),
+            last_restore: Some(self.now_iso_millis()),
         };
         self.store
             .apply(vec![
@@ -487,6 +609,161 @@ impl IdentityVault {
         let state = self.state.lock().await;
         let cek = state.cek.as_ref().ok_or_else(locked)?;
         super::decrypt_data(jwe, cek)
+    }
+
+    async fn reconcile_recovered_did(
+        &self,
+        portable_did: &PortableDid,
+        replacement_endpoints: Option<Vec<String>>,
+        defer_replacement: bool,
+        use_stored_on_not_found: bool,
+        identity_private_jwk: &JWK,
+    ) -> AgentIdentityResult<PortableDid> {
+        let resolved = match self.did_network.resolve(&portable_did.uri).await? {
+            DidResolution::Found(resolved) => resolved,
+            DidResolution::NotFound => {
+                return self
+                    .reconcile_not_found(
+                        portable_did,
+                        replacement_endpoints,
+                        defer_replacement,
+                        use_stored_on_not_found,
+                        identity_private_jwk,
+                    )
+                    .await
+            }
+        };
+
+        match dwn_endpoint_status(&resolved.document, &portable_did.uri) {
+            DwnEndpointStatus::Ready(_) => {
+                let local_document =
+                    copy_resolved_dwn_service(&portable_did.document, &resolved.document);
+                let Some(replacement) = replacement_endpoints else {
+                    return Ok(PortableDid {
+                        document: local_document,
+                        metadata: resolved.metadata(),
+                        ..portable_did.clone()
+                    });
+                };
+                if defer_replacement {
+                    return Ok(PortableDid {
+                        document: local_document,
+                        metadata: resolved.metadata(),
+                        ..portable_did.clone()
+                    });
+                }
+                let public_document =
+                    replace_dwn_service_endpoint_urls(&resolved.document, &replacement)?;
+                let local_document =
+                    replace_dwn_service_endpoint_urls(&local_document, &replacement)?;
+                self.publish_document(
+                    portable_did,
+                    public_document,
+                    local_document,
+                    Some(resolved.sequence),
+                    resolved.types.as_deref().unwrap_or(&[]),
+                    identity_private_jwk,
+                )
+                .await
+            }
+            status => {
+                let Some(replacement) = replacement_endpoints else {
+                    return Err(AgentIdentityError::did(status.message().to_string()));
+                };
+                let public_document =
+                    replace_dwn_service_endpoint_urls(&resolved.document, &replacement)?;
+                let local_document =
+                    replace_dwn_service_endpoint_urls(&portable_did.document, &replacement)?;
+                self.publish_document(
+                    portable_did,
+                    public_document,
+                    local_document,
+                    Some(resolved.sequence),
+                    resolved.types.as_deref().unwrap_or(&[]),
+                    identity_private_jwk,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn reconcile_not_found(
+        &self,
+        portable_did: &PortableDid,
+        replacement_endpoints: Option<Vec<String>>,
+        defer_replacement: bool,
+        use_stored_on_not_found: bool,
+        identity_private_jwk: &JWK,
+    ) -> AgentIdentityResult<PortableDid> {
+        if use_stored_on_not_found && (replacement_endpoints.is_none() || defer_replacement) {
+            let status = dwn_endpoint_status(&portable_did.document, &portable_did.uri);
+            if matches!(status, DwnEndpointStatus::Ready(_)) {
+                return self
+                    .publish_document(
+                        portable_did,
+                        portable_did.document.clone(),
+                        portable_did.document.clone(),
+                        None,
+                        &[],
+                        identity_private_jwk,
+                    )
+                    .await;
+            }
+            if replacement_endpoints.is_none() {
+                return Err(AgentIdentityError::did(status.message().to_string()));
+            }
+        }
+
+        let Some(replacement) = replacement_endpoints else {
+            return Err(AgentIdentityError::did(format!(
+                "Recovered DID '{}' was not found. Provide DWN endpoints explicitly to bootstrap recovery.",
+                portable_did.uri
+            )));
+        };
+        let document = replace_dwn_service_endpoint_urls(&portable_did.document, &replacement)?;
+        self.publish_document(
+            portable_did,
+            document.clone(),
+            document,
+            None,
+            &[],
+            identity_private_jwk,
+        )
+        .await
+    }
+
+    async fn publish_document(
+        &self,
+        portable_did: &PortableDid,
+        public_document: Document,
+        local_document: Document,
+        previous: Option<u64>,
+        types: &[u64],
+        identity_private_jwk: &JWK,
+    ) -> AgentIdentityResult<PortableDid> {
+        let sequence = next_sequence(clock_system_time(&self.clock)?, previous)
+            .map_err(|error| AgentIdentityError::did(error.to_string()))?;
+        let signer = self.identity_signer(identity_private_jwk)?;
+        let published = self
+            .did_network
+            .publish(&public_document, types, sequence, signer.as_ref())
+            .await?;
+        Ok(PortableDid {
+            document: local_document,
+            metadata: published_metadata(published),
+            ..portable_did.clone()
+        })
+    }
+
+    fn identity_signer(&self, identity_private_jwk: &JWK) -> AgentIdentityResult<Arc<dyn AgentDidSigner>> {
+        match &self.signer {
+            Some(signer) => Ok(signer.clone()),
+            None => Ok(Arc::new(DerivedIdentitySigner::from_jwk(identity_private_jwk)?)),
+        }
+    }
+
+    fn now_iso_millis(&self) -> String {
+        (self.clock)().to_rfc3339_opts(SecondsFormat::Millis, true)
     }
 
     async fn read_status(&self) -> AgentIdentityResult<(VaultStatus, Option<Vec<u8>>)> {
@@ -565,8 +842,22 @@ fn decode_base64url_lenient(value: &str) -> Option<Vec<u8>> {
     })
 }
 
-fn now_iso_millis() -> String {
-    super::now_utc().to_rfc3339_opts(SecondsFormat::Millis, true)
+fn replacement_endpoints(dwn_endpoints: &[String]) -> Option<Vec<String>> {
+    if dwn_endpoints.is_empty() {
+        None
+    } else {
+        Some(dwn_endpoints.to_vec())
+    }
+}
+
+fn published_metadata(sequence: u64) -> super::DidMetadata {
+    super::DidMetadata {
+        published: Some(true),
+        extra: std::collections::BTreeMap::from([(
+            "versionId".to_string(),
+            serde_json::json!(sequence.to_string()),
+        )]),
+    }
 }
 
 fn uninitialized() -> AgentIdentityError {
