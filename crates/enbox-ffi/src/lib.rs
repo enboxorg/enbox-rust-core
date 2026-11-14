@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use dwn_rs_agent::agent::{
-    derive_agent_keys, DidDhtProvider, IdentityVault, MemoryKeyManager, PortableDid,
-    VaultBackedSecretStore, DEFAULT_PBES2_ITERATIONS,
+    derive_agent_keys, AgentDidNetwork, DidDhtProvider, IdentityVault, MemoryKeyManager,
+    PortableDid, VaultBackedSecretStore, DEFAULT_PBES2_ITERATIONS,
 };
 use dwn_rs_agent::auth::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
@@ -1450,10 +1450,11 @@ impl EnboxCore {
             })?;
         let secret_store = SqliteSecretStore::new(node.store());
         let raw_store = Arc::new(secret_store.clone());
-        let credential_vault = Arc::new(IdentityVault::with_work_factor(
+        let credential_vault = Arc::new(IdentityVault::with_did_network(
             raw_store.clone(),
             Arc::new(DidDhtProvider::default()),
             work_factor,
+            default_did_network(),
         ));
         let credentials = Arc::new(VaultBackedSecretStore::new(
             credential_vault.clone(),
@@ -1484,8 +1485,61 @@ impl EnboxCore {
     }
 }
 
-pub(crate) async fn import_private_keys(
-    key_manager: &MemoryKeyManager,
+fn default_did_network() -> Arc<dyn AgentDidNetwork> {
+    #[cfg(test)]
+    {
+        Arc::new(TestDidNetwork)
+    }
+    #[cfg(not(test))]
+    {
+        Arc::new(dwn_rs_agent::agent::DidDhtNetwork::native())
+    }
+}
+
+#[cfg(test)]
+struct TestDidNetwork;
+
+#[cfg(test)]
+impl AgentDidNetwork for TestDidNetwork {
+    fn resolve<'a>(
+        &'a self,
+        did_uri: &'a str,
+    ) -> dwn_rs_agent::agent::AgentIdentityFuture<
+        'a,
+        dwn_rs_agent::agent::DidResolution,
+    > {
+        Box::pin(async move {
+            let document: ssi_dids_core::Document = serde_json::from_value(serde_json::json!({
+                "id": did_uri,
+                "service": [{
+                    "id": format!("{did_uri}#dwn"),
+                    "type": "DecentralizedWebNode",
+                    "serviceEndpoint": ["https://dwn.example"],
+                }],
+            }))
+            .expect("valid test DID document");
+            Ok(dwn_rs_agent::agent::DidResolution::Found(
+                dwn_rs_agent::agent::ResolvedAgentDid {
+                    document,
+                    sequence: 1,
+                    types: None,
+                },
+            ))
+        })
+    }
+
+    fn publish<'a>(
+        &'a self,
+        _document: &'a ssi_dids_core::Document,
+        _types: &'a [u64],
+        _sequence: u64,
+        _signer: &'a dyn dwn_rs_agent::agent::AgentDidSigner,
+    ) -> dwn_rs_agent::agent::AgentIdentityFuture<'a, u64> {
+        Box::pin(async move { Ok(1) })
+    }
+}
+
+pub(crate) async fn import_private_keys(    key_manager: &MemoryKeyManager,
     portable_did: &PortableDid,
 ) -> Result<(), dwn_rs_agent::agent::AgentIdentityError> {
     use dwn_rs_agent::agent::AgentKeyManager;

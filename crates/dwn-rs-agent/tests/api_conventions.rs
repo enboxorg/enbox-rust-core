@@ -1,3 +1,5 @@
+mod common;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -207,11 +209,7 @@ async fn arc_dyn_backends_match_concrete_backends() {
         concrete.portable_did.document.verification_method.len()
     );
 
-    let vault = Arc::new(dwn_rs_agent::agent::IdentityVault::with_work_factor(
-        secret_store.clone(),
-        Arc::new(DidDhtProvider::default()),
-        1,
-    ));
+    let vault = Arc::new(common::offline_vault(secret_store.clone(), Arc::new(DidDhtProvider::default()), 1));
     vault
         .initialize("test-password", Some(RECOVERY_PHRASE), vec![])
         .await

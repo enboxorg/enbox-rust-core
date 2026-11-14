@@ -143,7 +143,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::agent::{DidDhtProvider, IdentityVault};
+    use crate::agent::DidDhtProvider;
     use dwn_rs_core::stores::wake::WakePublishHandler;
     use dwn_rs_core::stores::MessageStore;
     use tempfile::tempdir;
@@ -194,11 +194,7 @@ mod tests {
         let first = {
             let store = opened_store(&path).await;
             let raw = Arc::new(SqliteSecretStore::new(&store));
-            let vault = IdentityVault::with_work_factor(
-                raw.clone(),
-                Arc::new(DidDhtProvider::default()),
-                1,
-            );
+            let vault = crate::agent::test_support::offline_vault(raw.clone(), Arc::new(DidDhtProvider::default()), 1);
             let initialized = vault
                 .initialize("test-password", Some(TEST_RECOVERY_PHRASE), vec![])
                 .await
@@ -213,11 +209,7 @@ mod tests {
             initialized.portable_did
         };
         let store = opened_store(&path).await;
-        let vault = IdentityVault::with_work_factor(
-            Arc::new(SqliteSecretStore::new(&store)),
-            Arc::new(DidDhtProvider::default()),
-            1,
-        );
+        let vault = crate::agent::test_support::offline_vault(Arc::new(SqliteSecretStore::new(&store)), Arc::new(DidDhtProvider::default()), 1);
         vault.unlock("test-password").await.unwrap();
         assert_eq!(vault.get_did().await.unwrap(), first);
     }

@@ -1,3 +1,5 @@
+mod common;
+
 use chrono::{TimeZone, Utc};
 use dwn_rs_agent::agent::*;
 use serde_json::{json, Value};
@@ -18,11 +20,7 @@ async fn setup() -> (
     Arc<AtomicI64>,
 ) {
     let raw = Arc::new(MemorySecretStore::default());
-    let vault = Arc::new(IdentityVault::with_work_factor(
-        raw.clone(),
-        Arc::new(DidDhtProvider::default()),
-        1,
-    ));
+    let vault = Arc::new(common::offline_vault(raw.clone(), Arc::new(DidDhtProvider::default()), 1));
     vault
         .initialize("password", Some(PHRASE), vec![])
         .await
@@ -358,11 +356,7 @@ async fn fresh_vault_is_gated_and_different_cek_cannot_read() {
     let (raw, _, secrets, _) = setup().await;
     secrets.put(KEY, vec![1], None).await.unwrap();
     let other_raw = Arc::new(MemorySecretStore::default());
-    let other = Arc::new(IdentityVault::with_work_factor(
-        other_raw,
-        Arc::new(DidDhtProvider::default()),
-        1,
-    ));
+    let other = Arc::new(common::offline_vault(other_raw, Arc::new(DidDhtProvider::default()), 1));
     let other_secrets = VaultBackedSecretStore::new(other.clone(), raw.clone());
     assert_eq!(
         other_secrets.get("absent").await.unwrap_err().code(),
@@ -393,11 +387,7 @@ async fn sqlite_credentials_survive_reopen_and_password_change() {
         let mut database = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
         MessageStore::open(&mut database).await.unwrap();
         let raw = Arc::new(SqliteSecretStore::new(&database));
-        let vault = Arc::new(IdentityVault::with_work_factor(
-            raw.clone(),
-            Arc::new(DidDhtProvider::default()),
-            1,
-        ));
+        let vault = Arc::new(common::offline_vault(raw.clone(), Arc::new(DidDhtProvider::default()), 1));
         vault.initialize("old", Some(PHRASE), vec![]).await.unwrap();
         let secrets = VaultBackedSecretStore::new(vault.clone(), raw.clone());
         secrets
@@ -414,11 +404,7 @@ async fn sqlite_credentials_survive_reopen_and_password_change() {
     let mut database = SqliteStore::new(&path, WakePublishHandler::new(Arc::new(())));
     MessageStore::open(&mut database).await.unwrap();
     let raw = Arc::new(SqliteSecretStore::new(&database));
-    let vault = Arc::new(IdentityVault::with_work_factor(
-        raw.clone(),
-        Arc::new(DidDhtProvider::default()),
-        1,
-    ));
+    let vault = Arc::new(common::offline_vault(raw.clone(), Arc::new(DidDhtProvider::default()), 1));
     let secrets = VaultBackedSecretStore::new(vault.clone(), raw);
     assert_eq!(
         secrets.get(KEY).await.unwrap_err().code(),
