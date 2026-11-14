@@ -54,6 +54,12 @@ pub struct ResolvedDhtDocument {
     pub types: Option<Vec<u64>>,
 }
 
+/// Statuses where the gateway is unreachable or throttling rather than
+/// definitively reporting that no record exists.
+fn is_gateway_unavailable(status: u16) -> bool {
+    matches!(status, 408 | 429) || status >= 500
+}
+
 #[derive(Clone)]
 /// `did:dht` gateway client over an injected [`DhtTransport`].
 ///
@@ -91,6 +97,18 @@ impl DhtResolver {
             .await?;
 
         if !(200..300).contains(&response.status) {
+            // A definitive miss is not-found; a temporarily unavailable gateway
+            // must never look like an absent record.
+            return Err(if is_gateway_unavailable(response.status) {
+                DhtPublishError::GatewayUnavailable {
+                    status: response.status,
+                }
+            } else {
+                DhtPublishError::NotFound
+            });
+        }
+
+        if response.body.is_empty() {
             return Err(DhtPublishError::NotFound);
         }
 
@@ -310,6 +328,40 @@ mod tests {
 
         assert_eq!(resolver.resolve(&did).await, Err(DhtPublishError::NotFound));
         assert_eq!(transport.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn treats_an_empty_success_body_as_not_found() {
+        let (did, _) = signed_relay_payload(1);
+        let (resolver, _) = resolver(DhtResolverConfig::default(), Ok(response(200, Vec::new())));
+
+        assert_eq!(resolver.resolve(&did).await, Err(DhtPublishError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn classifies_unavailable_gateways_separately_from_not_found() {
+        let (did, _) = signed_relay_payload(1);
+        for status in [408, 429, 500, 503] {
+            let (resolver, transport) =
+                resolver(DhtResolverConfig::default(), Ok(response(status, Vec::new())));
+            assert_eq!(
+                resolver.resolve(&did).await,
+                Err(DhtPublishError::GatewayUnavailable { status }),
+                "status {status}"
+            );
+            assert_eq!(transport.requests.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn treats_a_short_success_body_as_malformed_not_not_found() {
+        let (did, _) = signed_relay_payload(1);
+        let (resolver, _) = resolver(DhtResolverConfig::default(), Ok(response(200, vec![1; 71])));
+
+        assert!(matches!(
+            resolver.resolve(&did).await,
+            Err(DhtPublishError::InvalidDocumentLength { .. })
+        ));
     }
 
     #[tokio::test]
