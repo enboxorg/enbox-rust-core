@@ -620,7 +620,7 @@ impl IdentityVault {
         identity_private_jwk: &JWK,
     ) -> AgentIdentityResult<PortableDid> {
         let resolved = match self.did_network.resolve(&portable_did.uri).await? {
-            DidResolution::Found(resolved) => resolved,
+            DidResolution::Found(resolved) => *resolved,
             DidResolution::NotFound => {
                 return self
                     .reconcile_not_found(
@@ -741,7 +741,7 @@ impl IdentityVault {
         types: &[u64],
         identity_private_jwk: &JWK,
     ) -> AgentIdentityResult<PortableDid> {
-        let sequence = next_sequence(clock_system_time(&self.clock)?, previous)
+        let sequence = next_sequence(clock_system_time(&self.clock), previous)
             .map_err(|error| AgentIdentityError::did(error.to_string()))?;
         let signer = self.identity_signer(identity_private_jwk)?;
         let published = self
@@ -987,13 +987,13 @@ mod deferred_reconcile_tests {
     async fn deferred_ready_reset_stores_the_resolved_service_without_publishing() {
         let network = Arc::new(RecordingNetwork::not_found());
         let vault = seeded(network.clone()).await;
-        network.set(DidResolution::Found(ResolvedAgentDid {
+        network.set(DidResolution::Found(Box::new(ResolvedAgentDid {
             document: ready_document(
                 "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo",
             ),
             sequence: 9,
             types: None,
-        }));
+        })));
 
         vault
             .reset_password_with_recovery_phrase_deferred(

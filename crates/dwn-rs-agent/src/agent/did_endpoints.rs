@@ -110,7 +110,7 @@ pub(crate) fn replace_dwn_service_endpoint_urls(
     })?;
 
     let mut service = find_dwn_service(document, &did_uri)
-        .map(|service| serde_json::to_value(service))
+        .map(serde_json::to_value)
         .transpose()
         .map_err(|error| AgentIdentityError::did(format!("invalid DID service: {error}")))?
         .unwrap_or_else(|| json!({}));

@@ -83,9 +83,9 @@ impl DhtTransport for ScriptedTransport {
                 RelayMethod::Get => &mut state.gets,
                 RelayMethod::Put => &mut state.puts,
             };
-            Ok(queue
+            queue
                 .pop_front()
-                .unwrap_or_else(|| Ok(default_response(request.method)))?)
+                .unwrap_or_else(|| Ok(default_response(request.method)))
         })
     }
 }

@@ -31,11 +31,11 @@ struct ReadyNetwork;
 impl AgentDidNetwork for ReadyNetwork {
     fn resolve<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, DidResolution> {
         Box::pin(async move {
-            Ok(DidResolution::Found(ResolvedAgentDid {
+            Ok(DidResolution::Found(Box::new(ResolvedAgentDid {
                 document: ready_document(did_uri),
                 sequence: 1,
                 types: None,
-            }))
+            })))
         })
     }
 
