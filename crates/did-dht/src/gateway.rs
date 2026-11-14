@@ -342,8 +342,10 @@ mod tests {
     async fn classifies_unavailable_gateways_separately_from_not_found() {
         let (did, _) = signed_relay_payload(1);
         for status in [408, 429, 500, 503] {
-            let (resolver, transport) =
-                resolver(DhtResolverConfig::default(), Ok(response(status, Vec::new())));
+            let (resolver, transport) = resolver(
+                DhtResolverConfig::default(),
+                Ok(response(status, Vec::new())),
+            );
             assert_eq!(
                 resolver.resolve(&did).await,
                 Err(DhtPublishError::GatewayUnavailable { status }),

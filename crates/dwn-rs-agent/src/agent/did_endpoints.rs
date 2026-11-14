@@ -52,7 +52,10 @@ pub(crate) fn normalize_dwn_endpoints(values: &[String]) -> Option<Vec<String>> 
             return None;
         }
         let normalized = url.to_string();
-        let normalized = normalized.strip_suffix('/').unwrap_or(&normalized).to_string();
+        let normalized = normalized
+            .strip_suffix('/')
+            .unwrap_or(&normalized)
+            .to_string();
         if !endpoints.contains(&normalized) {
             endpoints.push(normalized);
         }
@@ -231,7 +234,10 @@ mod tests {
         .unwrap();
         let updated = replace_dwn_service_endpoint_urls(
             &original,
-            &["https://new.example/".to_string(), "https://new.example".to_string()],
+            &[
+                "https://new.example/".to_string(),
+                "https://new.example".to_string(),
+            ],
         )
         .unwrap();
 

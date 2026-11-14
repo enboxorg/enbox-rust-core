@@ -129,7 +129,10 @@ impl JwsSigner for DynSigner<'_> {
     }
 
     async fn sign_bytes(&self, signing_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
-        self.0.sign(signing_bytes).await.map_err(SignatureError::other)
+        self.0
+            .sign(signing_bytes)
+            .await
+            .map_err(SignatureError::other)
     }
 }
 
@@ -154,9 +157,9 @@ impl DidDhtNetwork {
 impl AgentDidNetwork for DidDhtNetwork {
     fn resolve<'a>(&'a self, did_uri: &'a str) -> AgentIdentityFuture<'a, DidResolution> {
         Box::pin(async move {
-            let did: DIDBuf = did_uri
-                .parse()
-                .map_err(|error| AgentIdentityError::did(format!("invalid DID {did_uri}: {error}")))?;
+            let did: DIDBuf = did_uri.parse().map_err(|error| {
+                AgentIdentityError::did(format!("invalid DID {did_uri}: {error}"))
+            })?;
             match self.resolver.resolve(&did).await {
                 Ok(resolved) => Ok(DidResolution::Found(ResolvedAgentDid {
                     document: resolved.document,
