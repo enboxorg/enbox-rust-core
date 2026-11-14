@@ -15,6 +15,9 @@ pub enum DhtPublishError {
     #[error("DID document not found")]
     NotFound,
 
+    #[error("DID DHT gateway unavailable: status {status}")]
+    GatewayUnavailable { status: u16 },
+
     #[error("invalid document length: expected {min}..={max}, found {found}")]
     InvalidDocumentLength {
         min: usize,

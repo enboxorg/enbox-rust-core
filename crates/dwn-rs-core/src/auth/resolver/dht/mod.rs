@@ -159,6 +159,11 @@ fn map_resolve_error(error: DhtPublishError) -> ResolverError {
         }
         DhtPublishError::InvalidSignature => ResolverError::InvalidSignature,
         DhtPublishError::Transport(message) => ResolverError::Internal(message),
+        // A throttled or unavailable gateway is a resolution failure, never
+        // evidence that the DID does not exist.
+        DhtPublishError::GatewayUnavailable { status } => {
+            ResolverError::Internal(format!("DID DHT gateway unavailable: status {status}"))
+        }
         // Publish-only variants never surface on the resolve path.
         DhtPublishError::GatewayRejected { status, sequence } => ResolverError::Internal(format!(
             "gateway rejected publication: status {status}, sequence {sequence}"
@@ -318,6 +323,29 @@ mod tests {
             Err(ResolverError::NotFound)
         );
         assert_eq!(http.request_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn maps_unavailable_gateways_to_internal_errors() {
+        let did = "did:dht:cyuoqaf7itop8ohww4yn5ojg13qaq83r9zihgqntc5i9zwrfdfoo"
+            .parse::<DIDBuf>()
+            .unwrap();
+        for status in [
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let (resolver, http) = resolver(DhtResolverConfig::default(), Ok(response(status)));
+
+            assert!(
+                matches!(
+                    DidMethodResolver::resolve(&resolver, &did).await,
+                    Err(ResolverError::Internal(_))
+                ),
+                "status {status}"
+            );
+            assert_eq!(http.request_count(), 1);
+        }
     }
 
     #[tokio::test]
