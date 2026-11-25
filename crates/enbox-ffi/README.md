@@ -16,9 +16,14 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `sync_once(request_json)` | Run one sync cycle against a remote DWN URL |
 | `poll_reconcile(request_json)` | Pull-only poll reconciliation (live-degraded HTTP fallback) |
 | `sync_status(query_json)` | Last sync outcome (in-progress flag, status, error, counters) |
-| `initialize_agent_identity(request_json)` | Initialize the shared password vault and its `did:dht` identity |
-| `initialize_credential_vault(password, recovery_phrase)` | Initialize password-protected credential storage; returns its recovery phrase |
-| `unlock_credential_vault(password)` | Unlock encrypted credentials and enable runtime access |
+| `initialize_vault(request_json)` | Initialize the shared password vault and its `did:dht` identity; returns `recoveryPhrase` + `portableDid` |
+| `unlock(password)` / `unlock_with_reason(password, reason)` | Unlock the vault with its password; the reason variant records the host's audit label on success |
+| `lock()` | Clear the in-memory vault key; returns `AgentVaultUninitialized` for an uninitialized vault |
+| `change_password(old_password, new_password)` | Re-wrap the vault key under a new password |
+| `reset_password_with_recovery_phrase(request_json)` | Reset the password from the 12-word recovery phrase |
+| `backup_vault()` | Export the vault as `IdentityVaultBackup` JSON |
+| `restore_vault(backup_json, password)` | Restore a vault from backup JSON and its password |
+| `vault_status()` | `EnboxVaultStatus` (`initialized`, `locked`, `last_backup`, `last_restore`) |
 | `delete_registration_tokens()` | Delete the persisted token entry while locked or unlocked; returns whether it existed |
 | `current_agent_identity()` | Decrypt the shared vault’s `PortableDid` JSON, or `None` before initialization |
 | `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
@@ -36,9 +41,10 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `load_delegate_decryption_keys()` | Decrypt `DelegateDecryptionKey[]`; requires an unlocked credential vault (empty array when unset) |
 | `save_delegate_context_keys(keys_json)` | Encrypt and persist `DelegateContextKey[]`; requires an unlocked credential vault |
 | `load_delegate_context_keys()` | Decrypt `DelegateContextKey[]`; requires an unlocked credential vault (empty array when unset) |
-| `lock()` / `unlock()` | Lock clears the credential CEK and gates runtime access; passwordless unlock changes only the runtime flag |
 
-Typed errors (`EnboxError`) cross the FFI boundary. These methods are synchronous; Rust async callers must dispatch them to a blocking thread, except `lock()`, which supports async caller contexts. Calls may wait for an in-flight vault lifecycle operation.
+Typed errors (`EnboxError`) cross the FFI boundary. These methods are synchronous and may wait for an in-flight vault lifecycle operation. Vault lifecycle and status methods (`lock`, `unlock`, `unlock_with_reason`, `vault_status`, `status`, `initialize_vault`, …) are safe to call from an async caller context; the remaining methods must be dispatched to a blocking thread.
+
+A freshly opened `EnboxCore` starts locked, and the identity vault is the only lock state: there is no passwordless unlock. At most one live `EnboxCore` may be open per database path in a process; a second `open*` on the same file fails with `AgentVaultError` until the first core is dropped.
 
 ## Credential vault release boundary
 
@@ -46,22 +52,23 @@ The plaintext identity path was never released, so no host database holds raw CE
 
 The PBES2 work factor defaults to 210 000. A host can choose it when it opens the core with `open_with_work_factor(database_path, work_factor)` or `open_in_memory_with_work_factor(work_factor)`; 0 is rejected with `AgentVaultError`. Any stored entry opens at any work factor of 1 or more, so a vault written by another host or by the TypeScript agent opens unchanged.
 
-Initialize the shared vault once with `initialize_agent_identity` (with password and optional endpoints), or `initialize_credential_vault(password, recovery_phrase)` and unlock it after reopen with `unlock_credential_vault(password)`. Persisted registration and delegate-key methods require that shared vault to be unlocked. Passwordless `unlock()` or `unlock_with_reason()` cannot decrypt credentials. If legacy registration bytes cause `AgentSecretInvalidEnvelope`, explicitly call `delete_registration_tokens()` (works while locked), unlock, and obtain fresh credentials; deletion is not secure erasure.
+Initialize the shared vault once with `initialize_vault` (password plus optional recovery phrase and endpoints), and unlock it after reopen with `unlock(password)` or `unlock_with_reason(password, reason)`. Persisted registration and delegate-key methods require that shared vault to be unlocked. If legacy registration bytes cause `AgentSecretInvalidEnvelope`, explicitly call `delete_registration_tokens()` (works while locked), unlock, and obtain fresh credentials; deletion is not secure erasure.
 
 ## Agent identity workflow
 
 1. Open a durable node: `EnboxCore.open("/path/to/enbox.sqlite")`
 2. Initialize or recover an identity:
    ```json
-   initialize_agent_identity({
+   initialize_vault({
      "password": "<vault password>",
      "recoveryPhrase": "<12-word BIP-39 phrase, optional>",
      "dwnEndpoints": ["https://dwn.example/"]
    })
    ```
-   Returns JSON `VaultInitialization` (`portableDid` + `recoveryPhrase`), without raw vault keys. The host displays the recovery phrase **once**. Identity and credentials use the same password vault; choose either initializer once, since a second initialization returns `AgentVaultAlreadyInitialized`. Missing passwords fail JSON validation and blank passwords fail vault validation.
-3. On subsequent launches, call `unlock_credential_vault(password)` before `current_agent_identity()`. Identity access fails with `AgentVaultLocked` until password unlock; before initialization it returns `null`. Runtime-only `unlock()` cannot expose the identity.
+   Returns JSON `VaultInitialization` (`portableDid` + `recoveryPhrase`), without raw vault keys. The host displays the recovery phrase **once**. A second initialization returns `AgentVaultAlreadyInitialized`. Missing passwords fail JSON validation and blank passwords fail vault validation.
+3. On subsequent launches, call `unlock(password)` (or `unlock_with_reason(password, reason)`) before `current_agent_identity()`. Identity access fails with `AgentVaultLocked` until password unlock; before initialization it returns `null`. A freshly opened core starts locked.
 4. For recovery-screen validation before committing, call `derive_agent_keys_from_phrase(phrase)` — this is pure and does not persist anything.
+5. Drive the rest of the lifecycle with `change_password`, `reset_password_with_recovery_phrase`, `backup_vault`, `restore_vault`, `lock`, and `vault_status`. Every failed restore or reset ends locked with the stored vault unchanged, and only a successful password unlock records an unlock reason.
 
 `PortableDid` follows [`agent/service.rs`](../dwn-rs-agent/src/agent/service.rs); `VaultInitialization` follows [`agent/vault.rs`](../dwn-rs-agent/src/agent/vault.rs). The secret store layer is `SqliteSecretStore` ([`dwn-rs-agent/src/secrets_store.rs`](../dwn-rs-agent/src/secrets_store.rs), feature `sqlite`), which shares the SQLite database used for DWN data.
 
@@ -162,8 +169,9 @@ The Rust facade tracks the bookkeeping a mobile host needs to coordinate biometr
 | Method | Purpose |
 |---|---|
 | `initialize_runtime(json)` | Record `deviceId`, `appGroup`, optional `databasePath` override, and `backgroundRefreshEnabled` (matches [`MobileInitializeRequest`](../dwn-rs-core/src/mobile.rs)). |
-| `unlock_with_reason(reason)` | Same effect as `unlock()`, but records the reason on the runtime status for audit logs. Use after a successful Face ID / Touch ID / `BiometricPrompt`. |
-| `lock()` | Clear the credential CEK, gate runtime access, and clear `last_unlock_reason`. |
+| `unlock_with_reason(password, reason)` | Unlocks the vault like `unlock(password)` and records the reason on the runtime status for audit logs. Use after a successful Face ID / Touch ID / `BiometricPrompt`; the vault never unlocks without the password. |
+| `lock()` | Clear the vault's in-memory key, gate runtime access, and clear `last_unlock_reason`. |
+| `vault_status()` | Returns `EnboxVaultStatus` (`initialized`, `locked`, `lastBackup`, `lastRestore`) from the real vault. |
 | `begin_background_task(taskId)` | Returns `true` if the id was newly registered, `false` if it was already active. Mirrors `MobileCore::track_background_task` idempotency expected by WorkManager / `BGTaskScheduler`. |
 | `end_background_task(taskId)` | Returns `true` if removed, `false` if unknown. Safe to call from expiration / cleanup paths. |
 | `status()` | Returns `EnboxRuntimeStatus` with `initialized`, `locked`, `databasePath`, `deviceId`, `appGroup`, `backgroundRefreshEnabled`, `lastUnlockReason`, `activeBackgroundTasks`. |

@@ -57,7 +57,7 @@ See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the full matrix. CI run
 [`enbox-ffi`](crates/enbox-ffi/) exposes a UniFFI facade (`EnboxCore`) covering the full mobile/desktop surface:
 
 - DWN message dispatch and HTTP sync (M4): `process_message`, `sync_once`, `poll_reconcile`, `sync_status`, `lock`/`unlock`.
-- Agent identity and vault (M5, [#148](https://github.com/enboxorg/enbox-rust-core/pull/148)): `initialize_agent_identity`, `current_agent_identity`, `derive_agent_keys_from_phrase`; durable `SqliteSecretStore`.
+- Agent identity and vault (M5, [#148](https://github.com/enboxorg/enbox-rust-core/pull/148)): `initialize_vault`, `current_agent_identity`, `derive_agent_keys_from_phrase`; durable `SqliteSecretStore`.
 - Protocol install and encryption (M5, [#149](https://github.com/enboxorg/enbox-rust-core/pull/149)): `install_protocol`, `inject_protocol_encryption` against the local `SqliteNativeDwn`.
 - DWeb Connect (M5, [#150](https://github.com/enboxorg/enbox-rust-core/pull/150)): `create_permission_request`, `create_delegate_grant`, `create_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, persisted decryption/context keys.
 - HTTP register / push / restore (M5, [#151](https://github.com/enboxorg/enbox-rust-core/pull/151)): `register_tenant`, `push_protocol`, `run_restore_flow` against `@enbox/dwn-server`-style endpoints.

@@ -1796,6 +1796,7 @@ name = "enbox-ffi"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "chrono",
  "dwn-rs-agent",
  "dwn-rs-core",
