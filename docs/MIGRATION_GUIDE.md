@@ -9,7 +9,7 @@ As of M5/M6, the Rust core ships everything an app previously got from the in-pr
 - `UniversalResolver` with `did:jwk` + `did:key` resolution.
 - Native sync engine (`sync_once`, `poll_reconcile`, `resume_pending`) with durable checkpoints.
 - Live subscriptions via the loopback WebSocket transport.
-- Agent identity (`initialize_agent_identity`, `current_agent_identity`, key derivation, durable vault).
+- Agent identity (`initialize_vault`, `current_agent_identity`, key derivation, durable vault).
 - Tenant registration over HTTP, protocol install/push, restore flow.
 - DWeb Connect: permission requests, delegate grants, revocations, delegate-key derivation, context-key derivation, persisted key delivery.
 
@@ -28,7 +28,7 @@ The Rust core does not aim to be a 1:1 type-for-type port of `dwn-sdk-js`. The w
 | `MessageStoreLevel`, `DataStoreLevel`, `StateIndexLevel`, `ResumableTaskStoreLevel`, `EventEmitterEventLog` constructors | Dropped; `EnboxCore::open` wires all stores from the same `SqliteStore` handle. |
 | `UniversalResolver` + `DidResolverCacheLevel` | Built into the Rust core; supports `did:jwk` + `did:key` Ed25519 verification. Static fallback registration is in `crates/dwn-rs-core/src/auth/jws.rs`. |
 | `SyncEngineLevel` (live + repair) | `core.sync_once(...)`, `core.poll_reconcile(...)`, `core.resume_pending(...)`, `core.list_pending_scopes(...)`. |
-| `agent.identity.create(...)` | `core.initialize_agent_identity(request)` / `core.derive_agent_keys_from_phrase(phrase)`. |
+| `agent.identity.create(...)` | `core.initialize_vault(request)` / `core.derive_agent_keys_from_phrase(phrase)`. |
 | `agent.permissions.createGrant(...)` | `core.create_permission_request(...)`, `core.create_delegate_grant(...)`, `core.create_grant_revocation(...)`. |
 | `agent.sync.start(...)` background loop | Host owns scheduling. Call `sync_once` / `resume_pending` from WorkManager (Android) or `BGTaskScheduler` (iOS). See [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md). |
 | `ReadableStream<Uint8Array>` for record data | Plain `Vec<u8>` over the FFI. For large records, the host should stream over WebSocket or sync, not embed in `processMessage`. |
@@ -112,9 +112,9 @@ const revokeJson  = await core.createGrantRevocation(JSON.stringify(revocation))
 
 Release boundary: the plaintext identity path was never released, so no deployed database holds raw CEK, unlock-salt or private-DID material, and no migration or cleanup step exists. The vault stores only password-wrapped entries. `derive_agent_keys_from_phrase` still returns the vault CEK and unlock salt to the caller; the host must not persist them. The PBES2 work factor defaults to 210 000 and a host can choose it when it opens the core with `open_with_work_factor(database_path, workFactor)` or `open_in_memory_with_work_factor(workFactor)`; a value of 0 is rejected with `AgentVaultError`. Any stored entry opens at any work factor of 1 or more, so a vault written by another host or by the TypeScript agent opens unchanged.
 
-Before persisting registration tokens or delegate keys, call `initialize_credential_vault(password, recovery_phrase)` once. The method returns the phrase for the host to keep securely. On reopen, call `unlock_credential_vault(password)`. This initializes and unlocks local credential storage without publishing a DID.
+Before persisting registration tokens or delegate keys, call `initialize_vault(request)` once; it returns the recovery phrase and the published `portableDid`. On reopen, call `unlock(password)` or `unlock_with_reason(password, reason)`. A freshly opened core starts locked, and only the identity vault tracks lock state.
 
-Persisted delegate decryption / context keys round-trip through `save_delegate_decryption_keys` / `load_delegate_decryption_keys` (and the corresponding context-key methods). Those methods and registration with `persistTokens: true` require the shared credential vault to be unlocked. `lock()` clears its in-memory key; passwordless `unlock()` and `unlock_with_reason()` affect the runtime flag only and cannot decrypt credentials.
+Persisted delegate decryption / context keys round-trip through `save_delegate_decryption_keys` / `load_delegate_decryption_keys` (and the corresponding context-key methods). Those methods and registration with `persistTokens: true` require the shared credential vault to be unlocked. `lock()` clears its in-memory key; password-only `unlock(password)` and `unlock_with_reason(password, reason)` are the only ways back in, and `change_password`, `reset_password_with_recovery_phrase`, `backup_vault`, `restore_vault`, and `vault_status` cover the rest of the lifecycle. At most one live `EnboxCore` may be open per database path in a process; a second `open*` on the same file fails with `AgentVaultError` until the first is dropped.
 
 Rust registration and delegate helpers now accept `CredentialStore`, not the raw `SecretStore`. Construct `VaultBackedSecretStore` with the shared `Arc<IdentityVault>` and raw backend; reuse that credential-store instance across callers. Persisted values are UTF-8 JSON envelopes containing `jwe` and optional `expiresAt`. Credential operations reject reserved `agent:vault:*` keys with `AgentSecretInvalidEnvelope`, so they cannot overwrite or delete vault material. Existing plaintext auth values fail with `AgentSecretInvalidEnvelope`; there is no automatic migration or plaintext fallback. For legacy registration tokens, call `delete_registration_tokens()` (also supported while locked; returns whether an entry existed), unlock the credential vault, then authenticate again to obtain fresh tokens. Delegate entries can be explicitly replaced using their save methods. No generic raw-store access is needed.
 
@@ -132,7 +132,7 @@ core.initializeRuntime(JSON.stringify({
 }));
 
 // After Face ID / Touch ID / BiometricPrompt succeeds:
-core.unlockWithReason('user_resume');
+core.unlockWithReason(password, 'user_resume');
 
 // Before a WorkManager / BGTask block:
 core.beginBackgroundTask('sync.periodic');
@@ -171,8 +171,8 @@ Encrypted records remain decryptable only if the agent identity migrates first. 
 
 Identity migration runs independently of DWN store migration:
 
-- Portable DID material and BIP-39 recovery phrases round-trip through `derive_agent_keys_from_phrase` and `initialize_agent_identity`. Both Ed25519 signing keys and X25519 key-agreement keys survive.
-- `SqliteSecretStore` is a raw backend. `IdentityVault` protects its key material, and `VaultBackedSecretStore` encrypts auth credentials before persistence. The legacy `initialize_agent_identity` storage path is separate and has not been migrated by the credential cutover.
+- Portable DID material and BIP-39 recovery phrases round-trip through `derive_agent_keys_from_phrase` and `initialize_vault`. Both Ed25519 signing keys and X25519 key-agreement keys survive.
+- `SqliteSecretStore` is a raw backend. `IdentityVault` protects its key material, and `VaultBackedSecretStore` encrypts auth credentials before persistence. Identity and credentials use that one vault through `initialize_vault`, `unlock`, and the rest of the lifecycle surface.
 - Wallet recovery must prove that encrypted protocol records can be decrypted after restoring the seed/vault. The integration test `crates/dwn-rs-agent/tests/wallet_recovery.rs` exercises this exact flow.
 - Data migration must not introduce a plaintext fallback for records whose protocol requires encryption. The Rust handler enforces the encryption requirement on every `RecordsWrite`.
 

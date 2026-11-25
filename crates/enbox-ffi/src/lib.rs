@@ -3,8 +3,9 @@
 //! This crate exposes a small, stable boundary over the native Rust DWN core.
 //! Internal crates remain idiomatic Rust; DTO translation happens here.
 
-use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeSet, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use dwn_rs_agent::agent::{
     derive_agent_keys, AgentDidNetwork, DidDhtProvider, IdentityVault, MemoryKeyManager,
@@ -50,6 +51,7 @@ uniffi::setup_scaffolding!();
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct EnboxRuntimeStatus {
     pub initialized: bool,
+    /// Whether the identity vault currently holds no in-memory key.
     pub locked: bool,
     pub database_path: Option<String>,
     /// Host-provided device identifier, set by `initialize_runtime`.
@@ -59,7 +61,8 @@ pub struct EnboxRuntimeStatus {
     /// Whether the host has enabled background sync wake hooks.
     pub background_refresh_enabled: bool,
     /// Last reason supplied to `unlock_with_reason`.
-    /// Cleared on `lock()` or successful password unlock.
+    /// Recorded only after a successful password unlock; cleared on lock, a
+    /// successful `unlock(password)`, or any vault operation that ends locked.
     pub last_unlock_reason: Option<String>,
     /// IDs of background tasks currently checked out via
     /// `begin_background_task`. Sorted for deterministic comparison.
@@ -75,6 +78,16 @@ pub struct EnboxSyncStatus {
     pub records_pulled: u64,
     pub records_pushed: u64,
     pub last_pull_cursor_json: Option<String>,
+}
+
+/// The vault's persisted status together with its live lock state.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EnboxVaultStatus {
+    pub initialized: bool,
+    /// Whether the vault currently holds no in-memory key.
+    pub locked: bool,
+    pub last_backup: Option<String>,
+    pub last_restore: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -112,8 +125,15 @@ impl From<dwn_rs_agent::agent::AgentIdentityError> for EnboxError {
     }
 }
 
+/// Database files currently owned by a live [`EnboxCore`] in this process.
+///
+/// Two cores on one file would each hold an independent in-memory vault key
+/// over the same store, so locking or changing the password in one would
+/// leave the other unlocked with a stale key.
+static OPEN_DATABASE_PATHS: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
 struct CoreState {
-    locked: bool,
     database_path: Option<String>,
     node: Option<Arc<SqliteNativeDwn>>,
     secret_store: Option<SqliteSecretStore>,
@@ -138,6 +158,14 @@ struct AgentIdentityInitializeRequest {
     dwn_endpoints: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultResetPasswordRequest {
+    recovery_phrase: String,
+    password: String,
+    dwn_endpoints: Option<Vec<String>>,
+}
+
 #[derive(uniffi::Object)]
 pub struct EnboxCore {
     credential_vault: Arc<IdentityVault>,
@@ -145,14 +173,16 @@ pub struct EnboxCore {
     credential_lifecycle: Mutex<()>,
     runtime: tokio::runtime::Runtime,
     state: Arc<Mutex<CoreState>>,
+    /// Normalized database path reserved by this core, released on drop.
+    database_path_key: Option<PathBuf>,
 }
 
 impl Drop for EnboxCore {
     fn drop(&mut self) {
         // Close through the store's lifecycle API rather than letting the
         // field drops close inline: the explicit path drains under the
-        // per-file lock, so a host holding two cores open on one database
-        // cannot interleave this teardown with the other core's opens.
+        // per-file lock, so this teardown cannot interleave with the next
+        // open of the same file.
         // `block_on` panics inside a runtime, so when dropped from async
         // context fall back to the field drops — still sequential on this
         // thread, just unserialised against other sets on the same file.
@@ -175,6 +205,8 @@ impl Drop for EnboxCore {
             state.node = None;
             state.secret_store = None;
         }
+        // Release the path only after the teardown above drains the store.
+        release_database_path(&self.database_path_key);
     }
 }
 
@@ -393,90 +425,160 @@ impl EnboxCore {
         )
     }
 
-    pub fn lock(&self) {
-        let _lifecycle = self
-            .credential_lifecycle
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if let Ok(mut state) = self.state.lock() {
-            state.locked = true;
-            state.last_unlock_reason = None;
-        }
-        // Key clearing precedes status validation, including on errors.
-        let _ = std::thread::scope(|scope| {
-            scope
-                .spawn(|| self.runtime.block_on(self.credential_vault.lock()))
-                .join()
-                .expect("vault lock worker panicked")
-        });
-    }
-
-    /// Mark the runtime unlocked; this does not unlock encrypted credentials.
+    /// Initialize the shared password vault with a fresh or recovered agent
+    /// identity.
     ///
-    /// Use [`Self::unlock_credential_vault`] with a password for credential access.
-    pub fn unlock(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.locked = false;
-        }
-    }
-
-    /// Mark the runtime unlocked and record `reason`; encrypted credentials
-    /// remain locked until [`Self::unlock_credential_vault`] succeeds.
-    ///
-    /// Mirrors `MobileBiometricVault::unlock(reason)` in `dwn-rs-core`:
-    /// Rust does not perform the biometric check itself, so the host
-    /// must call this only after a successful platform prompt (Face ID,
-    /// Touch ID, BiometricPrompt, ...).
-    pub fn unlock_with_reason(&self, reason: String) -> Result<(), EnboxError> {
-        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
-            detail: format!("core state lock poisoned: {err}"),
-        })?;
-        state.locked = false;
-        state.last_unlock_reason = Some(reason);
-        Ok(())
-    }
-
-    /// Initialize the credential vault, returning its recovery phrase.
-    ///
-    /// Shares identity and key state with initialize_agent_identity. The vault
-    /// stores only password-wrapped entries; the plaintext identity path was
-    /// never released, so there is no legacy material to migrate or erase.
-    pub fn initialize_credential_vault(
-        &self,
-        password: String,
-        recovery_phrase: Option<String>,
-    ) -> Result<String, EnboxError> {
-        let _lifecycle = self
-            .credential_lifecycle
-            .lock()
-            .map_err(|_| EnboxError::Store {
-                detail: "credential lifecycle lock poisoned".into(),
+    /// `request_json` accepts `{ "password": string, "recoveryPhrase"?:
+    /// string, "dwnEndpoints"?: string[] }`. Returns JSON
+    /// [`VaultInitialization`] (`recoveryPhrase` and `portableDid`) and never
+    /// raw vault keys. Succeeds on a fresh, locked core.
+    pub fn initialize_vault(&self, request_json: String) -> Result<String, EnboxError> {
+        let request: AgentIdentityInitializeRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
             })?;
-        self.require_secret_store()?;
-        let result = self.runtime.block_on(self.credential_vault.initialize(
-            &password,
-            recovery_phrase.as_deref(),
-            vec![],
+        let _lifecycle = self.lifecycle_guard()?;
+        let initialization = self.run_vault(self.credential_vault.initialize(
+            &request.password,
+            request.recovery_phrase.as_deref(),
+            request.dwn_endpoints,
         ))?;
-        Ok(result.recovery_phrase)
+        serde_json::to_string(&initialization).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
     }
 
-    /// Unlock encrypted credentials with the vault password and enable runtime access.
-    pub fn unlock_credential_vault(&self, password: String) -> Result<(), EnboxError> {
-        let _lifecycle = self
-            .credential_lifecycle
-            .lock()
-            .map_err(|_| EnboxError::Store {
-                detail: "credential lifecycle lock poisoned".into(),
-            })?;
-        self.runtime
-            .block_on(self.credential_vault.unlock(&password))?;
-        let mut state = self.state.lock().map_err(|err| EnboxError::Store {
-            detail: format!("core state lock poisoned: {err}"),
-        })?;
-        state.locked = false;
-        state.last_unlock_reason = None;
+    /// Unlock the vault with its password.
+    ///
+    /// A failed unlock ends locked and clears any recorded unlock reason.
+    pub fn unlock(&self, password: String) -> Result<(), EnboxError> {
+        let _lifecycle = self.lifecycle_guard()?;
+        let result = self.run_vault(self.credential_vault.unlock(&password));
+        self.set_unlock_reason(None);
+        result?;
         Ok(())
+    }
+
+    /// Unlock the vault with its password and record the host-supplied
+    /// `reason`.
+    ///
+    /// The reason is recorded only when the password unlocks the vault; a
+    /// failed attempt ends locked and clears it.
+    pub fn unlock_with_reason(&self, password: String, reason: String) -> Result<(), EnboxError> {
+        let _lifecycle = self.lifecycle_guard()?;
+        match self.run_vault(self.credential_vault.unlock(&password)) {
+            Ok(()) => {
+                self.set_unlock_reason(Some(reason));
+                Ok(())
+            }
+            Err(err) => {
+                self.set_unlock_reason(None);
+                Err(err.into())
+            }
+        }
+    }
+
+    /// Lock the vault, clearing its in-memory key and unlock reason.
+    ///
+    /// Idempotent when an initialized vault is already locked. An
+    /// uninitialized vault returns `AgentVaultUninitialized` and stays
+    /// locked. Safe to call from an async caller context.
+    pub fn lock(&self) -> Result<(), EnboxError> {
+        let _lifecycle = self.lifecycle_guard()?;
+        let result = self.run_vault(self.credential_vault.lock());
+        self.set_unlock_reason(None);
+        result?;
+        Ok(())
+    }
+
+    /// Re-wrap the vault key under `new_password`, requiring `old_password`.
+    ///
+    /// A wrong old password ends locked; a blank new password is rejected
+    /// before the in-memory key is cleared.
+    pub fn change_password(
+        &self,
+        old_password: String,
+        new_password: String,
+    ) -> Result<(), EnboxError> {
+        let _lifecycle = self.lifecycle_guard()?;
+        let result = self.run_vault(
+            self.credential_vault
+                .change_password(&old_password, &new_password),
+        );
+        if result.is_err() {
+            self.clear_unlock_reason_if_locked();
+        }
+        result?;
+        Ok(())
+    }
+
+    /// Reset the vault password from its recovery phrase.
+    ///
+    /// `request_json` accepts `{ "recoveryPhrase": string, "password":
+    /// string, "dwnEndpoints"?: string[] }`. Any failure ends locked.
+    pub fn reset_password_with_recovery_phrase(
+        &self,
+        request_json: String,
+    ) -> Result<(), EnboxError> {
+        let request: VaultResetPasswordRequest =
+            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
+                detail: err.to_string(),
+            })?;
+        let _lifecycle = self.lifecycle_guard()?;
+        let result = self.run_vault(self.credential_vault.reset_password_with_recovery_phrase(
+            &request.recovery_phrase,
+            &request.password,
+            request.dwn_endpoints,
+        ));
+        if result.is_err() {
+            self.clear_unlock_reason_if_locked();
+        }
+        result?;
+        Ok(())
+    }
+
+    /// Export the initialized, unlocked vault as JSON
+    /// [`IdentityVaultBackup`].
+    pub fn backup_vault(&self) -> Result<String, EnboxError> {
+        let _lifecycle = self.lifecycle_guard()?;
+        let backup = self.run_vault(self.credential_vault.backup())?;
+        serde_json::to_string(&backup).map_err(|err| EnboxError::Json {
+            detail: err.to_string(),
+        })
+    }
+
+    /// Restore the vault from raw backup JSON and its password.
+    ///
+    /// Allowed on fresh or initialized stores. Every failure, including
+    /// malformed JSON, returns a typed vault error and ends locked with the
+    /// stored vault unchanged.
+    pub fn restore_vault(&self, backup_json: String, password: String) -> Result<(), EnboxError> {
+        let _lifecycle = self.lifecycle_guard()?;
+        let result = self.run_vault(
+            self.credential_vault
+                .restore_json(backup_json.as_bytes(), &password),
+        );
+        if result.is_err() {
+            self.clear_unlock_reason_if_locked();
+        }
+        result?;
+        Ok(())
+    }
+
+    /// The vault's persisted status together with its live lock state.
+    pub fn vault_status(&self) -> Result<EnboxVaultStatus, EnboxError> {
+        let _lifecycle = self.lifecycle_guard()?;
+        let (status, locked) = self.run_vault(async {
+            let status = self.credential_vault.status().await?;
+            let locked = self.credential_vault.is_locked().await;
+            Ok::<_, dwn_rs_agent::agent::AgentIdentityError>((status, locked))
+        })?;
+        Ok(EnboxVaultStatus {
+            initialized: status.initialized,
+            locked,
+            last_backup: status.last_backup,
+            last_restore: status.last_restore,
+        })
     }
 
     /// Record host-supplied runtime metadata (`device_id`, `app_group`,
@@ -494,6 +596,7 @@ impl EnboxCore {
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
+        let locked = self.is_vault_locked();
         let mut state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
         })?;
@@ -503,7 +606,7 @@ impl EnboxCore {
             state.database_path = Some(database_path);
         }
         state.background_refresh_enabled = request.background_refresh_enabled;
-        Ok(status_from_state(&state))
+        Ok(status_from_state(&state, locked))
     }
 
     /// Register a background task id on the runtime status. Returns
@@ -529,11 +632,14 @@ impl EnboxCore {
     }
 
     pub fn status(&self) -> EnboxRuntimeStatus {
+        // Read the vault before the state lock: a vault operation may take the
+        // state lock to update its unlock reason.
+        let locked = self.is_vault_locked();
         let state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        status_from_state(&state)
+        status_from_state(&state, locked)
     }
 
     /// Install a local private JWK signer used to authorize HTTP sync requests.
@@ -574,12 +680,12 @@ impl EnboxCore {
         tenant: String,
         message_json: String,
     ) -> Result<String, EnboxError> {
+        if self.is_vault_locked() {
+            return Err(EnboxError::Locked);
+        }
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
         })?;
-        if state.locked {
-            return Err(EnboxError::Locked);
-        }
         let Some(node) = state.node.as_ref() else {
             return Err(EnboxError::NotInitialized);
         };
@@ -669,12 +775,12 @@ impl EnboxCore {
         let deadline_ms = request.deadline_ms;
         let connectivity = request.connectivity.clone().unwrap_or_default();
 
+        if self.is_vault_locked() {
+            return Err(EnboxError::Locked);
+        }
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
         })?;
-        if state.locked {
-            return Err(EnboxError::Locked);
-        }
         if state.sync_in_progress {
             return Err(EnboxError::SyncInProgress);
         }
@@ -797,44 +903,14 @@ impl EnboxCore {
         })
     }
 
-    /// Initialize the shared password vault with a fresh or recovered agent identity.
+    /// Return the shared vault's decrypted agent DID, or `None` before
+    /// initialization.
     ///
-    /// Accepts `{ "password": string, "recoveryPhrase"?: string,
-    /// "dwnEndpoints"?: string[] }`. Returns the recovery phrase and encrypted
-    /// vault's `portableDid`; initialization never returns raw vault keys.
-    pub fn initialize_agent_identity(&self, request_json: String) -> Result<String, EnboxError> {
-        let request: AgentIdentityInitializeRequest =
-            serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
-                detail: err.to_string(),
-            })?;
-        let _lifecycle = self
-            .credential_lifecycle
-            .lock()
-            .map_err(|_| EnboxError::Store {
-                detail: "credential lifecycle lock poisoned".into(),
-            })?;
-        self.require_secret_store()?;
-        let initialization = self.runtime.block_on(self.credential_vault.initialize(
-            &request.password,
-            request.recovery_phrase.as_deref(),
-            request.dwn_endpoints,
-        ))?;
-        serde_json::to_string(&initialization).map_err(|err| EnboxError::Json {
-            detail: err.to_string(),
-        })
-    }
-
-    /// Return the shared vault's decrypted agent DID, or `None` before initialization.
-    /// Requires password unlock after reopening or locking the vault.
+    /// Requires a password unlock after opening or locking the vault; a locked
+    /// initialized vault returns `AgentVaultLocked`.
     pub fn current_agent_identity(&self) -> Result<Option<String>, EnboxError> {
-        let _lifecycle = self
-            .credential_lifecycle
-            .lock()
-            .map_err(|_| EnboxError::Store {
-                detail: "credential lifecycle lock poisoned".into(),
-            })?;
-        self.require_secret_store()?;
-        let portable_did = self.runtime.block_on(async {
+        let _lifecycle = self.lifecycle_guard()?;
+        let portable_did = self.run_vault(async {
             if !self.credential_vault.status().await?.initialized {
                 return Ok(None);
             }
@@ -1239,12 +1315,12 @@ impl EnboxCore {
         &self,
         portable_did: &PortableDid,
     ) -> Result<(Arc<SqliteNativeDwn>, MemoryKeyManager), EnboxError> {
+        if self.is_vault_locked() {
+            return Err(EnboxError::Locked);
+        }
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
         })?;
-        if state.locked {
-            return Err(EnboxError::Locked);
-        }
         let node = state.node.clone().ok_or(EnboxError::NotInitialized)?;
         drop(state);
 
@@ -1294,12 +1370,12 @@ impl EnboxCore {
         let sync_request = Self::build_sync_once_request(&request, default_reason);
         let deadline_ms = request.deadline_ms;
 
+        if self.is_vault_locked() {
+            return Err(EnboxError::Locked);
+        }
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
         })?;
-        if state.locked {
-            return Err(EnboxError::Locked);
-        }
         if state.sync_in_progress {
             return Err(EnboxError::SyncInProgress);
         }
@@ -1385,13 +1461,9 @@ impl EnboxCore {
         &self,
         portable_did: &PortableDid,
     ) -> Result<MemoryKeyManager, EnboxError> {
-        let state = self.state.lock().map_err(|err| EnboxError::Store {
-            detail: format!("core state lock poisoned: {err}"),
-        })?;
-        if state.locked {
+        if self.is_vault_locked() {
             return Err(EnboxError::Locked);
         }
-        drop(state);
 
         let key_manager = MemoryKeyManager::default();
         self.runtime
@@ -1400,23 +1472,65 @@ impl EnboxCore {
     }
 
     fn require_credential_store(&self) -> Result<Arc<VaultBackedSecretStore>, EnboxError> {
-        let state = self.state.lock().map_err(|_| EnboxError::Store {
-            detail: "core state lock poisoned".into(),
-        })?;
-        if state.locked {
+        if self.is_vault_locked() {
             return Err(EnboxError::Locked);
         }
         Ok(self.credentials.clone())
     }
 
+    #[cfg(test)]
     fn require_secret_store(&self) -> Result<SqliteSecretStore, EnboxError> {
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
         })?;
-        if state.locked {
-            return Err(EnboxError::Locked);
-        }
         state.secret_store.clone().ok_or(EnboxError::NotInitialized)
+    }
+
+    fn lifecycle_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, EnboxError> {
+        self.credential_lifecycle
+            .lock()
+            .map_err(|_| EnboxError::Store {
+                detail: "credential lifecycle lock poisoned".into(),
+            })
+    }
+
+    /// Whether the vault currently holds no in-memory key.
+    ///
+    /// Blocking on `self.runtime` panics inside an async context, so such
+    /// callers drive the future on a scoped thread instead.
+    fn is_vault_locked(&self) -> bool {
+        self.run_vault(self.credential_vault.is_locked())
+    }
+
+    fn run_vault<T, F>(&self, future: F) -> T
+    where
+        F: std::future::Future<Output = T> + Send,
+        T: Send,
+    {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(move || self.runtime.block_on(future))
+                    .join()
+                    .expect("vault worker panicked")
+            })
+        } else {
+            self.runtime.block_on(future)
+        }
+    }
+
+    fn set_unlock_reason(&self, reason: Option<String>) {
+        self.state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .last_unlock_reason = reason;
+    }
+
+    /// Keep the recorded reason consistent with a vault that ended locked.
+    fn clear_unlock_reason_if_locked(&self) {
+        if self.is_vault_locked() {
+            self.set_unlock_reason(None);
+        }
     }
 
     fn open_with_resolver<F, Fut, E>(
@@ -1437,17 +1551,30 @@ impl EnboxCore {
             )
             .into());
         }
-        let runtime = tokio::runtime::Builder::new_multi_thread()
+        let database_path_key = database_path.as_deref().map(normalize_database_path);
+        reserve_database_path(&database_path_key)?;
+
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(|err| EnboxError::Store {
-                detail: err.to_string(),
-            })?;
-        let node = runtime
-            .block_on(dwn(resolver))
-            .map_err(|err| EnboxError::Store {
-                detail: err.to_string(),
-            })?;
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                release_database_path(&database_path_key);
+                return Err(EnboxError::Store {
+                    detail: err.to_string(),
+                });
+            }
+        };
+        let node = match runtime.block_on(dwn(resolver)) {
+            Ok(node) => node,
+            Err(err) => {
+                release_database_path(&database_path_key);
+                return Err(EnboxError::Store {
+                    detail: err.to_string(),
+                });
+            }
+        };
         let secret_store = SqliteSecretStore::new(node.store());
         let raw_store = Arc::new(secret_store.clone());
         let credential_vault = Arc::new(IdentityVault::with_did_network(
@@ -1466,7 +1593,6 @@ impl EnboxCore {
             credential_lifecycle: Mutex::new(()),
             runtime,
             state: Arc::new(Mutex::new(CoreState {
-                locked: false,
                 database_path,
                 node: Some(Arc::new(node)),
                 secret_store: Some(secret_store),
@@ -1481,8 +1607,56 @@ impl EnboxCore {
                 last_unlock_reason: None,
                 active_background_tasks: BTreeSet::new(),
             })),
+            database_path_key,
         }))
     }
+}
+
+/// Normalize a database path so equivalent spellings share one reservation.
+///
+/// Resolves a symlinked file and, for a path that does not exist yet, the
+/// existing parent directory (which covers `.` / `..` segments and directory
+/// symlinks).
+fn normalize_database_path(path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+    if let Ok(resolved) = path.canonicalize() {
+        return resolved;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => parent
+            .canonicalize()
+            .map(|parent| parent.join(name))
+            .unwrap_or(path),
+        _ => path,
+    }
+}
+
+fn reserve_database_path(database_path_key: &Option<PathBuf>) -> Result<(), EnboxError> {
+    let Some(key) = database_path_key else {
+        return Ok(());
+    };
+    let inserted = OPEN_DATABASE_PATHS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(key.clone());
+    if !inserted {
+        return Err(dwn_rs_agent::agent::AgentIdentityError::new(
+            "AgentVaultError",
+            "database path is already open",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn release_database_path(database_path_key: &Option<PathBuf>) {
+    let Some(key) = database_path_key else {
+        return;
+    };
+    OPEN_DATABASE_PATHS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(key);
 }
 
 fn default_did_network() -> Arc<dyn AgentDidNetwork> {
@@ -1547,13 +1721,13 @@ pub(crate) async fn import_private_keys(
     Ok(())
 }
 
-/// Build an `EnboxRuntimeStatus` snapshot from the locked `CoreState`.
-/// Centralised so `status()`, `initialize_runtime()`, and tests render
-/// the same view.
-fn status_from_state(state: &CoreState) -> EnboxRuntimeStatus {
+/// Build an `EnboxRuntimeStatus` snapshot from the locked `CoreState` and the
+/// vault's live lock state. Centralised so `status()`, `initialize_runtime()`,
+/// and tests render the same view.
+fn status_from_state(state: &CoreState, locked: bool) -> EnboxRuntimeStatus {
     EnboxRuntimeStatus {
         initialized: state.node.is_some(),
-        locked: state.locked,
+        locked,
         database_path: state.database_path.clone(),
         device_id: state.device_id.clone(),
         app_group: state.app_group.clone(),
@@ -1631,7 +1805,7 @@ mod tests {
 
     #[test]
     fn process_message_roundtrips_unsigned_records_query() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
+        let core = open_unlocked_test_core();
         let request = ProcessMessageSmokeRequest {
             tenant: "did:example:alice".to_string(),
             message: serde_json::json!({
@@ -1657,8 +1831,8 @@ mod tests {
 
     #[test]
     fn lock_blocks_process_message_with_typed_error() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
-        core.lock();
+        let core = open_unlocked_test_core();
+        core.lock().expect("lock initialized vault");
         let err = core
             .process_message("did:example:alice".to_string(), "{}".to_string())
             .expect_err("locked core rejects processing");
@@ -1675,8 +1849,18 @@ mod tests {
         let path = db_path.to_string_lossy().into_owned();
 
         {
-            let core = EnboxCore::open(path.clone()).expect("open durable core");
+            let core =
+                EnboxCore::open_with_work_factor(path.clone(), 1).expect("open durable core");
             assert_eq!(core.status().database_path.as_deref(), Some(path.as_str()));
+            core.initialize_vault(
+                serde_json::json!({
+                    "password": TEST_PASSWORD,
+                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                    "dwnEndpoints": []
+                })
+                .to_string(),
+            )
+            .expect("initialize vault");
             let request = ProcessMessageSmokeRequest {
                 tenant: "did:example:alice".to_string(),
                 message: serde_json::json!({
@@ -1698,11 +1882,12 @@ mod tests {
         assert!(db_path.exists());
         let reopened = EnboxCore::open(path).expect("reopen durable core");
         assert!(reopened.status().initialized);
+        assert!(reopened.status().locked, "a reopened core starts locked");
     }
 
     #[test]
     fn sync_once_requires_signer_and_reports_status_without_panic() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
+        let core = open_unlocked_test_core();
         core.register_sync_identity(
             serde_json::json!({
                 "did": "did:example:alice",
@@ -1782,7 +1967,7 @@ mod tests {
     }
 
     fn configured_sync_core() -> Arc<EnboxCore> {
-        let core = EnboxCore::open_in_memory().expect("core opens");
+        let core = open_unlocked_test_core();
         core.register_sync_identity(
             serde_json::json!({
                 "did": "did:example:alice",
@@ -1913,11 +2098,11 @@ mod tests {
 
     #[test]
     fn unlock_with_reason_records_audit_label_and_lock_clears_it() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
-        core.lock();
+        let core = open_unlocked_test_core();
+        core.lock().expect("lock initialized vault");
         assert!(core.status().locked);
 
-        core.unlock_with_reason("push_notification".to_string())
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "push_notification".to_string())
             .expect("unlock_with_reason");
         let status = core.status();
         assert!(!status.locked);
@@ -1926,7 +2111,7 @@ mod tests {
             Some("push_notification")
         );
 
-        core.lock();
+        core.lock().expect("lock initialized vault");
         let after_lock = core.status();
         assert!(after_lock.locked);
         assert!(after_lock.last_unlock_reason.is_none());
@@ -1991,7 +2176,7 @@ mod tests {
         // No `configure_sync_signer` call, so the resume should fail
         // even when there's nothing to do — the lock guard runs before
         // the no-work short-circuit returns.
-        let core = EnboxCore::open_in_memory().expect("core opens");
+        let core = open_unlocked_test_core();
         core.register_sync_identity(
             serde_json::json!({
                 "did": "did:example:alice",
@@ -2013,7 +2198,7 @@ mod tests {
     #[test]
     fn resume_pending_rejects_locked_core() {
         let core = configured_sync_core();
-        core.lock();
+        core.lock().expect("lock initialized vault");
         let err = core.resume_pending(
             serde_json::json!({
                 "tenant": "did:example:alice"
@@ -2135,82 +2320,203 @@ mod tests {
 
     const TEST_RECOVERY_PHRASE: &str =
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const TEST_PASSWORD: &str = "test-password";
+    /// A valid BIP-39 phrase that derives a different identity.
+    const MISMATCHED_RECOVERY_PHRASE: &str =
+        "legal winner thank year wave sausage worth useful legal winner thank yellow";
+
+    fn initialize_request(password: &str, recovery_phrase: Option<&str>) -> String {
+        serde_json::json!({
+            "password": password,
+            "recoveryPhrase": recovery_phrase,
+            "dwnEndpoints": []
+        })
+        .to_string()
+    }
+
+    fn agent_error_code(error: EnboxError) -> String {
+        match error {
+            EnboxError::Agent { code, .. } => code,
+            other => panic!("expected agent error, got {other:?}"),
+        }
+    }
+
+    fn open_error(result: Result<Arc<EnboxCore>, EnboxError>) -> EnboxError {
+        result.err().expect("open must fail")
+    }
+
+    fn open_unlocked_test_core() -> Arc<EnboxCore> {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        core.initialize_vault(initialize_request(
+            TEST_PASSWORD,
+            Some(TEST_RECOVERY_PHRASE),
+        ))
+        .expect("initialize vault");
+        core
+    }
+
+    #[test]
+    fn fresh_core_starts_locked_with_an_uninitialized_vault() {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        assert!(core.status().locked);
+        assert_eq!(
+            core.vault_status().expect("vault status"),
+            EnboxVaultStatus {
+                initialized: false,
+                locked: true,
+                last_backup: None,
+                last_restore: None,
+            }
+        );
+        assert!(core.current_agent_identity().unwrap().is_none());
+        assert!(matches!(
+            core.process_message("did:example:alice".to_string(), "{}".to_string()),
+            Err(EnboxError::Locked)
+        ));
+        assert_eq!(
+            agent_error_code(core.lock().unwrap_err()),
+            "AgentVaultUninitialized"
+        );
+        assert_eq!(
+            agent_error_code(core.unlock(TEST_PASSWORD.to_string()).unwrap_err()),
+            "AgentVaultUninitialized"
+        );
+        assert!(core.status().last_unlock_reason.is_none());
+    }
 
     #[test]
     // Covers: DID-DHT-006
-    fn initialize_agent_identity_uses_shared_vault_across_reopen() {
-        // Serialize file-backed tests process-wide.
-        // Plain `#[test]`: no runtime is running on this thread yet, so
-        // blocking acquisition is safe.
+    fn full_vault_lifecycle_backup_and_restore_across_reopen() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp
             .path()
             .join("agent.sqlite")
             .to_string_lossy()
             .into_owned();
+        let core = EnboxCore::open_with_work_factor(path.clone(), 1).expect("open core");
 
-        let core = EnboxCore::open(path.clone()).expect("open core");
-        let raw = core
-            .initialize_agent_identity(
-                serde_json::json!({
-                    "password": "test-password",
-                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
-                    "dwnEndpoints": ["https://dwn.example/"]
-                })
-                .to_string(),
-            )
-            .expect("initialize agent");
-
-        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("init json");
-        let did_uri = parsed["portableDid"]["uri"]
-            .as_str()
-            .expect("did uri present")
-            .to_string();
+        let init: serde_json::Value = serde_json::from_str(
+            &core
+                .initialize_vault(initialize_request(
+                    TEST_PASSWORD,
+                    Some(TEST_RECOVERY_PHRASE),
+                ))
+                .expect("initialize vault"),
+        )
+        .expect("init json");
+        assert_eq!(init["recoveryPhrase"], TEST_RECOVERY_PHRASE);
+        assert!(init.get("vaultContentEncryptionKey").is_none());
+        assert!(init.get("vaultUnlockSalt").is_none());
+        let original_did = init["portableDid"].clone();
+        let did_uri = original_did["uri"].as_str().expect("did uri").to_string();
         assert!(did_uri.starts_with("did:dht:"), "got {did_uri}");
-        assert_eq!(parsed["recoveryPhrase"], TEST_RECOVERY_PHRASE);
-        assert!(parsed.get("vaultContentEncryptionKey").is_none());
-        assert!(parsed.get("vaultUnlockSalt").is_none());
+        let key_ids: Vec<&str> = original_did["document"]["verificationMethod"]
+            .as_array()
+            .expect("verification methods")
+            .iter()
+            .filter_map(|method| method["id"].as_str())
+            .collect();
+        for fragment in ["#0", "#sig", "#enc"] {
+            assert!(
+                key_ids.iter().any(|id| id.ends_with(fragment)),
+                "missing {fragment} in {key_ids:?}"
+            );
+        }
         assert_eq!(
-            core.runtime
-                .block_on(core.credential_vault.get_did())
-                .unwrap()
-                .uri,
-            did_uri
+            serde_json::from_str::<serde_json::Value>(
+                &core.current_agent_identity().unwrap().expect("identity")
+            )
+            .unwrap(),
+            original_did
         );
 
-        let current = core
-            .current_agent_identity()
-            .expect("current identity")
-            .expect("identity persisted");
-        let current_did: serde_json::Value =
-            serde_json::from_str(&current).expect("current identity json");
+        core.lock().expect("lock");
+        assert!(core.status().locked);
         assert_eq!(
-            current_did["uri"],
-            serde_json::Value::String(did_uri.clone())
+            agent_error_code(core.current_agent_identity().unwrap_err()),
+            "AgentVaultLocked"
+        );
+        assert_eq!(
+            agent_error_code(core.unlock("wrong-password".to_string()).unwrap_err()),
+            "AgentVaultInvalidPassword"
+        );
+        assert_eq!(
+            agent_error_code(
+                core.unlock_with_reason("wrong-password".to_string(), "biometric".to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultInvalidPassword"
+        );
+        assert!(core.status().last_unlock_reason.is_none());
+
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "biometric".to_string())
+            .expect("unlock with reason");
+        assert_eq!(
+            core.status().last_unlock_reason.as_deref(),
+            Some("biometric")
+        );
+
+        core.change_password(TEST_PASSWORD.to_string(), "new-password".to_string())
+            .expect("change password");
+        let backup = core.backup_vault().expect("backup");
+        let backup_json: serde_json::Value = serde_json::from_str(&backup).expect("backup json");
+        assert!(backup_json["data"].is_string());
+        assert!(backup_json["dateCreated"].is_string());
+        assert!(backup_json["size"].is_number());
+        let status = core.vault_status().expect("vault status");
+        assert!(status.initialized);
+        assert!(!status.locked);
+        assert!(status.last_backup.is_some());
+
+        let fresh = EnboxCore::open_in_memory_with_work_factor(1).expect("fresh core");
+        fresh
+            .restore_vault(backup, "new-password".to_string())
+            .expect("restore onto fresh core");
+        let restored_status = fresh.vault_status().expect("restored status");
+        assert!(restored_status.initialized);
+        assert!(!restored_status.locked);
+        assert!(restored_status.last_restore.is_some());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &fresh
+                    .current_agent_identity()
+                    .unwrap()
+                    .expect("restored identity")
+            )
+            .unwrap(),
+            original_did
         );
 
         drop(core);
-        let reopened = EnboxCore::open(path).expect("reopen core");
-        assert!(
-            matches!(reopened.current_agent_identity(), Err(EnboxError::Agent { ref code, .. }) if code == "AgentVaultLocked")
+        let reopened = EnboxCore::open_with_work_factor(path, 1).expect("reopen");
+        assert!(reopened.status().locked);
+        assert_eq!(
+            agent_error_code(reopened.unlock(TEST_PASSWORD.to_string()).unwrap_err()),
+            "AgentVaultInvalidPassword"
         );
         reopened
-            .unlock_credential_vault("test-password".into())
-            .unwrap();
-        let reopened_raw = reopened
-            .current_agent_identity()
-            .expect("current identity on reopened core")
-            .expect("identity persisted across reopen");
-        let reopened_did: serde_json::Value =
-            serde_json::from_str(&reopened_raw).expect("reopened identity json");
-        assert_eq!(reopened_did["uri"], serde_json::Value::String(did_uri));
+            .unlock("new-password".to_string())
+            .expect("unlock with the changed password");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &reopened
+                    .current_agent_identity()
+                    .unwrap()
+                    .expect("identity after reopen")
+            )
+            .unwrap()["uri"],
+            serde_json::Value::String(did_uri)
+        );
     }
 
     #[test]
-    // Covers: DID-DHT-006
-    fn credential_initializer_and_identity_accessor_share_one_vault() {
-        let core = EnboxCore::open_in_memory().unwrap();
-        initialize_test_credential_vault(&core);
+    fn vault_lifecycle_and_identity_accessor_share_one_vault() {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        core.initialize_vault(initialize_request(
+            TEST_PASSWORD,
+            Some(TEST_RECOVERY_PHRASE),
+        ))
+        .expect("initialize vault");
         let expected = core
             .runtime
             .block_on(core.credential_vault.get_did())
@@ -2218,90 +2524,65 @@ mod tests {
         let actual: PortableDid =
             serde_json::from_str(&core.current_agent_identity().unwrap().unwrap()).unwrap();
         assert_eq!(actual, expected);
-        assert!(actual.uri.starts_with("did:dht:"));
-        let error = core
-            .initialize_agent_identity(
-                serde_json::json!({
-                    "password": "test-password", "recoveryPhrase": TEST_RECOVERY_PHRASE
-                })
-                .to_string(),
-            )
-            .unwrap_err();
-        assert!(
-            matches!(error, EnboxError::Agent { code, .. } if code == "AgentVaultAlreadyInitialized")
+        assert_eq!(
+            agent_error_code(
+                core.initialize_vault(initialize_request(
+                    TEST_PASSWORD,
+                    Some(TEST_RECOVERY_PHRASE)
+                ))
+                .unwrap_err()
+            ),
+            "AgentVaultAlreadyInitialized"
         );
-        core.lock();
-        core.unlock();
-        assert!(
-            matches!(core.current_agent_identity(), Err(EnboxError::Agent { code, .. }) if code == "AgentVaultLocked")
+        core.lock().expect("lock");
+        assert_eq!(
+            agent_error_code(core.current_agent_identity().unwrap_err()),
+            "AgentVaultLocked"
         );
     }
 
     #[test]
     fn identity_initialization_requires_password_without_writing() {
-        let core = EnboxCore::open_in_memory().unwrap();
+        let core = EnboxCore::open_in_memory_with_work_factor(1).unwrap();
         assert!(matches!(
-            core.initialize_agent_identity("{}".into()),
+            core.initialize_vault("{}".into()),
             Err(EnboxError::Json { .. })
         ));
         assert!(core.current_agent_identity().unwrap().is_none());
-        assert!(matches!(core.initialize_agent_identity(serde_json::json!({
-            "password": " "
-        }).to_string()), Err(EnboxError::Agent { code, .. }) if code == "AgentVaultBlankPassword"));
+        assert_eq!(
+            agent_error_code(
+                core.initialize_vault(serde_json::json!({ "password": " " }).to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultBlankPassword"
+        );
         assert!(core.current_agent_identity().unwrap().is_none());
+        assert!(!core.vault_status().unwrap().initialized);
     }
 
     #[test]
-    fn host_initializers_never_store_plaintext_identity_material() {
+    fn vault_never_stores_plaintext_identity_material() {
         use dwn_rs_agent::agent::SecretStore;
-        for credentials_first in [false, true] {
-            let core = EnboxCore::open_in_memory().unwrap();
-            let identity_request = serde_json::json!({
-                "password": "test-password", "recoveryPhrase": TEST_RECOVERY_PHRASE
-            })
-            .to_string();
-            let error = if credentials_first {
-                core.initialize_credential_vault(
-                    "test-password".into(),
-                    Some(TEST_RECOVERY_PHRASE.into()),
-                )
-                .unwrap();
-                core.initialize_agent_identity(identity_request)
-                    .unwrap_err()
-            } else {
-                core.initialize_agent_identity(identity_request).unwrap();
-                core.initialize_credential_vault(
-                    "test-password".into(),
-                    Some(TEST_RECOVERY_PHRASE.into()),
-                )
-                .unwrap_err()
-            };
-            assert!(
-                matches!(error, EnboxError::Agent { code, .. } if code == "AgentVaultAlreadyInitialized")
-            );
-            core.save_delegate_context_keys("[]".into()).unwrap();
-            let raw = core.require_secret_store().unwrap();
-            for key in [
-                "agent:vault:portableDid",
-                "agent:vault:contentEncryptionKey",
-                "agent:vault:unlockSalt",
-            ] {
-                assert!(core.runtime.block_on(raw.get(key)).unwrap().is_none());
-            }
-            let envelope = core
-                .runtime
-                .block_on(raw.get("enbox:auth:delegateContextKeys"))
-                .unwrap()
-                .unwrap();
-            assert!(
-                serde_json::from_slice::<serde_json::Value>(&envelope).unwrap()["jwe"].is_string()
-            );
-            core.lock();
-            core.unlock_credential_vault("test-password".into())
-                .unwrap();
-            assert!(core.current_agent_identity().unwrap().is_some());
-            assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
+        let core = open_unlocked_test_core();
+        core.save_delegate_context_keys("[]".into()).unwrap();
+        let raw = core.require_secret_store().unwrap();
+        for key in [
+            "agent:vault:portableDid",
+            "agent:vault:contentEncryptionKey",
+            "agent:vault:unlockSalt",
+        ] {
+            assert!(core.runtime.block_on(raw.get(key)).unwrap().is_none());
         }
+        let envelope = core
+            .runtime
+            .block_on(raw.get("enbox:auth:delegateContextKeys"))
+            .unwrap()
+            .unwrap();
+        assert!(serde_json::from_slice::<serde_json::Value>(&envelope).unwrap()["jwe"].is_string());
+        core.lock().expect("lock");
+        core.unlock(TEST_PASSWORD.to_string()).expect("unlock");
+        assert!(core.current_agent_identity().unwrap().is_some());
+        assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
     }
 
     fn stored_vault_work_factor(core: &EnboxCore, password: &str) -> u32 {
@@ -2337,14 +2618,12 @@ mod tests {
             ),
         ];
         for (core, expected) in cores {
-            core.initialize_agent_identity(
-                serde_json::json!({
-                    "password": "test-password", "recoveryPhrase": TEST_RECOVERY_PHRASE
-                })
-                .to_string(),
-            )
-            .expect("initialize agent");
-            assert_eq!(stored_vault_work_factor(&core, "test-password"), expected);
+            core.initialize_vault(initialize_request(
+                TEST_PASSWORD,
+                Some(TEST_RECOVERY_PHRASE),
+            ))
+            .expect("initialize vault");
+            assert_eq!(stored_vault_work_factor(&core, TEST_PASSWORD), expected);
         }
     }
 
@@ -2357,16 +2636,16 @@ mod tests {
             .expect("zero work factor rejected");
         assert!(matches!(error, EnboxError::Agent { ref code, .. } if code == "AgentVaultError"));
         assert!(!path.exists());
+        EnboxCore::open_with_work_factor(path.to_string_lossy().into_owned(), 1)
+            .expect("a failed open leaves no path reservation");
     }
 
     #[test]
-    fn initialize_agent_identity_without_phrase_generates_random_did() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
+    fn initialize_vault_without_phrase_generates_random_did() {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
         let raw = core
-            .initialize_agent_identity(
-                serde_json::json!({ "password": "test-password", "dwnEndpoints": [] }).to_string(),
-            )
-            .expect("initialize agent");
+            .initialize_vault(initialize_request(TEST_PASSWORD, None))
+            .expect("initialize vault");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("init json");
         let phrase = parsed["recoveryPhrase"].as_str().expect("generated phrase");
         assert_eq!(phrase.split_whitespace().count(), 12);
@@ -2400,25 +2679,83 @@ mod tests {
     }
 
     #[test]
-    fn vault_touching_agent_methods_fail_when_locked() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
-        core.lock();
-        let err = core
-            .initialize_agent_identity(
-                serde_json::json!({ "password": "test-password", "dwnEndpoints": [] }).to_string(),
-            )
-            .expect_err("locked initialize must fail");
-        assert!(matches!(err, EnboxError::Locked));
-        let err = core
+    fn locked_vault_operations_surface_typed_errors() {
+        let core = open_unlocked_test_core();
+        let portable_did = core
             .current_agent_identity()
-            .expect_err("locked current must fail");
-        assert!(matches!(err, EnboxError::Locked));
+            .unwrap()
+            .expect("initialized identity");
+        core.lock().expect("lock");
+        assert_eq!(
+            agent_error_code(core.current_agent_identity().unwrap_err()),
+            "AgentVaultLocked"
+        );
+        assert_eq!(
+            agent_error_code(core.backup_vault().unwrap_err()),
+            "AgentVaultLocked"
+        );
+        assert!(matches!(
+            core.load_delegate_context_keys().unwrap_err(),
+            EnboxError::Locked
+        ));
+        assert!(matches!(
+            core.save_delegate_context_keys("[]".into()).unwrap_err(),
+            EnboxError::Locked
+        ));
+        assert!(matches!(
+            core.sync_once(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://127.0.0.1:9/",
+                    "direction": "pull"
+                })
+                .to_string()
+            ),
+            Err(EnboxError::Locked)
+        ));
+        assert!(matches!(
+            core.poll_reconcile(
+                serde_json::json!({
+                    "tenant": "did:example:alice",
+                    "remote": "http://127.0.0.1:9/",
+                    "direction": "pull"
+                })
+                .to_string()
+            ),
+            Err(EnboxError::Locked)
+        ));
+        assert!(matches!(
+            core.inject_protocol_encryption(portable_did, plain_protocol_definition().to_string()),
+            Err(EnboxError::Locked)
+        ));
+        // Metadata and pure surfaces stay available while locked.
+        assert!(core.status().locked);
+        assert!(core.vault_status().unwrap().locked);
+        assert!(core.delete_registration_tokens().is_ok());
+        assert!(core
+            .derive_agent_keys_from_phrase(TEST_RECOVERY_PHRASE.to_string())
+            .is_ok());
+        assert!(core
+            .create_permission_request(
+                serde_json::json!({
+                    "requester": "did:example:requester",
+                    "scope": {
+                        "interface": "Records",
+                        "method": "Read",
+                        "protocol": "https://protocol.example/notes",
+                        "protocolPath": "note"
+                    },
+                    "delegated": false
+                })
+                .to_string(),
+            )
+            .is_ok());
     }
 
     #[test]
     fn derive_agent_keys_is_pure_and_works_while_locked() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
-        core.lock();
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        assert!(core.status().locked);
         let raw = core
             .derive_agent_keys_from_phrase(TEST_RECOVERY_PHRASE.to_string())
             .expect("derive runs while locked (no vault access)");
@@ -2451,27 +2788,34 @@ mod tests {
                 .unwrap();
             }
         });
-        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
+        core.unlock(fixture["inputs"]["password"].as_str().unwrap().into())
             .unwrap();
     }
 
     #[test]
-    fn password_unlock_clears_previous_reason_only_on_success() {
-        let core = EnboxCore::open_in_memory().unwrap();
+    fn failed_password_unlock_clears_the_previous_reason() {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).unwrap();
         initialize_test_credential_vault(&core);
-        core.unlock_with_reason("push_notification".into()).unwrap();
-        assert!(matches!(
-            core.unlock_credential_vault("wrong".into()),
-            Err(EnboxError::Agent { code, .. }) if code == "AgentVaultInvalidPassword"
-        ));
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
+        let password = fixture["inputs"]["password"].as_str().unwrap().to_string();
+        core.unlock_with_reason(password.clone(), "push_notification".to_string())
+            .unwrap();
         assert_eq!(
             core.status().last_unlock_reason.as_deref(),
             Some("push_notification")
         );
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
-        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
-            .unwrap();
+        assert_eq!(
+            agent_error_code(core.unlock("wrong".into()).unwrap_err()),
+            "AgentVaultInvalidPassword"
+        );
+        let status = core.status();
+        assert!(status.locked);
+        assert!(
+            status.last_unlock_reason.is_none(),
+            "a failed unlock clears the recorded reason"
+        );
+        core.unlock(password).unwrap();
         let status = core.status();
         assert!(!status.locked);
         assert!(status.last_unlock_reason.is_none());
@@ -2479,34 +2823,44 @@ mod tests {
     }
 
     #[test]
-    fn credential_vault_initialization_and_password_gate() {
-        let core = EnboxCore::open_in_memory().unwrap();
-        let error = core.load_delegate_context_keys().unwrap_err();
-        assert!(matches!(error, EnboxError::Agent { code, .. } if code == "AgentVaultLocked"));
-        let phrase = core
-            .initialize_credential_vault("password".into(), Some(TEST_RECOVERY_PHRASE.into()))
-            .unwrap();
-        assert_eq!(phrase, TEST_RECOVERY_PHRASE);
+    fn vault_password_gate_controls_credential_access() {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).unwrap();
+        assert!(matches!(
+            core.load_delegate_context_keys().unwrap_err(),
+            EnboxError::Locked
+        ));
+        let init: serde_json::Value = serde_json::from_str(
+            &core
+                .initialize_vault(initialize_request(
+                    TEST_PASSWORD,
+                    Some(TEST_RECOVERY_PHRASE),
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(init["recoveryPhrase"], TEST_RECOVERY_PHRASE);
         core.save_delegate_context_keys("[]".into()).unwrap();
         assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
-        core.lock();
+        core.lock().unwrap();
         assert!(core.runtime.block_on(core.credential_vault.is_locked()));
-        core.unlock();
-        assert!(
-            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
+        assert!(matches!(
+            core.load_delegate_context_keys().unwrap_err(),
+            EnboxError::Locked
+        ));
+        assert!(matches!(
+            core.save_delegate_context_keys("[]".into()).unwrap_err(),
+            EnboxError::Locked
+        ));
+        assert_eq!(
+            agent_error_code(core.unlock("wrong".into()).unwrap_err()),
+            "AgentVaultInvalidPassword"
         );
-        core.unlock_with_reason("biometric".into()).unwrap();
-        assert!(
-            matches!(core.save_delegate_context_keys("[]".into()).unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
-        );
-        core.unlock_credential_vault("password".into()).unwrap();
+        assert!(matches!(
+            core.load_delegate_context_keys().unwrap_err(),
+            EnboxError::Locked
+        ));
+        core.unlock(TEST_PASSWORD.to_string()).unwrap();
         assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
-        assert!(
-            matches!(core.unlock_credential_vault("wrong".into()).unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultInvalidPassword")
-        );
-        assert!(
-            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
-        );
     }
 
     #[test]
@@ -2575,13 +2929,14 @@ mod tests {
                 assert_ne!(bytes, plaintext);
                 assert!(!String::from_utf8(bytes).unwrap().contains("private-token"));
             }
-            core.lock();
+            core.lock().unwrap();
         }
         let core = EnboxCore::open(path).unwrap();
-        assert!(
-            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
-        );
-        core.unlock_credential_vault(password).unwrap();
+        assert!(matches!(
+            core.load_delegate_context_keys().unwrap_err(),
+            EnboxError::Locked
+        ));
+        core.unlock(password).unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&core.load_delegate_context_keys().unwrap())
                 .unwrap(),
@@ -2630,7 +2985,7 @@ mod tests {
         core.runtime
             .block_on(raw.put(REGISTRATION_TOKENS_KEY, br#"{"legacy":"token"}"#.to_vec()))
             .unwrap();
-        core.lock();
+        core.lock().unwrap();
         assert!(core.delete_registration_tokens().unwrap());
         assert!(!core.delete_registration_tokens().unwrap());
         assert!(core
@@ -2640,7 +2995,7 @@ mod tests {
             .is_none());
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
-        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
+        core.unlock(fixture["inputs"]["password"].as_str().unwrap().into())
             .unwrap();
         core.register_tenant(serde_json::json!({"dwnEndpoints":[], "agentDid":"did:example:agent", "connectedDid":"did:example:owner", "persistTokens":true}).to_string()).unwrap();
         let bytes = core
@@ -2649,75 +3004,588 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["jwe"].is_string());
-        core.lock();
+        core.lock().unwrap();
         assert!(core.delete_registration_tokens().unwrap());
     }
 
     #[test]
-    fn lock_from_async_context_clears_key_without_poisoning_lifecycle() {
-        let core = EnboxCore::open_in_memory().unwrap();
-        initialize_test_credential_vault(&core);
+    fn lock_and_status_are_safe_from_an_async_caller_context() {
+        let core = open_unlocked_test_core();
+        core.save_delegate_context_keys("[]".into()).unwrap();
         let caller = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
         caller.block_on(async {
-            core.lock();
+            core.lock().expect("lock from async context");
+            assert!(core.status().locked);
+            assert!(core.vault_status().unwrap().locked);
         });
         assert!(core.credential_lifecycle.lock().is_ok());
         assert!(core.runtime.block_on(core.credential_vault.is_locked()));
-        core.unlock();
-        assert!(
-            matches!(core.load_delegate_context_keys().unwrap_err(), EnboxError::Agent { code, .. } if code == "AgentVaultLocked")
-        );
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
-        core.unlock_credential_vault(fixture["inputs"]["password"].as_str().unwrap().into())
-            .unwrap();
+        assert!(matches!(
+            core.load_delegate_context_keys().unwrap_err(),
+            EnboxError::Locked
+        ));
+        core.unlock(TEST_PASSWORD.to_string()).unwrap();
         assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
     }
 
     #[test]
     fn host_lock_and_password_unlock_serialize() {
-        let core = EnboxCore::open_in_memory().unwrap();
-        initialize_test_credential_vault(&core);
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../../../fixtures/interop/vault-jwe.json")).unwrap();
-        let password = fixture["inputs"]["password"].as_str().unwrap().to_string();
+        let core = open_unlocked_test_core();
         let barrier = std::sync::Barrier::new(2);
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 barrier.wait();
-                core.lock();
+                core.lock().expect("lock");
             });
             scope.spawn(|| {
                 barrier.wait();
-                core.unlock_credential_vault(password).unwrap();
+                core.unlock(TEST_PASSWORD.to_string()).expect("unlock");
             });
         });
         assert_eq!(
             core.status().locked,
             core.runtime.block_on(core.credential_vault.is_locked())
         );
-        core.lock();
-        core.unlock();
+        core.lock().expect("lock");
         assert!(core.runtime.block_on(core.credential_vault.is_locked()));
     }
 
     fn initialized_core_with_did() -> (Arc<EnboxCore>, serde_json::Value) {
-        let core = EnboxCore::open_in_memory().expect("core opens");
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
         let init_raw = core
-            .initialize_agent_identity(
-                serde_json::json!({
-                    "password": "test-password",
-                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
-                    "dwnEndpoints": []
-                })
-                .to_string(),
-            )
-            .expect("initialize agent");
+            .initialize_vault(initialize_request(
+                TEST_PASSWORD,
+                Some(TEST_RECOVERY_PHRASE),
+            ))
+            .expect("initialize vault");
         let init: serde_json::Value = serde_json::from_str(&init_raw).expect("initialization json");
         let portable_did = init["portableDid"].clone();
         (core, portable_did)
+    }
+
+    fn stored_cek_entry(core: &EnboxCore) -> Vec<u8> {
+        use dwn_rs_agent::agent::{SecretStore, VAULT_CEK_JWE_KEY};
+        let raw = core.require_secret_store().unwrap();
+        core.runtime
+            .block_on(raw.get(VAULT_CEK_JWE_KEY))
+            .unwrap()
+            .expect("vault CEK entry")
+    }
+
+    /// Re-encode a backup with its decoded payload mutated.
+    fn with_backup_payload(
+        backup: &serde_json::Value,
+        mutate: impl FnOnce(&mut serde_json::Value),
+    ) -> String {
+        use base64::prelude::{Engine as _, BASE64_URL_SAFE_NO_PAD};
+        let data = backup["data"].as_str().expect("backup data");
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(data).expect("backup payload"))
+                .expect("payload json");
+        mutate(&mut payload);
+        let encoded = BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        serde_json::json!({
+            "dateCreated": backup["dateCreated"],
+            "size": encoded.chars().count(),
+            "data": encoded,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn unlock_reason_tracks_only_successful_password_unlock() {
+        let core = open_unlocked_test_core();
+        core.lock().expect("lock");
+
+        assert_eq!(
+            agent_error_code(
+                core.unlock_with_reason("wrong".to_string(), "biometric".to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultInvalidPassword"
+        );
+        assert!(core.status().last_unlock_reason.is_none());
+
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "biometric".to_string())
+            .expect("unlock with reason");
+        assert_eq!(
+            core.status().last_unlock_reason.as_deref(),
+            Some("biometric")
+        );
+
+        assert_eq!(
+            agent_error_code(core.unlock("wrong".to_string()).unwrap_err()),
+            "AgentVaultInvalidPassword"
+        );
+        assert!(core.status().locked);
+        assert!(core.status().last_unlock_reason.is_none());
+
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "biometric-2".to_string())
+            .expect("unlock with reason");
+        core.unlock(TEST_PASSWORD.to_string()).expect("unlock");
+        let status = core.status();
+        assert!(!status.locked);
+        assert!(status.last_unlock_reason.is_none());
+
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "biometric-3".to_string())
+            .expect("unlock with reason");
+        core.lock().expect("lock");
+        assert!(core.status().last_unlock_reason.is_none());
+    }
+
+    #[test]
+    fn change_password_enforces_the_vault_state_machine() {
+        let fresh = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        assert_eq!(
+            agent_error_code(
+                fresh
+                    .change_password("old".into(), "new".into())
+                    .unwrap_err()
+            ),
+            "AgentVaultUninitialized"
+        );
+
+        let core = open_unlocked_test_core();
+        assert_eq!(
+            agent_error_code(
+                core.change_password(TEST_PASSWORD.into(), "   ".into())
+                    .unwrap_err()
+            ),
+            "AgentVaultBlankPassword"
+        );
+        assert!(
+            !core.status().locked,
+            "a blank new password leaves the vault unlocked"
+        );
+
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "biometric".to_string())
+            .expect("unlock with reason");
+        assert_eq!(
+            agent_error_code(
+                core.change_password("wrong".into(), "new-password".into())
+                    .unwrap_err()
+            ),
+            "AgentVaultInvalidPassword"
+        );
+        assert!(core.status().locked);
+        assert!(core.status().last_unlock_reason.is_none());
+
+        core.change_password(TEST_PASSWORD.to_string(), "new-password".to_string())
+            .expect("change password with the valid old password");
+        assert!(!core.status().locked);
+        assert_eq!(stored_vault_work_factor(&core, "new-password"), 1);
+        assert_eq!(
+            agent_error_code(core.unlock(TEST_PASSWORD.to_string()).unwrap_err()),
+            "AgentVaultInvalidPassword"
+        );
+        core.unlock("new-password".to_string()).expect("unlock new");
+    }
+
+    #[test]
+    fn reset_password_with_recovery_phrase_enforces_the_vault_contract() {
+        let fresh = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        assert_eq!(
+            agent_error_code(
+                fresh
+                    .reset_password_with_recovery_phrase(
+                        serde_json::json!({
+                            "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                            "password": "new-password",
+                        })
+                        .to_string(),
+                    )
+                    .unwrap_err()
+            ),
+            "AgentVaultUninitialized"
+        );
+
+        let core = open_unlocked_test_core();
+        let cek_before = stored_cek_entry(&core);
+
+        assert_eq!(
+            agent_error_code(
+                core.reset_password_with_recovery_phrase(
+                    serde_json::json!({
+                        "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                        "password": "  ",
+                    })
+                    .to_string(),
+                )
+                .unwrap_err()
+            ),
+            "AgentVaultBlankPassword"
+        );
+        assert!(core.status().locked);
+
+        assert_eq!(
+            agent_error_code(
+                core.reset_password_with_recovery_phrase(
+                    serde_json::json!({
+                        "recoveryPhrase": "not a valid phrase",
+                        "password": "new-password",
+                    })
+                    .to_string(),
+                )
+                .unwrap_err()
+            ),
+            "AgentIdentityInvalidMnemonic"
+        );
+
+        assert_eq!(
+            agent_error_code(
+                core.reset_password_with_recovery_phrase(
+                    serde_json::json!({
+                        "recoveryPhrase": MISMATCHED_RECOVERY_PHRASE,
+                        "password": "new-password",
+                    })
+                    .to_string(),
+                )
+                .unwrap_err()
+            ),
+            "HD_IDENTITY_VAULT_RECOVERY_PHRASE_MISMATCH"
+        );
+        assert_eq!(
+            stored_cek_entry(&core),
+            cek_before,
+            "stored vault unchanged"
+        );
+        assert!(core.status().locked);
+        assert!(core.status().last_unlock_reason.is_none());
+
+        let attempts = [
+            ("new-password", serde_json::Value::Null),
+            (
+                "final-password",
+                serde_json::json!(["https://dwn.example/"]),
+            ),
+        ];
+        for (password, endpoints) in attempts {
+            let mut request = serde_json::json!({
+                "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                "password": password,
+            });
+            if !endpoints.is_null() {
+                request["dwnEndpoints"] = endpoints;
+            }
+            core.reset_password_with_recovery_phrase(request.to_string())
+                .expect("reset from matching phrase");
+            assert!(!core.status().locked);
+            core.unlock(password.to_string())
+                .expect("unlock with the reset password");
+        }
+        assert_eq!(
+            agent_error_code(core.unlock(TEST_PASSWORD.to_string()).unwrap_err()),
+            "AgentVaultInvalidPassword"
+        );
+    }
+
+    #[test]
+    fn restore_vault_validates_the_backup_and_ends_locked_on_every_failure() {
+        let core = open_unlocked_test_core();
+        let backup: serde_json::Value =
+            serde_json::from_str(&core.backup_vault().expect("backup")).expect("backup json");
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "biometric".to_string())
+            .expect("unlock with reason");
+        let cek_before = stored_cek_entry(&core);
+
+        for candidate in [
+            "not-json".to_string(),
+            "{}".to_string(),
+            serde_json::json!({
+                "dateCreated": backup["dateCreated"],
+                "size": 1,
+                "data": "not-base64!",
+            })
+            .to_string(),
+        ] {
+            let error = core
+                .restore_vault(candidate, TEST_PASSWORD.to_string())
+                .unwrap_err();
+            assert_eq!(agent_error_code(error), "AgentVaultInvalidBackup");
+            assert!(core.status().locked);
+            assert!(core.status().last_unlock_reason.is_none());
+            assert_eq!(stored_cek_entry(&core), cek_before);
+        }
+
+        let uninitialized = with_backup_payload(&backup, |payload| {
+            payload["status"]["initialized"] = serde_json::Value::Bool(false);
+        });
+        assert_eq!(
+            agent_error_code(
+                core.restore_vault(uninitialized, TEST_PASSWORD.to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultInvalidBackup"
+        );
+
+        let corrupt_did = with_backup_payload(&backup, |payload| {
+            payload["did"] = serde_json::Value::String("not-a-jwe".to_string());
+        });
+        assert_eq!(
+            agent_error_code(
+                core.restore_vault(corrupt_did, TEST_PASSWORD.to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultInvalidBackup"
+        );
+
+        assert_eq!(
+            agent_error_code(
+                core.restore_vault(backup.to_string(), "wrong-password".to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultInvalidPassword"
+        );
+        assert!(core.status().locked);
+        assert_eq!(stored_cek_entry(&core), cek_before);
+
+        core.restore_vault(backup.to_string(), TEST_PASSWORD.to_string())
+            .expect("valid restore");
+        let status = core.vault_status().expect("vault status");
+        assert!(status.initialized);
+        assert!(!status.locked);
+        assert!(status.last_restore.is_some());
+        assert!(core.current_agent_identity().unwrap().is_some());
+    }
+
+    #[test]
+    fn vault_failures_pass_stable_agent_codes_through_the_ffi() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let zero = open_error(EnboxCore::open_with_work_factor(
+            temp.path()
+                .join("zero.sqlite")
+                .to_string_lossy()
+                .into_owned(),
+            0,
+        ));
+        assert_eq!(agent_error_code(zero), "AgentVaultError");
+
+        let fresh = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        assert_eq!(
+            agent_error_code(fresh.lock().unwrap_err()),
+            "AgentVaultUninitialized"
+        );
+        assert_eq!(
+            agent_error_code(fresh.unlock(TEST_PASSWORD.to_string()).unwrap_err()),
+            "AgentVaultUninitialized"
+        );
+        assert_eq!(
+            agent_error_code(fresh.backup_vault().unwrap_err()),
+            "AgentVaultUninitialized"
+        );
+        assert_eq!(
+            agent_error_code(
+                fresh
+                    .initialize_vault(serde_json::json!({ "password": " " }).to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultBlankPassword"
+        );
+
+        let did_endpoint_error = fresh
+            .initialize_vault(
+                serde_json::json!({
+                    "password": TEST_PASSWORD,
+                    "dwnEndpoints": ["https://dwn.example/?query=1"],
+                })
+                .to_string(),
+            )
+            .unwrap_err();
+        assert_eq!(
+            agent_error_code(did_endpoint_error),
+            "AgentIdentityDidError"
+        );
+
+        fresh
+            .initialize_vault(initialize_request(
+                TEST_PASSWORD,
+                Some(TEST_RECOVERY_PHRASE),
+            ))
+            .expect("initialize vault");
+        assert_eq!(
+            agent_error_code(
+                fresh
+                    .initialize_vault(initialize_request(
+                        TEST_PASSWORD,
+                        Some(TEST_RECOVERY_PHRASE)
+                    ))
+                    .unwrap_err()
+            ),
+            "AgentVaultAlreadyInitialized"
+        );
+        assert_eq!(
+            agent_error_code(fresh.unlock("wrong".to_string()).unwrap_err()),
+            "AgentVaultInvalidPassword"
+        );
+        assert_eq!(
+            agent_error_code(fresh.current_agent_identity().unwrap_err()),
+            "AgentVaultLocked"
+        );
+        assert_eq!(
+            agent_error_code(
+                fresh
+                    .restore_vault("{}".to_string(), TEST_PASSWORD.to_string())
+                    .unwrap_err()
+            ),
+            "AgentVaultInvalidBackup"
+        );
+
+        {
+            use dwn_rs_agent::agent::{SecretStore, VAULT_DID_JWE_KEY};
+            let raw = fresh.require_secret_store().unwrap();
+            fresh
+                .runtime
+                .block_on(raw.put(VAULT_DID_JWE_KEY, b"not-a-jwe".to_vec()))
+                .unwrap();
+        }
+        fresh
+            .unlock(TEST_PASSWORD.to_string())
+            .expect("unlock after restore failure");
+        assert_eq!(
+            agent_error_code(fresh.current_agent_identity().unwrap_err()),
+            "AgentVaultCorrupt"
+        );
+        assert_eq!(
+            agent_error_code(
+                fresh
+                    .reset_password_with_recovery_phrase(
+                        serde_json::json!({
+                            "recoveryPhrase": "not a valid phrase",
+                            "password": "new-password",
+                        })
+                        .to_string(),
+                    )
+                    .unwrap_err()
+            ),
+            "AgentIdentityInvalidMnemonic"
+        );
+        assert_eq!(
+            agent_error_code(
+                fresh
+                    .reset_password_with_recovery_phrase(
+                        serde_json::json!({
+                            "recoveryPhrase": MISMATCHED_RECOVERY_PHRASE,
+                            "password": "new-password",
+                        })
+                        .to_string(),
+                    )
+                    .unwrap_err()
+            ),
+            "HD_IDENTITY_VAULT_RECOVERY_PHRASE_MISMATCH"
+        );
+    }
+
+    #[test]
+    fn one_live_core_per_database_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("enbox.sqlite");
+        let path_string = path.to_string_lossy().into_owned();
+        let core = EnboxCore::open_with_work_factor(path_string.clone(), 1).expect("open core");
+        core.initialize_vault(initialize_request(
+            TEST_PASSWORD,
+            Some(TEST_RECOVERY_PHRASE),
+        ))
+        .expect("initialize vault");
+
+        assert_eq!(
+            agent_error_code(open_error(EnboxCore::open_with_work_factor(
+                path_string.clone(),
+                1
+            ))),
+            "AgentVaultError"
+        );
+        let dotted = temp.path().join(".").join("enbox.sqlite");
+        assert_eq!(
+            agent_error_code(open_error(EnboxCore::open_with_work_factor(
+                dotted.to_string_lossy().into_owned(),
+                1
+            ))),
+            "AgentVaultError"
+        );
+        #[cfg(unix)]
+        {
+            let alias = temp.path().join("alias.sqlite");
+            std::os::unix::fs::symlink(&path, &alias).expect("symlink");
+            assert_eq!(
+                agent_error_code(open_error(EnboxCore::open_with_work_factor(
+                    alias.to_string_lossy().into_owned(),
+                    1
+                ))),
+                "AgentVaultError"
+            );
+        }
+        assert!(
+            core.status().initialized,
+            "the live core stays usable after a rejected open"
+        );
+
+        // In-memory cores have their own databases and never contend.
+        let first = EnboxCore::open_in_memory_with_work_factor(1).expect("first in-memory core");
+        let second = EnboxCore::open_in_memory_with_work_factor(1).expect("second in-memory core");
+        assert!(first.status().initialized && second.status().initialized);
+
+        drop(core);
+        let reopened = EnboxCore::open_with_work_factor(path_string, 1).expect("reopen after drop");
+
+        let other_path = temp.path().join("other.sqlite");
+        assert_eq!(
+            agent_error_code(open_error(EnboxCore::open_with_work_factor(
+                other_path.to_string_lossy().into_owned(),
+                0
+            ))),
+            "AgentVaultError"
+        );
+        EnboxCore::open_with_work_factor(other_path.to_string_lossy().into_owned(), 1)
+            .expect("a failed open leaves no path reservation");
+        drop(reopened);
+    }
+
+    #[test]
+    fn vault_failures_never_expose_secrets() {
+        let core = open_unlocked_test_core();
+        let wrong_password = "definitely-not-the-password";
+        let errors = vec![
+            core.unlock(wrong_password.to_string()).unwrap_err(),
+            core.change_password(wrong_password.to_string(), "brand-new".to_string())
+                .unwrap_err(),
+            core.restore_vault("{}".to_string(), wrong_password.to_string())
+                .unwrap_err(),
+            core.reset_password_with_recovery_phrase(
+                serde_json::json!({
+                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                    "password": "  ",
+                })
+                .to_string(),
+            )
+            .unwrap_err(),
+        ];
+        let fresh = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        let mut errors = errors;
+        errors.push(
+            fresh
+                .initialize_vault(serde_json::json!({ "password": " " }).to_string())
+                .unwrap_err(),
+        );
+
+        let secrets = [
+            TEST_PASSWORD,
+            TEST_RECOVERY_PHRASE,
+            wrong_password,
+            "brand-new",
+        ];
+        for error in errors {
+            let debug = format!("{error:?}");
+            let display = error.to_string();
+            for secret in secrets {
+                assert!(!debug.contains(secret), "debug leaked a secret: {debug}");
+                assert!(
+                    !display.contains(secret),
+                    "display leaked a secret: {display}"
+                );
+            }
+        }
     }
 
     fn plain_protocol_definition() -> serde_json::Value {
@@ -2808,7 +3676,7 @@ mod tests {
     #[test]
     fn install_protocol_rejects_locked_core() {
         let (core, portable_did) = initialized_core_with_did();
-        core.lock();
+        core.lock().expect("lock");
         let err = core
             .install_protocol(
                 portable_did.to_string(),
@@ -3096,7 +3964,7 @@ mod tests {
     #[test]
     fn connect_state_touching_methods_reject_locked_core() {
         let (core, portable_did) = initialized_core_with_did();
-        core.lock();
+        core.lock().expect("lock");
 
         let err = core
             .derive_delegate_keys(
@@ -3130,8 +3998,8 @@ mod tests {
 
     #[test]
     fn pure_connect_constructors_work_while_locked() {
-        let core = EnboxCore::open_in_memory().expect("core opens");
-        core.lock();
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        assert!(core.status().locked);
         let raw = core
             .create_permission_request(
                 serde_json::json!({
@@ -3192,8 +4060,8 @@ mod tests {
         use tokio::sync::oneshot;
 
         use super::{
-            initialized_core_with_did, plain_protocol_definition, EnboxCore, EnboxError,
-            TEST_RECOVERY_PHRASE,
+            initialize_request, initialized_core_with_did, plain_protocol_definition, EnboxCore,
+            EnboxError, TEST_PASSWORD, TEST_RECOVERY_PHRASE,
         };
 
         #[derive(Debug, Clone)]
@@ -3644,7 +4512,7 @@ mod tests {
         fn http_setup_methods_reject_locked_core() {
             let server = start_mock_server();
             let (core, portable_did) = initialized_core_with_did();
-            core.lock();
+            core.lock().expect("lock");
             let agent_did = portable_did_uri(&portable_did);
             let err = core
                 .register_tenant(
@@ -3683,16 +4551,12 @@ mod tests {
 
         #[test]
         fn http_setup_methods_surface_json_errors() {
-            let core = EnboxCore::open_in_memory().expect("core opens");
-            core.initialize_agent_identity(
-                serde_json::json!({
-                    "password": "test-password",
-                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
-                    "dwnEndpoints": []
-                })
-                .to_string(),
-            )
-            .expect("init identity");
+            let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+            core.initialize_vault(initialize_request(
+                TEST_PASSWORD,
+                Some(TEST_RECOVERY_PHRASE),
+            ))
+            .expect("init vault");
             let err = core
                 .register_tenant("not-json".to_string())
                 .expect_err("invalid json must fail");
