@@ -62,7 +62,8 @@ pub struct EnboxRuntimeStatus {
     pub background_refresh_enabled: bool,
     /// Last reason supplied to `unlock_with_reason`.
     /// Recorded only after a successful password unlock; cleared on lock, a
-    /// successful `unlock(password)`, or any vault operation that ends locked.
+    /// successful `unlock(password)`, `restore_vault`, or any vault operation
+    /// that ends locked.
     pub last_unlock_reason: Option<String>,
     /// IDs of background tasks currently checked out via
     /// `begin_background_task`. Sorted for deterministic comparison.
@@ -182,25 +183,18 @@ impl Drop for EnboxCore {
         // Close through the store's lifecycle API rather than letting the
         // field drops close inline: the explicit path drains under the
         // per-file lock, so this teardown cannot interleave with the next
-        // open of the same file.
-        // `block_on` panics inside a runtime, so when dropped from async
-        // context fall back to the field drops — still sequential on this
-        // thread, just unserialised against other sets on the same file.
-        if tokio::runtime::Handle::try_current().is_err() {
-            self.runtime.block_on(async {
-                let node = self
-                    .state
-                    .lock()
-                    .ok()
-                    .and_then(|mut state| state.node.take());
-                if let Some(node) = node {
-                    // One shared cell: closing through any handle drains every
-                    // clone, including the secret store's.
-                    let mut store = node.store().clone();
-                    MessageStore::close(&mut store).await;
-                }
-            });
-        }
+        // open of the same file. `run_vault` moves the work off an async
+        // caller's runtime.
+        let state = Arc::clone(&self.state);
+        self.run_vault(async move {
+            let node = state.lock().ok().and_then(|mut state| state.node.take());
+            if let Some(node) = node {
+                // One shared cell: closing through any handle drains every
+                // clone, including the secret store's.
+                let mut store = node.store().clone();
+                MessageStore::close(&mut store).await;
+            }
+        });
         if let Ok(mut state) = self.state.lock() {
             state.node = None;
             state.secret_store = None;
@@ -551,16 +545,14 @@ impl EnboxCore {
     ///
     /// Allowed on fresh or initialized stores. Every failure, including
     /// malformed JSON, returns a typed vault error and ends locked with the
-    /// stored vault unchanged.
+    /// stored vault unchanged. Any recorded unlock reason is cleared.
     pub fn restore_vault(&self, backup_json: String, password: String) -> Result<(), EnboxError> {
         let _lifecycle = self.lifecycle_guard()?;
         let result = self.run_vault(
             self.credential_vault
                 .restore_json(backup_json.as_bytes(), &password),
         );
-        if result.is_err() {
-            self.clear_unlock_reason_if_locked();
-        }
+        self.set_unlock_reason(None);
         result?;
         Ok(())
     }
@@ -1623,10 +1615,19 @@ fn normalize_database_path(path: &str) -> PathBuf {
         return resolved;
     }
     match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => parent
-            .canonicalize()
-            .map(|parent| parent.join(name))
-            .unwrap_or(path),
+        (Some(parent), Some(name)) => {
+            // A bare file name has an empty parent; resolve it against the
+            // current directory so a later absolute spelling matches it.
+            let parent = if parent.as_os_str().is_empty() {
+                std::path::Path::new(".")
+            } else {
+                parent
+            };
+            parent
+                .canonicalize()
+                .map(|parent| parent.join(name))
+                .unwrap_or(path)
+        }
         _ => path,
     }
 }
@@ -3341,13 +3342,69 @@ mod tests {
         assert!(core.status().locked);
         assert_eq!(stored_cek_entry(&core), cek_before);
 
+        core.unlock_with_reason(TEST_PASSWORD.to_string(), "biometric".to_string())
+            .expect("unlock with reason");
         core.restore_vault(backup.to_string(), TEST_PASSWORD.to_string())
             .expect("valid restore");
         let status = core.vault_status().expect("vault status");
         assert!(status.initialized);
         assert!(!status.locked);
         assert!(status.last_restore.is_some());
+        assert!(core.status().last_unlock_reason.is_none());
         assert!(core.current_agent_identity().unwrap().is_some());
+    }
+
+    #[test]
+    fn restore_vault_failures_leave_a_fresh_core_uninitialized_and_locked() {
+        let source = open_unlocked_test_core();
+        let backup: serde_json::Value =
+            serde_json::from_str(&source.backup_vault().expect("backup")).expect("backup json");
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("fresh core");
+
+        let uninitialized = with_backup_payload(&backup, |payload| {
+            payload["status"]["initialized"] = serde_json::Value::Bool(false);
+        });
+        let corrupt_did = with_backup_payload(&backup, |payload| {
+            payload["did"] = serde_json::Value::String("not-a-jwe".to_string());
+        });
+        let missing_fields =
+            serde_json::json!({ "dateCreated": backup["dateCreated"] }).to_string();
+
+        let failures = [
+            (
+                "not-json".to_string(),
+                TEST_PASSWORD,
+                "AgentVaultInvalidBackup",
+            ),
+            ("{}".to_string(), TEST_PASSWORD, "AgentVaultInvalidBackup"),
+            (missing_fields, TEST_PASSWORD, "AgentVaultInvalidBackup"),
+            (uninitialized, TEST_PASSWORD, "AgentVaultInvalidBackup"),
+            (corrupt_did, TEST_PASSWORD, "AgentVaultInvalidBackup"),
+            (
+                backup.to_string(),
+                "wrong-password",
+                "AgentVaultInvalidPassword",
+            ),
+        ];
+        for (candidate, password, expected) in failures {
+            assert_eq!(
+                agent_error_code(
+                    core.restore_vault(candidate, password.to_string())
+                        .unwrap_err()
+                ),
+                expected
+            );
+            assert_eq!(
+                core.vault_status().expect("vault status"),
+                EnboxVaultStatus {
+                    initialized: false,
+                    locked: true,
+                    last_backup: None,
+                    last_restore: None,
+                }
+            );
+            assert!(core.status().last_unlock_reason.is_none());
+        }
     }
 
     #[test]
@@ -3539,6 +3596,57 @@ mod tests {
         );
         EnboxCore::open_with_work_factor(other_path.to_string_lossy().into_owned(), 1)
             .expect("a failed open leaves no path reservation");
+        drop(reopened);
+    }
+
+    #[test]
+    fn relative_database_paths_share_one_reservation() {
+        let canonical_cwd = std::env::current_dir()
+            .expect("current dir")
+            .canonicalize()
+            .expect("canonical current dir");
+        for spelling in [
+            "enbox-relative-missing.sqlite",
+            "./enbox-relative-missing.sqlite",
+        ] {
+            assert_eq!(
+                normalize_database_path(spelling),
+                canonical_cwd.join("enbox-relative-missing.sqlite")
+            );
+        }
+
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let file_name = format!(
+            ".enbox-relative-{}-{}.sqlite",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+
+        struct RemoveDatabase(PathBuf);
+        impl Drop for RemoveDatabase {
+            fn drop(&mut self) {
+                for suffix in ["", "-wal", "-shm", "-journal"] {
+                    let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+                }
+            }
+        }
+        let _cleanup = RemoveDatabase(PathBuf::from(&file_name));
+
+        let core =
+            EnboxCore::open_with_work_factor(file_name.clone(), 1).expect("open relative database");
+        assert!(
+            std::path::Path::new(&file_name).exists(),
+            "open_at creates the relative file"
+        );
+        for spelling in [file_name.clone(), format!("./{file_name}")] {
+            assert_eq!(
+                agent_error_code(open_error(EnboxCore::open_with_work_factor(spelling, 1))),
+                "AgentVaultError"
+            );
+        }
+
+        drop(core);
+        let reopened = EnboxCore::open_with_work_factor(file_name, 1).expect("reopen after drop");
         drop(reopened);
     }
 
