@@ -261,7 +261,7 @@ fn relationship_ids(document: &Document) -> Vec<String> {
 }
 
 #[tokio::test]
-// Covers: DID-DHT-001, DID-DHT-006
+// Covers: DID-DHT-001, DID-DHT-006, ENBOX-AGENT-009
 async fn initialize_through_the_vault_builds_the_did_dht_agent_shape() {
     let harness = harness();
     let initialization = harness
@@ -294,7 +294,7 @@ async fn initialize_through_the_vault_builds_the_did_dht_agent_shape() {
 }
 
 #[tokio::test]
-// Covers: DID-DHT-004, DID-DHT-005
+// Covers: DID-DHT-004, DID-DHT-005, ENBOX-AGENT-009
 async fn fresh_initialize_publishes_before_committing() {
     let harness = harness();
     let initialization = harness
@@ -489,7 +489,7 @@ async fn injected_signers_are_used_for_every_publication() {
 }
 
 #[tokio::test]
-// Covers: DID-DHT-006
+// Covers: DID-DHT-006, ENBOX-AGENT-009
 async fn recovery_ready_without_replacement_adopts_the_resolved_service() {
     let keys = derive_agent_keys(PHRASE).unwrap();
     let remote = derived_document(&keys, vec!["https://resolved.example".to_string()]).await;
@@ -892,7 +892,7 @@ async fn reset_ready_with_endpoints_republishes_only_the_dwn_service() {
 }
 
 #[tokio::test]
-// Covers: DID-DHT-004
+// Covers: DID-DHT-004, ENBOX-AGENT-009
 async fn sequence_continuity_survives_a_clock_rollback() {
     let harness = harness();
     harness
