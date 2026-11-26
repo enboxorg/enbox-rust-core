@@ -50,6 +50,22 @@ This repository validates DWN behavior through **three independent layers**. The
 
 **Partial** means the shared fixture corpus exercises a slice of the behavior; the dwn-sdk-js native suite covers the full handler/feature/scenario surface.
 
+## Agent vault interop fixtures
+
+The agent vault fixtures from #308/#329 live outside `fixtures/manifest.json` (their proofs are the vault test binaries and the optional Bun runners, not `conformance_fixtures.rs`) but follow the same `oracle`/`source.commit` contract and are gated by `fixture-provenance`.
+
+| Fixture | Producer | Rust proof | TypeScript proof |
+|---------|----------|------------|------------------|
+| `fixtures/interop/vault-jwe.json` | pinned TS `HdIdentityVault` (`p2c = 1`) | `tests/vault_jwe_interop.rs`, `tests/vault_lifecycle.rs` | reopened at the pin by `tools/conformance/typescript-vault-jwe.test.ts` |
+| `fixtures/interop/vault-secret-envelope.json` | pinned TS `VaultBackedSecretStore` | `tests/vault_secret_store.rs` | `tools/conformance/typescript-vault-secret.test.ts` |
+| `fixtures/interop/vault-backup.json` | pinned TS `HdIdentityVault.backup()` | `tests/vault_lifecycle.rs` (restore onto fresh and initialized stores) | `tools/conformance/typescript-vault-backup.test.ts` |
+| `fixtures/interop/vault-phrase-acceptance.json` | pinned TS `validateMnemonic(phrase, englishWordlist)` | `tests/api_conventions.rs` | `tools/conformance/typescript-vault-phrase.test.ts` |
+| `crates/dwn-rs-agent/tests/fixtures/vault-jwe-rust-to-ts.json` | Rust codec | `tests/vault_jwe_interop.rs` | `tools/conformance/typescript-vault-jwe.test.ts` (also `isPortableDid` + `#0`/`#sig`/`#enc`/`#dwn` shape) |
+| `crates/dwn-rs-agent/tests/fixtures/vault-secret-rust-to-ts.json` | Rust credential store (`VAULT_SECRET_EXPORT`) | `tests/vault_secret_store.rs` | `tools/conformance/typescript-vault-secret.test.ts` |
+| `crates/dwn-rs-agent/tests/fixtures/vault-backup-rust-to-ts.json` | Rust vault backup (`BLESS_VAULT_FIXTURES=1`) | `tests/vault_lifecycle.rs` | `tools/conformance/typescript-vault-backup.test.ts` |
+
+Regenerate the TS fixtures with `ENBOX_TS_ROOT=/path/to/enbox bun tools/conformance/generate-vault-{backup,phrase,secret}-fixture.ts` at the pin, and the Rust blobs with `BLESS_VAULT_FIXTURES=1 cargo test -p dwn-rs-agent`.
+
 ## Rust-extension fixtures
 
 `StateIndex` and `MessagesSync` (and the sparse-merkle trie they use) were removed from upstream
@@ -99,7 +115,7 @@ Non-fuzz total: **~85** spec files (**~110** including fuzz).
 | `NativeSyncEngine` not wired to `SqliteNativeDwn` | `sync_once_with_peer` + `DirectSyncEndpoint` integration test | done |
 | Scenario/end-to-end specs use in-process `Dwn`, not HTTP | `loopback-interop` covers Records, Protocols, Permissions, WebSocket subscribe; the removed-upstream `MessagesSync` scenario is disabled (see #188) | done |
 | `enbox-ffi` sync surface for mobile hosts | `EnboxCore::open`, `sync_once`, `poll_reconcile`, `sync_status` + crate README | done |
-| `enbox-ffi` agent identity surface | `initialize_vault`, `current_agent_identity`, `derive_agent_keys_from_phrase` + `SqliteSecretStore`; covered in `crates/enbox-ffi/src/lib.rs` tests | done |
+| `enbox-ffi` agent identity surface | one `IdentityVault` over `SqliteSecretStore` with `initialize_vault`, `unlock`/`unlock_with_reason`, `lock`, `change_password`, `reset_password_with_recovery_phrase`, `backup_vault`, `restore_vault`, `vault_status`, `current_agent_identity`, `derive_agent_keys_from_phrase`; covered in `crates/enbox-ffi/src/lib.rs` tests plus the #329 cross-runtime vault fixtures | done |
 | `enbox-ffi` protocol install / push / restore | `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption` over `Local`/`HttpDwnProtocolEndpoint` with axum mock server tests | done |
 | `enbox-ffi` DWeb Connect surface | `create_permission_request/_delegate_grant/_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, persisted decryption/context keys; covered in `enbox-ffi` tests | done |
 | `enbox-ffi` HTTP tenant registration | `register_tenant` against axum mock; anonymous, provider-auth-v0, refresh-on-expiry paths | done |

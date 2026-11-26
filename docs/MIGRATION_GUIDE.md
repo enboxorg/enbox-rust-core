@@ -93,14 +93,19 @@ The Rust sync engine writes durable `SyncCheckpoint` rows in SQLite, so a `deadl
 
 ### 3. Replace the identity vault
 
-Move identity initialization off the TypeScript `AgentKeyManager` / `Web5UserAgent` paths. The Rust `SqliteSecretStore` is the raw persistence backend in the same SQLite database opened by `EnboxCore.open`. The legacy identity initialization path below remains separate from the password vault used for auth credentials.
+Move identity initialization off the TypeScript `AgentKeyManager` / `Web5UserAgent` paths. The Rust `SqliteSecretStore` is the raw persistence backend in the same SQLite database opened by `EnboxCore.open`; `IdentityVault` is the password-gated owner of the identity and the credential vault on top of it.
 
 ```typescript
-const portableDidJson = await core.initializeAgentIdentity(JSON.stringify({
-  recoveryPhrase: bip39Mnemonic, // omit for a fresh random DID
-}));
-const did = (JSON.parse(portableDidJson) as { uri: string }).uri;
+const initialization = JSON.parse(await core.initializeVault(JSON.stringify({
+  password: vaultPassword,
+  recoveryPhrase: bip39Mnemonic, // omit for a fresh random DID and 12-word phrase
+  dwnEndpoints: ['https://dwn.example/'],
+})));
+const did = initialization.portableDid.uri;
+// Show initialization.recoveryPhrase to the user once.
 ```
+
+On later launches call `unlock(password)` (or `unlock_with_reason(password, reason)`) before any identity or credential access. Storing the vault password (for example in Keychain/Keystore behind biometrics) is the host's job; see [`MOBILE_INTEGRATION.md`](MOBILE_INTEGRATION.md).
 
 For DWeb Connect flows, the previous TypeScript permission helpers map directly:
 
@@ -117,6 +122,8 @@ Before persisting registration tokens or delegate keys, call `initialize_vault(r
 Persisted delegate decryption / context keys round-trip through `save_delegate_decryption_keys` / `load_delegate_decryption_keys` (and the corresponding context-key methods). Those methods and registration with `persistTokens: true` require the shared credential vault to be unlocked. `lock()` clears its in-memory key; password-only `unlock(password)` and `unlock_with_reason(password, reason)` are the only ways back in, and `change_password`, `reset_password_with_recovery_phrase`, `backup_vault`, `restore_vault`, and `vault_status` cover the rest of the lifecycle. At most one live `EnboxCore` may be open per database path in a process; a second `open*` on the same file fails with `AgentVaultError` until the first is dropped.
 
 Rust registration and delegate helpers now accept `CredentialStore`, not the raw `SecretStore`. Construct `VaultBackedSecretStore` with the shared `Arc<IdentityVault>` and raw backend; reuse that credential-store instance across callers. Persisted values are UTF-8 JSON envelopes containing `jwe` and optional `expiresAt`. Credential operations reject reserved `agent:vault:*` keys with `AgentSecretInvalidEnvelope`, so they cannot overwrite or delete vault material. Existing plaintext auth values fail with `AgentSecretInvalidEnvelope`; there is no automatic migration or plaintext fallback. For legacy registration tokens, call `delete_registration_tokens()` (also supported while locked; returns whether an entry existed), unlock the credential vault, then authenticate again to obtain fresh tokens. Delegate entries can be explicitly replaced using their save methods. No generic raw-store access is needed.
+
+> **Registration-token boundary (#196).** Tenant registration flows now persist the token map (`enbox:auth:registrationTokens`) as a vault-backed envelope. Stores written before the vault work hold that map as plaintext; Rust never reads them back as plaintext and fails them as `AgentSecretInvalidEnvelope`. Such hosts must call `delete_registration_tokens()` and re-register to obtain fresh tokens — deletion removes the row but is not secure erasure, so treat the old token material as compromised where that matters. Registration with `persistTokens: false` is unaffected.
 
 These host methods are synchronous and may block while another vault lifecycle operation finishes. Rust async callers must dispatch them to a blocking thread rather than enter them from an async runtime. If the vault locks during registration or refresh, saving fails instead of falling back to plaintext; a server may already have rotated the refresh token, so fresh authentication may be required.
 
