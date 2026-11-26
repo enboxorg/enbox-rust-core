@@ -28,9 +28,10 @@ const enboxTsRoot = process.env.ENBOX_TS_ROOT ?? resolve(repoRoot, '../enbox');
 const compactPath = resolve(enboxTsRoot, 'packages/crypto/src/jose/jwe/compact.ts');
 const keyManagerPath = resolve(enboxTsRoot, 'packages/crypto/src/local-key-manager.ts');
 const bearerDidPath = resolve(enboxTsRoot, 'packages/dids/src/bearer-did.ts');
+const didUtilsPath = resolve(enboxTsRoot, 'packages/dids/src/utils.ts');
 const convertPath = resolve(enboxTsRoot, 'packages/common/src/convert.ts');
 
-for (const modulePath of [compactPath, keyManagerPath, bearerDidPath, convertPath, rustBlobPath, tsFixturePath]) {
+for (const modulePath of [compactPath, keyManagerPath, bearerDidPath, didUtilsPath, convertPath, rustBlobPath, tsFixturePath]) {
   if (!existsSync(modulePath)) {
     throw new Error(
       `Unable to find ${modulePath}. ` +
@@ -42,7 +43,34 @@ for (const modulePath of [compactPath, keyManagerPath, bearerDidPath, convertPat
 const { CompactJwe } = await import(compactPath);
 const { LocalKeyManager } = await import(keyManagerPath);
 const { BearerDid } = await import(bearerDidPath);
+const { isPortableDid } = await import(didUtilsPath);
 const { Convert } = await import(convertPath);
+
+/**
+ * The agent `PortableDid` document shape: `#0` identity, `#sig` signing,
+ * `#enc` key agreement, and the `#dwn` service.
+ */
+function assertAgentDocumentShape(portableDid: Record<string, any>, uri: string): void {
+  expect(isPortableDid(portableDid)).toBe(true);
+  expect(portableDid.uri).toBe(uri);
+
+  const document = portableDid.document;
+  expect(document.verificationMethod.map((method: { id: string }) => method.id)).toEqual([
+    `${uri}#0`,
+    `${uri}#sig`,
+    `${uri}#enc`,
+  ]);
+  expect(document.keyAgreement).toEqual([`${uri}#enc`]);
+  expect(document.service.map((service: { id: string }) => service.id)).toContain(`${uri}#dwn`);
+
+  const curves = Object.fromEntries(
+    document.verificationMethod.map((method: { id: string, publicKeyJwk: { crv: string } }) => [
+      method.id.replace(`${uri}#`, ''),
+      method.publicKeyJwk.crv,
+    ])
+  );
+  expect(curves).toEqual({ '0': 'Ed25519', 'sig': 'Ed25519', 'enc': 'X25519' });
+}
 
 async function unlockCek(cekJwe: string, password: string) {
   const { plaintext } = await CompactJwe.decrypt({
@@ -74,6 +102,7 @@ describe('vault at-rest JWE interop', () => {
       options: { allowedAlgs: ['dir'], allowedEncs: ['A256GCM'], minP2cCount: 1 },
     });
     const portableDid = Convert.uint8Array(didBytes).toObject();
+    assertAgentDocumentShape(portableDid, blob.vector.portableDidUri);
     const bearerDid = await BearerDid.import({ portableDid });
     expect(bearerDid.uri).toBe(blob.vector.portableDidUri);
 
@@ -98,9 +127,9 @@ describe('vault at-rest JWE interop', () => {
       keyManager: new LocalKeyManager(),
       options: { allowedAlgs: ['dir'], allowedEncs: ['A256GCM'], minP2cCount: 1 },
     });
-    const bearerDid = await BearerDid.import({
-      portableDid: Convert.uint8Array(didBytes).toObject(),
-    });
+    const portableDid = Convert.uint8Array(didBytes).toObject();
+    assertAgentDocumentShape(portableDid, fixture.vector.portableDidUri);
+    const bearerDid = await BearerDid.import({ portableDid });
     expect(bearerDid.uri).toBe(fixture.vector.portableDidUri);
   });
 });

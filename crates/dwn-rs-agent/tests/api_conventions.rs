@@ -31,6 +31,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[test]
+// Covers: ENBOX-AGENT-001
 fn derivation_golden_vector() {
     let keys = derive_agent_keys(RECOVERY_PHRASE).unwrap();
     assert_eq!(
@@ -44,6 +45,7 @@ fn derivation_golden_vector() {
 }
 
 #[tokio::test]
+// Covers: ENBOX-AGENT-001, ENBOX-AGENT-009
 async fn recovery_golden_did_uri() {
     let service = AgentIdentityService::new(
         DidDhtProvider::default(),
@@ -71,6 +73,30 @@ fn invalid_mnemonic_keeps_code() {
         error.to_string(),
         format!("AgentIdentityInvalidMnemonic: {}", error.detail())
     );
+}
+
+#[test]
+// Covers: ENBOX-AGENT-002
+fn recovery_phrase_acceptance_matches_the_pinned_fixture() {
+    let fixture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/interop/vault-phrase-acceptance.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+
+    for case in cases {
+        let phrase = case["phrase"].as_str().unwrap();
+        let expected = case["accepted"].as_bool().unwrap();
+        let result = derive_agent_keys(phrase);
+        assert_eq!(result.is_ok(), expected, "{}: {phrase:?}", case["id"]);
+        if let Err(error) = result {
+            assert_eq!(error.code(), "AgentIdentityInvalidMnemonic");
+        }
+    }
 }
 
 #[tokio::test]

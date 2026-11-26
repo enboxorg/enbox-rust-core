@@ -133,10 +133,43 @@ async fn ts_values_open_through_store(store: &impl SecretStore) {
     let did_jwe = String::from_utf8(store.get(VAULT_DID_JWE_KEY).await.unwrap().unwrap()).unwrap();
     let did_bytes = decrypt_did(&did_jwe, &cek).unwrap();
     let did: Value = serde_json::from_slice(&did_bytes).unwrap();
+    let uri = fixture["vector"]["portableDidUri"].as_str().unwrap();
+    assert_eq!(did["uri"].as_str().unwrap(), uri);
+
+    let verification_methods = did["document"]["verificationMethod"].as_array().unwrap();
+    let method_id = |index: usize| {
+        verification_methods[index]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
     assert_eq!(
-        did["uri"].as_str().unwrap(),
-        fixture["vector"]["portableDidUri"].as_str().unwrap()
+        [method_id(0), method_id(1), method_id(2)],
+        [
+            format!("{uri}#0"),
+            format!("{uri}#sig"),
+            format!("{uri}#enc")
+        ]
     );
+    let curve = |index: usize| {
+        verification_methods[index]["publicKeyJwk"]["crv"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        [curve(0), curve(1), curve(2)],
+        ["Ed25519", "Ed25519", "X25519"]
+    );
+    assert_eq!(
+        did["document"]["keyAgreement"],
+        serde_json::json!([format!("{uri}#enc")])
+    );
+    assert!(did["document"]["service"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|service| service["id"].as_str() == Some(&format!("{uri}#dwn"))));
 
     for (jwe_key, plain_key) in [
         ("dataJwe", "dataPlaintext"),
@@ -157,11 +190,13 @@ async fn ts_values_open_through_store(store: &impl SecretStore) {
     assert!(status.initialized);
 }
 
+// Covers: ENBOX-AGENT-004, ENBOX-AGENT-009
 #[tokio::test]
 async fn ts_vault_values_open_through_memory_store() {
     ts_values_open_through_store(&MemorySecretStore::default()).await;
 }
 
+// Covers: ENBOX-AGENT-004
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn ts_vault_values_open_through_sqlite_store() {
@@ -177,6 +212,7 @@ async fn ts_vault_values_open_through_sqlite_store() {
     ts_values_open_through_store(&SqliteSecretStore::new(&sqlite)).await;
 }
 
+// Covers: ENBOX-AGENT-004
 #[test]
 fn reordered_header_opens_when_retagged() {
     let cek = [0x42; 32];
@@ -208,6 +244,7 @@ fn retagging_is_required_after_header_change() {
     .is_err());
 }
 
+// Covers: ENBOX-AGENT-004
 #[test]
 fn algorithm_allow_lists_reject_cross_use() {
     let cek = [0x42; 32];
@@ -231,6 +268,7 @@ fn algorithm_allow_lists_reject_cross_use() {
     .is_err());
 }
 
+// Covers: ENBOX-AGENT-004
 #[test]
 fn malformed_inputs_fail_closed() {
     let cek = [0x42; 32];
@@ -287,6 +325,7 @@ fn malformed_inputs_fail_closed() {
 /// change; otherwise the checked-in blob must open against the fixed
 /// phrase and password. The blob lives under `crates/` so the TS-parity
 /// provenance gate does not apply to it.
+// Covers: ENBOX-AGENT-003
 #[tokio::test]
 async fn rust_vault_values_for_ts_consumer() {
     let derived = derive_agent_keys(RECOVERY_PHRASE).unwrap();
