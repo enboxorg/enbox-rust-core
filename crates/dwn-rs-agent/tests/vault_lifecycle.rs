@@ -217,6 +217,7 @@ impl DidProvider for FailingDidProvider {
     }
 }
 
+// Covers: ENBOX-AGENT-005
 #[tokio::test]
 async fn fresh_state_is_locked_uninitialized_and_writes_nothing() {
     let (vault, store) = memory_vault();
@@ -232,6 +233,7 @@ async fn fresh_state_is_locked_uninitialized_and_writes_nothing() {
     assert!(snapshot(&*store).await.is_empty());
 }
 
+// Covers: ENBOX-AGENT-005
 #[tokio::test]
 async fn uninitialized_operations_keep_their_codes() {
     let (vault, _) = memory_vault();
@@ -261,6 +263,7 @@ async fn uninitialized_operations_keep_their_codes() {
     );
 }
 
+// Covers: ENBOX-AGENT-003, ENBOX-AGENT-005
 #[tokio::test]
 async fn initialize_persists_wrapped_values_and_unlocks() {
     let (vault, store) = memory_vault();
@@ -391,6 +394,7 @@ async fn initialize_did_failure_leaves_store_empty_and_locked() {
     assert!(snapshot(&*store).await.is_empty());
 }
 
+// Covers: ENBOX-AGENT-005, ENBOX-AGENT-011
 #[tokio::test]
 async fn unlock_wrong_password_locks_and_keeps_store() {
     let (vault, store) = memory_vault();
@@ -458,6 +462,7 @@ async fn unlock_structurally_invalid_cek_is_corrupt() {
     );
 }
 
+// Covers: ENBOX-AGENT-004
 #[tokio::test]
 async fn corrupt_status_blocks_status_reading_operations() {
     let (vault, store) = memory_vault();
@@ -502,6 +507,7 @@ async fn corrupt_status_blocks_status_reading_operations() {
     );
 }
 
+// Covers: ENBOX-AGENT-005
 #[tokio::test]
 async fn lock_gates_key_operations_and_is_idempotent() {
     let (vault, _) = memory_vault();
@@ -560,6 +566,7 @@ async fn get_did_corrupt_did_stays_unlocked() {
     assert_eq!(vault.decrypt_data(&jwe).await.unwrap(), b"hello");
 }
 
+// Covers: ENBOX-AGENT-005
 #[tokio::test]
 async fn change_password_preserves_salt_factor_and_other_entries() {
     let (vault, store) = memory_vault();
@@ -609,6 +616,7 @@ async fn change_password_wrong_old_locks_and_keeps_store() {
     assert_eq!(snapshot(&*store).await, before);
 }
 
+// Covers: ENBOX-AGENT-005
 #[tokio::test]
 async fn change_password_blank_new_stays_unlocked_and_keeps_store() {
     let (vault, store) = memory_vault();
@@ -663,6 +671,7 @@ async fn reset_with_matching_phrase_rewraps_cek_and_keeps_entries() {
     );
 }
 
+// Covers: ENBOX-AGENT-005, ENBOX-AGENT-011
 #[tokio::test]
 async fn reset_with_other_phrase_is_mismatch_and_locks() {
     let (vault, store) = memory_vault();
@@ -680,6 +689,7 @@ async fn reset_with_other_phrase_is_mismatch_and_locks() {
     assert_eq!(snapshot(&*store).await, before);
 }
 
+// Covers: ENBOX-AGENT-006
 #[tokio::test]
 async fn backup_encodes_stored_entries_and_updates_status() {
     let (vault, store) = memory_vault();
@@ -710,6 +720,7 @@ async fn backup_encodes_stored_entries_and_updates_status() {
     );
 }
 
+// Covers: ENBOX-AGENT-010
 #[tokio::test]
 async fn backup_commit_failure_leaves_status_unchanged() {
     let store = Arc::new(FaultyStore::default());
@@ -729,6 +740,7 @@ async fn backup_commit_failure_leaves_status_unchanged() {
     assert_eq!(snapshot(&*store).await, before);
 }
 
+// Covers: ENBOX-AGENT-006
 #[tokio::test]
 async fn restore_round_trip_after_password_change() {
     let (vault, _) = memory_vault();
@@ -774,6 +786,7 @@ async fn restore_onto_fresh_vault_succeeds() {
     assert_eq!(fresh.get_did().await.unwrap().uri, init.portable_did.uri);
 }
 
+// Covers: ENBOX-AGENT-007, ENBOX-AGENT-011
 #[tokio::test]
 async fn restore_failure_matrix_on_initialized_and_fresh() {
     let (source, source_store) = memory_vault();
@@ -981,6 +994,7 @@ async fn ts_vault_values_restore_through_the_vault() {
 }
 
 #[tokio::test]
+// Covers: ENBOX-AGENT-006
 async fn rust_backup_carries_the_ts_backup_shape() {
     let (vault, _) = memory_vault();
     vault
@@ -994,6 +1008,172 @@ async fn rust_backup_carries_the_ts_backup_shape() {
     assert!(value.get("status").unwrap().is_object());
 }
 
+const TS_BACKUP_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/interop/vault-backup.json"
+);
+const RUST_BACKUP_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/vault-backup-rust-to-ts.json"
+);
+const RUST_BACKUP_PASSWORD: &str = "rust-emit-password";
+
+fn read_fixture(path: &str) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn fixture_backup(fixture: &Value) -> IdentityVaultBackup {
+    serde_json::from_value(fixture["vector"]["backup"].clone()).unwrap()
+}
+
+/// Rust-emitted backup for the pinned TS consumer.
+///
+/// Run with `BLESS_VAULT_FIXTURES=1` to regenerate after an intended format
+/// change; otherwise the checked-in blob must restore against the fixed
+/// phrase and password.
+#[tokio::test]
+// Covers: ENBOX-AGENT-006
+async fn rust_backup_for_ts_consumer() {
+    let store = memory_store();
+    let writer = Arc::new(offline_vault(
+        store.clone(),
+        Arc::new(DidDhtProvider::default()),
+        1,
+    ));
+    let init = writer
+        .initialize(
+            RUST_BACKUP_PASSWORD,
+            Some(PHRASE),
+            vec!["https://dwn.example".to_string()],
+        )
+        .await
+        .unwrap();
+    let backup = writer.backup().await.unwrap();
+    let blob = serde_json::json!({
+        "schemaVersion": 1,
+        "oracle": "rust",
+        "source": {
+            "repository": "enboxorg/enbox-rust-core",
+            "tool": "crates/dwn-rs-agent/tests/vault_lifecycle.rs",
+            "generator": "BLESS_VAULT_FIXTURES=1",
+        },
+        "inputs": {
+            "recoveryPhrase": PHRASE,
+            "password": RUST_BACKUP_PASSWORD,
+            "keyDerivationWorkFactor": 1,
+            "dwnEndpoints": ["https://dwn.example"],
+        },
+        "vector": {
+            "backup": backup,
+            "contentEncryptionKey": read_string(&*store, VAULT_CEK_JWE_KEY).await,
+            "did": read_string(&*store, VAULT_DID_JWE_KEY).await,
+            "vaultStatus": String::from_utf8(
+                store.get(VAULT_STATUS_KEY).await.unwrap().unwrap()
+            )
+            .unwrap(),
+            "portableDidUri": init.portable_did.uri,
+        },
+    });
+
+    if std::env::var("BLESS_VAULT_FIXTURES").is_ok() {
+        std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).unwrap();
+        std::fs::write(
+            RUST_BACKUP_PATH,
+            serde_json::to_string_pretty(&blob).unwrap() + "\n",
+        )
+        .unwrap();
+    }
+
+    let checked_in = read_fixture(RUST_BACKUP_PATH);
+    let (reader, reader_store) = memory_vault();
+    reader
+        .restore(
+            &fixture_backup(&checked_in),
+            checked_in["inputs"]["password"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reader.get_did().await.unwrap().uri,
+        checked_in["vector"]["portableDidUri"].as_str().unwrap()
+    );
+    assert_eq!(
+        header(&read_string(&*reader_store, VAULT_CEK_JWE_KEY).await)["p2c"],
+        checked_in["inputs"]["keyDerivationWorkFactor"]
+    );
+}
+
+#[tokio::test]
+// Covers: ENBOX-AGENT-006
+async fn ts_backup_fixture_restores_onto_fresh_and_initialized_stores() {
+    let fixture = read_fixture(TS_BACKUP_PATH);
+    let backup = fixture_backup(&fixture);
+    let password = fixture["inputs"]["password"].as_str().unwrap();
+    let expected_uri = fixture["vector"]["portableDidUri"].as_str().unwrap();
+
+    let value: Value = serde_json::from_slice(&base64url.decode(&backup.data).unwrap()).unwrap();
+    assert_eq!(value["did"], fixture["vector"]["did"]);
+    assert_eq!(
+        value["contentEncryptionKey"],
+        fixture["vector"]["contentEncryptionKey"]
+    );
+    assert_eq!(
+        serde_json::to_string(&value["status"]).unwrap(),
+        fixture["vector"]["statusBeforeBackup"].as_str().unwrap()
+    );
+
+    // The fixture backup carries `lastBackup: null`, so restore merges the
+    // current value: none on a fresh store, the local one otherwise.
+    let (fresh, fresh_store) = memory_vault();
+    restore_fixture_backup(&fresh, &backup, password, expected_uri, None).await;
+    assert_eq!(
+        header(&read_string(&*fresh_store, VAULT_CEK_JWE_KEY).await)["p2c"],
+        fixture["inputs"]["keyDerivationWorkFactor"]
+    );
+
+    let (initialized, initialized_store) = memory_vault();
+    initialized
+        .initialize(PASSWORD_2, Some(PHRASE_B), vec![])
+        .await
+        .unwrap();
+    let local_backup = initialized.backup().await.unwrap();
+    restore_fixture_backup(
+        &initialized,
+        &backup,
+        password,
+        expected_uri,
+        Some(local_backup.date_created.as_str()),
+    )
+    .await;
+    assert_eq!(
+        header(&read_string(&*initialized_store, VAULT_CEK_JWE_KEY).await)["p2c"],
+        fixture["inputs"]["keyDerivationWorkFactor"]
+    );
+    initialized.lock().await.unwrap();
+    initialized.unlock(password).await.unwrap();
+    assert_eq!(
+        initialized.unlock(PASSWORD_2).await.unwrap_err().code(),
+        "AgentVaultInvalidPassword"
+    );
+}
+
+async fn restore_fixture_backup(
+    vault: &IdentityVault,
+    backup: &IdentityVaultBackup,
+    password: &str,
+    expected_uri: &str,
+    expected_last_backup: Option<&str>,
+) {
+    vault.restore(backup, password).await.unwrap();
+    assert!(!vault.is_locked().await);
+    assert_eq!(vault.get_did().await.unwrap().uri, expected_uri);
+    let status = vault.status().await.unwrap();
+    assert!(status.initialized);
+    assert_eq!(status.last_backup.as_deref(), expected_last_backup);
+    assert!(status.last_restore.is_some());
+}
+
+// Covers: ENBOX-AGENT-010
 #[tokio::test]
 async fn interrupted_initialize_leaves_store_untouched_and_retry_succeeds() {
     let store = Arc::new(FaultyStore::default());
@@ -1024,6 +1204,7 @@ async fn interrupted_initialize_leaves_store_untouched_and_retry_succeeds() {
     assert!(!vault.is_locked().await);
 }
 
+// Covers: ENBOX-AGENT-011
 #[tokio::test]
 async fn failures_leave_no_reachable_key_material() {
     let (vault, _) = memory_vault();
@@ -1067,6 +1248,7 @@ async fn failures_leave_no_reachable_key_material() {
     assert!(vault.is_locked().await);
 }
 
+// Covers: ENBOX-AGENT-011
 #[tokio::test]
 async fn debug_and_errors_do_not_leak_secrets() {
     let (vault, _) = memory_vault();
@@ -1182,6 +1364,7 @@ async fn corrupt_status_locks_key_material() {
     assert!(vault.is_locked().await);
 }
 
+// Covers: ENBOX-AGENT-010, ENBOX-AGENT-011
 #[tokio::test]
 async fn change_password_commit_failure_keeps_store_and_locks() {
     let store = Arc::new(FaultyStore::default());
@@ -1214,6 +1397,7 @@ async fn change_password_commit_failure_keeps_store_and_locks() {
     vault.unlock(PASSWORD_2).await.unwrap();
 }
 
+// Covers: ENBOX-AGENT-010
 #[tokio::test]
 async fn reset_commit_failure_keeps_store_and_locks() {
     let store = Arc::new(FaultyStore::default());
@@ -1250,6 +1434,7 @@ async fn reset_commit_failure_keeps_store_and_locks() {
     vault.unlock(PASSWORD_2).await.unwrap();
 }
 
+// Covers: ENBOX-AGENT-010
 #[tokio::test]
 async fn restore_commit_failure_keeps_store_and_locks() {
     let (source, _) = memory_vault();
@@ -1315,6 +1500,7 @@ async fn configured_work_factor_is_written_on_initialize_and_reset() {
     }
 }
 
+// Covers: ENBOX-AGENT-004
 #[tokio::test]
 async fn stored_work_factor_opens_under_any_configuration() {
     for written in [1, 10_000, DEFAULT_PBES2_ITERATIONS] {
@@ -1368,6 +1554,7 @@ async fn change_password_preserves_work_factor_from_configuration() {
     );
 }
 
+// Covers: ENBOX-AGENT-004
 #[tokio::test]
 async fn non_positive_work_factor_is_corrupt() {
     let (vault, store) = memory_vault();
@@ -1459,6 +1646,7 @@ mod sqlite {
         ))
     }
 
+    // Covers: ENBOX-AGENT-010
     #[tokio::test]
     async fn apply_commits_one_batch() {
         let temp = tempdir().unwrap();
@@ -1510,6 +1698,7 @@ mod sqlite {
         assert_eq!(store.get("partial").await.unwrap(), None);
     }
 
+    // Covers: ENBOX-AGENT-010
     #[tokio::test]
     async fn apply_rolls_back_the_whole_batch_when_one_statement_fails() {
         let temp = tempdir().unwrap();
