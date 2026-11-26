@@ -75,7 +75,7 @@ Goal: preserve wallet and agent semantics without requiring a JS runtime. **Comp
 
 Delivered:
 
-- Identity lifecycle in `dwn_rs_core::agent` (`AgentIdentityService`, `PortableDid`, BIP-39 recovery) with the SQLite-backed `SqliteSecretStore` for vault persistence. FFI: `initialize_vault`, `current_agent_identity`, `derive_agent_keys_from_phrase`.
+- Identity lifecycle in `dwn_rs_agent::agent` (`AgentIdentityService`, `PortableDid`, BIP-39 recovery) with the password-gated `IdentityVault` over a SQLite-backed `SqliteSecretStore`, atomically committed lifecycle mutations, backup/restore, and the `VaultBackedSecretStore` credential envelopes. FFI: `initialize_vault`, `unlock`/`unlock_with_reason`, `lock`, `change_password`, `reset_password_with_recovery_phrase`, `backup_vault`, `restore_vault`, `vault_status`, `current_agent_identity`, `derive_agent_keys_from_phrase`.
 - Tenant registration via HTTP-backed `TenantRegistrationClient` against `@enbox/dwn-server`-style endpoints (provider-auth-v0 token refresh, anonymous fallback, persisted registration tokens). FFI: `register_tenant`.
 - Protocol installation flows (`install_protocol_if_needed`, `push_protocol_if_needed`, `run_restore_flow`) over a local `SqliteNativeDwn` and the new `HttpDwnProtocolEndpoint`. FFI: `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption`.
 - Delegated grants, DWeb Connect authorization, derived decryption/context keys, and persisted key delivery (`dwn_rs_core::connect`). FFI: `create_permission_request`, `create_delegate_grant`, `create_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, `save_/load_delegate_decryption_keys`, `save_/load_delegate_context_keys`.
