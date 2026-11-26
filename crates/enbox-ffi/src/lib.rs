@@ -2385,6 +2385,7 @@ mod tests {
         assert!(core.status().last_unlock_reason.is_none());
     }
 
+    // Covers: ENBOX-AGENT-005, ENBOX-AGENT-006
     #[test]
     // Covers: DID-DHT-006
     fn full_vault_lifecycle_backup_and_restore_across_reopen() {
@@ -2510,6 +2511,7 @@ mod tests {
         );
     }
 
+    // Covers: ENBOX-AGENT-012
     #[test]
     fn vault_lifecycle_and_identity_accessor_share_one_vault() {
         let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
@@ -2561,6 +2563,7 @@ mod tests {
         assert!(!core.vault_status().unwrap().initialized);
     }
 
+    // Covers: ENBOX-AGENT-003, ENBOX-AGENT-008
     #[test]
     fn vault_never_stores_plaintext_identity_material() {
         use dwn_rs_agent::agent::SecretStore;
@@ -2641,6 +2644,7 @@ mod tests {
             .expect("a failed open leaves no path reservation");
     }
 
+    // Covers: ENBOX-AGENT-002, ENBOX-AGENT-009
     #[test]
     fn initialize_vault_without_phrase_generates_random_did() {
         let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
@@ -2679,6 +2683,7 @@ mod tests {
         );
     }
 
+    // Covers: ENBOX-AGENT-005, ENBOX-AGENT-011
     #[test]
     fn locked_vault_operations_surface_typed_errors() {
         let core = open_unlocked_test_core();
@@ -2793,6 +2798,7 @@ mod tests {
             .unwrap();
     }
 
+    // Covers: ENBOX-AGENT-005
     #[test]
     fn failed_password_unlock_clears_the_previous_reason() {
         let core = EnboxCore::open_in_memory_with_work_factor(1).unwrap();
@@ -2823,6 +2829,7 @@ mod tests {
         assert!(!core.runtime.block_on(core.credential_vault.is_locked()));
     }
 
+    // Covers: ENBOX-AGENT-013
     #[test]
     fn vault_password_gate_controls_credential_access() {
         let core = EnboxCore::open_in_memory_with_work_factor(1).unwrap();
@@ -2864,6 +2871,7 @@ mod tests {
         assert_eq!(core.load_delegate_context_keys().unwrap(), "[]");
     }
 
+    // Covers: ENBOX-AGENT-008
     #[test]
     fn host_credentials_persist_as_envelopes_and_legacy_errors_propagate() {
         use dwn_rs_agent::agent::SecretStore;
@@ -2976,6 +2984,7 @@ mod tests {
         );
     }
 
+    // Covers: ENBOX-AGENT-013
     #[test]
     fn host_can_delete_legacy_registration_tokens_while_locked() {
         use dwn_rs_agent::agent::SecretStore;
@@ -3136,6 +3145,7 @@ mod tests {
         assert!(core.status().last_unlock_reason.is_none());
     }
 
+    // Covers: ENBOX-AGENT-005
     #[test]
     fn change_password_enforces_the_vault_state_machine() {
         let fresh = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
@@ -3184,6 +3194,7 @@ mod tests {
         core.unlock("new-password".to_string()).expect("unlock new");
     }
 
+    // Covers: ENBOX-AGENT-005
     #[test]
     fn reset_password_with_recovery_phrase_enforces_the_vault_contract() {
         let fresh = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
@@ -3282,6 +3293,7 @@ mod tests {
         );
     }
 
+    // Covers: ENBOX-AGENT-007
     #[test]
     fn restore_vault_validates_the_backup_and_ends_locked_on_every_failure() {
         let core = open_unlocked_test_core();
@@ -3354,6 +3366,7 @@ mod tests {
         assert!(core.current_agent_identity().unwrap().is_some());
     }
 
+    // Covers: ENBOX-AGENT-007
     #[test]
     fn restore_vault_failures_leave_a_fresh_core_uninitialized_and_locked() {
         let source = open_unlocked_test_core();
@@ -3534,6 +3547,7 @@ mod tests {
         );
     }
 
+    // Covers: ENBOX-AGENT-012
     #[test]
     fn one_live_core_per_database_path() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -3599,6 +3613,7 @@ mod tests {
         drop(reopened);
     }
 
+    // Covers: ENBOX-AGENT-012
     #[test]
     fn relative_database_paths_share_one_reservation() {
         let canonical_cwd = std::env::current_dir()
@@ -3650,6 +3665,7 @@ mod tests {
         drop(reopened);
     }
 
+    // Covers: ENBOX-AGENT-011
     #[test]
     fn vault_failures_never_expose_secrets() {
         let core = open_unlocked_test_core();

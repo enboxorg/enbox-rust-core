@@ -42,6 +42,7 @@ async fn setup() -> (
     (raw, vault, secrets, clock)
 }
 
+// Covers: ENBOX-AGENT-008, ENBOX-AGENT-013
 #[tokio::test]
 async fn binary_replacement_and_locked_operations() {
     let (raw, vault, secrets, _) = setup().await;
@@ -75,6 +76,7 @@ async fn binary_replacement_and_locked_operations() {
     assert!(!format!("{secrets:?}").contains("secret-token"));
 }
 
+// Covers: ENBOX-AGENT-008
 #[tokio::test]
 async fn expiry_boundaries_and_no_ttl() {
     let (raw, _, secrets, clock) = setup().await;
@@ -100,6 +102,7 @@ async fn expiry_boundaries_and_no_ttl() {
     assert_eq!(secrets.get(KEY).await.unwrap(), Some(vec![9]));
 }
 
+// Covers: ENBOX-AGENT-008
 #[tokio::test]
 async fn malformed_envelopes_are_typed_preserved_and_redacted() {
     let (raw, vault, secrets, _) = setup().await;
@@ -335,6 +338,7 @@ async fn expiry_purge_cannot_delete_a_concurrent_replacement() {
     assert_eq!(secrets.get(KEY).await.unwrap(), Some(vec![2]));
 }
 
+// Covers: ENBOX-AGENT-013
 #[tokio::test]
 async fn lock_during_read_prevents_decryption() {
     let (raw, vault, _, _) = setup().await;
@@ -355,6 +359,7 @@ async fn lock_during_read_prevents_decryption() {
     assert_eq!(read.await.unwrap().unwrap_err().code(), "AgentVaultLocked");
 }
 
+// Covers: ENBOX-AGENT-013
 #[tokio::test]
 async fn fresh_vault_is_gated_and_different_cek_cannot_read() {
     let (raw, _, secrets, _) = setup().await;
@@ -462,6 +467,7 @@ async fn encrypted_write_can_finish_after_lock_and_delete_is_ordered() {
     assert_eq!(raw.get(KEY).await.unwrap(), None);
 }
 
+// Covers: ENBOX-AGENT-008, ENBOX-AGENT-013
 #[tokio::test]
 async fn auth_helpers_use_envelopes_and_propagate_lock_and_legacy_errors() {
     use dwn_rs_agent::auth::{connect::*, setup::*};
@@ -679,6 +685,7 @@ async fn auth_helpers_preserve_backend_error_identity() {
     );
 }
 
+// Covers: ENBOX-AGENT-008
 #[tokio::test]
 async fn credential_keys_cannot_modify_vault_entries() {
     let (raw, vault, secrets, _) = setup().await;
@@ -719,6 +726,7 @@ async fn credential_keys_cannot_modify_vault_entries() {
     }
 }
 
+// Covers: ENBOX-AGENT-008, ENBOX-AGENT-013
 #[tokio::test]
 async fn auth_key_families_and_locked_expiry_use_the_same_envelope_contract() {
     use dwn_rs_agent::auth::connect::{
