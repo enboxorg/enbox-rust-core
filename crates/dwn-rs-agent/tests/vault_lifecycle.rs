@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use base64::prelude::{Engine as _, BASE64_URL_SAFE_NO_PAD as base64url};
 use dwn_rs_agent::agent::{
-    derive_agent_keys, encrypt_data, encrypt_did, AgentDidCreateRequest, AgentDidNetwork,
-    AgentDidSigner, AgentIdentityError, AgentIdentityFuture, AgentIdentityResult, DidDhtProvider,
-    DidProvider, DidResolution, IdentityVault, IdentityVaultBackup, MemorySecretStore, PortableDid,
-    ResolvedAgentDid, SecretStore, SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS,
-    VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
+    derive_agent_keys_with_version, encrypt_data, encrypt_did, AgentDidCreateRequest,
+    AgentDidNetwork, AgentDidSigner, AgentIdentityError, AgentIdentityFuture, AgentIdentityResult,
+    DidDhtProvider, DidProvider, DidResolution, IdentityVault, IdentityVaultBackup,
+    MemorySecretStore, PortableDid, ResolvedAgentDid, SecretStore, SecretWrite,
+    VaultDerivationVersion, VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY,
+    VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use serde_json::Value;
 use ssi_dids_core::Document;
@@ -22,7 +23,7 @@ const PHRASE_B: &str =
     "legal winner thank year wave sausage worth useful legal winner thank yellow";
 const PASSWORD: &str = "vault-password";
 const PASSWORD_2: &str = "vault-password-2";
-const DID_URI: &str = "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo";
+const DID_URI: &str = "did:dht:3pcjxsbcm5py5xaffs4uppp8ywubyy9bw4erbicw7qrkue1t81uo";
 
 /// A gateway that is always reachable and already has a ready document, so
 /// password lifecycle tests never touch the network.
@@ -226,7 +227,8 @@ async fn fresh_state_is_locked_uninitialized_and_writes_nothing() {
         VaultStatus {
             initialized: false,
             last_backup: None,
-            last_restore: None
+            last_restore: None,
+            derivation_version: None,
         }
     );
     assert!(vault.is_locked().await);
@@ -280,7 +282,9 @@ async fn initialize_persists_wrapped_values_and_unlocks() {
     assert!(!vault.is_locked().await);
     assert_eq!(vault.get_did().await.unwrap().uri, DID_URI);
 
-    let salt = derive_agent_keys(PHRASE).unwrap().vault_unlock_salt;
+    let salt = derive_agent_keys_with_version(PHRASE, VaultDerivationVersion::V2)
+        .unwrap()
+        .vault_unlock_salt;
     let cek_header = header(&read_string(&*store, VAULT_CEK_JWE_KEY).await);
     assert_eq!(cek_header["alg"], "PBES2-HS512+A256KW");
     assert_eq!(cek_header["enc"], "A256GCM");
@@ -298,7 +302,8 @@ async fn initialize_persists_wrapped_values_and_unlocks() {
         VaultStatus {
             initialized: true,
             last_backup: None,
-            last_restore: None
+            last_restore: None,
+            derivation_version: Some(VaultDerivationVersion::V2),
         }
     );
 }
@@ -308,9 +313,12 @@ async fn initialize_generates_twelve_word_phrase() {
     let (vault, _) = memory_vault();
     let init = vault.initialize(PASSWORD, None, vec![]).await.unwrap();
     assert_eq!(init.recovery_phrase.split(' ').count(), 12);
-    assert!(derive_agent_keys(&init.recovery_phrase).is_ok());
+    assert!(
+        derive_agent_keys_with_version(&init.recovery_phrase, VaultDerivationVersion::V2).is_ok()
+    );
 
-    let derived = derive_agent_keys(&init.recovery_phrase).unwrap();
+    let derived =
+        derive_agent_keys_with_version(&init.recovery_phrase, VaultDerivationVersion::V2).unwrap();
     let rederived = DidDhtProvider::default()
         .create_did(AgentDidCreateRequest {
             identity_private_jwk: derived.identity_private_jwk,
@@ -445,7 +453,7 @@ async fn unlock_structurally_invalid_cek_is_corrupt() {
     );
     assert!(vault.is_locked().await);
 
-    let cek: [u8; 32] = derive_agent_keys(PHRASE)
+    let cek: [u8; 32] = derive_agent_keys_with_version(PHRASE, VaultDerivationVersion::V2)
         .unwrap()
         .vault_content_encryption_key
         .as_slice()
@@ -656,7 +664,9 @@ async fn reset_with_matching_phrase_rewraps_cek_and_keeps_entries() {
         .unwrap();
     assert!(!vault.is_locked().await);
 
-    let salt = derive_agent_keys(PHRASE).unwrap().vault_unlock_salt;
+    let salt = derive_agent_keys_with_version(PHRASE, VaultDerivationVersion::V2)
+        .unwrap()
+        .vault_unlock_salt;
     let header = header(&read_string(&*store, VAULT_CEK_JWE_KEY).await);
     assert_eq!(header["p2s"], base64url.encode(&salt));
     assert_eq!(header["p2c"], DEFAULT_PBES2_ITERATIONS);
@@ -797,7 +807,7 @@ async fn restore_failure_matrix_on_initialized_and_fresh() {
     let backup = source.backup().await.unwrap();
     let valid_data = backup.data.clone();
     let cek_entry = read_string(&*source_store, VAULT_CEK_JWE_KEY).await;
-    let cek: [u8; 32] = derive_agent_keys(PHRASE)
+    let cek: [u8; 32] = derive_agent_keys_with_version(PHRASE, VaultDerivationVersion::V2)
         .unwrap()
         .vault_content_encryption_key
         .as_slice()
@@ -1256,7 +1266,7 @@ async fn debug_and_errors_do_not_leak_secrets() {
         .initialize(PASSWORD, Some(PHRASE), vec![])
         .await
         .unwrap();
-    let derived = derive_agent_keys(PHRASE).unwrap();
+    let derived = derive_agent_keys_with_version(PHRASE, VaultDerivationVersion::V2).unwrap();
     let cek_b64 = base64url.encode(&derived.vault_content_encryption_key);
     let private_jwk = serde_json::to_string(&derived.signing_private_jwk).unwrap();
     let backup = vault.backup().await.unwrap();

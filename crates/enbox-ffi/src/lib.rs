@@ -9,7 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use dwn_rs_agent::agent::{
     derive_agent_keys, AgentDidNetwork, DidDhtProvider, IdentityVault, MemoryKeyManager,
-    PortableDid, VaultBackedSecretStore, DEFAULT_PBES2_ITERATIONS,
+    PortableDid, VaultBackedSecretStore, VaultDerivationVersion, DEFAULT_PBES2_ITERATIONS,
 };
 use dwn_rs_agent::auth::connect::{
     create_delegate_grant, create_grant_revocation, create_permission_request, derive_context_key,
@@ -89,6 +89,8 @@ pub struct EnboxVaultStatus {
     pub locked: bool,
     pub last_backup: Option<String>,
     pub last_restore: Option<String>,
+    /// HD derivation scheme; absent for legacy `V1` vaults.
+    pub derivation_version: Option<u8>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -157,6 +159,41 @@ struct AgentIdentityInitializeRequest {
     recovery_phrase: Option<String>,
     #[serde(default)]
     dwn_endpoints: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_derivation_version")]
+    derivation_version: Option<u8>,
+}
+
+/// Reject an explicit `null` version while still defaulting an absent one.
+fn deserialize_optional_derivation_version<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalVersion;
+
+    impl<'de> serde::de::Visitor<'de> for OptionalVersion {
+        type Value = Option<u8>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("derivation version 1 or 2")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Err(E::custom("derivationVersion must be 1 or 2"))
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Err(E::custom("derivationVersion must be 1 or 2"))
+        }
+
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            u8::deserialize(deserializer).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalVersion)
 }
 
 #[derive(Deserialize)]
@@ -423,19 +460,31 @@ impl EnboxCore {
     /// identity.
     ///
     /// `request_json` accepts `{ "password": string, "recoveryPhrase"?:
-    /// string, "dwnEndpoints"?: string[] }`. Returns JSON
-    /// [`VaultInitialization`] (`recoveryPhrase` and `portableDid`) and never
-    /// raw vault keys. Succeeds on a fresh, locked core.
+    /// string, "dwnEndpoints"?: string[], "derivationVersion"?: 1 | 2 }`.
+    /// Returns JSON [`VaultInitialization`] (`recoveryPhrase` and
+    /// `portableDid`) and never raw vault keys. Succeeds on a fresh, locked
+    /// core.
     pub fn initialize_vault(&self, request_json: String) -> Result<String, EnboxError> {
         let request: AgentIdentityInitializeRequest =
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
+        let derivation_version = match request.derivation_version {
+            None => None,
+            Some(1) => Some(VaultDerivationVersion::V1),
+            Some(2) => Some(VaultDerivationVersion::V2),
+            Some(_) => {
+                return Err(EnboxError::Json {
+                    detail: "derivationVersion must be 1 or 2".to_string(),
+                })
+            }
+        };
         let _lifecycle = self.lifecycle_guard()?;
-        let initialization = self.run_vault(self.credential_vault.initialize(
+        let initialization = self.run_vault(self.credential_vault.initialize_with_version(
             &request.password,
             request.recovery_phrase.as_deref(),
             request.dwn_endpoints,
+            derivation_version,
         ))?;
         serde_json::to_string(&initialization).map_err(|err| EnboxError::Json {
             detail: err.to_string(),
@@ -570,6 +619,7 @@ impl EnboxCore {
             locked,
             last_backup: status.last_backup,
             last_restore: status.last_restore,
+            derivation_version: status.derivation_version.map(u8::from),
         })
     }
 
@@ -2325,6 +2375,8 @@ mod tests {
     /// A valid BIP-39 phrase that derives a different identity.
     const MISMATCHED_RECOVERY_PHRASE: &str =
         "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    const V1_DID: &str = "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo";
+    const V2_DID: &str = "did:dht:3pcjxsbcm5py5xaffs4uppp8ywubyy9bw4erbicw7qrkue1t81uo";
 
     fn initialize_request(password: &str, recovery_phrase: Option<&str>) -> String {
         serde_json::json!({
@@ -2367,6 +2419,7 @@ mod tests {
                 locked: true,
                 last_backup: None,
                 last_restore: None,
+                derivation_version: None,
             }
         );
         assert!(core.current_agent_identity().unwrap().is_none());
@@ -2654,6 +2707,92 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("init json");
         let phrase = parsed["recoveryPhrase"].as_str().expect("generated phrase");
         assert_eq!(phrase.split_whitespace().count(), 12);
+    }
+
+    #[test]
+    // Covers: ENBOX-AGENT-001, ENBOX-AGENT-005
+    fn initialize_vault_defaults_to_v2_and_accepts_explicit_v1() {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        let raw = core
+            .initialize_vault(initialize_request(
+                TEST_PASSWORD,
+                Some(TEST_RECOVERY_PHRASE),
+            ))
+            .expect("initialize vault");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("init json");
+        assert_eq!(parsed["portableDid"]["uri"], V2_DID);
+        assert_eq!(
+            core.vault_status().unwrap().derivation_version,
+            Some(u8::from(VaultDerivationVersion::V2))
+        );
+
+        let core_v1 = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        core_v1
+            .initialize_vault(
+                serde_json::json!({
+                    "password": TEST_PASSWORD,
+                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                    "derivationVersion": 1,
+                })
+                .to_string(),
+            )
+            .expect("initialize v1 vault");
+        assert_eq!(
+            core_v1.vault_status().unwrap().derivation_version,
+            Some(u8::from(VaultDerivationVersion::V1))
+        );
+        let identity: serde_json::Value =
+            serde_json::from_str(&core_v1.current_agent_identity().unwrap().expect("identity"))
+                .expect("identity json");
+        assert_eq!(identity["uri"], V1_DID);
+    }
+
+    #[test]
+    // Covers: ENBOX-AGENT-005
+    fn initialize_vault_rejects_invalid_derivation_version_before_writes() {
+        let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        for request in [
+            serde_json::json!({
+                "password": TEST_PASSWORD,
+                "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                "derivationVersion": 0,
+            }),
+            serde_json::json!({
+                "password": TEST_PASSWORD,
+                "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                "derivationVersion": 3,
+            }),
+            serde_json::json!({
+                "password": TEST_PASSWORD,
+                "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                "derivationVersion": "2",
+            }),
+            serde_json::json!({
+                "password": TEST_PASSWORD,
+                "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                "derivationVersion": null,
+            }),
+        ] {
+            let error = core.initialize_vault(request.to_string()).unwrap_err();
+            assert!(matches!(error, EnboxError::Json { .. }), "{error:?}");
+            assert_eq!(
+                core.vault_status().unwrap(),
+                EnboxVaultStatus {
+                    initialized: false,
+                    locked: true,
+                    last_backup: None,
+                    last_restore: None,
+                    derivation_version: None,
+                }
+            );
+            assert!(core.current_agent_identity().unwrap().is_none());
+        }
+
+        core.initialize_vault(initialize_request(
+            TEST_PASSWORD,
+            Some(TEST_RECOVERY_PHRASE),
+        ))
+        .expect("a rejected request leaves the core usable");
     }
 
     #[test]
@@ -3064,11 +3203,17 @@ mod tests {
 
     fn initialized_core_with_did() -> (Arc<EnboxCore>, serde_json::Value) {
         let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
+        // Local DWN dispatch verifies the tenant DID through the public
+        // gateway; the legacy DID is published, so protocol tests stay on v1.
         let init_raw = core
-            .initialize_vault(initialize_request(
-                TEST_PASSWORD,
-                Some(TEST_RECOVERY_PHRASE),
-            ))
+            .initialize_vault(
+                serde_json::json!({
+                    "password": TEST_PASSWORD,
+                    "recoveryPhrase": TEST_RECOVERY_PHRASE,
+                    "derivationVersion": 1,
+                })
+                .to_string(),
+            )
             .expect("initialize vault");
         let init: serde_json::Value = serde_json::from_str(&init_raw).expect("initialization json");
         let portable_did = init["portableDid"].clone();
@@ -3414,6 +3559,7 @@ mod tests {
                     locked: true,
                     last_backup: None,
                     last_restore: None,
+                    derivation_version: None,
                 }
             );
             assert!(core.status().last_unlock_reason.is_none());
