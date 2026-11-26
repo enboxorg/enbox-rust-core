@@ -47,8 +47,8 @@ const { isPortableDid } = await import(didUtilsPath);
 const { Convert } = await import(convertPath);
 
 /**
- * The agent `PortableDid` document shape: `#0` identity, `#sig` signing,
- * `#enc` key agreement, and the `#dwn` service.
+ * The agent `PortableDid` document shape: fragment `0` identity, `sig` signing,
+ * `enc` key agreement, and the `dwn` service.
  */
 function assertAgentDocumentShape(portableDid: Record<string, any>, uri: string): void {
   expect(isPortableDid(portableDid)).toBe(true);
