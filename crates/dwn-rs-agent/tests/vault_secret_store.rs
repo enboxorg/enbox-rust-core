@@ -26,7 +26,12 @@ async fn setup() -> (
         1,
     ));
     vault
-        .initialize("password", Some(PHRASE), vec![])
+        .initialize_with_version(
+            "password",
+            Some(PHRASE),
+            vec![],
+            Some(VaultDerivationVersion::V1),
+        )
         .await
         .unwrap();
     let clock = Arc::new(AtomicI64::new(1000));

@@ -15,10 +15,10 @@ use did_dht::{
     RelayResponse, ResolvedDhtDocument,
 };
 use dwn_rs_agent::agent::{
-    derive_agent_keys, AgentDerivedKeys, AgentDidCreateRequest, AgentDidSigner, AgentIdentityError,
-    AgentIdentityFuture, DerivedIdentitySigner, DidDhtNetwork, DidDhtProvider, DidProvider,
-    IdentityVault, MemorySecretStore, SecretStore, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY,
-    VAULT_STATUS_KEY,
+    derive_agent_keys_with_version, AgentDerivedKeys, AgentDidCreateRequest, AgentDidSigner,
+    AgentIdentityError, AgentIdentityFuture, AgentIdentityResult, DerivedIdentitySigner,
+    DidDhtNetwork, DidDhtProvider, DidProvider, IdentityVault, MemorySecretStore, SecretStore,
+    VaultDerivationVersion, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use dwn_rs_core::auth::PrivateJwkSigner;
 use serde_json::{json, Value};
@@ -33,8 +33,12 @@ const OTHER_PHRASE: &str =
     "legal winner thank year wave sausage worth useful legal winner thank yellow";
 const PASSWORD: &str = "vault-password";
 const PASSWORD_2: &str = "vault-password-2";
-const DID_URI: &str = "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo";
+const DID_URI: &str = "did:dht:3pcjxsbcm5py5xaffs4uppp8ywubyy9bw4erbicw7qrkue1t81uo";
 const NOW: u64 = 1_700_000_000;
+
+fn derive_agent_keys(phrase: &str) -> AgentIdentityResult<AgentDerivedKeys> {
+    derive_agent_keys_with_version(phrase, VaultDerivationVersion::V2)
+}
 
 #[derive(Default)]
 struct Script {

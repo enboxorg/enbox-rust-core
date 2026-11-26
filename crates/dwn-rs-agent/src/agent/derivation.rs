@@ -14,6 +14,74 @@ use ssi_jwk::JWK;
 
 type HmacSha512 = Hmac<Sha512>;
 
+/// HD derivation scheme used for vault and agent keys.
+///
+/// `V1` is the legacy BIP-44 tree; `V2` is the BIP-43 tree used for fresh
+/// vaults. Both share the same HKDF inputs; only the derivation paths differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VaultDerivationVersion {
+    V1 = 1,
+    V2 = 2,
+}
+
+impl VaultDerivationVersion {
+    pub(crate) fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::V1),
+            2 => Some(Self::V2),
+            _ => None,
+        }
+    }
+
+    fn paths(self) -> &'static VaultDerivationPaths {
+        match self {
+            Self::V1 => &V1_PATHS,
+            Self::V2 => &V2_PATHS,
+        }
+    }
+}
+
+impl From<VaultDerivationVersion> for u8 {
+    fn from(version: VaultDerivationVersion) -> Self {
+        version as u8
+    }
+}
+
+impl Serialize for VaultDerivationVersion {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u8(*self as u8)
+    }
+}
+
+impl<'de> Deserialize<'de> for VaultDerivationVersion {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = u8::deserialize(deserializer)?;
+        Self::from_u8(value)
+            .ok_or_else(|| serde::de::Error::custom("derivation version must be 1 or 2"))
+    }
+}
+
+struct VaultDerivationPaths {
+    vault: &'static str,
+    identity: &'static str,
+    signing: &'static str,
+    encryption: &'static str,
+}
+
+const V1_PATHS: VaultDerivationPaths = VaultDerivationPaths {
+    vault: "m/44'/0'/0'/0'/0'",
+    identity: "m/44'/0'/1708523827'/0'/0'",
+    signing: "m/44'/0'/1708523827'/0'/1'",
+    encryption: "m/44'/0'/1708523827'/0'/2'",
+};
+
+const V2_PATHS: VaultDerivationPaths = VaultDerivationPaths {
+    vault: "m/43'/1708523827'/0'/0'",
+    identity: "m/43'/1708523827'/1'/0'/0'",
+    signing: "m/43'/1708523827'/1'/0'/1'",
+    encryption: "m/43'/1708523827'/1'/0'/2'",
+};
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDerivedKeys {
@@ -42,16 +110,31 @@ impl AgentDerivedKeys {
     }
 }
 
-/// Derive the deterministic key set (vault, identity, signing, encryption) from a BIP-39 phrase.
+/// Derive the legacy `V1` key set from a BIP-39 phrase.
 ///
 /// Pure: derives the same keys for the same phrase and persists nothing.
+/// Fresh vaults use [`VaultDerivationVersion::V2`] through
+/// [`derive_agent_keys_with_version`].
 pub fn derive_agent_keys(recovery_phrase: &str) -> AgentIdentityResult<AgentDerivedKeys> {
+    derive_agent_keys_with_version(recovery_phrase, VaultDerivationVersion::V1)
+}
+
+/// Derive the deterministic key set (vault, identity, signing, encryption) for
+/// an explicit derivation version.
+///
+/// Pure: derives the same keys for the same phrase and version, and persists
+/// nothing.
+pub fn derive_agent_keys_with_version(
+    recovery_phrase: &str,
+    version: VaultDerivationVersion,
+) -> AgentIdentityResult<AgentDerivedKeys> {
     let mnemonic = parse_recovery_phrase(recovery_phrase)?;
     let seed = mnemonic.to_seed("");
-    let vault = derive_slip10_ed25519(&seed, "m/44'/0'/0'/0'/0'")?;
-    let identity = derive_slip10_ed25519(&seed, "m/44'/0'/1708523827'/0'/0'")?;
-    let signing = derive_slip10_ed25519(&seed, "m/44'/0'/1708523827'/0'/1'")?;
-    let encryption = derive_slip10_ed25519(&seed, "m/44'/0'/1708523827'/0'/2'")?;
+    let paths = version.paths();
+    let vault = derive_slip10_ed25519(&seed, paths.vault)?;
+    let identity = derive_slip10_ed25519(&seed, paths.identity)?;
+    let signing = derive_slip10_ed25519(&seed, paths.signing)?;
+    let encryption = derive_slip10_ed25519(&seed, paths.encryption)?;
     let mut vault_public = [0; 33];
     vault_public[1..].copy_from_slice(&ed25519_public_key_bytes(vault.private_key));
 
@@ -250,6 +333,66 @@ mod tests {
         assert_eq!(jwk_curve(&first.encryption_private_jwk), Some("X25519"));
         assert_eq!(first.vault_content_encryption_key.len(), 32);
         assert_eq!(first.vault_unlock_salt.len(), 32);
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    // Covers: ENBOX-AGENT-001
+    #[test]
+    fn derivation_versions_match_golden_vectors() {
+        let v1 =
+            derive_agent_keys_with_version(RECOVERY_PHRASE, VaultDerivationVersion::V1).unwrap();
+        assert_eq!(
+            hex(&v1.vault_content_encryption_key),
+            "b99ff78488da4c83cbe590b5374bfca38551eb47e65514667018cc33c91f4913"
+        );
+        assert_eq!(
+            hex(&v1.vault_unlock_salt),
+            "cf6389ce23de14b02e05413e1bcc3715f6fed4c2b0eda9412701279288f37d20"
+        );
+
+        let v2 =
+            derive_agent_keys_with_version(RECOVERY_PHRASE, VaultDerivationVersion::V2).unwrap();
+        assert_eq!(
+            hex(&v2.vault_content_encryption_key),
+            "a19daef652efd7e05e22a9184a244d63983fd5ef2714b113b8d60dc53028fd67"
+        );
+        assert_eq!(
+            hex(&v2.vault_unlock_salt),
+            "faa7f7433146bb721fd77c7b6a1cc6dc4725886130d6f05582eabca26bde85c0"
+        );
+
+        assert_eq!(derive_agent_keys(RECOVERY_PHRASE).unwrap(), v1);
+        assert_ne!(v1, v2);
+    }
+
+    // Covers: ENBOX-AGENT-001
+    #[test]
+    fn derivation_version_is_an_integer_one_or_two() {
+        assert_eq!(
+            serde_json::to_string(&VaultDerivationVersion::V1).unwrap(),
+            "1"
+        );
+        assert_eq!(
+            serde_json::to_string(&VaultDerivationVersion::V2).unwrap(),
+            "2"
+        );
+        assert_eq!(
+            serde_json::from_str::<VaultDerivationVersion>("1").unwrap(),
+            VaultDerivationVersion::V1
+        );
+        assert_eq!(
+            serde_json::from_str::<VaultDerivationVersion>("2").unwrap(),
+            VaultDerivationVersion::V2
+        );
+        for raw in ["0", "3", "\"2\"", "null", "1.5", "true", "{}"] {
+            assert!(
+                serde_json::from_str::<VaultDerivationVersion>(raw).is_err(),
+                "{raw}"
+            );
+        }
     }
 
     #[test]

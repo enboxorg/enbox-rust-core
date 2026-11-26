@@ -6,14 +6,15 @@
 //! built by the injected [`DidProvider`].
 
 use super::{
-    clock_system_time, copy_resolved_dwn_service, decrypt_did, derive_agent_keys,
-    dwn_endpoint_status, encrypt_did, normalize_dwn_endpoints, replace_dwn_service_endpoint_urls,
-    system_clock, unwrap_cek_typed, validate_agent_did_key_requirements, validate_recovery_phrase,
-    wrap_cek, AgentClock, AgentDerivedKeys, AgentDidCreateRequest, AgentDidNetwork, AgentDidSigner,
-    AgentIdentityError, AgentIdentityResult, CekDecodeError, CekHeader, DerivedIdentitySigner,
-    DidDhtNetwork, DidProvider, DidResolution, DwnEndpointStatus, PortableDid, SecretStore,
-    SecretWrite, VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY, VAULT_DID_JWE_KEY,
-    VAULT_STATUS_KEY,
+    clock_system_time, copy_resolved_dwn_service, decrypt_did, derive_agent_keys_with_version,
+    dwn_endpoint_status, encrypt_did, normalize_dwn_endpoints, parse_derivation_version,
+    replace_dwn_service_endpoint_urls, system_clock, unwrap_cek_typed,
+    validate_agent_did_key_requirements, validate_recovery_phrase, wrap_cek, AgentClock,
+    AgentDerivedKeys, AgentDidCreateRequest, AgentDidNetwork, AgentDidSigner, AgentIdentityError,
+    AgentIdentityResult, CekDecodeError, CekHeader, DerivedIdentitySigner, DidDhtNetwork,
+    DidProvider, DidResolution, DwnEndpointStatus, PortableDid, SecretStore, SecretWrite,
+    VaultDerivationVersion, VaultStatus, DEFAULT_PBES2_ITERATIONS, VAULT_CEK_JWE_KEY,
+    VAULT_DID_JWE_KEY, VAULT_STATUS_KEY,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -161,11 +162,29 @@ impl IdentityVault {
     }
 
     /// Create a fresh identity, persisting all three values atomically.
+    ///
+    /// Fresh initialization uses `V2`. Recovery without an explicit version
+    /// prefers `V2` and falls back to `V1` only when `V2` is explicitly absent.
     pub async fn initialize(
         &self,
         password: &str,
         recovery_phrase: Option<&str>,
         dwn_endpoints: Vec<String>,
+    ) -> AgentIdentityResult<VaultInitialization> {
+        self.initialize_with_version(password, recovery_phrase, dwn_endpoints, None)
+            .await
+    }
+
+    /// Initialize with an explicit derivation version.
+    ///
+    /// `None` selects `V2` for fresh initialization and automatic `V2 → V1`
+    /// recovery fallback. `Some` forces that exact version.
+    pub async fn initialize_with_version(
+        &self,
+        password: &str,
+        recovery_phrase: Option<&str>,
+        dwn_endpoints: Vec<String>,
+        derivation_version: Option<VaultDerivationVersion>,
     ) -> AgentIdentityResult<VaultInitialization> {
         let mut state = self.state.lock().await;
         let (status, _) = self.read_status_locking_on_error(&mut state).await?;
@@ -185,61 +204,38 @@ impl IdentityVault {
                 .map_err(|err| AgentIdentityError::invalid_mnemonic(err.to_string()))?
                 .to_string(),
         };
-        let dwn_endpoints = if dwn_endpoints.is_empty() {
-            Vec::new()
-        } else {
-            normalize_dwn_endpoints(&dwn_endpoints).ok_or_else(|| {
-                AgentIdentityError::did(
-                    "DWN endpoint URL must use HTTP(S) without a query or fragment.",
-                )
-            })?
-        };
-
-        let derived = derive_agent_keys(&recovery_phrase)?;
-        let AgentDerivedKeys {
-            identity_private_jwk,
-            signing_private_jwk,
-            encryption_private_jwk,
-            vault_content_encryption_key,
-            vault_unlock_salt,
-        } = derived;
-        let identity_private_jwk = identity_private_jwk.clone();
-        let vault_content_encryption_key = Zeroizing::new(vault_content_encryption_key);
-        let cek = Zeroizing::new(fixed_cek(&vault_content_encryption_key)?);
-        let salt = vault_unlock_salt;
-        let created = self
-            .did_provider
-            .create_did(AgentDidCreateRequest {
-                identity_private_jwk: identity_private_jwk.clone(),
-                signing_private_jwk,
-                encryption_private_jwk,
-                dwn_endpoints: dwn_endpoints.clone(),
-            })
-            .await?;
-        validate_agent_did_key_requirements(&created)?;
+        let dwn_endpoints = normalize_request_endpoints(dwn_endpoints)?;
 
         // Publication and reconciliation complete before the first write, so a
         // failure leaves a fresh vault uninitialized.
-        let portable_did = if is_recovery {
-            self.reconcile_recovered_did(
-                &created,
-                replacement_endpoints(&dwn_endpoints),
-                true,
-                false,
-                &identity_private_jwk,
-            )
-            .await?
+        let (derived, version, portable_did) = if is_recovery {
+            self.recover_material(&recovery_phrase, &dwn_endpoints, derivation_version)
+                .await?
         } else {
-            self.publish_document(
-                &created,
-                created.document.clone(),
-                created.document.clone(),
-                None,
-                &[],
-                &identity_private_jwk,
-            )
-            .await?
+            let version = derivation_version.unwrap_or(VaultDerivationVersion::V2);
+            let derived = derive_agent_keys_with_version(&recovery_phrase, version)?;
+            let created = self.create_derived_did(&derived, &dwn_endpoints).await?;
+            let portable_did = self
+                .publish_document(
+                    &created,
+                    created.document.clone(),
+                    created.document.clone(),
+                    None,
+                    &[],
+                    &derived.identity_private_jwk,
+                )
+                .await?;
+            (derived, version, portable_did)
         };
+
+        let AgentDerivedKeys {
+            vault_content_encryption_key,
+            vault_unlock_salt,
+            ..
+        } = derived;
+        let vault_content_encryption_key = Zeroizing::new(vault_content_encryption_key);
+        let cek = Zeroizing::new(fixed_cek(&vault_content_encryption_key)?);
+        let salt = vault_unlock_salt;
 
         let cek_entry = wrap_cek_blocking(
             Zeroizing::new(password.as_bytes().to_vec()),
@@ -255,6 +251,7 @@ impl IdentityVault {
             initialized: true,
             last_backup: None,
             last_restore: None,
+            derivation_version: Some(version),
         };
 
         self.store
@@ -270,6 +267,98 @@ impl IdentityVault {
             recovery_phrase,
             portable_did,
         })
+    }
+
+    /// Resolve the recovery material for an explicit or automatically chosen
+    /// derivation version, publishing only where reconciliation requires it.
+    async fn recover_material(
+        &self,
+        recovery_phrase: &str,
+        dwn_endpoints: &[String],
+        requested_version: Option<VaultDerivationVersion>,
+    ) -> AgentIdentityResult<(AgentDerivedKeys, VaultDerivationVersion, PortableDid)> {
+        if let Some(version) = requested_version {
+            let derived = derive_agent_keys_with_version(recovery_phrase, version)?;
+            let created = self.create_derived_did(&derived, dwn_endpoints).await?;
+            let portable_did = self
+                .reconcile_recovered_did(
+                    &created,
+                    replacement_endpoints(dwn_endpoints),
+                    true,
+                    false,
+                    None,
+                    &derived.identity_private_jwk,
+                )
+                .await?;
+            return Ok((derived, version, portable_did));
+        }
+
+        let v2 = derive_agent_keys_with_version(recovery_phrase, VaultDerivationVersion::V2)?;
+        let created_v2 = self.create_derived_did(&v2, dwn_endpoints).await?;
+        let v2_resolution = self.did_network.resolve(&created_v2.uri).await?;
+        if !matches!(v2_resolution, DidResolution::NotFound) {
+            let portable_did = self
+                .reconcile_recovered_did(
+                    &created_v2,
+                    replacement_endpoints(dwn_endpoints),
+                    true,
+                    false,
+                    Some(v2_resolution),
+                    &v2.identity_private_jwk,
+                )
+                .await?;
+            return Ok((v2, VaultDerivationVersion::V2, portable_did));
+        }
+
+        let v1 = derive_agent_keys_with_version(recovery_phrase, VaultDerivationVersion::V1)?;
+        let created_v1 = self.create_derived_did(&v1, dwn_endpoints).await?;
+        let v1_resolution = self.did_network.resolve(&created_v1.uri).await?;
+        match v1_resolution {
+            DidResolution::Found(_) => {
+                let portable_did = self
+                    .reconcile_recovered_did(
+                        &created_v1,
+                        replacement_endpoints(dwn_endpoints),
+                        true,
+                        false,
+                        Some(v1_resolution),
+                        &v1.identity_private_jwk,
+                    )
+                    .await?;
+                Ok((v1, VaultDerivationVersion::V1, portable_did))
+            }
+            DidResolution::NotFound => {
+                let portable_did = self
+                    .reconcile_recovered_did(
+                        &created_v2,
+                        replacement_endpoints(dwn_endpoints),
+                        true,
+                        false,
+                        Some(v2_resolution),
+                        &v2.identity_private_jwk,
+                    )
+                    .await?;
+                Ok((v2, VaultDerivationVersion::V2, portable_did))
+            }
+        }
+    }
+
+    async fn create_derived_did(
+        &self,
+        derived: &AgentDerivedKeys,
+        dwn_endpoints: &[String],
+    ) -> AgentIdentityResult<PortableDid> {
+        let created = self
+            .did_provider
+            .create_did(AgentDidCreateRequest {
+                identity_private_jwk: derived.identity_private_jwk.clone(),
+                signing_private_jwk: derived.signing_private_jwk.clone(),
+                encryption_private_jwk: derived.encryption_private_jwk.clone(),
+                dwn_endpoints: dwn_endpoints.to_vec(),
+            })
+            .await?;
+        validate_agent_did_key_requirements(&created)?;
+        Ok(created)
     }
 
     /// Unlock with the password, replacing any in-memory CEK. Never writes.
@@ -402,7 +491,10 @@ impl IdentityVault {
         }
         validate_recovery_phrase(recovery_phrase)?;
 
-        let derived = derive_agent_keys(recovery_phrase)?;
+        let version = status
+            .derivation_version
+            .unwrap_or(VaultDerivationVersion::V1);
+        let derived = derive_agent_keys_with_version(recovery_phrase, version)?;
         let AgentDerivedKeys {
             identity_private_jwk,
             signing_private_jwk,
@@ -447,6 +539,7 @@ impl IdentityVault {
                 dwn_endpoints,
                 defer_replacement,
                 true,
+                None,
                 &identity_private_jwk,
             )
             .await?
@@ -507,6 +600,7 @@ impl IdentityVault {
             initialized: true,
             last_backup: Some(date_created.clone()),
             last_restore: status.last_restore,
+            derivation_version: status.derivation_version,
         };
         self.store
             .apply(vec![SecretWrite::put(VAULT_STATUS_KEY, updated.encode()?)])
@@ -566,6 +660,8 @@ impl IdentityVault {
             .get("lastBackup")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        let backup_derivation_version =
+            parse_derivation_version(backup_status).map_err(|_| invalid_backup())?;
 
         let (current, _) = self.read_status().await?;
         let recovered_cek = match unwrap_cek_blocking(
@@ -585,6 +681,9 @@ impl IdentityVault {
             initialized: true,
             last_backup: backup_last_backup.or(current.last_backup),
             last_restore: Some(self.now_iso_millis()),
+            // A restored vault's version comes only from the backup; a legacy
+            // backup must not inherit the local vault's version.
+            derivation_version: backup_derivation_version,
         };
         self.store
             .apply(vec![
@@ -617,9 +716,14 @@ impl IdentityVault {
         replacement_endpoints: Option<Vec<String>>,
         defer_replacement: bool,
         use_stored_on_not_found: bool,
+        resolution: Option<DidResolution>,
         identity_private_jwk: &JWK,
     ) -> AgentIdentityResult<PortableDid> {
-        let resolved = match self.did_network.resolve(&portable_did.uri).await? {
+        let resolution = match resolution {
+            Some(resolution) => resolution,
+            None => self.did_network.resolve(&portable_did.uri).await?,
+        };
+        let resolved = match resolution {
             DidResolution::Found(resolved) => *resolved,
             DidResolution::NotFound => {
                 return self
@@ -847,6 +951,15 @@ fn decode_base64url_lenient(value: &str) -> Option<Vec<u8>> {
     })
 }
 
+fn normalize_request_endpoints(dwn_endpoints: Vec<String>) -> AgentIdentityResult<Vec<String>> {
+    if dwn_endpoints.is_empty() {
+        return Ok(Vec::new());
+    }
+    normalize_dwn_endpoints(&dwn_endpoints).ok_or_else(|| {
+        AgentIdentityError::did("DWN endpoint URL must use HTTP(S) without a query or fragment.")
+    })
+}
+
 fn replacement_endpoints(dwn_endpoints: &[String]) -> Option<Vec<String>> {
     if dwn_endpoints.is_empty() {
         None
@@ -902,8 +1015,8 @@ mod deferred_reconcile_tests {
     use super::*;
     use crate::agent::test_support::ready_document;
     use crate::agent::{
-        derive_agent_keys, encrypt_did, AgentIdentityFuture, DidDhtProvider, DidResolution,
-        MemorySecretStore, ResolvedAgentDid,
+        encrypt_did, AgentIdentityFuture, DidDhtProvider, DidResolution, MemorySecretStore,
+        ResolvedAgentDid,
     };
     use ssi_dids_core::Document;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -989,7 +1102,7 @@ mod deferred_reconcile_tests {
         let vault = seeded(network.clone()).await;
         network.set(DidResolution::Found(Box::new(ResolvedAgentDid {
             document: ready_document(
-                "did:dht:qftx7z968xcpfy1a1diu75pg5meap3gdtg6ezagaw849wdh6oubo",
+                "did:dht:3pcjxsbcm5py5xaffs4uppp8ywubyy9bw4erbicw7qrkue1t81uo",
             ),
             sequence: 9,
             types: None,
@@ -1037,7 +1150,7 @@ mod deferred_reconcile_tests {
         let network = Arc::new(RecordingNetwork::not_found());
         let vault = seeded(network.clone()).await;
 
-        let derived = derive_agent_keys(PHRASE).unwrap();
+        let derived = derive_agent_keys_with_version(PHRASE, VaultDerivationVersion::V2).unwrap();
         let cek: [u8; 32] = derived
             .vault_content_encryption_key
             .as_slice()

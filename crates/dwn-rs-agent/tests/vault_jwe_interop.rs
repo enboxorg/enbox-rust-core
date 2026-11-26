@@ -365,7 +365,12 @@ async fn rust_vault_values_for_ts_consumer() {
             "contentEncryptionKey": wrap_cek(RUST_PASSWORD, &cek, &salt, 1).unwrap(),
             "did": encrypt_did(&did_json, &cek).unwrap(),
             "vaultStatus": String::from_utf8(
-                VaultStatus { initialized: true, last_backup: None, last_restore: None }
+                VaultStatus {
+                    initialized: true,
+                    last_backup: None,
+                    last_restore: None,
+                    derivation_version: None,
+                }
                     .encode()
                     .unwrap(),
             )

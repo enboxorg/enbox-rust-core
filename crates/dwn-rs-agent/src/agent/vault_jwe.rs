@@ -6,6 +6,7 @@
 
 use super::{
     validate_agent_did_key_requirements, AgentIdentityError, AgentIdentityResult, PortableDid,
+    VaultDerivationVersion,
 };
 use aes::cipher::{array::Array, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use aes_gcm::{
@@ -42,6 +43,65 @@ pub struct VaultStatus {
     pub last_backup: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_restore: Option<String>,
+    /// Absent for legacy `V1` vaults; explicit `null` is invalid.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_derivation_version",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub derivation_version: Option<VaultDerivationVersion>,
+}
+
+/// Reject an explicit `null` version while still defaulting an absent one.
+fn deserialize_optional_derivation_version<'de, D>(
+    deserializer: D,
+) -> Result<Option<VaultDerivationVersion>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalVersion;
+
+    impl<'de> serde::de::Visitor<'de> for OptionalVersion {
+        type Value = Option<VaultDerivationVersion>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("derivation version 1 or 2")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Err(E::custom("derivation version must be 1 or 2"))
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Err(E::custom("derivation version must be 1 or 2"))
+        }
+
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            VaultDerivationVersion::deserialize(deserializer).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalVersion)
+}
+
+pub(crate) fn parse_derivation_version(
+    value: &serde_json::Value,
+) -> AgentIdentityResult<Option<VaultDerivationVersion>> {
+    match value.get("derivationVersion") {
+        None => Ok(None),
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|raw| u8::try_from(raw).ok())
+            .and_then(VaultDerivationVersion::from_u8)
+            .map(Some)
+            .ok_or_else(|| AgentIdentityError::vault("invalid vault status".to_string())),
+        Some(_) => Err(AgentIdentityError::vault(
+            "invalid vault status".to_string(),
+        )),
+    }
 }
 
 impl VaultStatus {
@@ -50,6 +110,7 @@ impl VaultStatus {
             initialized: false,
             last_backup: None,
             last_restore: None,
+            derivation_version: None,
         }
     }
 
@@ -82,6 +143,7 @@ impl VaultStatus {
             initialized,
             last_backup: opt_string("lastBackup")?,
             last_restore: opt_string("lastRestore")?,
+            derivation_version: parse_derivation_version(&value)?,
         })
     }
 
@@ -89,6 +151,9 @@ impl VaultStatus {
         let mut value = serde_json::json!({ "initialized": self.initialized });
         value["lastBackup"] = self.last_backup.clone().into();
         value["lastRestore"] = self.last_restore.clone().into();
+        if let Some(version) = self.derivation_version {
+            value["derivationVersion"] = u8::from(version).into();
+        }
         serde_json::to_vec(&value)
             .map_err(|err| AgentIdentityError::vault(format!("invalid vault status: {err}")))
     }
@@ -765,13 +830,39 @@ mod tests {
             initialized: true,
             last_backup: None,
             last_restore: Some("2026-09-20T00:00:00Z".to_string()),
+            derivation_version: Some(VaultDerivationVersion::V2),
         };
         let bytes = status.encode().unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["initialized"], true);
         assert_eq!(value["lastBackup"], serde_json::Value::Null);
         assert_eq!(value["lastRestore"], "2026-09-20T00:00:00Z");
+        assert_eq!(value["derivationVersion"], 2);
         assert_eq!(VaultStatus::parse(Some(&bytes)).unwrap(), status);
+    }
+
+    #[test]
+    fn status_omits_absent_derivation_and_rejects_null_or_unknown() {
+        let status = VaultStatus::uninitialized();
+        let value: serde_json::Value = serde_json::from_slice(&status.encode().unwrap()).unwrap();
+        assert!(value.get("derivationVersion").is_none());
+
+        for raw in [
+            r#"{"initialized": true, "lastBackup": null, "lastRestore": null, "derivationVersion": null}"#,
+            r#"{"initialized": true, "lastBackup": null, "lastRestore": null, "derivationVersion": 0}"#,
+            r#"{"initialized": true, "lastBackup": null, "lastRestore": null, "derivationVersion": 3}"#,
+            r#"{"initialized": true, "lastBackup": null, "lastRestore": null, "derivationVersion": "2"}"#,
+            r#"{"initialized": true, "lastBackup": null, "lastRestore": null, "derivationVersion": 2.0}"#,
+        ] {
+            assert!(VaultStatus::parse(Some(raw.as_bytes())).is_err(), "{raw}");
+            assert!(serde_json::from_str::<VaultStatus>(raw).is_err(), "{raw}");
+        }
+
+        let valid: VaultStatus = serde_json::from_str(
+            r#"{"initialized": true, "lastBackup": null, "lastRestore": null, "derivationVersion": 1}"#,
+        )
+        .unwrap();
+        assert_eq!(valid.derivation_version, Some(VaultDerivationVersion::V1));
     }
 
     #[test]
