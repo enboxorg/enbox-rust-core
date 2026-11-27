@@ -260,8 +260,8 @@ fn require_ok(reply: &JsonValue, error_code: &str) -> AgentIdentityResult<()> {
 /// [`ProtocolEndpoint`] backed by a remote `@enbox/dwn-server`-style HTTP
 /// endpoint.
 ///
-/// Sends signed `ProtocolsQuery`/`ProtocolsConfigure` messages as JSON-RPC
-/// requests in the `dwn-request` header. Mirrors the transport used by
+/// Sends signed `ModulesQuery`/`ModulesConfigure` messages as body-framed
+/// JSON-RPC requests. Mirrors the transport used by
 /// [`dwn_rs_core::sync::endpoint::HttpSyncEndpoint`]: the response payload
 /// is read from the `dwn-response` header when present, otherwise from
 /// the response body.
@@ -302,10 +302,21 @@ impl HttpDwnProtocolEndpoint {
             "method": "dwn.processMessage",
             "params": { "target": tenant, "message": message }
         });
+        let body = dwn_rs_core::utils::http_rpc_framing::encode_request_body(
+            &serde_json::to_vec(&envelope).map_err(|err| {
+                AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string())
+            })?,
+            None,
+        )
+        .map_err(|err| AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string()))?;
         let response = self
             .client
             .post(&self.url)
-            .header("dwn-request", envelope.to_string())
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                dwn_rs_core::utils::http_rpc_framing::HTTP_DWN_RPC_MEDIA_TYPE,
+            )
+            .body(body)
             .send()
             .await
             .map_err(|err| {

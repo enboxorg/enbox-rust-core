@@ -129,7 +129,7 @@ For HTTP-backed registration and protocol push (closes #145), three additional m
      "definition": <protocol_definition>
    })
    ```
-   Signs a `ProtocolsQuery` against the remote first (idempotent path), otherwise signs and sends a `ProtocolsConfigure` (with encryption injected when required). Same JSON-RPC transport as `HttpSyncEndpoint`: `dwn-request` header on `POST <url>/`, response read from `dwn-response` header or body.
+   Signs a `ProtocolsQuery` against the remote first (idempotent path), otherwise signs and sends a `ProtocolsConfigure` (with encryption injected when required). Same JSON-RPC transport as `HttpSyncEndpoint`: body-framed request on `POST <url>/`, response read from `dwn-response` header or body.
 3. Replay a recovery flow across local + remote endpoints:
    ```json
    run_restore_flow({

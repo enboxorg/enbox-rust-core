@@ -4320,8 +4320,9 @@ mod tests {
         use std::sync::Mutex;
         use std::thread::JoinHandle as ThreadJoinHandle;
 
+        use axum::body::Bytes;
         use axum::extract::State;
-        use axum::http::{HeaderMap, StatusCode};
+        use axum::http::{header, HeaderMap, StatusCode};
         use axum::response::IntoResponse;
         use axum::routing::{get, post};
         use axum::{Json, Router};
@@ -4443,19 +4444,26 @@ mod tests {
         async fn dwn_handler(
             State(state): State<Arc<Mutex<MockState>>>,
             headers: HeaderMap,
+            body: Bytes,
         ) -> impl IntoResponse {
-            let Some(request_header) = headers
-                .get("dwn-request")
+            if !headers
+                .get(header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
-            else {
-                return (StatusCode::BAD_REQUEST, "missing dwn-request").into_response();
-            };
-            let envelope: JsonValue = match serde_json::from_str(request_header) {
-                Ok(value) => value,
-                Err(err) => {
-                    return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
-                }
-            };
+                .is_some_and(dwn_rs_core::utils::http_rpc_framing::is_http_dwn_rpc_content_type)
+            {
+                return (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "unsupported content type",
+                )
+                    .into_response();
+            }
+            let envelope: JsonValue =
+                match dwn_rs_core::utils::http_rpc_framing::parse_request_body(&body) {
+                    Ok(parsed) => parsed.envelope,
+                    Err(err) => {
+                        return (StatusCode::BAD_REQUEST, err.to_string()).into_response();
+                    }
+                };
             let id = envelope.get("id").cloned().unwrap_or(JsonValue::Null);
 
             let mut guard = state.lock().unwrap();

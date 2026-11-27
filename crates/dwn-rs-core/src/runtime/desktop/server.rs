@@ -1,7 +1,7 @@
 //! Loopback HTTP server for desktop local DWN nodes.
 //!
 //! Implements the minimal `@enbox/dwn-server` surface used by `@enbox/dwn-clients`:
-//! `GET /health`, `GET /info`, and `POST /` with JSON-RPC in the `dwn-request` header.
+//! `GET /health`, `GET /info`, and `POST /` with a body-framed JSON-RPC request.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::{
     body::Bytes,
     extract::{ws::WebSocketUpgrade, FromRequest, State},
-    http::{HeaderMap, Request, StatusCode},
+    http::{header, HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -21,6 +21,7 @@ use serde_json::{json, Value as JsonValue};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
+use crate::utils::http_rpc_framing;
 use crate::Response as DWNResponse;
 use crate::{
     dwn::{Dwn, TenantGate},
@@ -475,19 +476,32 @@ async fn info(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn json_rpc(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let Some(request_header) = headers
-        .get("dwn-request")
+    if !headers
+        .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-    else {
+        .is_some_and(http_rpc_framing::is_http_dwn_rpc_content_type)
+    {
         return json_rpc_error(
             json!(null),
             -32600,
-            "request payload required.".to_string(),
-            StatusCode::BAD_REQUEST,
+            "unsupported content type.".to_string(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
         );
+    }
+
+    let parsed = match http_rpc_framing::parse_request_body(&body) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            return json_rpc_error(
+                json!(null),
+                -32600,
+                err.to_string(),
+                StatusCode::BAD_REQUEST,
+            )
+        }
     };
 
-    let request: JsonRpcRequest = match serde_json::from_str(request_header) {
+    let request: JsonRpcRequest = match serde_json::from_value(parsed.envelope) {
         Ok(request) => request,
         Err(err) => {
             return json_rpc_error(
@@ -519,11 +533,7 @@ async fn json_rpc(State(state): State<AppState>, headers: HeaderMap, body: Bytes
         .get("message")
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let data = if body.is_empty() {
-        None
-    } else {
-        Some(body.to_vec())
-    };
+    let data = parsed.data.map(|data| data.to_vec());
 
     let result = state
         .processor

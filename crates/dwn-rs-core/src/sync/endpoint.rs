@@ -385,10 +385,20 @@ where
                 "message": message,
             }
         });
+        let body = crate::utils::http_rpc_framing::encode_request_body(
+            &serde_json::to_vec(&request)
+                .map_err(|err| SyncError::permanent("JsonRpcError", err.to_string()))?,
+            None,
+        )
+        .map_err(|err| SyncError::permanent("JsonRpcError", err.to_string()))?;
         let response = self
             .client
             .post(&self.url)
-            .header("dwn-request", request.to_string())
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                crate::utils::http_rpc_framing::HTTP_DWN_RPC_MEDIA_TYPE,
+            )
+            .body(body)
             .send()
             .await
             .map_err(|err| SyncError::transient("HttpTransportFailed", err.to_string()))?;

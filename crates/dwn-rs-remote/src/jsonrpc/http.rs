@@ -1,11 +1,11 @@
 use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
+use dwn_rs_core::utils::http_rpc_framing::{self, HTTP_DWN_RPC_MEDIA_TYPE};
 use dwn_rs_core::{Reply, Response as DWNResponse};
 use futures_core::{stream::BoxStream, TryStream};
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use http::header;
-use serde_json::json;
 use tower::Service;
 use tracing::trace;
 
@@ -47,21 +47,33 @@ where
 
         Box::pin(async move {
             let stream = request.1;
+            let envelope = serde_json::to_vec(&request.0)?;
+            let prefix = http_rpc_framing::frame_request_header(&envelope, stream.is_some())
+                .map_err(|err| JSONRpcError {
+                    code: JSONRpcErrorCodes::InternalError,
+                    message: err.to_string(),
+                    data: None,
+                })?;
 
             let mut rb = client
                 .clone()
                 .request(http::method::Method::POST, url)
-                .header("dwn-request", json!(request.0).to_string());
+                .header(header::CONTENT_TYPE, HTTP_DWN_RPC_MEDIA_TYPE);
 
-            if let Some(data) = stream {
-                let (lw, _) = data.size_hint();
-
-                rb = rb
-                    .header(header::CONTENT_TYPE, "application/octet-stream")
-                    .header(header::TRANSFER_ENCODING, "chunked")
-                    .header(header::CONTENT_LENGTH, lw.to_string())
-                    .body(reqwest::Body::wrap_stream(data));
-            }
+            rb = match stream {
+                Some(data) => {
+                    let data = data
+                        .map_ok(Bytes::from)
+                        .map_err(|err| std::io::Error::other(err.into().to_string()));
+                    type BodyStream = BoxStream<'static, Result<Bytes, std::io::Error>>;
+                    let body: BodyStream =
+                        futures_util::stream::once(async move { Ok::<_, std::io::Error>(prefix) })
+                            .chain(data)
+                            .boxed();
+                    rb.body(reqwest::Body::wrap_stream::<BodyStream>(body))
+                }
+                None => rb.body(prefix),
+            };
 
             let req = rb.build()?;
 
@@ -121,7 +133,7 @@ where
 
 impl HTTPTransport {
     pub fn new(uri: String) -> Result<Self, JSONRpcError> {
-        let content_type = "application/json-rpc".parse().map_err(|e| JSONRpcError {
+        let content_type = HTTP_DWN_RPC_MEDIA_TYPE.parse().map_err(|e| JSONRpcError {
             code: JSONRpcErrorCodes::InternalError,
             message: format!("Failed to parse Content-Type header: {}", e),
             data: None,
