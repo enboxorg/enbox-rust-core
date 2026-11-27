@@ -77,9 +77,9 @@ Delivered:
 
 - Identity lifecycle in `dwn_rs_agent::agent` (`AgentIdentityService`, `PortableDid`, BIP-39 recovery) with the password-gated `IdentityVault` over a SQLite-backed `SqliteSecretStore`, atomically committed lifecycle mutations, backup/restore, and the `VaultBackedSecretStore` credential envelopes. FFI: `initialize_vault`, `unlock`/`unlock_with_reason`, `lock`, `change_password`, `reset_password_with_recovery_phrase`, `backup_vault`, `restore_vault`, `vault_status`, `current_agent_identity`, `derive_agent_keys_from_phrase`.
 - Tenant registration via HTTP-backed `TenantRegistrationClient` against `@enbox/dwn-server`-style endpoints (provider-auth-v0 token refresh, anonymous fallback, persisted registration tokens). FFI: `register_tenant`.
-- Protocol installation flows (`install_protocol_if_needed`, `push_protocol_if_needed`, `run_restore_flow`) over a local `SqliteNativeDwn` and the new `HttpDwnProtocolEndpoint`. FFI: `install_protocol`, `push_protocol`, `run_restore_flow`, `inject_protocol_encryption`.
+- Module installation flows (`install_module_if_needed`, `push_module_if_needed`, `run_restore_flow`) over a local `SqliteNativeDwn` and the new `HttpDwnModuleEndpoint`. FFI: `install_module`, `push_module`, `run_restore_flow`, `inject_module_encryption`.
 - Delegated grants, DWeb Connect authorization, derived decryption/context keys, and persisted key delivery (`dwn_rs_core::connect`). FFI: `create_permission_request`, `create_delegate_grant`, `create_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, `save_/load_delegate_decryption_keys`, `save_/load_delegate_context_keys`.
-- Encrypted protocol behavior with per-path key-agreement derivation (`inject_protocol_encryption`); recovery semantics covered by `crates/dwn-rs-agent/tests/wallet_recovery.rs`.
+- Encrypted module behavior with per-path key-agreement derivation (`inject_module_encryption`); recovery semantics covered by `crates/dwn-rs-agent/tests/wallet_recovery.rs`.
 
 ## Milestone 6: Native Bindings And Integration
 
@@ -87,7 +87,7 @@ Goal: expose the Rust core to product surfaces. **Complete** for the API surface
 
 Delivered:
 
-- UniFFI facade (`crates/enbox-ffi`) covers DWN message dispatch, sync, agent identity, protocol install/push/restore, DWeb Connect, remote registration, and the mobile runtime status surface. See [crates/enbox-ffi/README.md](../crates/enbox-ffi/README.md).
+- UniFFI facade (`crates/enbox-ffi`) covers DWN message dispatch, sync, agent identity, module install/push/restore, DWeb Connect, remote registration, and the mobile runtime status surface. See [crates/enbox-ffi/README.md](../crates/enbox-ffi/README.md).
 - Background-safe sync: `sync_once` / `poll_reconcile` accept `deadlineMs`, full `connectivity`, and `reason` and enforce the deadline via `tokio::time::timeout` ([#153](https://github.com/enboxorg/enbox-rust-core/pull/153)).
 - Durable checkpoint-driven resume: `list_pending_scopes` + `resume_pending` over the SQLite sync ledger, matching [`BACKGROUND_SYNC.md`](BACKGROUND_SYNC.md) ([#157](https://github.com/enboxorg/enbox-rust-core/pull/157)).
 - Mobile runtime status: `initialize_runtime`, `unlock_with_reason`, `begin_/end_background_task`, extended `EnboxRuntimeStatus` ([#155](https://github.com/enboxorg/enbox-rust-core/pull/155)).
