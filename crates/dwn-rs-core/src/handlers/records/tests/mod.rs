@@ -2042,6 +2042,62 @@ async fn broad_read_fails_closed_on_non_denial_authorization_errors() {
     );
 }
 
+// Covers: DWN-REC-008
+// A candidate whose module definition cannot be resolved proves nothing about
+// the requester's authority, so a broad read propagates instead of skipping it.
+#[tokio::test]
+async fn broad_read_fails_closed_when_candidate_module_is_missing() {
+    let (message_store, _data_store, write_handler, read_handler) = read_fixture().await;
+
+    // The orphan ranks first and names a module that was never configured, so
+    // its authorization has no definition to evaluate.
+    let orphan_data = Bytes::from_static(b"orphan");
+    let orphan = parsed_value(
+        &signed_write_message(WriteSpec {
+            module: "http://example.com/missing".to_string(),
+            data_cid: generate_dag_pb_cid_from_bytes(&orphan_data).to_string(),
+            data_size: orphan_data.len() as u64,
+            ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+        })
+        .await,
+    );
+    let indexes = records_write_indexes(&orphan, TENANT, true).unwrap();
+    message_store.put(TENANT, orphan, indexes).await.unwrap();
+
+    let visible_data = Bytes::from_static(b"visible");
+    let visible = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&visible_data).to_string(),
+        data_size: visible_data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        write_handler
+            .run(TENANT, &visible, Some(visible_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let read = signed_broad_read("2025-01-01T00:10:00.000000Z", Some("member")).await;
+    let reply = read_handler.run(TENANT, &read, None).await;
+    assert_eq!(
+        reply.status.code, 500,
+        "an unresolvable module must not become invisibility: {}",
+        reply.status.detail
+    );
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModuleAuthorizationModuleNotFound"),
+        "{}",
+        reply.status.detail
+    );
+}
+
 async fn read_fixture() -> (
     TestMessageStore,
     TestDataStore,

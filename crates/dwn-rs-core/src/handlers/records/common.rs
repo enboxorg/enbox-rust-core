@@ -946,17 +946,34 @@ where
     .into())
 }
 
-/// A grant failure is a denial unless the grant machinery itself failed, in
-/// which case the answer says nothing about authority and must propagate.
+/// A grant failure is a denial only for the classified scope, validity, and
+/// authority outcomes; anything else means the grant machinery could not
+/// decide, which says nothing about authority and must propagate.
 fn grant_authorization_error(
     error: permissions::errors::PermissionError,
 ) -> ModuleAuthorizationError {
-    use permissions::errors::PermissionError;
+    use permissions::errors::{
+        AuthorizationRequestError, AuthorizationValidationError, GrantError, PermissionError,
+    };
+    let detail = error.to_string();
     match &error {
-        PermissionError::DataStoreError(_)
-        | PermissionError::MessageStoreError(_)
-        | PermissionError::StoreError(_) => ModuleAuthorizationError::internal(error.to_string()),
-        _ => ModuleAuthorizationError::Detail(error.to_string()),
+        PermissionError::InvalidGrant(
+            GrantError::NotFound(_)
+            | GrantError::NotActive
+            | GrantError::Expired
+            | GrantError::Revoked
+            | GrantError::OutsideScope
+            | GrantError::Unauthorized
+            | GrantError::InvalidScopeForTarget(..),
+        )
+        | PermissionError::AuthorizationValidationError(
+            AuthorizationValidationError::UnexpectedGrantee(..)
+            | AuthorizationValidationError::UnexpectedGrantor(..)
+            | AuthorizationValidationError::BadRequest(
+                AuthorizationRequestError::GrantScopeMismatch(..),
+            ),
+        ) => ModuleAuthorizationError::Detail(detail),
+        _ => ModuleAuthorizationError::internal(detail),
     }
 }
 
@@ -1044,9 +1061,23 @@ impl ModuleAuthorizationError {
     }
 
     /// Whether the failure is a classified authorization denial, which hides a
-    /// candidate, rather than an operational failure, which must propagate.
+    /// candidate, rather than a failure that proves nothing about authority and
+    /// must propagate. Only the codes upstream classifies as denials hide a
+    /// candidate, so a code added later fails closed until it is classified.
     pub(crate) fn is_denial(&self) -> bool {
-        !matches!(self, Self::Internal(_))
+        match self {
+            Self::Detail(_) => true,
+            Self::Internal(_) => false,
+            Self::Code(error) => matches!(
+                error.code,
+                DwnErrorCode::EncryptionControlReadUnauthorized
+                    | DwnErrorCode::ModuleAuthorizationActionNotAllowed
+                    | DwnErrorCode::ModuleAuthorizationActionRulesNotFound
+                    | DwnErrorCode::ModuleAuthorizationMatchingRoleRecordNotFound
+                    | DwnErrorCode::ModuleAuthorizationMissingContextId
+                    | DwnErrorCode::ModuleAuthorizationNotARole
+            ),
+        }
     }
 
     /// The HTTP 401 status carrying the stable code when one is present.
@@ -1322,13 +1353,19 @@ where
     )
     .await
     .map_err(|error| match error {
-        ModuleDefinitionLookupError::NotFound(detail) => {
-            ModuleAuthorizationError::Detail(format!("ModuleAuthorizationModuleNotFound: {detail}"))
+        ModuleDefinitionLookupError::NotFound(module) => {
+            ModuleAuthorizationError::Code(DwnError::new(
+                DwnErrorCode::ModuleAuthorizationModuleNotFound,
+                format!("unable to find module definition for {module}"),
+            ))
         }
         other => ModuleAuthorizationError::internal(other.to_string()),
     })?;
     let rule_set = definition.rule_at(module_path.as_str()).ok_or_else(|| {
-        format!("ModuleAuthorizationInvalidModulePath: {module_path} is not defined")
+        DwnError::new(
+            DwnErrorCode::ModuleAuthorizationIncorrectModulePath,
+            format!("{module_path} is not defined"),
+        )
     })?;
     let invoked_role = auth.module_role();
     if invoked_role.is_some() {

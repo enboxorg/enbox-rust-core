@@ -12,6 +12,7 @@ use crate::descriptors::{
     ReadDescriptor,
 };
 use crate::dwn::{Handler, HandlerContext};
+use crate::errors::DwnErrorCode;
 use crate::filters::{FilterKey, Filters};
 use crate::handlers::records::common::{
     authorize_records_read, bool_filter, date_sort_to_message_sort, extract_author,
@@ -227,7 +228,14 @@ where
                             Err(control::ControlValidationError::Internal(detail)) => {
                                 return store_error_reply(detail)
                             }
-                            Err(error) => Err(ModuleAuthorizationError::Detail(error.to_string())),
+                            Err(control::ControlValidationError::Dwn(error))
+                                if error.code == DwnErrorCode::EncryptionControlReadUnauthorized =>
+                            {
+                                Err(ModuleAuthorizationError::Detail(error.to_string()))
+                            }
+                            Err(error) => {
+                                Err(ModuleAuthorizationError::internal(error.to_string()))
+                            }
                         }
                     } else {
                         authorize_records_read(

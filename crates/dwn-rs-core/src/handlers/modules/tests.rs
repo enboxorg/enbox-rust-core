@@ -1408,6 +1408,43 @@ fn validate_definition_rejects_invalid_module_rules() {
     assert_eq!(error.code, "ModulesConfigureInvalidSize");
 }
 
+// Covers: ENBOX-ERR-001
+#[tokio::test]
+async fn modules_configure_rejects_record_limit_above_maximum() {
+    let mut message_store = TestMessageStore::default();
+    message_store.open().await.unwrap();
+    let handler = ModulesConfigureHandler::new(message_store, Some(Arc::new(test_resolver())));
+
+    let mut descriptor = configure_descriptor(
+        "http://example.com/limited",
+        true,
+        "2025-01-01T00:00:00.000000Z",
+    );
+    descriptor
+        .definition
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .record_limit = Some(module_types::RecordLimit { max: 1001 });
+
+    let reply = handler
+        .run(
+            "did:example:alice",
+            &signed_configure_descriptor(descriptor).await,
+            None,
+        )
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureInvalidRecordLimit"),
+        "{}",
+        reply.status.detail
+    );
+}
+
 fn enc_key_agreement() -> ModuleKeyAgreement {
     ModuleKeyAgreement {
         public_key_jwk: serde_json::from_value(serde_json::json!({
