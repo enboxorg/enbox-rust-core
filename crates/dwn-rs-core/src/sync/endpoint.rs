@@ -1030,6 +1030,61 @@ mod tests {
         );
     }
 
+    // Covers: DWN-REC-004
+    // Prune removes a subtree, so a grandchild's immediate parent may be gone
+    // with no prune of its own. The retained prune on the grandparent still
+    // settles the reply terminally rather than as a repairable dependency.
+    #[tokio::test]
+    async fn pruned_grandparent_settles_a_grandchild_as_superseded() {
+        use crate::stores::memory::MemoryMessageStore;
+        use crate::testing::{signed_delete_message, signed_write_message, WriteSpec};
+
+        const TENANT: &str = "did:example:alice";
+        const GRANDPARENT: &str = "grandparent";
+        const CHILD: &str = "child";
+
+        let mut store = MemoryMessageStore::default();
+        store.open().await.unwrap();
+
+        let anchor: Message<Descriptor> = serde_json::from_value(
+            signed_write_message(WriteSpec::new("2025-01-01T00:00:00.000000Z")).await,
+        )
+        .unwrap();
+        let prune: Message<Descriptor> = serde_json::from_value(
+            signed_delete_message(GRANDPARENT, true, "2025-01-01T00:01:00.000000Z").await,
+        )
+        .unwrap();
+        let indexes =
+            crate::handlers::records::common::records_delete_indexes(&prune, &anchor, TENANT)
+                .unwrap();
+        store.put(TENANT, prune, indexes).await.unwrap();
+
+        let grandchild: Message<Descriptor> = serde_json::from_value(
+            signed_write_message(WriteSpec {
+                parent_id: Some(CHILD.to_string()),
+                parent_context_id: Some(format!("{GRANDPARENT}/{CHILD}")),
+                ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+            })
+            .await,
+        )
+        .unwrap();
+
+        for code in [
+            DwnErrorCode::ModuleAuthorizationParentRecordNotFound,
+            DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound,
+        ] {
+            let status = Status::from_error(400, DwnError::new(code, "parent is gone"));
+            assert!(
+                parent_reply_is_terminal(TENANT, &grandchild, &status, &store).await,
+                "{code} must settle through the pruned grandparent"
+            );
+            assert_eq!(
+                classify_apply_reply_with_parent_state(&status, &grandchild, false, true),
+                ReplicationApplyOutcome::Superseded
+            );
+        }
+    }
+
     #[test]
     fn apply_reply_classification_uses_structured_error_code() {
         // Covers: DWN-SYNC-002
