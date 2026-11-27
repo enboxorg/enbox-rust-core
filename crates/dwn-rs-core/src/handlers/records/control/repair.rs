@@ -198,25 +198,7 @@ fn actions_sought_by_stored_write(control: &Message<Descriptor>, rule_set: &Rule
         .ok()
         .and_then(|descriptor| descriptor.squash)
         == Some(true);
-    if !is_squash {
-        return vec![Can::Create];
-    }
-    let declares_squash = rule_set
-        .actions
-        .iter()
-        .any(|action| action_can(action).contains(&Can::Squash));
-    if declares_squash {
-        vec![Can::Squash]
-    } else {
-        vec![Can::Squash, Can::Create]
-    }
-}
-
-fn action_can(action: &Action) -> &[Can] {
-    match action {
-        Action::Role(role_action) => &role_action.can,
-        Action::Who(who) => &who.can,
-    }
+    rule_set.initial_write_actions(is_squash)
 }
 
 /// Classifies a stored control record against the configuration now in force.
