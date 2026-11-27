@@ -3,7 +3,7 @@
   "oracle": "enbox",
   "source": {
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "path": "packages/agent/src/hd-identity-vault.ts",
     "tool": "tools/conformance/generate-vault-phrase-fixture.ts"
   },

@@ -3,7 +3,7 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "cidFunction": "Cid.computeCid"
   },
   "cases": [
@@ -47,15 +47,15 @@
       "id": "protocols-query-basic",
       "description": "Unsigned ProtocolsQuery with a normalized protocol URL filter.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreigmavpwhex2fnkicsxpihb4y4mopse5qe74di5ohvh4jqxmzdnptu",
-      "messageCid": "bafyreigwgs5bd3nxr7tcsaqyfbfsuj4htl2leoowzfjkrdv5sm77uyzlim",
+      "descriptorCid": "bafyreidlixc3imxwt6sis5hx5gbvntuebr67nt3jgvdio5yz3uyejol5h4",
+      "messageCid": "bafyreihuv3d23lxscftk6p6oic6j55k7a6tzauryneufwbb3eear5k7jde",
       "message": {
         "descriptor": {
-          "interface": "Protocols",
+          "interface": "Modules",
           "method": "Query",
           "messageTimestamp": "2025-01-01T00:00:02.000000Z",
           "filter": {
-            "protocol": "http://example.com/protocol"
+            "module": "http://example.com/protocol"
           }
         }
       }
@@ -64,15 +64,15 @@
       "id": "protocols-query-permission-grant",
       "description": "Unsigned ProtocolsQuery carrying a permissionGrantId in the descriptor.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreie3hagsm33bo4x2cvneoeak7uo6pz2xsoqgwfwzwvctfax2szpaky",
-      "messageCid": "bafyreihgpwtp56ztdobilbvwrahz7lztjak6i4namkkcphcqxqp2spitxm",
+      "descriptorCid": "bafyreidqvwsfc6zigg5o3juao22prjzg356iybxan3brqaz5xsfapb6ari",
+      "messageCid": "bafyreidafpdjgyihuzopom5tgy65idpdes2kzcnilr6axhbjyo3dcrblvi",
       "message": {
         "descriptor": {
-          "interface": "Protocols",
+          "interface": "Modules",
           "method": "Query",
           "messageTimestamp": "2025-01-01T00:00:14.000000Z",
           "filter": {
-            "protocol": "http://example.com/protocol"
+            "module": "http://example.com/protocol"
           },
           "permissionGrantId": "grant-protocol-query-123"
         }
@@ -105,7 +105,9 @@
           "method": "Read",
           "messageTimestamp": "2025-01-01T00:00:12.000000Z",
           "messageCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
-          "permissionGrantIds": ["grant-message-read-123"]
+          "permissionGrantIds": [
+            "grant-message-read-123"
+          ]
         }
       }
     },
@@ -113,19 +115,19 @@
       "id": "records-write-basic",
       "description": "Unsigned RecordsWrite descriptor with external data CID metadata.",
       "rustStatus": "supported",
-  "descriptorCid": "bafyreic3egt3yxbwrmyugk5yk5wjrkgv7phy7tv2vvk3qcofqb6vzzy7e4",
-  "messageCid": "bafyreifd2exiqxwvnvzrh4wxbke7oh5t3nl6nfykodjcx2mqix7plpyb5y",
+      "descriptorCid": "bafyreiah7skzwofz4t45ywh3ar2lkjvjvstn3v4oxkbk5c2tqpy5gf2a5a",
+      "messageCid": "bafyreigz3esaqxeq6swknqqpiomfo67m3m64huhv2s6hzncl2b5y4wwb3a",
       "message": {
         "descriptor": {
           "interface": "Records",
           "method": "Write",
           "messageTimestamp": "2025-01-01T00:00:06.000000Z",
           "dateCreated": "2025-01-01T00:00:06.000000Z",
-      "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
-      "dataSize": 11,
-      "dataFormat": "text/plain",
-      "protocol": "https://example.com/records",
-      "protocolPath": "record"
+          "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
+          "dataSize": 11,
+          "dataFormat": "text/plain",
+          "module": "https://example.com/records",
+          "modulePath": "record"
         }
       }
     },
@@ -133,8 +135,8 @@
       "id": "records-write-permission-grant-squash",
       "description": "Unsigned RecordsWrite descriptor carrying permissionGrantId and Enbox squash metadata.",
       "rustStatus": "supported",
-  "descriptorCid": "bafyreiar6wou3l3nj2brctphqh7cc5oae5bvzbn2swdom5dqf6masd3vji",
-  "messageCid": "bafyreidhpxlcq7ta2qcmfojmxbm5mqjaluo6dghw74fno7op655y5hz7ai",
+      "descriptorCid": "bafyreieumkon7jpxh2v5oxzk4qtgd3mkibgd5nbt7je7cmqhsk5jg7etqq",
+      "messageCid": "bafyreib4dmppob7plthkatypdt35bmr2vj7g2sqlblxbsldasfodnrcb5e",
       "message": {
         "descriptor": {
           "interface": "Records",
@@ -142,11 +144,11 @@
           "messageTimestamp": "2025-01-01T00:00:11.000000Z",
           "dateCreated": "2025-01-01T00:00:11.000000Z",
           "dataCid": "bafyreietui4xdkiu4xvmx4fi2jivjtndbhb4drzpxomrjvd4mdz4w2avra",
-      "dataSize": 11,
-      "dataFormat": "text/plain",
-      "protocol": "https://example.com/records",
-      "protocolPath": "record",
-      "permissionGrantId": "grant-write-123",
+          "dataSize": 11,
+          "dataFormat": "text/plain",
+          "module": "https://example.com/records",
+          "modulePath": "record",
+          "permissionGrantId": "grant-write-123",
           "squash": true
         }
       }
@@ -171,15 +173,15 @@
       "id": "records-subscribe-basic",
       "description": "Unsigned RecordsSubscribe descriptor filtered by protocol.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreihgi7mluqi2zslcyc77sl4gnfl2nwqjfvzv6tfzqutjsq4b326hja",
-      "messageCid": "bafyreicap2eleobmc7xavrplmbgafasfpknfpvfartoq22uf2uehbtf7da",
+      "descriptorCid": "bafyreievxbksd66mmsrii4zuitxjo7q6f23eggocrji2h7467uspdmwfpa",
+      "messageCid": "bafyreiezjef3662gc2lblximuucoinwq67yde3ivrle6jsec5ziv7yk6du",
       "message": {
         "descriptor": {
           "interface": "Records",
           "method": "Subscribe",
           "messageTimestamp": "2025-01-01T00:00:08.000000Z",
           "filter": {
-            "protocol": "http://example.com/protocol"
+            "module": "http://example.com/protocol"
           }
         }
       }
@@ -224,7 +226,9 @@
           "interface": "Messages",
           "method": "Subscribe",
           "messageTimestamp": "2025-01-01T00:00:13.000000Z",
-          "permissionGrantIds": ["grant-message-subscribe-123"]
+          "permissionGrantIds": [
+            "grant-message-subscribe-123"
+          ]
         }
       }
     },

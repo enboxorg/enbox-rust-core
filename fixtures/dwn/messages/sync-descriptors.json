@@ -14,15 +14,15 @@
       "id": "messages-sync-root-protocol",
       "description": "MessagesSync root request scoped to a protocol.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreieykhu5avbofples6p3nf64qx2p7owgq6qpi5x22qavlzpc43dhd4",
-      "messageCid": "bafyreiexrwjg743psdfgk4uqxjxyomsflpazlwf56t2752uhh4dfb56cne",
+      "descriptorCid": "bafyreic7cs2u75xsv74d6vbhns5z4fspkvnsequq3mirrnosai3uxfv6cy",
+      "messageCid": "bafyreihkz2n5h4skvug22pnpsw7v4ioikffimvkw22pt5czwok44yrq4pi",
       "message": {
         "descriptor": {
           "interface": "Messages",
           "method": "Sync",
           "messageTimestamp": "2025-01-01T00:02:00.000000Z",
           "action": "root",
-          "protocol": "http://example.com/protocol"
+          "module": "http://example.com/protocol"
         }
       }
     },
@@ -61,15 +61,15 @@
       "id": "messages-sync-subtree-protocol",
       "description": "MessagesSync subtree hash request for a protocol-scoped bit prefix.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreidakki2xoyyxstvfuhzs3xdfrkjsyzuajil2cjs6uwsqnxbm2d7n4",
-      "messageCid": "bafyreic7yhv6ucuatvyyyr4ujd5yh3sbmaq6wfjhna6kbfdxpvysp22kci",
+      "descriptorCid": "bafyreig5y24ggou3c4ywqnoja6nyf43v6zguofscq6t66wtr3hfh5ktwk4",
+      "messageCid": "bafyreicckmngegikituh4cw2qr7oiwslqlqwjvwudwe7tnd2zkfufn2724",
       "message": {
         "descriptor": {
           "interface": "Messages",
           "method": "Sync",
           "messageTimestamp": "2025-01-01T00:02:05.000000Z",
           "action": "subtree",
-          "protocol": "http://example.com/protocol",
+          "module": "http://example.com/protocol",
           "prefix": "1010"
         }
       }
@@ -94,15 +94,15 @@
       "id": "messages-sync-leaves-protocol",
       "description": "MessagesSync leaves request for a protocol-scoped bit prefix.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreidoqv6oqq26piovf23zghphgva7tol6b3ikznq7tadeealgynilty",
-      "messageCid": "bafyreib4hgnuv4xtyai5em5dncgkllb4jgnylp27rvl33ovtp5gpu5waiq",
+      "descriptorCid": "bafyreiaenpynhrsro7bp35qykdpyaqw7fkzybhbe6fkefmhglok7aksmwe",
+      "messageCid": "bafyreihdlkdmcead6fpg367lpvbnhrtbntgclgiuhi2oehreokwaeidazi",
       "message": {
         "descriptor": {
           "interface": "Messages",
           "method": "Sync",
           "messageTimestamp": "2025-01-01T00:02:06.000000Z",
           "action": "leaves",
-          "protocol": "http://example.com/protocol",
+          "module": "http://example.com/protocol",
           "prefix": "1010"
         }
       }
@@ -131,19 +131,19 @@
       "id": "messages-sync-diff-protocol",
       "description": "MessagesSync diff request containing protocol-scoped client subtree hashes.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreihe4yz6qvbevwtprsnhq3tvxnpakcjqn5nluncwsvpinnpuxxwkn4",
-      "messageCid": "bafyreihgjuknrzittk4w5pg4wzhlqlhiosa5j4rczz5k674kmhme43ji3m",
+      "descriptorCid": "bafyreibighkfyevaaip324tgkrnl5bqs2pspvi72brdegshbefdi7vr7ky",
+      "messageCid": "bafyreifw4oh4acepsyb5afjmlca2ldkt7sn7rjpojwkcalyralgn6v2tbq",
       "message": {
         "descriptor": {
           "interface": "Messages",
           "method": "Sync",
           "messageTimestamp": "2025-01-01T00:02:07.000000Z",
           "action": "diff",
-          "protocol": "http://example.com/protocol",
+          "module": "http://example.com/protocol",
           "depth": 3,
           "hashes": {
-            "000": "0000000000000000000000000000000000000000000000000000000000000000",
-            "101": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            "101": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            "000": "0000000000000000000000000000000000000000000000000000000000000000"
           }
         }
       }

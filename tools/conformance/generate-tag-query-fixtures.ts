@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +15,12 @@ const { Message } = await import(
 );
 
 const tenant = CONFORMANCE_ALICE_DID;
+
+// Provenance pin: generated vectors must match .enbox-version.
+const pin = readFileSync(resolve(repoRoot, '.enbox-version'), 'utf8')
+  .split('\n')
+  .map((line) => line.trim())
+  .find((line) => line !== '' && !line.startsWith('#'))!;
 
 async function buildTaggedWrite(options: {
   id: string;
@@ -121,7 +127,7 @@ const fixture = {
   source: {
     package: '@enbox/dwn-sdk-js',
     repository: 'enboxorg/enbox',
-    commit: 'c63bf424ac0997583db825e8a5fddf1507d30c40',
+    commit: pin,
     functions: ['RecordsWrite.create', 'RecordsQuery.create', 'Message.getCid'],
   },
   seedSets,

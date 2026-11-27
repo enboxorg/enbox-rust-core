@@ -3,12 +3,12 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "functions": [
       "RecordsWrite.create",
-      "PermissionsProtocol.requestPath",
-      "PermissionsProtocol.grantPath",
-      "PermissionsProtocol.revocationPath",
+      "PermissionsModule.requestPath",
+      "PermissionsModule.grantPath",
+      "PermissionsModule.revocationPath",
       "Encoder.objectToBytes",
       "Cid.computeCid",
       "Cid.computeDagPbCidFromBytes"
@@ -17,7 +17,7 @@
   "cases": [
     {
       "id": "permissions-request-records-write",
-      "description": "Signed PermissionsProtocol request RecordsWrite with a Records.Write protocolPath scope and protocol tag.",
+      "description": "request permission record written to the Permissions module.",
       "rustStatus": "supported",
       "permissionKind": "request",
       "permissionData": {
@@ -26,53 +26,49 @@
         "scope": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/notes",
-          "protocolPath": "note"
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
         },
         "conditions": {
           "publication": "Required"
         }
       },
       "expected": {
-        "protocol": "https://identity.foundation/dwn/permissions",
-        "protocolPath": "request",
-        "tags": {
-          "protocol": "https://example.com/protocol/notes"
-        }
+        "statusCode": 202
       },
-      "cid": "bafkreiarbxyibwglfrpizxngz6uzqwk64xdk3mz7psf46usqjvlz4kajb4",
-      "dataCid": "bafkreiarbxyibwglfrpizxngz6uzqwk64xdk3mz7psf46usqjvlz4kajb4",
-      "dataSize": 234,
+      "cid": "bafkreicfwhnd4itre23papd4jbxe2b6bjdeam6uw4fwjn7epvu3tl73gxe",
+      "dataCid": "bafkreicfwhnd4itre23papd4jbxe2b6bjdeam6uw4fwjn7epvu3tl73gxe",
+      "dataSize": 230,
       "data": {
         "encoding": "utf8",
-        "value": "{\"description\":\"Request write access to protocol notes.\",\"delegated\":false,\"scope\":{\"interface\":\"Records\",\"method\":\"Write\",\"protocol\":\"https://example.com/protocol/notes\",\"protocolPath\":\"note\"},\"conditions\":{\"publication\":\"Required\"}}"
+        "value": "{\"description\":\"Request write access to protocol notes.\",\"delegated\":false,\"scope\":{\"interface\":\"Records\",\"method\":\"Write\",\"module\":\"https://example.com/protocol/notes\",\"modulePath\":\"note\"},\"conditions\":{\"publication\":\"Required\"}}"
       },
-      "descriptorCid": "bafyreidrzp5uhtavttogksubwyw5wurkcybu7yejm4sqcdejbdn7vysrhu",
-      "messageCid": "bafyreiaa55vw6jq2yz4kwrirx4epy6deo2qpaunc3prdf5vqlkiv2y6v3y",
+      "descriptorCid": "bafyreicofjnt2btea2aleytovvpgmewqtglqy3av5l46iekzym6jri7kle",
+      "messageCid": "bafyreibjvrn3raqto7ky3pfum7nk2brfd6ivi5pjhy6y56jjjbsqmwo7um",
       "message": {
-        "recordId": "bafyreideqv6tfwj2ig4tjwlt5jgly6u2tgsmymcbqxinkyxcbgg22a6n5u",
+        "recordId": "bafyreifqixllty5dijeldge6roz5zdtfrnivf355fwjdmilfps64a3g7uu",
         "descriptor": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://identity.foundation/dwn/permissions",
-          "protocolPath": "request",
+          "module": "https://identity.foundation/dwn/permissions",
+          "modulePath": "request",
           "tags": {
-            "protocol": "https://example.com/protocol/notes"
+            "module": "https://example.com/protocol/notes"
           },
-          "dataCid": "bafkreiarbxyibwglfrpizxngz6uzqwk64xdk3mz7psf46usqjvlz4kajb4",
-          "dataSize": 234,
-          "dateCreated": "2025-01-01T00:02:00.000000Z",
+          "dataCid": "bafkreicfwhnd4itre23papd4jbxe2b6bjdeam6uw4fwjn7epvu3tl73gxe",
+          "dataSize": 230,
+          "dateCreated": "2026-11-27T21:02:09.241000Z",
           "messageTimestamp": "2025-01-01T00:02:00.000000Z",
           "dataFormat": "application/json"
         },
-        "contextId": "bafyreideqv6tfwj2ig4tjwlt5jgly6u2tgsmymcbqxinkyxcbgg22a6n5u",
+        "contextId": "bafyreifqixllty5dijeldge6roz5zdtfrnivf355fwjdmilfps64a3g7uu",
         "authorization": {
           "signature": {
-            "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWlkZXF2NnRmd2oyaWc0dGp3bHQ1amdseTZ1MnRnc215bWNicXhpbmt5eGNiZ2cyMmE2bjV1IiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlkcnpwNXVodGF2dHRvZ2tzdWJ3eXc1d3Vya2N5YnU3eWVqbTRzcWNkZWpiZG43dnlzcmh1IiwiY29udGV4dElkIjoiYmFmeXJlaWRlcXY2dGZ3ajJpZzR0andsdDVqZ2x5NnUydGdzbXltY2JxeGlua3l4Y2JnZzIyYTZuNXUifQ",
+            "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWlmcWl4bGx0eTVkaWplbGRnZTZyb3o1emR0ZnJuaXZmMzU1ZndqZG1pbGZwczY0YTNnN3V1IiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWljb2ZqbnQyYnRlYTJhbGV5dG92dnBnbWV3cXRnbHF5M2F2NWw0Nmlla3p5bTZqcmk3a2xlIiwiY29udGV4dElkIjoiYmFmeXJlaWZxaXhsbHR5NWRpamVsZGdlNnJvejV6ZHRmcm5pdmYzNTVmd2pkbWlsZnBzNjRhM2c3dXUifQ",
             "signatures": [
               {
                 "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
-                "signature": "DU8S9ltuSFaCP_VbpDDVAc8H4wphBECtA6GMqmw5o4MeuwmXUX1THf7WwSfipZ43i0aukrW_G6FWfy4PkcBABg"
+                "signature": "_QhAX3TcdkpKPIvhmNHzEeVpltU_No5rmbC5NpNpl0ermb-qN8yHmJLrWPoFTt_5f7oO3blEmi4v1xo9aD1NDA"
               }
             ]
           }
@@ -81,66 +77,61 @@
     },
     {
       "id": "permissions-grant-records-write",
-      "description": "Signed PermissionsProtocol grant RecordsWrite with recipient, requestId, delegated scope, and protocol tag.",
+      "description": "grant permission record written to the Permissions module.",
       "rustStatus": "supported",
       "permissionKind": "grant",
       "permissionData": {
         "dateExpires": "2025-02-01T00:00:00.000000Z",
-        "requestId": "bafyreiaa55vw6jq2yz4kwrirx4epy6deo2qpaunc3prdf5vqlkiv2y6v3y",
+        "requestId": "bafyreifqixllty5dijeldge6roz5zdtfrnivf355fwjdmilfps64a3g7uu",
         "description": "Grant write access to protocol notes.",
         "delegated": true,
         "scope": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/notes",
-          "protocolPath": "note"
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
         },
         "conditions": {
           "publication": "Required"
         }
       },
       "expected": {
-        "recipient": "did:example:bob",
-        "protocol": "https://identity.foundation/dwn/permissions",
-        "protocolPath": "grant",
-        "tags": {
-          "protocol": "https://example.com/protocol/notes"
-        }
+        "statusCode": 202
       },
-      "cid": "bafkreig5nwatflcy3pux2dzt5djvkonryuy45vkutviguxdcee5rmj43f4",
-      "dataCid": "bafkreig5nwatflcy3pux2dzt5djvkonryuy45vkutviguxdcee5rmj43f4",
-      "dataSize": 349,
+      "cid": "bafkreiguad5zdmgexpqwh5mhe4g3ezyt77dcskxty7j2zmy45dosjrru3y",
+      "dataCid": "bafkreiguad5zdmgexpqwh5mhe4g3ezyt77dcskxty7j2zmy45dosjrru3y",
+      "dataSize": 345,
       "data": {
         "encoding": "utf8",
-        "value": "{\"dateExpires\":\"2025-02-01T00:00:00.000000Z\",\"requestId\":\"bafyreiaa55vw6jq2yz4kwrirx4epy6deo2qpaunc3prdf5vqlkiv2y6v3y\",\"description\":\"Grant write access to protocol notes.\",\"delegated\":true,\"scope\":{\"interface\":\"Records\",\"method\":\"Write\",\"protocol\":\"https://example.com/protocol/notes\",\"protocolPath\":\"note\"},\"conditions\":{\"publication\":\"Required\"}}"
+        "value": "{\"dateExpires\":\"2025-02-01T00:00:00.000000Z\",\"requestId\":\"bafyreifqixllty5dijeldge6roz5zdtfrnivf355fwjdmilfps64a3g7uu\",\"description\":\"Grant write access to protocol notes.\",\"delegated\":true,\"scope\":{\"interface\":\"Records\",\"method\":\"Write\",\"module\":\"https://example.com/protocol/notes\",\"modulePath\":\"note\"},\"conditions\":{\"publication\":\"Required\"}}"
       },
-      "descriptorCid": "bafyreicmsgqgl6y6agn24udem4bnvpi6nvws4zaw7dpqwanhkldjnqwity",
-      "messageCid": "bafyreibt53orcpk6vituo7sm2s7etwaa3x7hhfkjx6hwlpqixk7wglef3i",
+      "descriptorCid": "bafyreiaj2xl7logjfoj6n4pd3v6kayn5jbpggu4b47hbkz5vs7awqc6oba",
+      "messageCid": "bafyreidp6asb3hti676tfx3imvvniy7eiq22gbnwosg3h7necmdltwhyq4",
       "message": {
-        "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+        "recordId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
         "descriptor": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://identity.foundation/dwn/permissions",
-          "protocolPath": "grant",
+          "module": "https://identity.foundation/dwn/permissions",
+          "modulePath": "grant",
           "recipient": "did:example:bob",
           "tags": {
-            "protocol": "https://example.com/protocol/notes"
+            "module": "https://example.com/protocol/notes"
           },
-          "dataCid": "bafkreig5nwatflcy3pux2dzt5djvkonryuy45vkutviguxdcee5rmj43f4",
-          "dataSize": 349,
+          "dataCid": "bafkreiguad5zdmgexpqwh5mhe4g3ezyt77dcskxty7j2zmy45dosjrru3y",
+          "dataSize": 345,
           "dateCreated": "2025-01-01T00:02:01.000000Z",
           "messageTimestamp": "2025-01-01T00:02:01.000000Z",
           "dataFormat": "application/json"
         },
-        "contextId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+        "contextId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
         "authorization": {
           "signature": {
-            "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWljcmZqYTJubGlmaHliamdhZDJpeG82ajZsdGF6dXBsaXJ2dm4zeWJ2YXl6ZDdtNnVrbDNlIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWljbXNncWdsNnk2YWduMjR1ZGVtNGJudnBpNm52d3M0emF3N2RwcXdhbmhrbGRqbnF3aXR5IiwiY29udGV4dElkIjoiYmFmeXJlaWNyZmphMm5saWZoeWJqZ2FkMml4bzZqNmx0YXp1cGxpcnZ2bjN5YnZheXpkN202dWtsM2UifQ",
+            "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWllNG91eXd1Y2d2bnFnZWtnbGZuNnJpZ29mb2J3Zm1vcHlrc25zaGxjamw2dm81NnlzaWh1IiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlhajJ4bDdsb2dqZm9qNm40cGQzdjZrYXluNWpicGdndTRiNDdoYmt6NXZzN2F3cWM2b2JhIiwiY29udGV4dElkIjoiYmFmeXJlaWU0b3V5d3VjZ3ZucWdla2dsZm42cmlnb2ZvYndmbW9weWtzbnNobGNqbDZ2bzU2eXNpaHUifQ",
             "signatures": [
               {
                 "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
-                "signature": "dirhPt1NAY_Z9ggjRabHTDoRqjHY0hNPPYHTqKR1dO8y6HKgwvDZwjCWt9ZrzvhBZ91sEhFp8nTfsxZsQ4gaBQ"
+                "signature": "HUXULBjbOo4MAdKEzwNBaIm1tTuaWpnWUNB2e1_Bk5KANbitgZuaBiWftXem2sW9pV1oxfuBLuoU3raUbC2BCw"
               }
             ]
           }
@@ -149,20 +140,14 @@
     },
     {
       "id": "permissions-revocation-records-write",
-      "description": "Signed PermissionsProtocol revocation RecordsWrite nested under the grant record and carrying the grant protocol tag.",
+      "description": "revocation permission record written to the Permissions module.",
       "rustStatus": "supported",
       "permissionKind": "revocation",
       "permissionData": {
         "description": "Revoke delegated note write access."
       },
       "expected": {
-        "protocol": "https://identity.foundation/dwn/permissions",
-        "protocolPath": "grant/revocation",
-        "parentId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
-        "contextIdPrefix": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e/",
-        "tags": {
-          "protocol": "https://example.com/protocol/notes"
-        }
+        "statusCode": 202
       },
       "cid": "bafkreiffohybmygue6c6m72q6uwukhwvoh3zouyeeawgbvw2ln2cm3d23e",
       "dataCid": "bafkreiffohybmygue6c6m72q6uwukhwvoh3zouyeeawgbvw2ln2cm3d23e",
@@ -171,33 +156,33 @@
         "encoding": "utf8",
         "value": "{\"description\":\"Revoke delegated note write access.\"}"
       },
-      "descriptorCid": "bafyreiezuz5jqbqtrqvslsq6tvogq5qjtgayrzhtrmpj63dnvkbthrrshi",
-      "messageCid": "bafyreiev63lvwaxvhuna6h53yhwlmwj3fnsfyula2gq7smuucc6cecouse",
+      "descriptorCid": "bafyreiainhhjools6am6iztqrm7xuxcjul5pgogryqdqvvejj2fly6pbbm",
+      "messageCid": "bafyreiesynoocunu7ulqwa3auj3jwzdociytf5tqtfnr5zlkhxakq23soy",
       "message": {
-        "recordId": "bafyreiaf6cewhqqrnkg73hnlv5tzsjwoj2mzduw6mjm6gubzhdgcb3rjai",
+        "recordId": "bafyreihyb7nzqlj43rfjrahip4v7cjjzpk6pr5xqn6amxzufie5evdtvyq",
         "descriptor": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://identity.foundation/dwn/permissions",
-          "protocolPath": "grant/revocation",
+          "module": "https://identity.foundation/dwn/permissions",
+          "modulePath": "grant/revocation",
           "tags": {
-            "protocol": "https://example.com/protocol/notes"
+            "module": "https://example.com/protocol/notes"
           },
-          "parentId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "parentId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
           "dataCid": "bafkreiffohybmygue6c6m72q6uwukhwvoh3zouyeeawgbvw2ln2cm3d23e",
           "dataSize": 53,
-          "dateCreated": "2025-01-01T00:02:02.000000Z",
+          "dateCreated": "2026-11-27T21:02:09.255000Z",
           "messageTimestamp": "2025-01-01T00:02:02.000000Z",
           "dataFormat": "application/json"
         },
-        "contextId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e/bafyreiaf6cewhqqrnkg73hnlv5tzsjwoj2mzduw6mjm6gubzhdgcb3rjai",
+        "contextId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu/bafyreihyb7nzqlj43rfjrahip4v7cjjzpk6pr5xqn6amxzufie5evdtvyq",
         "authorization": {
           "signature": {
-            "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWlhZjZjZXdocXFybmtnNzNobmx2NXR6c2p3b2oybXpkdXc2bWptNmd1YnpoZGdjYjNyamFpIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWllenV6NWpxYnF0cnF2c2xzcTZ0dm9ncTVxanRnYXlyemh0cm1wajYzZG52a2J0aHJyc2hpIiwiY29udGV4dElkIjoiYmFmeXJlaWNyZmphMm5saWZoeWJqZ2FkMml4bzZqNmx0YXp1cGxpcnZ2bjN5YnZheXpkN202dWtsM2UvYmFmeXJlaWFmNmNld2hxcXJua2c3M2hubHY1dHpzandvajJtemR1dzZtam02Z3ViemhkZ2NiM3JqYWkifQ",
+            "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWloeWI3bnpxbGo0M3JmanJhaGlwNHY3Y2pqenBrNnByNXhxbjZhbXh6dWZpZTVldmR0dnlxIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlhaW5oaGpvb2xzNmFtNml6dHFybTd4dXhjanVsNXBnb2dyeXFkcXZ2ZWpqMmZseTZwYmJtIiwiY29udGV4dElkIjoiYmFmeXJlaWU0b3V5d3VjZ3ZucWdla2dsZm42cmlnb2ZvYndmbW9weWtzbnNobGNqbDZ2bzU2eXNpaHUvYmFmeXJlaWh5YjduenFsajQzcmZqcmFoaXA0djdjamp6cGs2cHI1eHFuNmFteHp1ZmllNWV2ZHR2eXEifQ",
             "signatures": [
               {
                 "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
-                "signature": "AZx_-z3QArDs_EEz-jovQJt5SbXm1MesF8naz9OjJph2OVFccAbZWwOBS8rfaeclg7_HfA730Ri70xxPShYDDQ"
+                "signature": "Pk3bov9eE21jbiJ1vVZqAaFlW7s5tljg8ETsgLv-rzMH0mg7PoGqWjMzK2De3z8C5jpiXTXteSiIVs39Tqn7CQ"
               }
             ]
           }

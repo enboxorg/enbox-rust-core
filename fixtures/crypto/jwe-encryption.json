@@ -3,8 +3,8 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
-    "note": "Deterministic A256CTR + X25519-HKDF-SHA256+A256KW vectors (pinned CEK/IV/ephemeral keys) covering protocolPath, roleAudience, and seal key wrapping; ciphertext and encryptedKey computed with the same primitives @enbox/dwn-sdk-js uses, verified via tools/conformance/typescript-jwe.test.ts."
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
+    "note": "Deterministic A256CTR + X25519-HKDF-SHA256+A256KW vectors (pinned CEK/IV/ephemeral keys) covering modulePath, roleAudience, and seal key wrapping; ciphertext and encryptedKey computed with the same primitives @enbox/dwn-sdk-js uses, verified via tools/conformance/typescript-jwe.test.ts."
   },
   "cases": [
     {
@@ -12,7 +12,7 @@
       "rustStatus": "supported",
       "keyAgreementAlgorithm": "X25519-HKDF-SHA256+A256KW",
       "contentEncryptionAlgorithm": "A256CTR",
-      "derivationScheme": "protocolPath",
+      "derivationScheme": "modulePath",
       "keyId": "HcofRtCgcAgsTvvmsjdr_4itCjPHXiPIGWudhtvdi94",
       "recipientPrivateJwk": {
         "kty": "OKP",
@@ -69,8 +69,8 @@
               "x": "TvZFDMyJNVuUxgmcZJXzEpLW0DhRKm6LiE4yxEByGQU",
               "kid": "did:example:alice#ephemeral"
             },
-            "encryptedKey": "arfE8YWfzaAP9IE9--WuBgYt2miRIKsbAufkxhwxBZlFGc1ldZ-xfA",
-            "derivationScheme": "protocolPath"
+            "encryptedKey": "G5aggvFpH4YSP24nWAQt_Hkb4eCGuMCxLPT3PYF-Lgu8i4b5oTvDpA",
+            "derivationScheme": "modulePath"
           }
         ]
       },
@@ -78,8 +78,8 @@
         "descriptor": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/jwe",
-          "protocolPath": "thread/message",
+          "module": "https://example.com/protocol/jwe",
+          "modulePath": "thread/message",
           "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
           "dataSize": 38,
           "dataFormat": "text/plain"
@@ -99,17 +99,17 @@
                 "x": "TvZFDMyJNVuUxgmcZJXzEpLW0DhRKm6LiE4yxEByGQU",
                 "kid": "did:example:alice#ephemeral"
               },
-              "encryptedKey": "arfE8YWfzaAP9IE9--WuBgYt2miRIKsbAufkxhwxBZlFGc1ldZ-xfA",
-              "derivationScheme": "protocolPath"
+              "encryptedKey": "G5aggvFpH4YSP24nWAQt_Hkb4eCGuMCxLPT3PYF-Lgu8i4b5oTvDpA",
+              "derivationScheme": "modulePath"
             }
           ]
         }
       },
       "derivedPrivateJwk": {
         "rootKeyId": "did:example:alice#enc",
-        "derivationScheme": "protocolPath",
+        "derivationScheme": "modulePath",
         "derivationPath": [
-          "protocolPath",
+          "modulePath",
           "https://example.com/protocol/jwe",
           "thread",
           "message"
@@ -130,7 +130,7 @@
       "contentEncryptionAlgorithm": "A256CTR",
       "derivationScheme": "roleAudience",
       "keyId": "q55ii2awy_tAqBl_rb_KHiuk7qccp09gN5GrgavuOY0",
-      "protocol": "https://example.com/protocol/notes",
+      "module": "https://example.com/protocol/notes",
       "rolePath": "member",
       "recipientPrivateJwk": {
         "kty": "OKP",
@@ -189,7 +189,7 @@
             },
             "encryptedKey": "Zu-1SLMTdznzjGOlGdWBLQHxbZFOlxT3pCTXN17aH2dhf93r6sxL9w",
             "derivationScheme": "roleAudience",
-            "protocol": "https://example.com/protocol/notes",
+            "module": "https://example.com/protocol/notes",
             "rolePath": "member"
           }
         ]
@@ -198,7 +198,7 @@
         "descriptor": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "dataCid": "bafkreiantkxywpgv6ysrifwk3zi67i77o4yxxaup2oawms5l3n7khq2vfm",
           "dataSize": 38,
           "dataFormat": "text/plain"
@@ -220,7 +220,7 @@
               },
               "encryptedKey": "Zu-1SLMTdznzjGOlGdWBLQHxbZFOlxT3pCTXN17aH2dhf93r6sxL9w",
               "derivationScheme": "roleAudience",
-              "protocol": "https://example.com/protocol/notes",
+              "module": "https://example.com/protocol/notes",
               "rolePath": "member"
             }
           ]
@@ -258,7 +258,7 @@
         "keyId": "qKpn4plbkMfU3yWDjgvuQc0qGzvQJn031umInc0PnAE"
       },
       "sealContext": {
-        "protocol": "https://example.org/protocols/seal-fixture",
+        "module": "https://example.org/protocols/seal-fixture",
         "rolePath": "chat/member",
         "contextId": "root/thread",
         "audienceKeyId": "wGUj0R5Q0vED7B2EW4GFOCqJB1XXTPm6pIjixu2psL4"

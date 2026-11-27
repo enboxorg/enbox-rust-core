@@ -15,7 +15,7 @@ type CoverageCase = {
   id: string;
   grantKeyCoverage: {
     grantScope: Record<string, unknown>;
-    deliveredScope: { protocol: string; protocolPath?: string };
+    deliveredScope: { module: string; modulePath?: string };
     definition?: string;
     expectedEligible: boolean;
     expectedCovers: boolean;
@@ -61,7 +61,7 @@ describe('grant-key Read coverage', () => {
         ? grantKeyScopeCoversDeliveredScope({
           grantScope,
           deliveredScope,
-          protocolDefinition:
+          moduleDefinition:
               definition === undefined ? undefined : fixture.definitions[definition],
         })
         : false;

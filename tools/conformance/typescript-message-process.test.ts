@@ -55,7 +55,6 @@ type TestStoresModule = {
     get(): {
       messageStore: unknown;
       dataStore: unknown;
-      stateIndex: unknown;
       resumableTaskStore: unknown;
     };
   };
@@ -195,7 +194,6 @@ async function openDwn(): Promise<DwnInstance> {
     didResolver,
     messageStore: stores.messageStore,
     dataStore: stores.dataStore,
-    stateIndex: stores.stateIndex,
     eventLog: TestEventLog.get(),
     resumableTaskStore: stores.resumableTaskStore,
   }) as Promise<DwnInstance>;

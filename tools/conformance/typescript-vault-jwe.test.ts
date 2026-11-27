@@ -115,21 +115,27 @@ describe('vault at-rest JWE interop', () => {
     expect(Buffer.from(data).toString('base64url')).toBe(blob.inputs.dataPlaintext);
   });
 
-  test('pinned implementation still opens its own fixture', async () => {
+  test('pinned implementation still opens its own fixture (v1 and v2)', async () => {
     const fixture = JSON.parse(await readFile(tsFixturePath, 'utf8'));
-    const contentEncryptionKey = await unlockCek(
-      fixture.vector.contentEncryptionKey,
-      fixture.inputs.password
-    );
-    const { plaintext: didBytes } = await CompactJwe.decrypt({
-      jwe: fixture.vector.did,
-      key: contentEncryptionKey,
-      keyManager: new LocalKeyManager(),
-      options: { allowedAlgs: ['dir'], allowedEncs: ['A256GCM'], minP2cCount: 1 },
-    });
-    const portableDid = Convert.uint8Array(didBytes).toObject();
-    assertAgentDocumentShape(portableDid, fixture.vector.portableDidUri);
-    const bearerDid = await BearerDid.import({ portableDid });
-    expect(bearerDid.uri).toBe(fixture.vector.portableDidUri);
+    const profiles = fixture.profiles ?? { default: fixture.vector };
+    for (const [label, vector] of Object.entries<Record<string, string>>(profiles)) {
+      const contentEncryptionKey = await unlockCek(
+        vector.contentEncryptionKey,
+        fixture.inputs.password
+      );
+      const { plaintext: didBytes } = await CompactJwe.decrypt({
+        jwe: vector.did,
+        key: contentEncryptionKey,
+        keyManager: new LocalKeyManager(),
+        options: { allowedAlgs: ['dir'], allowedEncs: ['A256GCM'], minP2cCount: 1 },
+      });
+      const portableDid = Convert.uint8Array(didBytes).toObject();
+      assertAgentDocumentShape(portableDid, vector.portableDidUri);
+      const bearerDid = await BearerDid.import({ portableDid });
+      expect(bearerDid.uri).toBe(vector.portableDidUri);
+
+      const status = JSON.parse(vector.vaultStatus);
+      expect(status.derivationVersion).toBe(label === 'v1' ? 1 : 2);
+    }
   });
 });

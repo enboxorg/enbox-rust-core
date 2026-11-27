@@ -25,7 +25,10 @@
       "id": "state-index-global-protocol-delete",
       "description": "StateIndex operations covering empty roots, global/protocol insertions, tenant isolation, subtree hashes, leaves, and deletes.",
       "rustStatus": "supported",
-      "tenants": ["did:example:alice", "did:example:bob"],
+      "tenants": [
+        "did:example:alice",
+        "did:example:bob"
+      ],
       "prefixes": {
         "note1First8Bits": "00010100"
       },
@@ -38,7 +41,7 @@
         {
           "type": "getProtocolRoot",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
         },
         {
@@ -52,7 +55,7 @@
           "tenant": "did:example:alice",
           "messageCid": "bafyreigyk7urkpepubmp5mzmebds6c6nutoohrf2mbecstmynw333prpie",
           "indexes": {
-            "interface": "Protocols",
+            "interface": "Modules",
             "method": "Configure"
           }
         },
@@ -63,8 +66,8 @@
           "indexes": {
             "interface": "Records",
             "method": "Write",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note"
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note"
           }
         },
         {
@@ -74,8 +77,8 @@
           "indexes": {
             "interface": "Records",
             "method": "Write",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note"
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note"
           }
         },
         {
@@ -85,8 +88,8 @@
           "indexes": {
             "interface": "Records",
             "method": "Write",
-            "protocol": "https://example.com/protocol/chat",
-            "protocolPath": "thread"
+            "module": "https://example.com/protocol/chat",
+            "modulePath": "thread"
           }
         },
         {
@@ -97,19 +100,19 @@
         {
           "type": "getProtocolRoot",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "expected": "fb369b80738fefcd406fa18e211d4425432399a0d62c64392bd0d5169a97a3f4"
         },
         {
           "type": "getProtocolRoot",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/chat",
+          "module": "https://example.com/protocol/chat",
           "expected": "7ed3e96de1e7f5f8119e778aa41a4b4805e64cf3094c0489cdee772bc8bc7b99"
         },
         {
           "type": "getProtocolRoot",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/unknown",
+          "module": "https://example.com/protocol/unknown",
           "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
         },
         {
@@ -127,7 +130,7 @@
         {
           "type": "getProtocolSubtreeHash",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "prefix": "0",
           "expected": "df04fd049956ad3b1945b07a3711316fb2f6a70c441c3571691a69abd17cf7cc"
         },
@@ -146,12 +149,14 @@
           "type": "getLeaves",
           "tenant": "did:example:alice",
           "prefix": "00010100",
-          "expected": ["bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi"]
+          "expected": [
+            "bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi"
+          ]
         },
         {
           "type": "getProtocolLeaves",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "prefix": "",
           "expected": [
             "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty",
@@ -161,7 +166,9 @@
         {
           "type": "delete",
           "tenant": "did:example:alice",
-          "messageCids": ["bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi"]
+          "messageCids": [
+            "bafyreifbgjgqxlmmpu7uflhzdl6hss2oasjlh3iqaawlkaljo2wieiltxi"
+          ]
         },
         {
           "type": "getRoot",
@@ -171,15 +178,17 @@
         {
           "type": "getProtocolRoot",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "expected": "6fd35d20ba5522f54dce0a1f121a40e6a3f6ff4a5cd2ef385600cacdff6a06b0"
         },
         {
           "type": "getProtocolLeaves",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "prefix": "",
-          "expected": ["bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty"]
+          "expected": [
+            "bafyreief4n6h2bbrm24j6chozaft4mgvh26zvl57rufoqia4s77i5zj3ty"
+          ]
         },
         {
           "type": "insert",
@@ -188,8 +197,8 @@
           "indexes": {
             "interface": "Records",
             "method": "Write",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note"
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note"
           }
         },
         {
@@ -205,9 +214,11 @@
         {
           "type": "getProtocolLeaves",
           "tenant": "did:example:bob",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "prefix": "",
-          "expected": ["bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e"]
+          "expected": [
+            "bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e"
+          ]
         },
         {
           "type": "delete",
@@ -226,13 +237,13 @@
         {
           "type": "getProtocolRoot",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/notes",
+          "module": "https://example.com/protocol/notes",
           "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
         },
         {
           "type": "getProtocolRoot",
           "tenant": "did:example:alice",
-          "protocol": "https://example.com/protocol/chat",
+          "module": "https://example.com/protocol/chat",
           "expected": "b178c245c947ea7e21ecede07728941a6ab1b706143c06873baff8ebd6de6308"
         },
         {
@@ -243,7 +254,9 @@
         {
           "type": "delete",
           "tenant": "did:example:bob",
-          "messageCids": ["bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e"]
+          "messageCids": [
+            "bafyreibivcteiebz2ttjpcctrqttvmnfkd2fxqapiqdncayyekv5gebj6e"
+          ]
         },
         {
           "type": "getRoot",
