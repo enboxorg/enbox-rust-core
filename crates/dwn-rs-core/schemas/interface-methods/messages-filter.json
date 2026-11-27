@@ -4,11 +4,17 @@
   "type": "object",
   "additionalProperties": false,
   "minProperties": 1,
+  "not": {
+    "required": [
+      "modulePath",
+      "modulePathPrefix"
+    ]
+  },
   "properties": {
     "interface": {
       "enum": [
         "Messages",
-        "Protocols",
+        "Modules",
         "Records"
       ],
       "type": "string"
@@ -21,10 +27,13 @@
       ],
       "type": "string"
     },
-    "protocol": {
+    "module": {
       "type": "string"
     },
-    "protocolPathPrefix": {
+    "modulePath": {
+      "type": "string"
+    },
+    "modulePathPrefix": {
       "type": "string"
     },
     "contextIdPrefix": {

@@ -83,7 +83,7 @@ where
         .map_err(|error| match error {
             ProtocolDefinitionLookupError::NotFound(uri) => {
                 ControlValidationError::Dwn(DwnError::new(
-                    DwnErrorCode::ProtocolAuthorizationProtocolNotFound,
+                    DwnErrorCode::ModuleAuthorizationModuleNotFound,
                     format!("unable to find protocol definition for {uri}"),
                 ))
             }
@@ -134,7 +134,7 @@ pub(crate) fn verify_stored_create_action(
 
     if rule_set.actions.is_empty() {
         return Err(control_error(
-            DwnErrorCode::ProtocolAuthorizationStoredInitialWriteActionRulesNotFound,
+            DwnErrorCode::ModuleAuthorizationStoredInitialWriteActionRulesNotFound,
             "no create action rule defined for the stored control record",
         ));
     }
@@ -173,7 +173,7 @@ pub(crate) fn verify_stored_create_action(
     }
 
     Err(control_error(
-        DwnErrorCode::ProtocolAuthorizationStoredInitialWriteActionNotAllowed,
+        DwnErrorCode::ModuleAuthorizationStoredInitialWriteActionNotAllowed,
         "the stored control record is not allowed by the resolved protocol configuration",
     ))
 }

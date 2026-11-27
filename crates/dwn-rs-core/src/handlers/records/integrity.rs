@@ -63,7 +63,7 @@ where
     let has_envelope = fields.encryption.is_some();
     if policy.encryption_required && !has_envelope {
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
+            DwnErrorCode::ModuleAuthorizationEncryptionRequired,
             format!(
                 "type '{type_name}' requires encryption but message has no encryption metadata"
             ),
@@ -72,7 +72,7 @@ where
     }
     if !policy.encryption_required && has_envelope {
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationEncryptionNotAllowed,
+            DwnErrorCode::ModuleAuthorizationEncryptionNotAllowed,
             format!("type '{type_name}' requires plaintext but message has encryption metadata"),
         )
         .into());
@@ -86,7 +86,7 @@ where
                     .map_err(|error| RecordsWriteValidationError::Internal(error.to_string()))?;
                 let Some(envelope) = fields.encryption.as_ref() else {
                     return Err(DwnError::new(
-                        DwnErrorCode::ProtocolAuthorizationEncryptionRequired,
+                        DwnErrorCode::ModuleAuthorizationEncryptionRequired,
                         format!(
                             "type '{type_name}' requires encryption but message has no encryption metadata"
                         ),
@@ -98,7 +98,7 @@ where
                 });
                 if !has_protocol_path_entry {
                     return Err(DwnError::new(
-                        DwnErrorCode::ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
+                        DwnErrorCode::ModuleAuthorizationEncryptionModulePathEntryMissing,
                         format!(
                             "encrypted record is missing a protocolPath keyEncryption entry for '{protocol_path}'"
                         ),
@@ -120,7 +120,7 @@ where
                     && descriptor.protocol_path == ENCRYPTION_PROTOCOL_GRANT_KEY_PATH;
                 if !dynamic_recipient {
                     return Err(DwnError::new(
-                        DwnErrorCode::ProtocolAuthorizationEncryptionKeyAgreementMissing,
+                        DwnErrorCode::ModuleAuthorizationEncryptionKeyAgreementMissing,
                         format!("encrypted protocol path '{protocol_path}' has no $keyAgreement"),
                     )
                     .into());
@@ -131,7 +131,7 @@ where
 
     if rule_set.immutable == Some(true) && !is_initial_write(message, author)? {
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationImmutableRecord,
+            DwnErrorCode::ModuleAuthorizationImmutableRecord,
             format!(
                 "record at protocol path '{protocol_path}' is immutable: updates are not allowed."
             ),
@@ -177,9 +177,9 @@ where
                 // client-facing reply; the replication apply layer classifies a prune
                 // as terminal locally. See `record_has_prune`.
                 let code = if parent_protocol != descriptor.protocol {
-                    DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound
+                    DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound
                 } else {
-                    DwnErrorCode::ProtocolAuthorizationParentRecordNotFound
+                    DwnErrorCode::ModuleAuthorizationParentRecordNotFound
                 };
                 DwnError::new(
                     code,
@@ -198,7 +198,7 @@ where
         let expected_path = format!("{}/{type_name}", parent_descriptor.protocol_path);
         if expected_path != descriptor.protocol_path {
             return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationIncorrectProtocolPath,
+                DwnErrorCode::ModuleAuthorizationIncorrectModulePath,
                 format!(
                     "declared protocol path '{}' does not extend parent path '{}'",
                     descriptor.protocol_path, parent_descriptor.protocol_path
@@ -208,13 +208,13 @@ where
         }
         let parent_context = context_id(&parent).ok_or_else(|| {
             DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                DwnErrorCode::ModuleAuthorizationIncorrectContextId,
                 "parent contextId is required",
             )
         })?;
         let record_id = message_record_id(message).ok_or_else(|| {
             DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                DwnErrorCode::ModuleAuthorizationIncorrectContextId,
                 "recordId is required",
             )
         })?;
@@ -225,13 +225,13 @@ where
             .clone()
             .ok_or_else(|| {
                 DwnError::new(
-                    DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                    DwnErrorCode::ModuleAuthorizationIncorrectContextId,
                     "contextId is required",
                 )
             })?;
         if context_id != expected_context {
             return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationIncorrectContextId,
+                DwnErrorCode::ModuleAuthorizationIncorrectContextId,
                 format!(
                     "declared contextId '{context_id}' is not the expected '{expected_context}'"
                 ),
@@ -240,7 +240,7 @@ where
         }
     } else if descriptor.protocol_path.contains('/') {
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationParentlessIncorrectProtocolPath,
+            DwnErrorCode::ModuleAuthorizationParentlessIncorrectModulePath,
             format!(
                 "declared protocol path '{}' is not valid for records with no parent",
                 descriptor.protocol_path
@@ -307,7 +307,7 @@ where
             .collect();
         if matching_entries.is_empty() {
             return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing,
+                DwnErrorCode::ModuleAuthorizationEncryptionRoleAudienceEntryMissing,
                 format!(
                     "encrypted record is missing a roleAudience keyEncryption entry for role '{role_path}'"
                 ),
@@ -336,7 +336,7 @@ where
         }
         if !missing_key_ids.is_empty() {
             return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceMissing,
+                DwnErrorCode::ModuleAuthorizationEncryptionRoleAudienceMissing,
                 format!(
                     "encrypted record references no retained audience for protocol '{protocol}', role '{role_path}', context '{audience_context}', and key IDs [{}]",
                     missing_key_ids.join(", ")

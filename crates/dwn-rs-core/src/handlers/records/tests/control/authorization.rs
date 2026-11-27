@@ -293,7 +293,7 @@ async fn a_missing_protocol_is_not_reported_as_an_invalid_role() {
     let reply = handler.run(CONTROL_TENANT, &write, Some(data)).await;
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationProtocolNotFound"),
+        Some("ModuleAuthorizationModuleNotFound"),
         "a missing protocol must stay a missing dependency: {}",
         reply.status.detail
     );

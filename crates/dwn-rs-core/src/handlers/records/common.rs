@@ -1070,7 +1070,7 @@ where
                 .and_then(|uses| uses.get(parsed.alias))
                 .ok_or_else(|| {
                     DwnError::new(
-                        DwnErrorCode::ProtocolAuthorizationNotARole,
+                        DwnErrorCode::ModuleAuthorizationNotARole,
                         format!(
                             "cross-protocol role alias '{}' in '{invoked_role}' does not exist in the protocol's uses map",
                             parsed.alias
@@ -1096,13 +1096,13 @@ where
             .await
             .map_err(|error| match error {
                 ProtocolDefinitionLookupError::NotFound(_) => DwnError::new(
-                    DwnErrorCode::ProtocolAuthorizationProtocolNotFound,
+                    DwnErrorCode::ModuleAuthorizationModuleNotFound,
                     format!(
                         "referenced protocol '{role_protocol}' is not defined at {evaluation_timestamp}"
                     ),
                 ),
                 other => DwnError::new(
-                    DwnErrorCode::ProtocolAuthorizationNotARole,
+                    DwnErrorCode::ModuleAuthorizationNotARole,
                     other.to_string(),
                 ),
             })?;
@@ -1116,14 +1116,14 @@ where
     };
     if !is_role {
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationNotARole,
+            DwnErrorCode::ModuleAuthorizationNotARole,
             format!("protocol path '{invoked_role}' does not match a role record type"),
         ));
     }
 
     if role_audience_context_id(&role_path, context_id).is_none() {
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationMissingContextId,
+            DwnErrorCode::ModuleAuthorizationMissingContextId,
             format!(
                 "could not verify role '{invoked_role}' because contextId is missing or too shallow"
             ),
@@ -1141,13 +1141,13 @@ where
     .await
     .map_err(|detail| {
         DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationMatchingRoleRecordNotFound,
+            DwnErrorCode::ModuleAuthorizationMatchingRoleRecordNotFound,
             detail,
         )
     })?;
     let Some(role_record) = role_record else {
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationMatchingRoleRecordNotFound,
+            DwnErrorCode::ModuleAuthorizationMatchingRoleRecordNotFound,
             format!("no matching role record found for protocol path '{role_path}'"),
         ));
     };
@@ -2467,7 +2467,7 @@ mod tests {
             Descriptor::Protocols(protocols)
                 if matches!(protocols.as_ref(), crate::descriptors::Protocols::Configure(_))
         );
-        assert!(is_configure, "seeded message must be a ProtocolsConfigure");
+        assert!(is_configure, "seeded message must be a ModulesConfigure");
         let indexes = BTreeMap::from([
             (
                 "interface".to_string(),

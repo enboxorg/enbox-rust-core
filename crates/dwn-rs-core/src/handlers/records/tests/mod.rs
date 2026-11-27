@@ -1574,7 +1574,7 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     assert_eq!(reply.status.code, 409);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationSquashBackstop")
+        Some("ModuleAuthorizationSquashBackstop")
     );
     assert_eq!(
         reply
@@ -1790,12 +1790,12 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
         assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
         assert_eq!(
             reply.status.error_code.as_deref(),
-            Some("ProtocolAuthorizationImmutableRecord")
+            Some("ModuleAuthorizationImmutableRecord")
         );
         assert_eq!(
             reply.status.detail,
             format!(
-                "ProtocolAuthorizationImmutableRecord: record at protocol path '{path}' is immutable: updates are not allowed."
+                "ModuleAuthorizationImmutableRecord: record at protocol path '{path}' is immutable: updates are not allowed."
             )
         );
     }
@@ -3741,7 +3741,7 @@ async fn records_write_encrypted_path_without_envelope_is_rejected() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRequired")
+        Some("ModuleAuthorizationEncryptionRequired")
     );
 }
 
@@ -3764,7 +3764,7 @@ async fn records_write_plaintext_path_with_envelope_is_rejected() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionNotAllowed")
+        Some("ModuleAuthorizationEncryptionNotAllowed")
     );
 }
 
@@ -3788,7 +3788,7 @@ async fn records_write_encrypted_path_without_path_key_is_rejected() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionKeyAgreementMissing")
+        Some("ModuleAuthorizationEncryptionKeyAgreementMissing")
     );
 }
 
@@ -3812,7 +3812,7 @@ async fn records_write_encrypted_path_with_wrong_entry_is_rejected() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionProtocolPathEntryMissing")
+        Some("ModuleAuthorizationEncryptionModulePathEntryMissing")
     );
 
     let role_only = envelope_with_entries(vec![role_audience_entry()]);
@@ -3827,7 +3827,7 @@ async fn records_write_encrypted_path_with_wrong_entry_is_rejected() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionProtocolPathEntryMissing")
+        Some("ModuleAuthorizationEncryptionModulePathEntryMissing")
     );
 }
 
@@ -3883,7 +3883,7 @@ async fn records_write_role_audience_distinguishes_entry_from_audience_dependenc
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRoleAudienceEntryMissing")
+        Some("ModuleAuthorizationEncryptionRoleAudienceEntryMissing")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed_value(&missing_entry), false),
@@ -3904,7 +3904,7 @@ async fn records_write_role_audience_distinguishes_entry_from_audience_dependenc
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRoleAudienceMissing")
+        Some("ModuleAuthorizationEncryptionRoleAudienceMissing")
     );
     assert!(reply.status.detail.contains("missing-key"));
     assert_eq!(
@@ -4129,7 +4129,7 @@ async fn records_write_role_audience_uses_the_timestamped_definition() {
     let reply = handler.run(TENANT, &current, write_data()).await;
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRoleAudienceEntryMissing")
+        Some("ModuleAuthorizationEncryptionRoleAudienceEntryMissing")
     );
 }
 
@@ -4260,7 +4260,7 @@ async fn records_write_missing_protocol_stays_a_repairable_dependency() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationProtocolNotFound")
+        Some("ModuleAuthorizationModuleNotFound")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed_value(&write), false),
@@ -4287,7 +4287,7 @@ async fn encryption_definition_resolves_without_installation() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRequired")
+        Some("ModuleAuthorizationEncryptionRequired")
     );
 }
 
@@ -4394,7 +4394,7 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRequired")
+        Some("ModuleAuthorizationEncryptionRequired")
     );
 
     let (message_store, data_store) = open_stores().await;
@@ -4420,7 +4420,7 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionNotAllowed")
+        Some("ModuleAuthorizationEncryptionNotAllowed")
     );
 }
 
@@ -4452,7 +4452,7 @@ async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRequired")
+        Some("ModuleAuthorizationEncryptionRequired")
     );
 
     let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
@@ -4461,7 +4461,7 @@ async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionKeyAgreementMissing")
+        Some("ModuleAuthorizationEncryptionKeyAgreementMissing")
     );
 
     // The `$ref` position type is looked up by the local structure key, so a
@@ -4471,7 +4471,7 @@ async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationInvalidType")
+        Some("ModuleAuthorizationInvalidType")
     );
 }
 
@@ -4561,7 +4561,7 @@ async fn records_write_policy_follows_governing_definition_over_time() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationEncryptionRequired")
+        Some("ModuleAuthorizationEncryptionRequired")
     );
 
     let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
@@ -4747,7 +4747,7 @@ async fn pruned_same_protocol_parent_rejects_child() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationParentRecordNotFound")
+        Some("ModuleAuthorizationParentRecordNotFound")
     );
     let pruned = record_has_prune(TENANT, &thread_id, &message_store)
         .await
@@ -4903,7 +4903,7 @@ impl DwnProcessMessage for MissingParentApplier {
                 Status::from_error(
                     400,
                     DwnError::new(
-                        DwnErrorCode::ProtocolAuthorizationParentRecordNotFound,
+                        DwnErrorCode::ModuleAuthorizationParentRecordNotFound,
                         "missing parent",
                     ),
                 ),

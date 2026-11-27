@@ -119,7 +119,7 @@ where
                 Ok(Some(authorization)) => authorization,
                 Ok(None) => {
                     return Response::unauthorized(
-                        "ProtocolsConfigureAuthorizationFailed: message failed authorization"
+                        "ModulesConfigureAuthorizationFailed: message failed authorization"
                             .to_string(),
                     )
                 }
@@ -274,7 +274,7 @@ where
                 .await?
             else {
                 return Err(format!(
-                    "ProtocolsConfigureComposedProtocolNotInstalled: composed protocol '{protocol_uri}' (alias '{alias}') is not installed for tenant '{tenant}'."
+                    "ModulesConfigureComposedProtocolNotInstalled: composed protocol '{protocol_uri}' (alias '{alias}') is not installed for tenant '{tenant}'."
                 ));
             };
             referenced.insert(alias.clone(), definition);
@@ -351,7 +351,7 @@ where
                 continue;
             }
             return Err(Response::bad_request(format!(
-                "ProtocolsConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{protocol_path}' after records exist; install the changed definition under a new protocol URI."
+                "ModulesConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{protocol_path}' after records exist; install the changed definition under a new protocol URI."
             )));
         }
 
@@ -374,7 +374,7 @@ where
                 .and_then(|uses| uses.get(parsed.alias))
                 .ok_or_else(|| {
                     Response::bad_request(format!(
-                        "ProtocolsConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{protocol_path}' does not exist in the 'uses' map.",
+                        "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{protocol_path}' does not exist in the 'uses' map.",
                         parsed.alias
                     ))
                 })?;
@@ -383,7 +383,7 @@ where
                     .await
                     .map_err(|err| match err {
                         ProtocolDefinitionLookupError::NotFound(uri) => Response::bad_request(
-                            format!("ProtocolAuthorizationProtocolNotFound: unable to find protocol definition for {uri}"),
+                            format!("ModuleAuthorizationModuleNotFound: unable to find protocol definition for {uri}"),
                         ),
                         ProtocolDefinitionLookupError::Store(detail) => {
                             store_error_reply(detail)
@@ -496,7 +496,7 @@ where
                     continue;
                 }
                 return Err(Response::bad_request(format!(
-                    "ProtocolsConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{}' imported by protocol '{protocol}' after records exist; install the changed definition under a new protocol URI.",
+                    "ModulesConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{}' imported by protocol '{protocol}' after records exist; install the changed definition under a new protocol URI.",
                     descriptor.protocol_path
                 )));
             }
@@ -562,7 +562,7 @@ fn plan_configure_transition(
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolDefinitionLookupError {
-    #[error("ProtocolAuthorizationProtocolNotFound: unable to find protocol definition for {0}")]
+    #[error("ModuleAuthorizationModuleNotFound: unable to find protocol definition for {0}")]
     NotFound(String),
     #[error("{0}")]
     Store(String),

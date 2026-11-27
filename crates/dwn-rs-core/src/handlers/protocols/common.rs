@@ -19,9 +19,9 @@ pub(crate) fn protocols_configure_descriptor(
     match &message.descriptor {
         Descriptor::Protocols(protocols) => match protocols.as_ref() {
             Protocols::Configure(descriptor) => Ok(descriptor),
-            _ => Err("expected ProtocolsConfigure message".to_string()),
+            _ => Err("expected ModulesConfigure message".to_string()),
         },
-        _ => Err("expected ProtocolsConfigure message".to_string()),
+        _ => Err("expected ModulesConfigure message".to_string()),
     }
 }
 
@@ -204,7 +204,7 @@ pub(crate) fn validate_refs_and_roles_recursively(
             if let Some(parsed) = protocol_types::parse_cross_protocol_ref(reference) {
                 let definition = referenced.get(parsed.alias).ok_or_else(|| {
                     format!(
-                        "ProtocolsConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' was not found.",
+                        "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' was not found.",
                         parsed.alias, child_protocol_path
                     )
                 })?;
@@ -214,13 +214,13 @@ pub(crate) fn validate_refs_and_roles_recursively(
                     traversed.push(segment);
                     let Some(node) = current.get(segment) else {
                         return Err(format!(
-                            "ProtocolsConfigureInvalidRefProtocolPath: '$ref' at protocol path '{child_protocol_path}' references type path '{}' which does not exist in protocol '{}'.",
+                            "ModulesConfigureInvalidRefProtocolPath: '$ref' at protocol path '{child_protocol_path}' references type path '{}' which does not exist in protocol '{}'.",
                             parsed.protocol_path, definition.protocol
                         ));
                     };
                     if node.reference.is_some() {
                         return Err(format!(
-                            "ProtocolsConfigureInvalidRefTargetThroughRef: '$ref' at protocol path '{child_protocol_path}' references type path '{}' in protocol '{}', but node '{}' is itself a '$ref'.",
+                            "ModulesConfigureInvalidRefTargetThroughRef: '$ref' at protocol path '{child_protocol_path}' references type path '{}' in protocol '{}', but node '{}' is itself a '$ref'.",
                             parsed.protocol_path,
                             definition.protocol,
                             traversed.join("/")
@@ -237,19 +237,19 @@ pub(crate) fn validate_refs_and_roles_recursively(
                     if let Some(parsed) = protocol_types::parse_cross_protocol_ref(&action.role) {
                         let definition = referenced.get(parsed.alias).ok_or_else(|| {
                             format!(
-                                "ProtocolsConfigureInvalidCrossProtocolRole: alias '{}' at protocol path '{}' was not found.",
+                                "ModulesConfigureInvalidCrossModuleRole: alias '{}' at protocol path '{}' was not found.",
                                 parsed.alias, child_protocol_path
                             )
                         })?;
                         let Some(role_rule_set) = definition.rule_at(parsed.protocol_path) else {
                             return Err(format!(
-                                "ProtocolsConfigureInvalidCrossProtocolRole: role '{}' at protocol path '{}' does not exist in protocol '{}'.",
+                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at protocol path '{}' does not exist in protocol '{}'.",
                                 action.role, child_protocol_path, definition.protocol
                             ));
                         };
                         if role_rule_set.role != Some(true) {
                             return Err(format!(
-                                "ProtocolsConfigureInvalidCrossProtocolRole: role '{}' at protocol path '{}' does not point to a valid role in protocol '{}'.",
+                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at protocol path '{}' does not point to a valid role in protocol '{}'.",
                                 action.role, child_protocol_path, definition.protocol
                             ));
                         }
@@ -265,7 +265,7 @@ pub(crate) fn validate_refs_and_roles_recursively(
                             == Some(true);
                         if role_type_encrypted {
                             return Err(format!(
-                                "ProtocolsConfigureInvalidEncryptedRoleType: cross-protocol role '{}' at protocol path '{}' resolves to encrypted type '{role_type}' in protocol '{}'; role records cannot be encrypted.",
+                                "ModulesConfigureInvalidEncryptedRoleType: cross-protocol role '{}' at protocol path '{}' resolves to encrypted type '{role_type}' in protocol '{}'; role records cannot be encrypted.",
                                 action.role, child_protocol_path, definition.protocol
                             ));
                         }
@@ -276,13 +276,13 @@ pub(crate) fn validate_refs_and_roles_recursively(
                         if let Some(parsed) = protocol_types::parse_cross_protocol_ref(of) {
                             let definition = referenced.get(parsed.alias).ok_or_else(|| {
                                 format!(
-                                    "ProtocolsConfigureInvalidCrossProtocolOf: alias '{}' at protocol path '{}' was not found.",
+                                    "ModulesConfigureInvalidCrossModuleOf: alias '{}' at protocol path '{}' was not found.",
                                     parsed.alias, child_protocol_path
                                 )
                             })?;
                             if definition.rule_at(parsed.protocol_path).is_none() {
                                 return Err(format!(
-                                    "ProtocolsConfigureInvalidCrossProtocolOf: reference '{}' at protocol path '{}' does not point to a valid type path in protocol '{}'.",
+                                    "ModulesConfigureInvalidCrossModuleOf: reference '{}' at protocol path '{}' does not point to a valid type path in protocol '{}'.",
                                     of, child_protocol_path, definition.protocol
                                 ));
                             }

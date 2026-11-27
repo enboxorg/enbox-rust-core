@@ -98,7 +98,7 @@ impl CoreProtocolRegistry {
         if !self.has(PERMISSIONS_PROTOCOL_URI) {
             return None;
         }
-        if error_code.starts_with("PermissionsProtocol") {
+        if error_code.starts_with("PermissionsModule") {
             return Some(if error_code.contains("Unauthorized") {
                 401
             } else {

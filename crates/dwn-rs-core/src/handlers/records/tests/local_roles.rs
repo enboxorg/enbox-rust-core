@@ -390,7 +390,7 @@ async fn role_holder_without_role_record_is_repairable() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMatchingRoleRecordNotFound")
+        Some("ModuleAuthorizationMatchingRoleRecordNotFound")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&message), false),
@@ -417,7 +417,7 @@ async fn role_held_in_sibling_context_does_not_authorize() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMatchingRoleRecordNotFound")
+        Some("ModuleAuthorizationMatchingRoleRecordNotFound")
     );
 }
 
@@ -444,7 +444,7 @@ async fn revoked_role_no_longer_authorizes() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMatchingRoleRecordNotFound")
+        Some("ModuleAuthorizationMatchingRoleRecordNotFound")
     );
 }
 
@@ -474,7 +474,7 @@ async fn role_removed_by_governing_definition_is_not_a_role() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationNotARole")
+        Some("ModuleAuthorizationNotARole")
     );
 }
 
@@ -496,7 +496,7 @@ async fn nested_role_query_without_context_is_rejected() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMissingContextId")
+        Some("ModuleAuthorizationMissingContextId")
     );
 
     let query = signed_query(
@@ -511,7 +511,7 @@ async fn nested_role_query_without_context_is_rejected() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMissingContextId")
+        Some("ModuleAuthorizationMissingContextId")
     );
 }
 
@@ -533,7 +533,7 @@ async fn deep_role_query_with_short_context_is_rejected() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMissingContextId")
+        Some("ModuleAuthorizationMissingContextId")
     );
 }
 
@@ -579,7 +579,7 @@ async fn role_removed_before_read_is_not_a_role_at_read_time() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationNotARole")
+        Some("ModuleAuthorizationNotARole")
     );
 }
 
@@ -593,6 +593,6 @@ async fn role_removed_before_delete_is_not_a_role_at_delete_time() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationNotARole")
+        Some("ModuleAuthorizationNotARole")
     );
 }

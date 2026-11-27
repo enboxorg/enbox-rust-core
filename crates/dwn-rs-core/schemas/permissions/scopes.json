@@ -17,12 +17,51 @@
         "method": {
           "const": "Read"
         },
-        "protocol": {
+        "module": {
           "type": "string"
+        },
+        "contextId": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "modulePath": {
+          "type": "string",
+          "maxLength": 600
         }
-      }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "contextId",
+              "modulePath"
+            ]
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "contextId"
+                ]
+              },
+              {
+                "required": [
+                  "modulePath"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "module"
+            ]
+          }
+        }
+      ]
     },
-    "protocols-configure-scope": {
+    "modules-configure-scope": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -31,17 +70,17 @@
       ],
       "properties": {
         "interface": {
-          "const": "Protocols"
+          "const": "Modules"
         },
         "method": {
           "const": "Configure"
         },
-        "protocol": {
+        "module": {
           "type": "string"
         }
       }
     },
-    "protocols-query-scope": {
+    "modules-query-scope": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -50,12 +89,12 @@
       ],
       "properties": {
         "interface": {
-          "const": "Protocols"
+          "const": "Modules"
         },
         "method": {
           "const": "Query"
         },
-        "protocol": {
+        "module": {
           "type": "string"
         }
       }
@@ -66,7 +105,7 @@
       "required": [
         "interface",
         "method",
-        "protocol"
+        "module"
       ],
       "properties": {
         "interface": {
@@ -75,15 +114,16 @@
         "method": {
           "const": "Delete"
         },
-        "protocol": {
+        "module": {
           "type": "string"
         },
         "contextId": {
           "type": "string",
           "maxLength": 600
         },
-        "protocolPath": {
-          "type": "string"
+        "modulePath": {
+          "type": "string",
+          "maxLength": 600
         }
       }
     },
@@ -93,7 +133,7 @@
       "required": [
         "interface",
         "method",
-        "protocol"
+        "module"
       ],
       "properties": {
         "interface": {
@@ -102,15 +142,16 @@
         "method": {
           "const": "Read"
         },
-        "protocol": {
+        "module": {
           "type": "string"
         },
         "contextId": {
           "type": "string",
           "maxLength": 600
         },
-        "protocolPath": {
-          "type": "string"
+        "modulePath": {
+          "type": "string",
+          "maxLength": 600
         }
       }
     },
@@ -120,7 +161,7 @@
       "required": [
         "interface",
         "method",
-        "protocol"
+        "module"
       ],
       "properties": {
         "interface": {
@@ -129,96 +170,16 @@
         "method": {
           "const": "Write"
         },
-        "protocol": {
+        "module": {
           "type": "string"
         },
         "contextId": {
           "type": "string",
           "maxLength": 600
         },
-        "protocolPath": {
-          "type": "string"
-        }
-      }
-    },
-    "records-query-scope": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "interface",
-        "method",
-        "protocol"
-      ],
-      "properties": {
-        "interface": {
-          "const": "Records"
-        },
-        "method": {
-          "const": "Query"
-        },
-        "protocol": {
-          "type": "string"
-        },
-        "contextId": {
+        "modulePath": {
           "type": "string",
           "maxLength": 600
-        },
-        "protocolPath": {
-          "type": "string"
-        }
-      }
-    },
-    "records-subscribe-scope": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "interface",
-        "method",
-        "protocol"
-      ],
-      "properties": {
-        "interface": {
-          "const": "Records"
-        },
-        "method": {
-          "const": "Subscribe"
-        },
-        "protocol": {
-          "type": "string"
-        },
-        "contextId": {
-          "type": "string",
-          "maxLength": 600
-        },
-        "protocolPath": {
-          "type": "string"
-        }
-      }
-    },
-    "records-count-scope": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "interface",
-        "method",
-        "protocol"
-      ],
-      "properties": {
-        "interface": {
-          "const": "Records"
-        },
-        "method": {
-          "const": "Count"
-        },
-        "protocol": {
-          "type": "string"
-        },
-        "contextId": {
-          "type": "string",
-          "maxLength": 600
-        },
-        "protocolPath": {
-          "type": "string"
         }
       }
     }

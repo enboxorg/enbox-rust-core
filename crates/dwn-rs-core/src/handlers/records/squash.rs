@@ -85,7 +85,7 @@ where
     if descriptor.message_timestamp <= newest_timestamp {
         let squash_floor_timestamp = canonical_rfc3339(newest_timestamp);
         return Err(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationSquashBackstop,
+            DwnErrorCode::ModuleAuthorizationSquashBackstop,
             format!(
                 "incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
                 canonical_rfc3339(descriptor.message_timestamp),

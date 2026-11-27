@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://identity.foundation/dwn/json-schemas/protocols-query.json",
+  "$id": "https://identity.foundation/dwn/json-schemas/modules-query.json",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -21,7 +21,7 @@
       "properties": {
         "interface": {
           "enum": [
-            "Protocols"
+            "Modules"
           ],
           "type": "string"
         },
@@ -39,7 +39,7 @@
           "minProperties": 1,
           "additionalProperties": false,
           "properties": {
-            "protocol": {
+            "module": {
               "type": "string"
             },
             "recipient": {

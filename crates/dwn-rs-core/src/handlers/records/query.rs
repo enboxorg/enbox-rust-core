@@ -58,7 +58,7 @@ where
 
             if let Err(reason) = validate_nested_protocol_path_scope(&descriptor.filter, false) {
                 return Response::bad_request(format!(
-                    "RecordsQueryNestedProtocolPathContextIdInvalid: {reason}"
+                    "RecordsQueryNestedModulePathContextIdInvalid: {reason}"
                 ));
             }
 

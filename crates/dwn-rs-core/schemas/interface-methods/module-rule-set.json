@@ -1,5 +1,5 @@
 {
-  "$id": "https://identity.foundation/dwn/json-schemas/protocol-rule-set.json",
+  "$id": "https://identity.foundation/dwn/json-schemas/module-rule-set.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
@@ -89,7 +89,7 @@
             "additionalProperties": false,
             "properties": {
               "role": {
-                "$comment": "Must be the protocol path of a role record type",
+                "$comment": "Must be the module path of a role record type",
                 "type": "string"
               },
               "can": {
@@ -116,11 +116,11 @@
       }
     },
     "$role": {
-      "$comment": "When `true`, this turns a record into `role` that may be used within a context/sub-context",
+      "$comment": "When `true`, this turns a record into a role that may be used within a context/sub-context. Role action rules cannot allow `anyone` to create or squash an initial role record, and role paths cannot use `$recordLimit`.",
       "type": "boolean"
     },
     "$ref": {
-      "$comment": "References a type from an external protocol declared in `uses`. Format: 'alias:typePath'. A $ref node is a pure attachment point and must not have $actions, $role, $size, $tags, or $keyAgreement.",
+      "$comment": "Attaches local children to an external record path declared in `uses`. Format: 'alias:typePath'. Explicit $actions are inert at this virtual node; record-policy overrides such as $role, $size, $tags, and $keyAgreement are forbidden.",
       "type": "string",
       "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*:.+$"
     },
@@ -151,16 +151,16 @@
       }
     },
     "$immutable": {
-      "$comment": "When true, records at this protocol path cannot be updated after initial write",
+      "$comment": "When true, records at this module path cannot be updated after initial write",
       "type": "boolean"
     },
     "$delivery": {
-      "$comment": "Delivery strategy hint for records at this protocol path. 'direct' = origin pushes to all participant DWN endpoints; 'subscribe' = participant providers subscribe to the origin DWN.",
+      "$comment": "Delivery strategy hint for records at this module path. 'direct' = origin pushes to all participant DWN endpoints; 'subscribe' = participant providers subscribe to the origin DWN.",
       "type": "string",
       "enum": ["direct", "subscribe"]
     },
     "$squash": {
-      "$comment": "When true, enables squash writes at this protocol path — a RecordsWrite with squash: true atomically creates a snapshot and deletes all older sibling records",
+      "$comment": "When true, enables squash writes at this module path — a RecordsWrite with squash: true atomically creates a snapshot and deletes all older sibling records",
       "type": "boolean",
       "enum": [true]
     },
@@ -219,7 +219,7 @@
   },
   "patternProperties": {
     "^[^$].*$": {
-      "$ref": "https://identity.foundation/dwn/json-schemas/protocol-rule-set.json"
+      "$ref": "https://identity.foundation/dwn/json-schemas/module-rule-set.json"
     }
   }
 }

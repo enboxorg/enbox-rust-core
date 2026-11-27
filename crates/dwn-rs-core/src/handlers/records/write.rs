@@ -82,7 +82,7 @@ impl From<ProtocolDefinitionLookupError> for RecordsWriteValidationError {
     fn from(error: ProtocolDefinitionLookupError) -> Self {
         match error {
             ProtocolDefinitionLookupError::NotFound(protocol) => Self::Dwn(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationProtocolNotFound,
+                DwnErrorCode::ModuleAuthorizationModuleNotFound,
                 format!("unable to find protocol definition for {protocol}"),
             )),
             ProtocolDefinitionLookupError::Store(detail) => Self::Internal(detail),

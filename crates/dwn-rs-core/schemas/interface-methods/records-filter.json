@@ -5,10 +5,10 @@
   "minProperties": 1,
   "additionalProperties": false,
   "properties": {
-    "protocol": {
+    "module": {
       "type": "string"
     },
-    "protocolPath": {
+    "modulePath": {
       "type": "string"
     },
     "author": {
@@ -35,8 +35,7 @@
       }]
     },
     "contextId": {
-      "type": "string",
-      "maxLength": 600
+      "$ref": "https://identity.foundation/dwn/json-schemas/defs.json#/$defs/contextId"
     },
     "schema": {
       "type": "string"
@@ -77,7 +76,18 @@
       "type": "string"
     },
     "parentId": {
-      "type": "string"
+      "oneOf": [{
+        "type": "string",
+        "minLength": 1
+      },{
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minItems": 1,
+        "uniqueItems": true
+      }]
     },
     "published": {
       "type": "boolean"

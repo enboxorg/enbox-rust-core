@@ -1,7 +1,7 @@
 {
   "$id": "https://identity.foundation/dwn/json-schemas/encryption/grant-key.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "Rust-owned schema for decrypted grant-key payloads from either delivery representation. Not an upstream file: the SDK carries no grant-key.json and checks this shape in agent code (assertGrantKeyPayload, isProtocolPathKeyMaterial, isX25519KeyMaterial). Structural only — additional properties accepted; key correspondence, scope coverage, and tag agreement are runtime checks, never schema checks.",
+  "$comment": "Rust-owned schema for decrypted grant-key payloads from either delivery representation. Not an upstream file: the SDK carries no grant-key.json and checks this shape in agent code (assertGrantKeyPayload, isModulePathKeyMaterial, isX25519KeyMaterial). Structural only — additional properties accepted; key correspondence, scope coverage, and tag agreement are runtime checks, never schema checks.",
   "type": "object",
   "required": ["grantId", "scope", "keyMaterial"],
   "properties": {
@@ -10,15 +10,15 @@
     },
     "scope": {
       "type": "object",
-      "required": ["scheme", "protocol"],
+      "required": ["scheme", "module"],
       "properties": {
         "scheme": {
-          "const": "protocolPath"
+          "const": "modulePath"
         },
-        "protocol": {
+        "module": {
           "type": "string"
         },
-        "protocolPath": {
+        "modulePath": {
           "type": "string"
         }
       }
@@ -38,7 +38,7 @@
           "const": "X25519-HKDF-SHA256+A256KW"
         },
         "derivationScheme": {
-          "const": "protocolPath"
+          "const": "modulePath"
         },
         "keyId": {
           "type": "string"

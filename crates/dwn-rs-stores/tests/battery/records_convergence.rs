@@ -406,6 +406,6 @@ async fn prune_ancestry_is_terminal_after_reopen() {
     assert_eq!(status, 400);
     assert_eq!(
         error.as_deref(),
-        Some("ProtocolAuthorizationParentRecordNotFound")
+        Some("ModuleAuthorizationParentRecordNotFound")
     );
 }

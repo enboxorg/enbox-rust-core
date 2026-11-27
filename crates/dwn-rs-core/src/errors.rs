@@ -10,31 +10,31 @@ pub type DwnErrorInfo = BTreeMap<String, serde_json::Value>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DwnErrorCode {
     GeneralJwsVerifierGetPublicKeyNotFound,
-    ProtocolAuthorizationProtocolNotFound,
-    ProtocolsConfigureComposedProtocolNotInstalled,
-    ProtocolsConfigureReservedEncryptionControlPath,
-    ProtocolAuthorizationParentRecordNotFound,
-    ProtocolAuthorizationCrossProtocolParentNotFound,
-    ProtocolAuthorizationParentlessIncorrectProtocolPath,
-    ProtocolAuthorizationIncorrectProtocolPath,
-    ProtocolAuthorizationIncorrectContextId,
-    ProtocolAuthorizationParentNotFoundConstructingRecordChain,
+    ModuleAuthorizationModuleNotFound,
+    ModulesConfigureComposedProtocolNotInstalled,
+    ModulesConfigureReservedEncryptionControlPath,
+    ModuleAuthorizationParentRecordNotFound,
+    ModuleAuthorizationCrossModuleParentNotFound,
+    ModuleAuthorizationParentlessIncorrectModulePath,
+    ModuleAuthorizationIncorrectModulePath,
+    ModuleAuthorizationIncorrectContextId,
+    ModuleAuthorizationParentNotFoundConstructingRecordChain,
     RecordsWriteGetInitialWriteNotFound,
     GrantAuthorizationGrantMissing,
     GrantAuthorizationGrantNotYetActive,
     GrantAuthorizationGrantExpired,
     GrantAuthorizationGrantRevoked,
-    ProtocolAuthorizationMatchingRoleRecordNotFound,
-    ProtocolAuthorizationNotARole,
-    ProtocolAuthorizationMissingContextId,
-    ProtocolAuthorizationInvalidType,
-    ProtocolAuthorizationEncryptionRequired,
-    ProtocolAuthorizationTagsInvalidSchema,
-    ProtocolAuthorizationEncryptionNotAllowed,
-    ProtocolAuthorizationEncryptionKeyAgreementMissing,
-    ProtocolAuthorizationEncryptionProtocolPathEntryMissing,
-    ProtocolAuthorizationEncryptionRoleAudienceEntryMissing,
-    ProtocolAuthorizationEncryptionRoleAudienceMissing,
+    ModuleAuthorizationMatchingRoleRecordNotFound,
+    ModuleAuthorizationNotARole,
+    ModuleAuthorizationMissingContextId,
+    ModuleAuthorizationInvalidType,
+    ModuleAuthorizationEncryptionRequired,
+    ModuleAuthorizationTagsInvalidSchema,
+    ModuleAuthorizationEncryptionNotAllowed,
+    ModuleAuthorizationEncryptionKeyAgreementMissing,
+    ModuleAuthorizationEncryptionModulePathEntryMissing,
+    ModuleAuthorizationEncryptionRoleAudienceEntryMissing,
+    ModuleAuthorizationEncryptionRoleAudienceMissing,
     EncryptionControlValidateDeliveryAudienceMissing,
     EncryptionControlReadUnauthorized,
     EncryptionControlValidateAudienceContextIdInvalid,
@@ -50,22 +50,22 @@ pub enum DwnErrorCode {
     EncryptionControlValidateDeliveryTagsMismatch,
     EncryptionControlValidateUnexpectedRecord,
     EncryptionControlValidateDeliveryRecipientRoleRecordMissing,
-    EncryptionProtocolValidateEncryptedDeliveryMissingEncryption,
-    EncryptionProtocolValidateGrantKeyAuthorMismatch,
-    EncryptionProtocolValidateGrantKeyRecipientMismatch,
-    EncryptionProtocolValidateGrantKeyGrantScopeMismatch,
-    EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid,
-    EncryptionProtocolValidateSchemaUnexpectedRecord,
+    EncryptionModuleValidateEncryptedDeliveryMissingEncryption,
+    EncryptionModuleValidateGrantKeyAuthorMismatch,
+    EncryptionModuleValidateGrantKeyRecipientMismatch,
+    EncryptionModuleValidateGrantKeyGrantScopeMismatch,
+    EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid,
+    EncryptionModuleValidateSchemaUnexpectedRecord,
     RecordsWriteMissingDataInPrevious,
     RecordsWriteMissingEncodedDataInPrevious,
     RecordsWriteNotAllowedAfterDelete,
     RecordsWriteDataCidMismatch,
     RecordsWriteDataSizeMismatch,
     RecordsWriteImmutablePropertyChanged,
-    ProtocolAuthorizationImmutableRecord,
-    ProtocolAuthorizationSquashBackstop,
-    ProtocolAuthorizationStoredInitialWriteActionRulesNotFound,
-    ProtocolAuthorizationStoredInitialWriteActionNotAllowed,
+    ModuleAuthorizationImmutableRecord,
+    ModuleAuthorizationSquashBackstop,
+    ModuleAuthorizationStoredInitialWriteActionRulesNotFound,
+    ModuleAuthorizationStoredInitialWriteActionNotAllowed,
     // Message ingress (admission) stage; see `dwn::validation::ingest_message`.
     MessageInterfaceOrMethodUndefined,
     MessageUnknownInterfaceOrMethod,
@@ -80,62 +80,56 @@ impl DwnErrorCode {
             Self::GeneralJwsVerifierGetPublicKeyNotFound => {
                 "GeneralJwsVerifierGetPublicKeyNotFound"
             }
-            Self::ProtocolAuthorizationProtocolNotFound => "ProtocolAuthorizationProtocolNotFound",
-            Self::ProtocolsConfigureComposedProtocolNotInstalled => {
-                "ProtocolsConfigureComposedProtocolNotInstalled"
+            Self::ModuleAuthorizationModuleNotFound => "ModuleAuthorizationModuleNotFound",
+            Self::ModulesConfigureComposedProtocolNotInstalled => {
+                "ModulesConfigureComposedProtocolNotInstalled"
             }
-            Self::ProtocolsConfigureReservedEncryptionControlPath => {
-                "ProtocolsConfigureReservedEncryptionControlPath"
+            Self::ModulesConfigureReservedEncryptionControlPath => {
+                "ModulesConfigureReservedEncryptionControlPath"
             }
-            Self::ProtocolAuthorizationParentRecordNotFound => {
-                "ProtocolAuthorizationParentRecordNotFound"
+            Self::ModuleAuthorizationParentRecordNotFound => {
+                "ModuleAuthorizationParentRecordNotFound"
             }
-            Self::ProtocolAuthorizationCrossProtocolParentNotFound => {
-                "ProtocolAuthorizationCrossProtocolParentNotFound"
+            Self::ModuleAuthorizationCrossModuleParentNotFound => {
+                "ModuleAuthorizationCrossModuleParentNotFound"
             }
-            Self::ProtocolAuthorizationParentlessIncorrectProtocolPath => {
-                "ProtocolAuthorizationParentlessIncorrectProtocolPath"
+            Self::ModuleAuthorizationParentlessIncorrectModulePath => {
+                "ModuleAuthorizationParentlessIncorrectModulePath"
             }
-            Self::ProtocolAuthorizationIncorrectProtocolPath => {
-                "ProtocolAuthorizationIncorrectProtocolPath"
+            Self::ModuleAuthorizationIncorrectModulePath => {
+                "ModuleAuthorizationIncorrectModulePath"
             }
-            Self::ProtocolAuthorizationIncorrectContextId => {
-                "ProtocolAuthorizationIncorrectContextId"
-            }
-            Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain => {
-                "ProtocolAuthorizationParentNotFoundConstructingRecordChain"
+            Self::ModuleAuthorizationIncorrectContextId => "ModuleAuthorizationIncorrectContextId",
+            Self::ModuleAuthorizationParentNotFoundConstructingRecordChain => {
+                "ModuleAuthorizationParentNotFoundConstructingRecordChain"
             }
             Self::RecordsWriteGetInitialWriteNotFound => "RecordsWriteGetInitialWriteNotFound",
             Self::GrantAuthorizationGrantMissing => "GrantAuthorizationGrantMissing",
             Self::GrantAuthorizationGrantNotYetActive => "GrantAuthorizationGrantNotYetActive",
             Self::GrantAuthorizationGrantExpired => "GrantAuthorizationGrantExpired",
             Self::GrantAuthorizationGrantRevoked => "GrantAuthorizationGrantRevoked",
-            Self::ProtocolAuthorizationMatchingRoleRecordNotFound => {
-                "ProtocolAuthorizationMatchingRoleRecordNotFound"
+            Self::ModuleAuthorizationMatchingRoleRecordNotFound => {
+                "ModuleAuthorizationMatchingRoleRecordNotFound"
             }
-            Self::ProtocolAuthorizationNotARole => "ProtocolAuthorizationNotARole",
-            Self::ProtocolAuthorizationMissingContextId => "ProtocolAuthorizationMissingContextId",
-            Self::ProtocolAuthorizationInvalidType => "ProtocolAuthorizationInvalidType",
-            Self::ProtocolAuthorizationEncryptionRequired => {
-                "ProtocolAuthorizationEncryptionRequired"
+            Self::ModuleAuthorizationNotARole => "ModuleAuthorizationNotARole",
+            Self::ModuleAuthorizationMissingContextId => "ModuleAuthorizationMissingContextId",
+            Self::ModuleAuthorizationInvalidType => "ModuleAuthorizationInvalidType",
+            Self::ModuleAuthorizationEncryptionRequired => "ModuleAuthorizationEncryptionRequired",
+            Self::ModuleAuthorizationTagsInvalidSchema => "ModuleAuthorizationTagsInvalidSchema",
+            Self::ModuleAuthorizationEncryptionNotAllowed => {
+                "ModuleAuthorizationEncryptionNotAllowed"
             }
-            Self::ProtocolAuthorizationTagsInvalidSchema => {
-                "ProtocolAuthorizationTagsInvalidSchema"
+            Self::ModuleAuthorizationEncryptionKeyAgreementMissing => {
+                "ModuleAuthorizationEncryptionKeyAgreementMissing"
             }
-            Self::ProtocolAuthorizationEncryptionNotAllowed => {
-                "ProtocolAuthorizationEncryptionNotAllowed"
+            Self::ModuleAuthorizationEncryptionModulePathEntryMissing => {
+                "ModuleAuthorizationEncryptionModulePathEntryMissing"
             }
-            Self::ProtocolAuthorizationEncryptionKeyAgreementMissing => {
-                "ProtocolAuthorizationEncryptionKeyAgreementMissing"
+            Self::ModuleAuthorizationEncryptionRoleAudienceEntryMissing => {
+                "ModuleAuthorizationEncryptionRoleAudienceEntryMissing"
             }
-            Self::ProtocolAuthorizationEncryptionProtocolPathEntryMissing => {
-                "ProtocolAuthorizationEncryptionProtocolPathEntryMissing"
-            }
-            Self::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing => {
-                "ProtocolAuthorizationEncryptionRoleAudienceEntryMissing"
-            }
-            Self::ProtocolAuthorizationEncryptionRoleAudienceMissing => {
-                "ProtocolAuthorizationEncryptionRoleAudienceMissing"
+            Self::ModuleAuthorizationEncryptionRoleAudienceMissing => {
+                "ModuleAuthorizationEncryptionRoleAudienceMissing"
             }
             Self::EncryptionControlValidateDeliveryAudienceMissing => {
                 "EncryptionControlValidateDeliveryAudienceMissing"
@@ -180,23 +174,23 @@ impl DwnErrorCode {
             Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing => {
                 "EncryptionControlValidateDeliveryRecipientRoleRecordMissing"
             }
-            Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption => {
-                "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption"
+            Self::EncryptionModuleValidateEncryptedDeliveryMissingEncryption => {
+                "EncryptionModuleValidateEncryptedDeliveryMissingEncryption"
             }
-            Self::EncryptionProtocolValidateGrantKeyAuthorMismatch => {
-                "EncryptionProtocolValidateGrantKeyAuthorMismatch"
+            Self::EncryptionModuleValidateGrantKeyAuthorMismatch => {
+                "EncryptionModuleValidateGrantKeyAuthorMismatch"
             }
-            Self::EncryptionProtocolValidateGrantKeyRecipientMismatch => {
-                "EncryptionProtocolValidateGrantKeyRecipientMismatch"
+            Self::EncryptionModuleValidateGrantKeyRecipientMismatch => {
+                "EncryptionModuleValidateGrantKeyRecipientMismatch"
             }
-            Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch => {
-                "EncryptionProtocolValidateGrantKeyGrantScopeMismatch"
+            Self::EncryptionModuleValidateGrantKeyGrantScopeMismatch => {
+                "EncryptionModuleValidateGrantKeyGrantScopeMismatch"
             }
-            Self::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid => {
-                "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid"
+            Self::EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid => {
+                "EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid"
             }
-            Self::EncryptionProtocolValidateSchemaUnexpectedRecord => {
-                "EncryptionProtocolValidateSchemaUnexpectedRecord"
+            Self::EncryptionModuleValidateSchemaUnexpectedRecord => {
+                "EncryptionModuleValidateSchemaUnexpectedRecord"
             }
             Self::RecordsWriteMissingDataInPrevious => "RecordsWriteMissingDataInPrevious",
             Self::RecordsWriteMissingEncodedDataInPrevious => {
@@ -206,13 +200,13 @@ impl DwnErrorCode {
             Self::RecordsWriteDataCidMismatch => "RecordsWriteDataCidMismatch",
             Self::RecordsWriteDataSizeMismatch => "RecordsWriteDataSizeMismatch",
             Self::RecordsWriteImmutablePropertyChanged => "RecordsWriteImmutablePropertyChanged",
-            Self::ProtocolAuthorizationImmutableRecord => "ProtocolAuthorizationImmutableRecord",
-            Self::ProtocolAuthorizationSquashBackstop => "ProtocolAuthorizationSquashBackstop",
-            Self::ProtocolAuthorizationStoredInitialWriteActionRulesNotFound => {
-                "ProtocolAuthorizationStoredInitialWriteActionRulesNotFound"
+            Self::ModuleAuthorizationImmutableRecord => "ModuleAuthorizationImmutableRecord",
+            Self::ModuleAuthorizationSquashBackstop => "ModuleAuthorizationSquashBackstop",
+            Self::ModuleAuthorizationStoredInitialWriteActionRulesNotFound => {
+                "ModuleAuthorizationStoredInitialWriteActionRulesNotFound"
             }
-            Self::ProtocolAuthorizationStoredInitialWriteActionNotAllowed => {
-                "ProtocolAuthorizationStoredInitialWriteActionNotAllowed"
+            Self::ModuleAuthorizationStoredInitialWriteActionNotAllowed => {
+                "ModuleAuthorizationStoredInitialWriteActionNotAllowed"
             }
             Self::MessageInterfaceOrMethodUndefined => "MessageInterfaceOrMethodUndefined",
             Self::MessageUnknownInterfaceOrMethod => "MessageUnknownInterfaceOrMethod",
@@ -244,23 +238,23 @@ impl DwnErrorCode {
             // disallowed static action.
             Self::EncryptionControlValidateAudienceRolePathInvalid
                 | Self::EncryptionControlValidateAudienceSealKeyIdMismatch
-                | Self::ProtocolAuthorizationStoredInitialWriteActionRulesNotFound
-                | Self::ProtocolAuthorizationStoredInitialWriteActionNotAllowed
+                | Self::ModuleAuthorizationStoredInitialWriteActionRulesNotFound
+                | Self::ModuleAuthorizationStoredInitialWriteActionNotAllowed
         )
     }
 
     pub const fn is_missing_dependency(self) -> bool {
         matches!(
             self,
-            Self::ProtocolAuthorizationProtocolNotFound
-                | Self::ProtocolsConfigureComposedProtocolNotInstalled
-                | Self::ProtocolAuthorizationParentRecordNotFound
-                | Self::ProtocolAuthorizationCrossProtocolParentNotFound
-                | Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain
+            Self::ModuleAuthorizationModuleNotFound
+                | Self::ModulesConfigureComposedProtocolNotInstalled
+                | Self::ModuleAuthorizationParentRecordNotFound
+                | Self::ModuleAuthorizationCrossModuleParentNotFound
+                | Self::ModuleAuthorizationParentNotFoundConstructingRecordChain
                 | Self::RecordsWriteGetInitialWriteNotFound
                 | Self::GrantAuthorizationGrantMissing
-                | Self::ProtocolAuthorizationMatchingRoleRecordNotFound
-                | Self::ProtocolAuthorizationEncryptionRoleAudienceMissing
+                | Self::ModuleAuthorizationMatchingRoleRecordNotFound
+                | Self::ModuleAuthorizationEncryptionRoleAudienceMissing
                 | Self::EncryptionControlValidateDeliveryAudienceMissing
                 | Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing
                 | Self::RecordsWriteMissingDataInPrevious
@@ -283,66 +277,62 @@ impl TryFrom<&str> for DwnErrorCode {
             "GeneralJwsVerifierGetPublicKeyNotFound" => {
                 Ok(Self::GeneralJwsVerifierGetPublicKeyNotFound)
             }
-            "ProtocolAuthorizationProtocolNotFound" => {
-                Ok(Self::ProtocolAuthorizationProtocolNotFound)
+            "ModuleAuthorizationModuleNotFound" => Ok(Self::ModuleAuthorizationModuleNotFound),
+            "ModulesConfigureComposedProtocolNotInstalled" => {
+                Ok(Self::ModulesConfigureComposedProtocolNotInstalled)
             }
-            "ProtocolsConfigureComposedProtocolNotInstalled" => {
-                Ok(Self::ProtocolsConfigureComposedProtocolNotInstalled)
+            "ModulesConfigureReservedEncryptionControlPath" => {
+                Ok(Self::ModulesConfigureReservedEncryptionControlPath)
             }
-            "ProtocolsConfigureReservedEncryptionControlPath" => {
-                Ok(Self::ProtocolsConfigureReservedEncryptionControlPath)
+            "ModuleAuthorizationParentRecordNotFound" => {
+                Ok(Self::ModuleAuthorizationParentRecordNotFound)
             }
-            "ProtocolAuthorizationParentRecordNotFound" => {
-                Ok(Self::ProtocolAuthorizationParentRecordNotFound)
+            "ModuleAuthorizationCrossModuleParentNotFound" => {
+                Ok(Self::ModuleAuthorizationCrossModuleParentNotFound)
             }
-            "ProtocolAuthorizationCrossProtocolParentNotFound" => {
-                Ok(Self::ProtocolAuthorizationCrossProtocolParentNotFound)
+            "ModuleAuthorizationParentlessIncorrectModulePath" => {
+                Ok(Self::ModuleAuthorizationParentlessIncorrectModulePath)
             }
-            "ProtocolAuthorizationParentlessIncorrectProtocolPath" => {
-                Ok(Self::ProtocolAuthorizationParentlessIncorrectProtocolPath)
+            "ModuleAuthorizationIncorrectModulePath" => {
+                Ok(Self::ModuleAuthorizationIncorrectModulePath)
             }
-            "ProtocolAuthorizationIncorrectProtocolPath" => {
-                Ok(Self::ProtocolAuthorizationIncorrectProtocolPath)
+            "ModuleAuthorizationIncorrectContextId" => {
+                Ok(Self::ModuleAuthorizationIncorrectContextId)
             }
-            "ProtocolAuthorizationIncorrectContextId" => {
-                Ok(Self::ProtocolAuthorizationIncorrectContextId)
-            }
-            "ProtocolAuthorizationParentNotFoundConstructingRecordChain" => {
-                Ok(Self::ProtocolAuthorizationParentNotFoundConstructingRecordChain)
+            "ModuleAuthorizationParentNotFoundConstructingRecordChain" => {
+                Ok(Self::ModuleAuthorizationParentNotFoundConstructingRecordChain)
             }
             "RecordsWriteGetInitialWriteNotFound" => Ok(Self::RecordsWriteGetInitialWriteNotFound),
             "GrantAuthorizationGrantMissing" => Ok(Self::GrantAuthorizationGrantMissing),
             "GrantAuthorizationGrantNotYetActive" => Ok(Self::GrantAuthorizationGrantNotYetActive),
             "GrantAuthorizationGrantExpired" => Ok(Self::GrantAuthorizationGrantExpired),
             "GrantAuthorizationGrantRevoked" => Ok(Self::GrantAuthorizationGrantRevoked),
-            "ProtocolAuthorizationMatchingRoleRecordNotFound" => {
-                Ok(Self::ProtocolAuthorizationMatchingRoleRecordNotFound)
+            "ModuleAuthorizationMatchingRoleRecordNotFound" => {
+                Ok(Self::ModuleAuthorizationMatchingRoleRecordNotFound)
             }
-            "ProtocolAuthorizationNotARole" => Ok(Self::ProtocolAuthorizationNotARole),
-            "ProtocolAuthorizationMissingContextId" => {
-                Ok(Self::ProtocolAuthorizationMissingContextId)
+            "ModuleAuthorizationNotARole" => Ok(Self::ModuleAuthorizationNotARole),
+            "ModuleAuthorizationMissingContextId" => Ok(Self::ModuleAuthorizationMissingContextId),
+            "ModuleAuthorizationInvalidType" => Ok(Self::ModuleAuthorizationInvalidType),
+            "ModuleAuthorizationEncryptionRequired" => {
+                Ok(Self::ModuleAuthorizationEncryptionRequired)
             }
-            "ProtocolAuthorizationInvalidType" => Ok(Self::ProtocolAuthorizationInvalidType),
-            "ProtocolAuthorizationEncryptionRequired" => {
-                Ok(Self::ProtocolAuthorizationEncryptionRequired)
+            "ModuleAuthorizationTagsInvalidSchema" => {
+                Ok(Self::ModuleAuthorizationTagsInvalidSchema)
             }
-            "ProtocolAuthorizationTagsInvalidSchema" => {
-                Ok(Self::ProtocolAuthorizationTagsInvalidSchema)
+            "ModuleAuthorizationEncryptionNotAllowed" => {
+                Ok(Self::ModuleAuthorizationEncryptionNotAllowed)
             }
-            "ProtocolAuthorizationEncryptionNotAllowed" => {
-                Ok(Self::ProtocolAuthorizationEncryptionNotAllowed)
+            "ModuleAuthorizationEncryptionKeyAgreementMissing" => {
+                Ok(Self::ModuleAuthorizationEncryptionKeyAgreementMissing)
             }
-            "ProtocolAuthorizationEncryptionKeyAgreementMissing" => {
-                Ok(Self::ProtocolAuthorizationEncryptionKeyAgreementMissing)
+            "ModuleAuthorizationEncryptionModulePathEntryMissing" => {
+                Ok(Self::ModuleAuthorizationEncryptionModulePathEntryMissing)
             }
-            "ProtocolAuthorizationEncryptionProtocolPathEntryMissing" => {
-                Ok(Self::ProtocolAuthorizationEncryptionProtocolPathEntryMissing)
+            "ModuleAuthorizationEncryptionRoleAudienceEntryMissing" => {
+                Ok(Self::ModuleAuthorizationEncryptionRoleAudienceEntryMissing)
             }
-            "ProtocolAuthorizationEncryptionRoleAudienceEntryMissing" => {
-                Ok(Self::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing)
-            }
-            "ProtocolAuthorizationEncryptionRoleAudienceMissing" => {
-                Ok(Self::ProtocolAuthorizationEncryptionRoleAudienceMissing)
+            "ModuleAuthorizationEncryptionRoleAudienceMissing" => {
+                Ok(Self::ModuleAuthorizationEncryptionRoleAudienceMissing)
             }
             "EncryptionControlValidateDeliveryAudienceMissing" => {
                 Ok(Self::EncryptionControlValidateDeliveryAudienceMissing)
@@ -387,23 +377,23 @@ impl TryFrom<&str> for DwnErrorCode {
             "EncryptionControlValidateDeliveryRecipientRoleRecordMissing" => {
                 Ok(Self::EncryptionControlValidateDeliveryRecipientRoleRecordMissing)
             }
-            "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption" => {
-                Ok(Self::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption)
+            "EncryptionModuleValidateEncryptedDeliveryMissingEncryption" => {
+                Ok(Self::EncryptionModuleValidateEncryptedDeliveryMissingEncryption)
             }
-            "EncryptionProtocolValidateGrantKeyAuthorMismatch" => {
-                Ok(Self::EncryptionProtocolValidateGrantKeyAuthorMismatch)
+            "EncryptionModuleValidateGrantKeyAuthorMismatch" => {
+                Ok(Self::EncryptionModuleValidateGrantKeyAuthorMismatch)
             }
-            "EncryptionProtocolValidateGrantKeyRecipientMismatch" => {
-                Ok(Self::EncryptionProtocolValidateGrantKeyRecipientMismatch)
+            "EncryptionModuleValidateGrantKeyRecipientMismatch" => {
+                Ok(Self::EncryptionModuleValidateGrantKeyRecipientMismatch)
             }
-            "EncryptionProtocolValidateGrantKeyGrantScopeMismatch" => {
-                Ok(Self::EncryptionProtocolValidateGrantKeyGrantScopeMismatch)
+            "EncryptionModuleValidateGrantKeyGrantScopeMismatch" => {
+                Ok(Self::EncryptionModuleValidateGrantKeyGrantScopeMismatch)
             }
-            "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid" => {
-                Ok(Self::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid)
+            "EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid" => {
+                Ok(Self::EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid)
             }
-            "EncryptionProtocolValidateSchemaUnexpectedRecord" => {
-                Ok(Self::EncryptionProtocolValidateSchemaUnexpectedRecord)
+            "EncryptionModuleValidateSchemaUnexpectedRecord" => {
+                Ok(Self::EncryptionModuleValidateSchemaUnexpectedRecord)
             }
             "RecordsWriteMissingDataInPrevious" => Ok(Self::RecordsWriteMissingDataInPrevious),
             "RecordsWriteMissingEncodedDataInPrevious" => {
@@ -415,15 +405,13 @@ impl TryFrom<&str> for DwnErrorCode {
             "RecordsWriteImmutablePropertyChanged" => {
                 Ok(Self::RecordsWriteImmutablePropertyChanged)
             }
-            "ProtocolAuthorizationImmutableRecord" => {
-                Ok(Self::ProtocolAuthorizationImmutableRecord)
+            "ModuleAuthorizationImmutableRecord" => Ok(Self::ModuleAuthorizationImmutableRecord),
+            "ModuleAuthorizationSquashBackstop" => Ok(Self::ModuleAuthorizationSquashBackstop),
+            "ModuleAuthorizationStoredInitialWriteActionRulesNotFound" => {
+                Ok(Self::ModuleAuthorizationStoredInitialWriteActionRulesNotFound)
             }
-            "ProtocolAuthorizationSquashBackstop" => Ok(Self::ProtocolAuthorizationSquashBackstop),
-            "ProtocolAuthorizationStoredInitialWriteActionRulesNotFound" => {
-                Ok(Self::ProtocolAuthorizationStoredInitialWriteActionRulesNotFound)
-            }
-            "ProtocolAuthorizationStoredInitialWriteActionNotAllowed" => {
-                Ok(Self::ProtocolAuthorizationStoredInitialWriteActionNotAllowed)
+            "ModuleAuthorizationStoredInitialWriteActionNotAllowed" => {
+                Ok(Self::ModuleAuthorizationStoredInitialWriteActionNotAllowed)
             }
             "MessageInterfaceOrMethodUndefined" => Ok(Self::MessageInterfaceOrMethodUndefined),
             "MessageUnknownInterfaceOrMethod" => Ok(Self::MessageUnknownInterfaceOrMethod),
