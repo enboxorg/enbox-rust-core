@@ -38,10 +38,10 @@ type FixtureCase = {
   record?: Record<string, unknown>;
   derivedPrivateJwk?: DerivedPrivateJwk;
   ephemeralPublicJwk?: Record<string, unknown>;
-  protocol?: string;
+  module?: string;
   rolePath?: string;
   seal?: SealKeyWrap;
-  sealContext?: { protocol: string; rolePath: string; contextId: string; audienceKeyId: string };
+  sealContext?: { module: string; rolePath: string; contextId: string; audienceKeyId: string };
   sealingPrivateJwk?: Record<string, unknown>;
   audiencePrivateJwk?: Record<string, unknown>;
 };
@@ -76,7 +76,7 @@ type DwnEncryption = {
     ephemeralPublicKey: Record<string, unknown>;
     encryptedKey: string;
     derivationScheme: string;
-    protocol?: string;
+    module?: string;
     rolePath?: string;
   }>;
 };
@@ -102,7 +102,7 @@ type EncryptionModule = {
     unwrapSeal(input: {
       audienceKeyId: string;
       contextId: string;
-      protocol: string;
+      module: string;
       recipientPrivateKey: Record<string, unknown>;
       rolePath: string;
       seal: SealKeyWrap;
@@ -245,7 +245,7 @@ async function assertEnvelope(fixtureCase: FixtureCase): Promise<void> {
     expect(entry.ephemeralPublicKey).toMatchObject(fixtureCase.ephemeralPublicJwk);
   }
   if (fixtureCase.derivationScheme === 'roleAudience') {
-    expect(entry.protocol).toBe(fixtureCase.protocol);
+    expect(entry.module).toBe(fixtureCase.module);
     expect(entry.rolePath).toBe(fixtureCase.rolePath);
   }
 
@@ -267,7 +267,7 @@ async function assertSeal(fixtureCase: FixtureCase): Promise<void> {
   const audiencePrivateKeyBytes = await Encryption.unwrapSeal({
     audienceKeyId      : context.audienceKeyId,
     contextId          : context.contextId,
-    protocol           : context.protocol,
+    module             : context.module,
     recipientPrivateKey: fixtureJwk(fixtureCase, fixtureCase.sealingPrivateJwk, 'sealingPrivateJwk'),
     rolePath           : context.rolePath,
     seal,

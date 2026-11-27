@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import type { ProtocolDefinition } from '@enbox/dwn-sdk-js';
+import type { ModuleDefinition } from '@enbox/dwn-sdk-js';
 
 type FixtureManifest = {
   schemaVersion: number;
@@ -24,7 +24,7 @@ type FixtureSet = {
 
 type ProtocolAuthorizationFixture = {
   directives: string[];
-  definition: ProtocolDefinition;
+  definition: ModuleDefinition;
   expectedStatusCode: number;
   expectedErrorCode?: string;
 };
@@ -32,8 +32,8 @@ type ProtocolAuthorizationFixture = {
 type GrantScopeFixture = {
   interface: string;
   method: string;
-  protocol?: string;
-  protocolPath?: string;
+  module?: string;
+  modulePath?: string;
 };
 
 type GrantAuthorizationFixture = {
@@ -62,8 +62,8 @@ type FixtureCase = {
 };
 
 type SdkModule = {
-  ProtocolsConfigure: {
-    validateProtocolDefinition(definition: ProtocolDefinition): void;
+  ModulesConfigure: {
+    validateModuleDefinition(definition: ModuleDefinition): void;
   };
 };
 
@@ -74,7 +74,7 @@ const repoRoot = resolve(__dirname, '../..');
 const fixturesRoot = resolve(repoRoot, 'fixtures');
 const defaultEnboxTsRoot = resolve(repoRoot, '../enbox');
 const enboxTsRoot = process.env.ENBOX_TS_ROOT ?? defaultEnboxTsRoot;
-const sdkModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/interfaces/protocols-configure.ts');
+const sdkModulePath = resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/interfaces/modules-configure.ts');
 
 if (!existsSync(sdkModulePath)) {
   throw new Error(
@@ -83,8 +83,8 @@ if (!existsSync(sdkModulePath)) {
   );
 }
 
-const { ProtocolsConfigure } = await import(pathToFileURL(sdkModulePath).href) as {
-  ProtocolsConfigure: SdkModule['ProtocolsConfigure'];
+const { ModulesConfigure } = await import(pathToFileURL(sdkModulePath).href) as {
+  ModulesConfigure: SdkModule['ModulesConfigure'];
 };
 const manifest = await readJson<FixtureManifest>(resolve(fixturesRoot, 'manifest.json'));
 const fixtureSuites = await Promise.all(
@@ -130,8 +130,8 @@ async function assertProtocolAuthorizationFixture(
   expect(protocol.directives.length).toBeGreaterThan(0);
 
   try {
-    (ProtocolsConfigure as unknown as { validateProtocolDefinition(definition: ProtocolDefinition): void })
-      .validateProtocolDefinition(protocol.definition);
+    (ModulesConfigure as unknown as { validateModuleDefinition(definition: ModuleDefinition): void })
+      .validateModuleDefinition(protocol.definition);
     expect(protocol.expectedStatusCode).toBeLessThan(400);
   } catch (error) {
     expect(protocol.expectedStatusCode).toBeGreaterThanOrEqual(400);
@@ -196,8 +196,8 @@ function evaluateGrantAuthorizationFixture(caseId: string, grant: GrantAuthoriza
   switch (grant.scope.interface) {
   case 'Records':
     return evaluateRecordsGrantAuthorization(grant);
-  case 'Protocols':
-    return evaluateProtocolsGrantAuthorization(grant);
+  case 'Modules':
+    return evaluateModulesGrantAuthorization(grant);
   case 'Messages':
     return evaluateMessagesGrantAuthorization(grant);
   default:
@@ -206,12 +206,12 @@ function evaluateGrantAuthorizationFixture(caseId: string, grant: GrantAuthoriza
 }
 
 function evaluateRecordsGrantAuthorization(grant: GrantAuthorizationFixture): string | undefined {
-  if (grant.scope.protocol !== incomingMessageStrOptional(grant, 'protocol')) {
-    return 'RecordsGrantAuthorizationScopeProtocolMismatch';
+  if (grant.scope.module !== incomingMessageStrOptional(grant, 'module')) {
+    return 'RecordsGrantAuthorizationScopeModuleMismatch';
   }
-  if (grant.scope.protocolPath !== undefined &&
-    incomingMessageStrOptional(grant, 'protocolPath') !== grant.scope.protocolPath) {
-    return 'RecordsGrantAuthorizationScopeProtocolPathMismatch';
+  if (grant.scope.modulePath !== undefined &&
+    incomingMessageStrOptional(grant, 'modulePath') !== grant.scope.modulePath) {
+    return 'RecordsGrantAuthorizationScopeModulePathMismatch';
   }
 
   const publication = grant.conditions?.publication;
@@ -224,26 +224,26 @@ function evaluateRecordsGrantAuthorization(grant: GrantAuthorizationFixture): st
   return undefined;
 }
 
-function evaluateProtocolsGrantAuthorization(grant: GrantAuthorizationFixture): string | undefined {
-  const scopeProtocol = grant.scope.protocol;
-  if (scopeProtocol === undefined) {
+function evaluateModulesGrantAuthorization(grant: GrantAuthorizationFixture): string | undefined {
+  const scopeModule = grant.scope.module;
+  if (scopeModule === undefined) {
     return undefined;
   }
-  const incomingProtocol = incomingMessageStrOptional(grant, 'protocol');
-  if (incomingProtocol !== undefined && incomingProtocol !== scopeProtocol) {
-    return 'ProtocolsGrantAuthorizationQueryProtocolScopeMismatch';
+  const incomingModule = incomingMessageStrOptional(grant, 'module');
+  if (incomingModule !== undefined && incomingModule !== scopeModule) {
+    return 'ModulesGrantAuthorizationQueryModuleScopeMismatch';
   }
   return undefined;
 }
 
 function evaluateMessagesGrantAuthorization(grant: GrantAuthorizationFixture): string | undefined {
-  const scopeProtocol = grant.scope.protocol;
-  if (scopeProtocol === undefined) {
+  const scopeModule = grant.scope.module;
+  if (scopeModule === undefined) {
     return undefined;
   }
-  const incomingProtocols = incomingMessageProtocols(grant);
-  if (incomingProtocols.length === 0 || incomingProtocols.some((protocol): boolean => protocol !== scopeProtocol)) {
-    return 'MessagesGrantAuthorizationMismatchedProtocol';
+  const incomingModules = incomingMessageModules(grant);
+  if (incomingModules.length === 0 || incomingModules.some((module): boolean => module !== scopeModule)) {
+    return 'MessagesGrantAuthorizationMismatchedModule';
   }
   return undefined;
 }
@@ -266,21 +266,21 @@ function incomingMessageBool(grant: GrantAuthorizationFixture, field: string): b
   return typeof value === 'boolean' ? value : undefined;
 }
 
-function incomingMessageProtocols(grant: GrantAuthorizationFixture): string[] {
-  const protocols: string[] = [];
-  const direct = incomingMessageStrOptional(grant, 'protocol');
+function incomingMessageModules(grant: GrantAuthorizationFixture): string[] {
+  const modules: string[] = [];
+  const direct = incomingMessageStrOptional(grant, 'module');
   if (direct !== undefined) {
-    protocols.push(direct);
+    modules.push(direct);
   }
   const filters = grant.incomingMessage.filters;
   if (Array.isArray(filters)) {
     for (const filter of filters) {
-      if (filter !== null && typeof filter === 'object' && typeof (filter as Record<string, unknown>).protocol === 'string') {
-        protocols.push((filter as Record<string, unknown>).protocol as string);
+      if (filter !== null && typeof filter === 'object' && typeof (filter as Record<string, unknown>).module === 'string') {
+        modules.push((filter as Record<string, unknown>).module as string);
       }
     }
   }
-  return protocols;
+  return modules;
 }
 
 function grantTimestamp(caseId: string, value: string, field: string): string {

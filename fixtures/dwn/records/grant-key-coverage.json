@@ -3,7 +3,7 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "functions": [
       "grantKeyScopeCoversDeliveredScope",
       "isGrantKeyEligibleRecordsScope"
@@ -11,7 +11,7 @@
   },
   "definitions": {
     "threads": {
-      "protocol": "http://example.com/threads",
+      "module": "http://example.com/threads",
       "published": true,
       "types": {
         "member": {},
@@ -91,10 +91,10 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads"
+          "module": "http://example.com/threads"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads"
+          "module": "http://example.com/threads"
         },
         "expectedEligible": true,
         "expectedCovers": true
@@ -107,11 +107,11 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads"
+          "module": "http://example.com/threads"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "member"
+          "module": "http://example.com/threads",
+          "modulePath": "member"
         },
         "expectedEligible": true,
         "expectedCovers": true
@@ -124,11 +124,11 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads"
+          "module": "http://example.com/threads"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread/notes"
+          "module": "http://example.com/threads",
+          "modulePath": "thread/notes"
         },
         "expectedEligible": true,
         "expectedCovers": true
@@ -141,12 +141,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "expectedEligible": true,
         "expectedCovers": true
@@ -159,12 +159,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread/notes"
+          "module": "http://example.com/threads",
+          "modulePath": "thread/notes"
         },
         "expectedEligible": true,
         "expectedCovers": true
@@ -177,12 +177,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread/notes/leaf"
+          "module": "http://example.com/threads",
+          "modulePath": "thread/notes/leaf"
         },
         "expectedEligible": true,
         "expectedCovers": true
@@ -195,11 +195,11 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads"
+          "module": "http://example.com/threads"
         },
         "expectedEligible": true,
         "expectedCovers": false
@@ -212,11 +212,11 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads"
+          "module": "http://example.com/threads"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -230,12 +230,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "threading"
+          "module": "http://example.com/threads",
+          "modulePath": "threading"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -249,12 +249,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "member"
+          "module": "http://example.com/threads",
+          "modulePath": "member"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -268,12 +268,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "member"
+          "module": "http://example.com/threads",
+          "modulePath": "member"
         },
         "expectedEligible": true,
         "expectedCovers": false
@@ -286,12 +286,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "archivist"
+          "module": "http://example.com/threads",
+          "modulePath": "archivist"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -305,12 +305,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "plain"
+          "module": "http://example.com/threads",
+          "modulePath": "plain"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "member"
+          "module": "http://example.com/threads",
+          "modulePath": "member"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -324,12 +324,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "unkeyed"
+          "module": "http://example.com/threads",
+          "modulePath": "unkeyed"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -343,12 +343,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "other:reader"
+          "module": "http://example.com/threads",
+          "modulePath": "other:reader"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -362,12 +362,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "member/child"
+          "module": "http://example.com/threads",
+          "modulePath": "member/child"
         },
         "definition": "threads",
         "expectedEligible": true,
@@ -381,12 +381,12 @@
         "grantScope": {
           "interface": "Records",
           "method": "Read",
-          "protocol": "http://example.com/threads",
+          "module": "http://example.com/threads",
           "contextId": "thread-1"
         },
         "deliveredScope": {
-          "protocol": "http://example.com/threads",
-          "protocolPath": "thread"
+          "module": "http://example.com/threads",
+          "modulePath": "thread"
         },
         "definition": "threads",
         "expectedEligible": false,

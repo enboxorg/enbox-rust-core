@@ -55,47 +55,6 @@ const DESCRIPTOR_ROUNDTRIP_ASSERTION: &str = "descriptor.roundtrip";
 mod conformance_helpers;
 use conformance_helpers::read_fixture;
 
-/// The pinned fixture corpus still carries the retired `Protocols` wire vocabulary. A signed
-/// message cannot be relabelled without changing its identity, so cases that still speak the
-/// retired vocabulary are not replayable through the current typed models.
-fn carries_retired_wire(value: &Value) -> bool {
-    match value {
-        Value::Object(map) => map.iter().any(|(key, value)| {
-            matches!(
-                key.as_str(),
-                "protocol" | "protocolPath" | "protocolRole" | "protocolPathPrefix"
-            ) || carries_retired_wire(value)
-        }),
-        Value::Array(items) => items.iter().any(carries_retired_wire),
-        Value::String(text) => text == "Protocols" || text == "protocolPath",
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
-    }
-}
-
-/// Rewrites the retired vocabulary in unsigned fixture structures (definitions, scopes) so the
-/// rules they declare can be exercised against the current models.
-fn to_modules_vocabulary(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(key, value)| {
-                    let key = match key.as_str() {
-                        "protocol" => "module",
-                        "protocolPath" => "modulePath",
-                        "protocolRole" => "moduleRole",
-                        "protocolPathPrefix" => "modulePathPrefix",
-                        other => other,
-                    };
-                    (key.to_string(), to_modules_vocabulary(value))
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.iter().map(to_modules_vocabulary).collect()),
-        Value::String(text) if text == "Protocols" => Value::String("Modules".to_string()),
-        other => other.clone(),
-    }
-}
-
 const MAX_INLINE_DATA_SIZE: usize = 30_000;
 
 #[derive(Debug, Deserialize)]
@@ -154,7 +113,7 @@ struct FixtureCase {
     key_id: Option<String>,
     payload: Option<FixtureJwsPayload>,
     plaintext: Option<FixtureData>,
-    protocol: Option<String>,
+    module: Option<String>,
     recipient_private_jwk: Option<FixtureX25519PrivateJwk>,
     recipient_public_jwk: Option<FixtureX25519PublicJwk>,
     record: Option<Value>,
@@ -222,8 +181,8 @@ struct GrantAuthorizationFixture {
 struct GrantScopeFixture {
     interface: String,
     method: String,
-    protocol: Option<String>,
-    protocol_path: Option<String>,
+    module: Option<String>,
+    module_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,8 +214,8 @@ struct GrantKeyCoverageFixture {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeliveredScopeFixture {
-    protocol: String,
-    protocol_path: Option<String>,
+    module: String,
+    module_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,7 +281,7 @@ enum StateIndexOperation {
     #[serde(rename = "getProtocolRoot")]
     GetProtocolRoot {
         tenant: String,
-        protocol: String,
+        module: String,
         expected: String,
     },
     #[serde(rename = "getSubtreeHash")]
@@ -334,7 +293,7 @@ enum StateIndexOperation {
     #[serde(rename = "getProtocolSubtreeHash")]
     GetProtocolSubtreeHash {
         tenant: String,
-        protocol: String,
+        module: String,
         prefix: String,
         expected: String,
     },
@@ -347,7 +306,7 @@ enum StateIndexOperation {
     #[serde(rename = "getProtocolLeaves")]
     GetProtocolLeaves {
         tenant: String,
-        protocol: String,
+        module: String,
         prefix: String,
         expected: Vec<String>,
     },
@@ -367,7 +326,7 @@ struct FixtureDerivedPrivateJwk {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SealContextFixture {
-    protocol: String,
+    module: String,
     role_path: String,
     context_id: String,
     audience_key_id: String,
@@ -467,9 +426,6 @@ async fn fixture_messages_route_through_dwn_dispatch() {
             let Some(message) = &case.message else {
                 continue;
             };
-            if carries_retired_wire(message) {
-                continue;
-            }
             let kind = match MessageKind::from_message(message) {
                 Ok(kind) => kind,
                 Err(_)
@@ -627,14 +583,6 @@ fn fixture_jwe_matches_typescript() {
             .iter()
             .filter(|case| case.rust_status == RustStatus::Supported)
         {
-            if case
-                .record
-                .as_ref()
-                .and_then(|record| record.get("encryption"))
-                .is_some_and(carries_retired_wire)
-            {
-                continue;
-            }
             if case.seal.is_some() {
                 if check_seal {
                     assert_jwe_seal(case);
@@ -676,9 +624,6 @@ fn supported_fixture_descriptors_roundtrip_through_rust_models() {
             .iter()
             .filter(|case| case.rust_status == RustStatus::Supported)
         {
-            if carries_retired_wire(descriptor(case)) {
-                continue;
-            }
             assert_supported_descriptor_roundtrip(case);
         }
     }
@@ -770,15 +715,14 @@ async fn fixture_process_replies_are_measurable_by_handler() {
             assert_message_process_fixture_shape(case);
             let process = message_process_fixture(case);
             if let Some(handler) = &process.handler {
-                let handler = modern_handler_key(handler);
                 if process.valid {
-                    valid_handlers.insert(handler);
+                    valid_handlers.insert(handler.clone());
                 } else {
-                    invalid_handlers.insert(handler);
+                    invalid_handlers.insert(handler.clone());
                 }
             }
 
-            if case.rust_status == RustStatus::Supported && !carries_retired_wire(message(case)) {
+            if case.rust_status == RustStatus::Supported {
                 assert_message_process_reply(case).await;
             }
         }
@@ -1018,38 +962,6 @@ fn assert_handler_coverage(
     );
 }
 
-/// Fixture process entries name handler keys by the vocabulary they were captured with; map the
-/// retired names onto the current ones so coverage still measures the same handler.
-fn modern_handler_key(handler: &str) -> String {
-    handler.replace("Protocols", "Modules")
-}
-
-/// Fixture error codes were captured with the retired vocabulary; map them onto the public
-/// codes the current engine emits.
-fn modern_error_code(code: &str) -> String {
-    code.replace("ProtocolsConfigure", "ModulesConfigure")
-        .replace("ProtocolAuthorization", "ModuleAuthorization")
-        .replace("EncryptionProtocol", "EncryptionModule")
-        .replace("UrlProtocol", "UrlModule")
-        .replace("NestedProtocolPath", "NestedModulePath")
-        .replace(
-            "ModuleAuthorizationParentlessIncorrectProtocolPath",
-            "ModuleAuthorizationParentlessIncorrectModulePath",
-        )
-        .replace(
-            "ModuleAuthorizationIncorrectProtocolPath",
-            "ModuleAuthorizationIncorrectModulePath",
-        )
-        .replace(
-            "ModuleAuthorizationEncryptionProtocolPathEntryMissing",
-            "ModuleAuthorizationEncryptionModulePathEntryMissing",
-        )
-        .replace("MismatchedProtocol", "MismatchedModule")
-        .replace("ScopeProtocolMismatch", "ScopeModuleMismatch")
-        .replace("ScopeProtocolPathMismatch", "ScopeModulePathMismatch")
-        .replace("ProtocolsGrantAuthorization", "ModulesGrantAuthorization")
-}
-
 fn current_handler_keys() -> BTreeSet<String> {
     current_handler_kinds()
         .into_iter()
@@ -1190,10 +1102,8 @@ fn assert_protocol_authorization_fixture(
         case.id
     );
 
-    let definition: module_types::Definition =
-        serde_json::from_value(to_modules_vocabulary(&protocol.definition)).unwrap_or_else(|err| {
-            panic!("{} protocol definition must deserialize: {}", case.id, err)
-        });
+    let definition: module_types::Definition = serde_json::from_value(protocol.definition.clone())
+        .unwrap_or_else(|err| panic!("{} protocol definition must deserialize: {}", case.id, err));
     let validation = module_types::validate_definition(&definition);
 
     if protocol.expected_status_code < 400 {
@@ -1212,12 +1122,7 @@ fn assert_protocol_authorization_fixture(
             Err(err) => err,
         };
         if let Some(expected_error_code) = &protocol.expected_error_code {
-            assert_eq!(
-                err.code,
-                modern_error_code(expected_error_code),
-                "{} protocol error",
-                case.id
-            );
+            assert_eq!(err.code, *expected_error_code, "{} protocol error", case.id);
         }
     }
 }
@@ -1229,7 +1134,7 @@ fn assert_grant_authorization_fixture(case: &FixtureCase, grant: &GrantAuthoriza
     assert!(
         matches!(
             grant.scope.interface.as_str(),
-            "Records" | "Protocols" | "Messages"
+            "Records" | "Modules" | "Messages"
         ),
         "{} grant scope interface must be a DWN interface",
         case.id
@@ -1305,11 +1210,7 @@ fn assert_grant_authorization_fixture(case: &FixtureCase, grant: &GrantAuthoriza
             );
             assert_eq!(
                 Some(actual_error_code.as_str()),
-                grant
-                    .expected_error_code
-                    .as_deref()
-                    .map(modern_error_code)
-                    .as_deref(),
+                grant.expected_error_code.as_deref(),
                 "{} grant error",
                 case.id
             );
@@ -1382,7 +1283,7 @@ fn evaluate_grant_authorization_fixture(
 
     match grant.scope.interface.as_str() {
         "Records" => evaluate_records_grant_authorization(case, grant),
-        "Protocols" => evaluate_protocols_grant_authorization(case, grant),
+        "Modules" => evaluate_modules_grant_authorization(case, grant),
         "Messages" => evaluate_messages_grant_authorization(case, grant),
         _ => Ok(()),
     }
@@ -1392,11 +1293,11 @@ fn evaluate_records_grant_authorization(
     case: &FixtureCase,
     grant: &GrantAuthorizationFixture,
 ) -> Result<(), String> {
-    if grant.scope.protocol.as_deref() != incoming_message_str_optional(grant, "protocol") {
+    if grant.scope.module.as_deref() != incoming_message_str_optional(grant, "module") {
         return Err("RecordsGrantAuthorizationScopeModuleMismatch".to_string());
     }
-    if let Some(scope_protocol_path) = grant.scope.protocol_path.as_deref() {
-        if incoming_message_str_optional(grant, "protocolPath") != Some(scope_protocol_path) {
+    if let Some(scope_module_path) = grant.scope.module_path.as_deref() {
+        if incoming_message_str_optional(grant, "modulePath") != Some(scope_module_path) {
             return Err("RecordsGrantAuthorizationScopeModulePathMismatch".to_string());
         }
     }
@@ -1420,16 +1321,14 @@ fn evaluate_records_grant_authorization(
     }
 }
 
-fn evaluate_protocols_grant_authorization(
+fn evaluate_modules_grant_authorization(
     _case: &FixtureCase,
     grant: &GrantAuthorizationFixture,
 ) -> Result<(), String> {
-    let Some(scope_protocol) = grant.scope.protocol.as_deref() else {
+    let Some(scope_module) = grant.scope.module.as_deref() else {
         return Ok(());
     };
-    if incoming_message_str_optional(grant, "protocol")
-        .is_some_and(|protocol| protocol != scope_protocol)
-    {
+    if incoming_message_str_optional(grant, "module").is_some_and(|module| module != scope_module) {
         return Err("ModulesGrantAuthorizationQueryModuleScopeMismatch".to_string());
     }
     Ok(())
@@ -1439,14 +1338,14 @@ fn evaluate_messages_grant_authorization(
     _case: &FixtureCase,
     grant: &GrantAuthorizationFixture,
 ) -> Result<(), String> {
-    let Some(scope_protocol) = grant.scope.protocol.as_deref() else {
+    let Some(scope_module) = grant.scope.module.as_deref() else {
         return Ok(());
     };
-    let incoming_protocols = incoming_message_protocols(grant);
-    if incoming_protocols.is_empty()
-        || incoming_protocols
+    let incoming_modules = incoming_message_modules(grant);
+    if incoming_modules.is_empty()
+        || incoming_modules
             .iter()
-            .any(|protocol| *protocol != scope_protocol)
+            .any(|module| *module != scope_module)
     {
         return Err("MessagesGrantAuthorizationMismatchedModule".to_string());
     }
@@ -1473,24 +1372,24 @@ fn incoming_message_bool(grant: &GrantAuthorizationFixture, field: &str) -> Opti
     grant.incoming_message.get(field).and_then(Value::as_bool)
 }
 
-fn incoming_message_protocols(grant: &GrantAuthorizationFixture) -> Vec<&str> {
-    let mut protocols = Vec::new();
-    if let Some(protocol) = incoming_message_str_optional(grant, "protocol") {
-        protocols.push(protocol);
+fn incoming_message_modules(grant: &GrantAuthorizationFixture) -> Vec<&str> {
+    let mut modules = Vec::new();
+    if let Some(module) = incoming_message_str_optional(grant, "module") {
+        modules.push(module);
     }
     if let Some(filters) = grant
         .incoming_message
         .get("filters")
         .and_then(Value::as_array)
     {
-        protocols.extend(
+        modules.extend(
             filters
                 .iter()
-                .filter_map(|filter| filter.get("protocol"))
+                .filter_map(|filter| filter.get("module"))
                 .filter_map(Value::as_str),
         );
     }
-    protocols
+    modules
 }
 
 fn grant_timestamp(case: &FixtureCase, value: &str, field: &str) -> chrono::DateTime<chrono::Utc> {
@@ -1525,7 +1424,7 @@ fn assert_protocol_directive_coverage(suite_id: &str, actual: &BTreeSet<String>)
 }
 
 fn assert_grant_scope_coverage(suite_id: &str, actual: &BTreeSet<String>) {
-    let expected = ["Records", "Protocols", "Messages"]
+    let expected = ["Records", "Modules", "Messages"]
         .into_iter()
         .map(str::to_string)
         .collect::<BTreeSet<_>>();
@@ -1566,11 +1465,11 @@ fn grant_behaviors(case: &FixtureCase, grant: &GrantAuthorizationFixture) -> BTr
     if grant.delegated {
         behaviors.insert("delegate".to_string());
     }
-    if grant.scope.protocol_path.is_some() {
+    if grant.scope.module_path.is_some() {
         behaviors.insert("scope".to_string());
     }
-    if grant.scope.protocol.is_none() && grant.scope.interface == "Records" {
-        panic!("{} Records grants must include protocol scope", case.id);
+    if grant.scope.module.is_none() && grant.scope.interface == "Records" {
+        panic!("{} Records grants must include module scope", case.id);
     }
     behaviors
 }
@@ -1648,11 +1547,11 @@ fn assert_state_index_operation_fixture_shape(case: &FixtureCase) {
             }
             StateIndexOperation::GetProtocolRoot {
                 tenant,
-                protocol,
+                module,
                 expected,
             } => {
                 assert_state_index_tenant(case, tenants, tenant);
-                assert_state_index_protocol(case, protocol);
+                assert_state_index_protocol(case, module);
                 assert_state_hash_hex(case, expected);
             }
             StateIndexOperation::GetSubtreeHash {
@@ -1666,12 +1565,12 @@ fn assert_state_index_operation_fixture_shape(case: &FixtureCase) {
             }
             StateIndexOperation::GetProtocolSubtreeHash {
                 tenant,
-                protocol,
+                module,
                 prefix,
                 expected,
             } => {
                 assert_state_index_tenant(case, tenants, tenant);
-                assert_state_index_protocol(case, protocol);
+                assert_state_index_protocol(case, module);
                 assert_bit_prefix(case, prefix);
                 assert_state_hash_hex(case, expected);
             }
@@ -1686,12 +1585,12 @@ fn assert_state_index_operation_fixture_shape(case: &FixtureCase) {
             }
             StateIndexOperation::GetProtocolLeaves {
                 tenant,
-                protocol,
+                module,
                 prefix,
                 expected,
             } => {
                 assert_state_index_tenant(case, tenants, tenant);
-                assert_state_index_protocol(case, protocol);
+                assert_state_index_protocol(case, module);
                 assert_bit_prefix(case, prefix);
                 assert_state_index_leaves(case, expected);
             }
@@ -1794,23 +1693,23 @@ async fn assert_state_index_operations(case: &FixtureCase) {
             }
             StateIndexOperation::GetProtocolRoot {
                 tenant,
-                protocol,
+                module,
                 expected,
             } => {
                 assert_eq!(
                     state_hash_hex(
                         &state_index
-                            .get_module_root(tenant, protocol)
+                            .get_module_root(tenant, module)
                             .await
                             .unwrap_or_else(|err| {
-                                panic!("{} StateIndex getProtocolRoot failed: {}", case.id, err)
+                                panic!("{} StateIndex getModuleRoot failed: {}", case.id, err)
                             })
                     ),
                     *expected,
-                    "{} getProtocolRoot {} {}",
+                    "{} getModuleRoot {} {}",
                     case.id,
                     tenant,
-                    protocol
+                    module
                 );
             }
             StateIndexOperation::GetSubtreeHash {
@@ -1836,27 +1735,27 @@ async fn assert_state_index_operations(case: &FixtureCase) {
             }
             StateIndexOperation::GetProtocolSubtreeHash {
                 tenant,
-                protocol,
+                module,
                 prefix,
                 expected,
             } => {
                 assert_eq!(
                     state_hash_hex(
                         &state_index
-                            .get_module_subtree_hash(tenant, protocol, &bit_prefix(prefix))
+                            .get_module_subtree_hash(tenant, module, &bit_prefix(prefix))
                             .await
                             .unwrap_or_else(|err| {
                                 panic!(
-                                    "{} StateIndex getProtocolSubtreeHash failed: {}",
+                                    "{} StateIndex getModuleSubtreeHash failed: {}",
                                     case.id, err
                                 )
                             })
                     ),
                     *expected,
-                    "{} getProtocolSubtreeHash {} {} {}",
+                    "{} getModuleSubtreeHash {} {} {}",
                     case.id,
                     tenant,
-                    protocol,
+                    module,
                     prefix
                 );
             }
@@ -1880,21 +1779,21 @@ async fn assert_state_index_operations(case: &FixtureCase) {
             }
             StateIndexOperation::GetProtocolLeaves {
                 tenant,
-                protocol,
+                module,
                 prefix,
                 expected,
             } => {
                 let mut leaves = state_index
-                    .get_module_leaves(tenant, protocol, &bit_prefix(prefix))
+                    .get_module_leaves(tenant, module, &bit_prefix(prefix))
                     .await
                     .unwrap_or_else(|err| {
-                        panic!("{} StateIndex getProtocolLeaves failed: {}", case.id, err)
+                        panic!("{} StateIndex getModuleLeaves failed: {}", case.id, err)
                     });
                 leaves.sort();
                 assert_eq!(
                     leaves, *expected,
-                    "{} getProtocolLeaves {} {} {}",
-                    case.id, tenant, protocol, prefix
+                    "{} getModuleLeaves {} {} {}",
+                    case.id, tenant, module, prefix
                 );
             }
         }
@@ -1912,7 +1811,6 @@ fn state_index_indexes(
     indexes: &BTreeMap<String, Value>,
 ) -> dwn_rs_core::MapValue {
     let value = serde_json::to_value(indexes)
-        .map(|value| to_modules_vocabulary(&value))
         .unwrap_or_else(|err| panic!("{} StateIndex indexes must serialize: {}", case.id, err));
     serde_json::from_value(value)
         .unwrap_or_else(|err| panic!("{} StateIndex indexes must deserialize: {}", case.id, err))
@@ -2056,16 +1954,16 @@ async fn messages_sync_reply(
     sync: &MessagesSyncFixture,
 ) -> Value {
     let descriptor = messages_sync_descriptor(case, sync);
-    let protocol = descriptor.get("protocol").and_then(Value::as_str);
+    let module = descriptor.get("module").and_then(Value::as_str);
 
     match messages_sync_action(case, descriptor) {
         "root" => {
-            let root = match protocol {
-                Some(protocol) => state_index
-                    .get_module_root(&sync.tenant, protocol)
+            let root = match module {
+                Some(module) => state_index
+                    .get_module_root(&sync.tenant, module)
                     .await
                     .unwrap_or_else(|err| {
-                        panic!("{} MessagesSync getProtocolRoot failed: {}", case.id, err)
+                        panic!("{} MessagesSync getModuleRoot failed: {}", case.id, err)
                     }),
                 None => state_index
                     .get_root(&sync.tenant)
@@ -2082,8 +1980,7 @@ async fn messages_sync_reply(
         "subtree" => {
             let prefix = bit_prefix(messages_sync_prefix(case, descriptor));
             let hash =
-                messages_sync_subtree_hash(case, state_index, &sync.tenant, protocol, &prefix)
-                    .await;
+                messages_sync_subtree_hash(case, state_index, &sync.tenant, module, &prefix).await;
             serde_json::json!({
                 "status": { "code": 200, "detail": "OK" },
                 "hash": hash,
@@ -2092,7 +1989,7 @@ async fn messages_sync_reply(
         "leaves" => {
             let prefix = bit_prefix(messages_sync_prefix(case, descriptor));
             let entries =
-                messages_sync_leaves(case, state_index, &sync.tenant, protocol, &prefix).await;
+                messages_sync_leaves(case, state_index, &sync.tenant, module, &prefix).await;
             serde_json::json!({
                 "status": { "code": 200, "detail": "OK" },
                 "entries": entries,
@@ -2110,7 +2007,7 @@ async fn messages_sync_diff_reply(
     sync: &MessagesSyncFixture,
     descriptor: &Value,
 ) -> Value {
-    let protocol = descriptor.get("protocol").and_then(Value::as_str);
+    let module = descriptor.get("module").and_then(Value::as_str);
     let depth = messages_sync_depth(case, descriptor);
     let client_hashes = messages_sync_hashes(case, descriptor);
     let default_hash = default_messages_sync_hash_hex(depth).await;
@@ -2118,7 +2015,7 @@ async fn messages_sync_diff_reply(
         case,
         state_index,
         &sync.tenant,
-        protocol,
+        module,
         depth,
         &default_hash,
     )
@@ -2156,7 +2053,7 @@ async fn messages_sync_diff_reply(
                     case,
                     state_index,
                     &sync.tenant,
-                    protocol,
+                    module,
                     &bit_prefix(&prefix),
                 )
                 .await,
@@ -2169,7 +2066,7 @@ async fn messages_sync_diff_reply(
                 case,
                 state_index,
                 &sync.tenant,
-                protocol,
+                module,
                 &bit_prefix(&prefix),
             )
             .await,
@@ -2188,14 +2085,14 @@ async fn collect_messages_sync_subtree_hashes(
     case: &FixtureCase,
     state_index: &MemoryStateIndex,
     tenant: &str,
-    protocol: Option<&str>,
+    module: Option<&str>,
     depth: usize,
     default_hash: &str,
 ) -> BTreeMap<String, String> {
     let mut hashes = BTreeMap::new();
     for prefix in bit_prefixes(depth) {
         let hash =
-            messages_sync_subtree_hash(case, state_index, tenant, protocol, &bit_prefix(&prefix))
+            messages_sync_subtree_hash(case, state_index, tenant, module, &bit_prefix(&prefix))
                 .await;
         if hash != default_hash {
             hashes.insert(prefix, hash);
@@ -2208,16 +2105,16 @@ async fn messages_sync_subtree_hash(
     case: &FixtureCase,
     state_index: &MemoryStateIndex,
     tenant: &str,
-    protocol: Option<&str>,
+    module: Option<&str>,
     prefix: &[bool],
 ) -> String {
-    let hash = match protocol {
-        Some(protocol) => state_index
-            .get_module_subtree_hash(tenant, protocol, prefix)
+    let hash = match module {
+        Some(module) => state_index
+            .get_module_subtree_hash(tenant, module, prefix)
             .await
             .unwrap_or_else(|err| {
                 panic!(
-                    "{} MessagesSync getProtocolSubtreeHash failed: {}",
+                    "{} MessagesSync getModuleSubtreeHash failed: {}",
                     case.id, err
                 )
             }),
@@ -2235,15 +2132,15 @@ async fn messages_sync_leaves(
     case: &FixtureCase,
     state_index: &MemoryStateIndex,
     tenant: &str,
-    protocol: Option<&str>,
+    module: Option<&str>,
     prefix: &[bool],
 ) -> Vec<String> {
-    match protocol {
-        Some(protocol) => state_index
-            .get_module_leaves(tenant, protocol, prefix)
+    match module {
+        Some(module) => state_index
+            .get_module_leaves(tenant, module, prefix)
             .await
             .unwrap_or_else(|err| {
-                panic!("{} MessagesSync getProtocolLeaves failed: {}", case.id, err)
+                panic!("{} MessagesSync getModuleLeaves failed: {}", case.id, err)
             }),
         None => state_index
             .get_leaves(tenant, prefix)
@@ -2593,15 +2490,15 @@ fn assert_jwe_envelope(case: &FixtureCase) {
             assert_eq!(
                 key_encryption.module(),
                 None,
-                "{} protocolPath entries must not carry protocol",
+                "{} modulePath entries must not carry module",
                 case.id
             );
         }
         dwn_rs_core::encryption::DerivationScheme::RoleAudience => {
             assert_eq!(
                 key_encryption.module(),
-                case.protocol.as_deref(),
-                "{} roleAudience protocol",
+                case.module.as_deref(),
+                "{} roleAudience module",
                 case.id
             );
             assert_eq!(
@@ -2807,7 +2704,7 @@ fn assert_jwe_seal(case: &FixtureCase) {
     let unwrapped = dwn_rs_core::encryption::seal_unwrap(
         &decode_base64url_array_fixture(&sealing_private_jwk.d, &case.id, "sealing private key"),
         &seal,
-        &context.protocol,
+        &context.module,
         &context.role_path,
         &context.context_id,
         &context.audience_key_id,
@@ -2922,17 +2819,17 @@ fn construct_jwe_derivation_path(case: &FixtureCase) -> Vec<String> {
         .unwrap_or_else(|| panic!("{} JWE record must include descriptor", case.id));
 
     match derivation_scheme(case) {
-        "protocolPath" => {
-            let protocol = descriptor
-                .get("protocol")
+        "modulePath" => {
+            let module = descriptor
+                .get("module")
                 .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("{} descriptor must include protocol", case.id));
-            let protocol_path = descriptor
-                .get("protocolPath")
+                .unwrap_or_else(|| panic!("{} descriptor must include module", case.id));
+            let module_path = descriptor
+                .get("modulePath")
                 .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("{} descriptor must include protocolPath", case.id));
-            let mut path = vec!["protocolPath".to_string(), protocol.to_string()];
-            path.extend(protocol_path.split('/').map(str::to_string));
+                .unwrap_or_else(|| panic!("{} descriptor must include modulePath", case.id));
+            let mut path = vec!["modulePath".to_string(), module.to_string()];
+            path.extend(module_path.split('/').map(str::to_string));
             path
         }
         "roleAudience" => vec!["roleAudience".to_string()],
@@ -3204,10 +3101,8 @@ fn assert_supported_descriptor_roundtrip(case: &FixtureCase) {
         ("Records", "Write") => roundtrip_descriptor::<RecordsWriteDescriptor>(descriptor),
         ("Records", "Delete") => roundtrip_descriptor::<DeleteDescriptor>(descriptor),
         ("Records", "Subscribe") => roundtrip_descriptor::<RecordsSubscribeDescriptor>(descriptor),
-        ("Protocols", "Configure") => {
-            roundtrip_descriptor::<ModulesConfigureDescriptor>(descriptor)
-        }
-        ("Protocols", "Query") => roundtrip_descriptor::<ModulesQueryDescriptor>(descriptor),
+        ("Modules", "Configure") => roundtrip_descriptor::<ModulesConfigureDescriptor>(descriptor),
+        ("Modules", "Query") => roundtrip_descriptor::<ModulesQueryDescriptor>(descriptor),
         ("Messages", "Read") => roundtrip_descriptor::<MessagesReadDescriptor>(descriptor),
         ("Messages", "Query") => roundtrip_descriptor::<MessagesQueryDescriptor>(descriptor),
         ("Messages", "Subscribe") => {
@@ -4048,9 +3943,8 @@ fn grant_key_coverage_matches_typescript() {
             };
             let label = format!("{}/{}", suite.suite_ref.id, case.id);
 
-            let scope: PermissionScope =
-                serde_json::from_value(to_modules_vocabulary(&coverage.grant_scope))
-                    .unwrap_or_else(|error| panic!("{label}: grant scope must parse: {error}"));
+            let scope: PermissionScope = serde_json::from_value(coverage.grant_scope.clone())
+                .unwrap_or_else(|error| panic!("{label}: grant scope must parse: {error}"));
             let eligible = eligible_grant_scope(&scope);
             assert_eq!(
                 eligible.is_some(),
@@ -4065,16 +3959,15 @@ fn grant_key_coverage_matches_typescript() {
                         let raw = definitions
                             .get(name)
                             .unwrap_or_else(|| panic!("{label}: no definition named {name}"));
-                        serde_json::from_value::<Definition>(to_modules_vocabulary(raw))
-                            .unwrap_or_else(|error| {
-                                panic!("{label}: definition {name} must parse: {error}")
-                            })
+                        serde_json::from_value::<Definition>(raw.clone()).unwrap_or_else(|error| {
+                            panic!("{label}: definition {name} must parse: {error}")
+                        })
                     });
                     read_grant_covers_delivered_scope(
                         eligible,
                         &DeliveredScope {
-                            module: &coverage.delivered_scope.protocol,
-                            module_path: coverage.delivered_scope.protocol_path.as_deref(),
+                            module: &coverage.delivered_scope.module,
+                            module_path: coverage.delivered_scope.module_path.as_deref(),
                         },
                         definition.as_ref(),
                     )

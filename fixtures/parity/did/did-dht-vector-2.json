@@ -3,9 +3,9 @@
   "oracle": "enbox",
   "source": {
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "path": "packages/dids/tests/fixtures/test-vectors/did-dht/vector-2.json",
-    "url": "https://github.com/enboxorg/enbox/blob/c63bf424ac0997583db825e8a5fddf1507d30c40/packages/dids/tests/fixtures/test-vectors/did-dht/vector-2.json"
+    "url": "https://github.com/enboxorg/enbox/blob/1d02b19555f256ecb9f7df5a47048425c549a6d7/packages/dids/tests/fixtures/test-vectors/did-dht/vector-2.json"
   },
   "description": "Official did:dht DNS-record and DID-document vector, replayed locally after encoding the TXT records into a DNS packet.",
   "vector": {

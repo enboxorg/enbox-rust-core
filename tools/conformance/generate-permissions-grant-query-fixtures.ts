@@ -7,10 +7,16 @@ import { CONFORMANCE_ALICE_DID, getConformanceAlicePersona } from './conformance
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const enboxTsRoot = process.env.ENBOX_TS_ROOT ?? resolve(repoRoot, '../enbox');
 
+// Provenance pin: generated vectors must match .enbox-version.
+const pin = readFileSync(resolve(repoRoot, '.enbox-version'), 'utf8')
+  .split('\n')
+  .map((line) => line.trim())
+  .find((line) => line !== '' && !line.startsWith('#'))!;
+
 const { TestDataGenerator } = await import(
   resolve(enboxTsRoot, 'packages/dwn-sdk-js/tests/utils/test-data-generator.ts')
 );
-const { PermissionsProtocol } = await import(
+const { PermissionsModule } = await import(
   resolve(enboxTsRoot, 'packages/dwn-sdk-js/src/index.ts')
 );
 
@@ -38,8 +44,8 @@ function indexesForGrant(message: Record<string, unknown>) {
     author: tenant,
     recordId: message.recordId,
     entryId: `${tenant}/${message.recordId}`,
-    protocol: descriptor.protocol,
-    protocolPath: descriptor.protocolPath,
+    module: descriptor.module,
+    modulePath: descriptor.modulePath,
     recipient: descriptor.recipient,
     dateCreated: descriptor.dateCreated,
     messageTimestamp: descriptor.messageTimestamp,
@@ -65,8 +71,8 @@ async function grantQueryCase(id: string, filter: Record<string, unknown>, expec
   const { message } = await TestDataGenerator.generateRecordsQuery({
     author: alice,
     filter: {
-      protocol: PermissionsProtocol.uri,
-      protocolPath: PermissionsProtocol.grantPath,
+      module: PermissionsModule.uri,
+      modulePath: PermissionsModule.grantPath,
       ...filter,
     },
   });
@@ -90,12 +96,12 @@ const cases = [
   await grantQueryCase('query-permissions-grant-by-path', {}, 1),
   await grantQueryCase(
     'query-permissions-grant-by-protocol-tag',
-    { tags: { protocol: grantProtocol } },
+    { tags: { module: grantProtocol } },
     1,
   ),
   await grantQueryCase(
     'query-permissions-grant-tag-no-match',
-    { tags: { protocol: 'https://example.com/other' } },
+    { tags: { module: 'https://example.com/other' } },
     0,
   ),
 ];
@@ -105,11 +111,11 @@ const fixture = {
   source: {
     package: '@enbox/dwn-sdk-js',
     repository: 'enboxorg/enbox',
-    commit: 'c63bf424ac0997583db825e8a5fddf1507d30c40',
+    commit: pin,
     functions: [
-      'PermissionsProtocol.createGrant',
+      'PermissionsModule.createGrant',
       'RecordsQuery.create',
-      'PermissionsProtocol.grantPath',
+      'PermissionsModule.grantPath',
     ],
   },
   seedSets,

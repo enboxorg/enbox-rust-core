@@ -12,6 +12,9 @@ use url::Url;
 use crate::encryption::ENCRYPTION_CONTROL_ROOT_PATH;
 use crate::errors::{DwnError, DwnErrorCode};
 
+/// Upper bound on `$recordLimit.max`, matching the TypeScript `DwnConstant.maxRecordLimit`.
+const MAX_RECORD_LIMIT: u64 = 1_000;
+
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct Type {
@@ -596,6 +599,14 @@ fn validate_rule_set(
             return Err(module_error(
                 "ModulesConfigureInvalidRecordLimit",
                 format!("Invalid $recordLimit at module path '{module_path}': max must be >= 1."),
+            ));
+        }
+        if record_limit.max > MAX_RECORD_LIMIT {
+            return Err(module_error(
+                "ModulesConfigureInvalidRecordLimit",
+                format!(
+                    "Invalid $recordLimit at module path '{module_path}': max must be <= {MAX_RECORD_LIMIT}."
+                ),
             ));
         }
     }

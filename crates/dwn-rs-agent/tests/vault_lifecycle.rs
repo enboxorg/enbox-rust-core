@@ -1127,10 +1127,9 @@ async fn ts_backup_fixture_restores_onto_fresh_and_initialized_stores() {
         value["contentEncryptionKey"],
         fixture["vector"]["contentEncryptionKey"]
     );
-    assert_eq!(
-        serde_json::to_string(&value["status"]).unwrap(),
-        fixture["vector"]["statusBeforeBackup"].as_str().unwrap()
-    );
+    let expected_status: Value =
+        serde_json::from_str(fixture["vector"]["statusBeforeBackup"].as_str().unwrap()).unwrap();
+    assert_eq!(value["status"], expected_status);
 
     // The fixture backup carries `lastBackup: null`, so restore merges the
     // current value: none on a fresh store, the local one otherwise.

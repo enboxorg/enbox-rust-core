@@ -3,7 +3,7 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "cidFunction": "Cid.computeCid",
     "replyBoundary": "Dwn.processMessage"
   },
@@ -19,7 +19,13 @@
         "handler": "MessagesRead",
         "valid": true,
         "stubReply": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "MessagesRead" }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "handler": "MessagesRead"
+        }
       },
       "message": {
         "descriptor": {
@@ -40,7 +46,12 @@
         "tenant": "did:example:alice",
         "handler": "MessagesRead",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"messageCid\" is a required property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"messageCid\" is a required property"
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -60,7 +71,14 @@
         "tenant": "did:example:alice",
         "handler": "MessagesQuery",
         "valid": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "entries": [], "drained": true }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [],
+          "drained": true
+        }
       },
       "message": {
         "authorization": {},
@@ -82,7 +100,12 @@
         "tenant": "did:example:alice",
         "handler": "MessagesQuery",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"not-an-array\" is not of type \"array\"" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"not-an-array\" is not of type \"array\""
+          }
+        }
       },
       "message": {
         "authorization": {},
@@ -105,7 +128,13 @@
         "handler": "MessagesSubscribe",
         "valid": true,
         "stubReply": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "MessagesSubscribe" }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "handler": "MessagesSubscribe"
+        }
       },
       "message": {
         "descriptor": {
@@ -125,7 +154,12 @@
         "tenant": "did:example:alice",
         "handler": "MessagesSubscribe",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"not-an-array\" is not of type \"array\"" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"not-an-array\" is not of type \"array\""
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -147,7 +181,13 @@
         "handler": "MessagesSync",
         "valid": true,
         "stubReply": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "handler": "MessagesSync" }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "handler": "MessagesSync"
+        }
       },
       "message": {
         "descriptor": {
@@ -168,7 +208,12 @@
         "tenant": "did:example:alice",
         "handler": "MessagesSync",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"not-a-sync-action\" is not one of [\"root\",\"subtree\",\"leaves\",\"diff\"]" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"not-a-sync-action\" is not one of [\"root\",\"subtree\",\"leaves\",\"diff\"]"
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -183,25 +228,50 @@
       "id": "process-protocols-configure-valid",
       "description": "ProtocolsConfigure dispatch stub until signed fixture is extracted (#107).",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreihdgcagpa7qvwxbyomcs2ac4a7lxmj2a4ygmv6xc62gzfxnt7bcpm",
-      "messageCid": "bafyreidxjfexpgzesjbf22reinefstax3usbhzn2jvoyacf3eeyc6w4ikq",
+      "descriptorCid": "bafyreicwo3oijosnkv77hyfstigc3cuj5wdcxvo7ffzjwvoysw5fpb2xjm",
+      "messageCid": "bafyreiagokhwi65y4opkfj4q4r3lceoiaokmcvnsdnrfevjkx6ghjvuuue",
       "process": {
         "tenant": "did:example:alice",
-        "handler": "ProtocolsConfigure",
+        "handler": "ModulesConfigure",
         "valid": true,
         "stubReply": true,
-        "reply": { "status": { "code": 202, "detail": "Accepted" }, "handler": "ProtocolsConfigure" }
+        "reply": {
+          "status": {
+            "code": 202,
+            "detail": "Accepted"
+          },
+          "handler": "ModulesConfigure"
+        }
       },
       "message": {
         "descriptor": {
-          "interface": "Protocols",
+          "interface": "Modules",
           "method": "Configure",
           "messageTimestamp": "2025-02-01T00:00:06.000000Z",
           "definition": {
-            "protocol": "http://example.com/process",
+            "module": "http://example.com/process",
             "published": true,
-            "types": { "note": { "schema": "http://schema.example.com/note", "dataFormats": ["text/plain"] } },
-            "structure": { "note": { "$actions": [{ "who": "anyone", "can": ["create", "read"] }] } }
+            "types": {
+              "note": {
+                "schema": "http://schema.example.com/note",
+                "dataFormats": [
+                  "text/plain"
+                ]
+              }
+            },
+            "structure": {
+              "note": {
+                "$actions": [
+                  {
+                    "who": "anyone",
+                    "can": [
+                      "create",
+                      "read"
+                    ]
+                  }
+                ]
+              }
+            }
           }
         }
       }
@@ -210,17 +280,22 @@
       "id": "process-protocols-configure-invalid",
       "description": "ProtocolsConfigure process fixture missing the definition.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreifyuchrdeo6l2vbcizwttepgg5zuqoc5donyg3lvf652lj27mg3ci",
-      "messageCid": "bafyreicod33xxmhtvf7ugyfwctatppx7hklizefolu5rjvr3eox5mwnat4",
+      "descriptorCid": "bafyreieg6ky74qphkoqtsvlezrzmp7jrxgvqpfn52fb5a35zccnugf3aey",
+      "messageCid": "bafyreiezbpmztlbj6dp4sq44xsn3j2ji2y7zbrwz3vdc2k2jehyvbp7tta",
       "process": {
         "tenant": "did:example:alice",
-        "handler": "ProtocolsConfigure",
+        "handler": "ModulesConfigure",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"definition\" is a required property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"definition\" is a required property"
+          }
+        }
       },
       "message": {
         "descriptor": {
-          "interface": "Protocols",
+          "interface": "Modules",
           "method": "Configure",
           "messageTimestamp": "2025-02-01T00:00:07.000000Z"
         }
@@ -230,20 +305,28 @@
       "id": "process-protocols-query-valid",
       "description": "ProtocolsQuery process fixture for a protocol filter.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreib6gvtnyzdxfrqzlssstcrfiz5m4ayjojfugkfppae4lpavzvbqba",
-      "messageCid": "bafyreibxfzxg4jpwshzxalrpujpijooni4qg4hqc52zsa6egsfjta3xn74",
+      "descriptorCid": "bafyreiacdvaidjllt7l6j4zs44glpatav44js26qdgpegkc3kvskeo7v3y",
+      "messageCid": "bafyreihdjinarbxm5psazlzhlji4cefgeyrnntnzqgwhn4tmqlocabck3y",
       "process": {
         "tenant": "did:example:alice",
-        "handler": "ProtocolsQuery",
+        "handler": "ModulesQuery",
         "valid": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "entries": [] }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": []
+        }
       },
       "message": {
         "descriptor": {
-          "interface": "Protocols",
+          "interface": "Modules",
           "method": "Query",
           "messageTimestamp": "2025-02-01T00:00:08.000000Z",
-          "filter": { "protocol": "http://example.com/process" }
+          "filter": {
+            "module": "http://example.com/process"
+          }
         }
       }
     },
@@ -251,20 +334,27 @@
       "id": "process-protocols-query-invalid",
       "description": "ProtocolsQuery process fixture for a malformed protocol filter.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreidkmobose25pdgk3vpmnfbo3agd775pfb22ec3z5jmt53xkqlxo5q",
-      "messageCid": "bafyreigngvo7eyns7ghz6l56mthxpzlbjl4eipy43ntg4xrrvkp636bvpa",
+      "descriptorCid": "bafyreigumkm5bvrrsuiwl63rj45yfyepfswynn6paqg2ga6faqhfq7pbcy",
+      "messageCid": "bafyreiecg5l45726vxhb2meiebqi6iul2ier3r6hpk62ix6s36qtmbmo54",
       "process": {
         "tenant": "did:example:alice",
-        "handler": "ProtocolsQuery",
+        "handler": "ModulesQuery",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: 7 is not of type \"string\"" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: 7 is not of type \"string\""
+          }
+        }
       },
       "message": {
         "descriptor": {
-          "interface": "Protocols",
+          "interface": "Modules",
           "method": "Query",
           "messageTimestamp": "2025-02-01T00:00:09.000000Z",
-          "filter": { "protocol": 7 }
+          "filter": {
+            "module": 7
+          }
         }
       }
     },
@@ -278,14 +368,22 @@
         "tenant": "did:example:alice",
         "handler": "RecordsCount",
         "valid": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "count": 0 }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "count": 0
+        }
       },
       "message": {
         "descriptor": {
           "interface": "Records",
           "method": "Count",
           "messageTimestamp": "2025-02-01T00:00:10.000000Z",
-          "filter": { "published": true }
+          "filter": {
+            "published": true
+          }
         }
       }
     },
@@ -299,7 +397,12 @@
         "tenant": "did:example:alice",
         "handler": "RecordsCount",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"filter\" is a required property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"filter\" is a required property"
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -320,7 +423,13 @@
         "handler": "RecordsDelete",
         "valid": true,
         "stubReply": true,
-        "reply": { "status": { "code": 202, "detail": "Accepted" }, "handler": "RecordsDelete" }
+        "reply": {
+          "status": {
+            "code": 202,
+            "detail": "Accepted"
+          },
+          "handler": "RecordsDelete"
+        }
       },
       "message": {
         "descriptor": {
@@ -342,7 +451,12 @@
         "tenant": "did:example:alice",
         "handler": "RecordsDelete",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"recordId\" is a required property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"recordId\" is a required property"
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -362,14 +476,23 @@
         "tenant": "did:example:alice",
         "handler": "RecordsQuery",
         "valid": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "entries": [], "cursor": null }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [],
+          "cursor": null
+        }
       },
       "message": {
         "descriptor": {
           "interface": "Records",
           "method": "Query",
           "messageTimestamp": "2025-02-01T00:00:14.000000Z",
-          "filter": { "published": true }
+          "filter": {
+            "published": true
+          }
         }
       }
     },
@@ -383,7 +506,12 @@
         "tenant": "did:example:alice",
         "handler": "RecordsQuery",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: {} has less than 1 property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: {} has less than 1 property"
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -404,14 +532,21 @@
         "tenant": "did:example:alice",
         "handler": "RecordsRead",
         "valid": true,
-        "reply": { "status": { "code": 404, "detail": "Not Found" } }
+        "reply": {
+          "status": {
+            "code": 404,
+            "detail": "Not Found"
+          }
+        }
       },
       "message": {
         "descriptor": {
           "interface": "Records",
           "method": "Read",
           "messageTimestamp": "2025-02-01T00:00:16.000000Z",
-          "filter": { "recordId": "record-1" }
+          "filter": {
+            "recordId": "record-1"
+          }
         }
       }
     },
@@ -425,7 +560,12 @@
         "tenant": "did:example:alice",
         "handler": "RecordsRead",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"filter\" is a required property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"filter\" is a required property"
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -439,20 +579,29 @@
       "id": "process-records-subscribe-valid",
       "description": "RecordsSubscribe process fixture for a protocol filter.",
       "rustStatus": "supported",
-      "descriptorCid": "bafyreiahed7hqbuz3wzu46imxfvxdmdhz3ruhdjithc4bv7oqfoubdgoxi",
-      "messageCid": "bafyreieel32x46uxabwnctczwpyxe6mmby5ojafayenp255feo64g3kk4i",
+      "descriptorCid": "bafyreiamqlwmn3f5laqxf5tmvze6a34njfhf3ktuepnju3wsgqs5f7sdzm",
+      "messageCid": "bafyreibfhe4m7cck5xacwliozlmcwfw2vonviawvcr6ycaytzss4w6uufq",
       "process": {
         "tenant": "did:example:alice",
         "handler": "RecordsSubscribe",
         "valid": true,
-        "reply": { "status": { "code": 200, "detail": "OK" }, "entries": [], "cursor": null }
+        "reply": {
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [],
+          "cursor": null
+        }
       },
       "message": {
         "descriptor": {
           "interface": "Records",
           "method": "Subscribe",
           "messageTimestamp": "2025-02-01T00:00:18.000000Z",
-          "filter": { "protocol": "http://example.com/process" }
+          "filter": {
+            "module": "http://example.com/process"
+          }
         }
       }
     },
@@ -466,7 +615,12 @@
         "tenant": "did:example:alice",
         "handler": "RecordsSubscribe",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"filter\" is a required property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"filter\" is a required property"
+          }
+        }
       },
       "message": {
         "descriptor": {
@@ -487,7 +641,13 @@
         "handler": "RecordsWrite",
         "valid": true,
         "stubReply": true,
-        "reply": { "status": { "code": 202, "detail": "Accepted" }, "handler": "RecordsWrite" }
+        "reply": {
+          "status": {
+            "code": 202,
+            "detail": "Accepted"
+          },
+          "handler": "RecordsWrite"
+        }
       },
       "message": {
         "descriptor": {
@@ -511,7 +671,12 @@
         "tenant": "did:example:alice",
         "handler": "RecordsWrite",
         "valid": false,
-        "reply": { "status": { "code": 400, "detail": "SchemaValidatorFailure: \"protocol\" is a required property" } }
+        "reply": {
+          "status": {
+            "code": 400,
+            "detail": "SchemaValidatorFailure: \"protocol\" is a required property"
+          }
+        }
       },
       "message": {
         "descriptor": {

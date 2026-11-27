@@ -1,134 +1,427 @@
 {
-  "schemaVersion": 1,
+  "cases": [
+    {
+      "description": "Global MessagesSync root reply for a seeded tenant store.",
+      "id": "messages-sync-reply-root-global",
+      "rustStatus": "supported",
+      "sync": {
+        "reply": {
+          "root": "14b4015e22b75402fcb65a056290a9815044551d1144f9eb322828767953b3fb",
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          }
+        },
+        "request": {
+          "descriptor": {
+            "action": "root",
+            "interface": "Messages",
+            "messageTimestamp": "2025-01-01T00:04:00.000000Z",
+            "method": "Sync"
+          },
+          "descriptorCid": "bafyreicpdkhqjzmmq4yt3ucxa75liwhoqosj24tgmv4blkbrh3k26otkwu"
+        },
+        "seedSet": "standard-sync-store",
+        "tenant": "did:example:alice"
+      }
+    },
+    {
+      "description": "Protocol-scoped MessagesSync root reply for PermissionsProtocol records tagged with an application protocol.",
+      "id": "messages-sync-reply-root-permissions-protocol",
+      "rustStatus": "supported",
+      "sync": {
+        "reply": {
+          "root": "838f7d0de5b875374aaa739fc09372d7d8c315206f267a6089a8fee19b3d2dfd",
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          }
+        },
+        "request": {
+          "descriptor": {
+            "action": "root",
+            "interface": "Messages",
+            "messageTimestamp": "2025-01-01T00:04:01.000000Z",
+            "method": "Sync",
+            "module": "https://identity.foundation/dwn/permissions"
+          },
+          "descriptorCid": "bafyreifqx3q4wkbrbr2nyeoarun3j2prurbzolkvk27n3qhkr7jr4l2nwa"
+        },
+        "seedSet": "standard-sync-store",
+        "tenant": "did:example:alice"
+      }
+    },
+    {
+      "description": "MessagesSync subtree reply for a seeded bit prefix.",
+      "id": "messages-sync-reply-subtree-global",
+      "rustStatus": "supported",
+      "sync": {
+        "reply": {
+          "hash": "f0ebbe83feb1c91f2149786c827401326ff8fa6987f430d1ef5424b8cb42bbee",
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          }
+        },
+        "request": {
+          "descriptor": {
+            "action": "subtree",
+            "interface": "Messages",
+            "messageTimestamp": "2025-01-01T00:04:02.000000Z",
+            "method": "Sync",
+            "prefix": "00010100"
+          },
+          "descriptorCid": "bafyreihsjtuc36lptaanjbrotx2kay6nxwik6na3kgmoeoidjhil7bggpq"
+        },
+        "seedSet": "standard-sync-store",
+        "tenant": "did:example:alice"
+      }
+    },
+    {
+      "description": "Protocol-scoped MessagesSync leaves reply for note records including small inline and large external data records.",
+      "id": "messages-sync-reply-leaves-notes-protocol",
+      "rustStatus": "supported",
+      "sync": {
+        "reply": {
+          "entries": [
+            "bafyreierf2snqorxatnxhhot3muc34peflp5p4wqwe7damzaeluthlns6q",
+            "bafyreidxrmuluzamingnf2sd767kjhaf3bboke7fkmnr2pgddz7gzuwlpq",
+            "bafyreiak7zqvkjxtvtqmrgmcm6cj7jsze746o3dn4n6pk6m36j7xl3zp4q"
+          ],
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          }
+        },
+        "request": {
+          "descriptor": {
+            "action": "leaves",
+            "interface": "Messages",
+            "messageTimestamp": "2025-01-01T00:04:03.000000Z",
+            "method": "Sync",
+            "module": "https://example.com/protocol/notes",
+            "prefix": ""
+          },
+          "descriptorCid": "bafyreichet75h5u6hiuaoisp62hjz7noqf55li2wo2jly4n6qjphcucf2a"
+        },
+        "seedSet": "standard-sync-store",
+        "tenant": "did:example:alice"
+      }
+    },
+    {
+      "description": "Protocol-scoped MessagesSync leaves reply for a PermissionsProtocol record carrying a protocol tag.",
+      "id": "messages-sync-reply-leaves-permissions-protocol",
+      "rustStatus": "supported",
+      "sync": {
+        "reply": {
+          "entries": [
+            "bafyreif4hfvk5tyiyghmkaphetl6mwrz4unikunhwcncaggn456zrytbym"
+          ],
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          }
+        },
+        "request": {
+          "descriptor": {
+            "action": "leaves",
+            "interface": "Messages",
+            "messageTimestamp": "2025-01-01T00:04:04.000000Z",
+            "method": "Sync",
+            "module": "https://identity.foundation/dwn/permissions",
+            "prefix": ""
+          },
+          "descriptorCid": "bafyreihnedu6ugsvpy5b7srbsrxhgytdaprn73rw2pdbpefwk7fii3q2aq"
+        },
+        "seedSet": "standard-sync-store",
+        "tenant": "did:example:alice"
+      }
+    },
+    {
+      "description": "MessagesSync diff reply where the server has note records the client lacks, including inline data for small records and no inline data for a large record.",
+      "id": "messages-sync-reply-diff-only-remote-inline-and-large",
+      "rustStatus": "supported",
+      "sync": {
+        "reply": {
+          "onlyLocal": [],
+          "onlyRemote": [
+            {
+              "encodedData": "aGVsbG8gd29ybGQ",
+              "message": {
+                "contextId": "sync-small-record-1",
+                "descriptor": {
+                  "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+                  "dataFormat": "text/plain",
+                  "dataSize": 11,
+                  "dateCreated": "2025-01-01T00:03:00.000000Z",
+                  "interface": "Records",
+                  "messageTimestamp": "2025-01-01T00:03:00.000000Z",
+                  "method": "Write",
+                  "module": "https://example.com/protocol/notes",
+                  "modulePath": "note"
+                },
+                "recordId": "sync-small-record-1"
+              },
+              "messageCid": "bafyreierf2snqorxatnxhhot3muc34peflp5p4wqwe7damzaeluthlns6q"
+            },
+            {
+              "encodedData": "aGVsbG8gd29ybGQ",
+              "message": {
+                "contextId": "sync-small-record-2",
+                "descriptor": {
+                  "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+                  "dataFormat": "text/plain",
+                  "dataSize": 11,
+                  "dateCreated": "2025-01-01T00:03:01.000000Z",
+                  "interface": "Records",
+                  "messageTimestamp": "2025-01-01T00:03:01.000000Z",
+                  "method": "Write",
+                  "module": "https://example.com/protocol/notes",
+                  "modulePath": "note",
+                  "permissionGrantId": "grant-write-123",
+                  "squash": true
+                },
+                "recordId": "sync-small-record-2"
+              },
+              "messageCid": "bafyreidxrmuluzamingnf2sd767kjhaf3bboke7fkmnr2pgddz7gzuwlpq"
+            },
+            {
+              "message": {
+                "contextId": "sync-large-record-1",
+                "descriptor": {
+                  "dataCid": "bafkreibrdz52ofnxudjtoyrkhlige267226yxslkzpz6hs2hmz4ivvmez4",
+                  "dataFormat": "application/octet-stream",
+                  "dataSize": 30721,
+                  "dateCreated": "2025-01-01T00:03:02.000000Z",
+                  "interface": "Records",
+                  "messageTimestamp": "2025-01-01T00:03:02.000000Z",
+                  "method": "Write",
+                  "module": "https://example.com/protocol/notes",
+                  "modulePath": "note"
+                },
+                "recordId": "sync-large-record-1"
+              },
+              "messageCid": "bafyreiak7zqvkjxtvtqmrgmcm6cj7jsze746o3dn4n6pk6m36j7xl3zp4q"
+            }
+          ],
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          }
+        },
+        "request": {
+          "descriptor": {
+            "action": "diff",
+            "depth": 0,
+            "hashes": {},
+            "interface": "Messages",
+            "messageTimestamp": "2025-01-01T00:04:05.000000Z",
+            "method": "Sync",
+            "module": "https://example.com/protocol/notes"
+          },
+          "descriptorCid": "bafyreifim55aonys2t2rnz6zt5zmgztgbkrm2iajs5th2ykeniprxoyjm4"
+        },
+        "seedSet": "standard-sync-store",
+        "tenant": "did:example:alice"
+      }
+    },
+    {
+      "description": "MessagesSync diff reply where the client reports an additional non-empty prefix absent from the server.",
+      "id": "messages-sync-reply-diff-only-local-prefix",
+      "rustStatus": "supported",
+      "sync": {
+        "reply": {
+          "onlyLocal": [
+            "0000",
+            "0001",
+            "0010",
+            "1111"
+          ],
+          "onlyRemote": [
+            {
+              "encodedData": "aGVsbG8gd29ybGQ",
+              "message": {
+                "contextId": "sync-small-record-1",
+                "descriptor": {
+                  "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+                  "dataFormat": "text/plain",
+                  "dataSize": 11,
+                  "dateCreated": "2025-01-01T00:03:00.000000Z",
+                  "interface": "Records",
+                  "messageTimestamp": "2025-01-01T00:03:00.000000Z",
+                  "method": "Write",
+                  "module": "https://example.com/protocol/notes",
+                  "modulePath": "note"
+                },
+                "recordId": "sync-small-record-1"
+              },
+              "messageCid": "bafyreierf2snqorxatnxhhot3muc34peflp5p4wqwe7damzaeluthlns6q"
+            },
+            {
+              "encodedData": "aGVsbG8gd29ybGQ",
+              "message": {
+                "contextId": "sync-small-record-2",
+                "descriptor": {
+                  "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+                  "dataFormat": "text/plain",
+                  "dataSize": 11,
+                  "dateCreated": "2025-01-01T00:03:01.000000Z",
+                  "interface": "Records",
+                  "messageTimestamp": "2025-01-01T00:03:01.000000Z",
+                  "method": "Write",
+                  "module": "https://example.com/protocol/notes",
+                  "modulePath": "note",
+                  "permissionGrantId": "grant-write-123",
+                  "squash": true
+                },
+                "recordId": "sync-small-record-2"
+              },
+              "messageCid": "bafyreidxrmuluzamingnf2sd767kjhaf3bboke7fkmnr2pgddz7gzuwlpq"
+            },
+            {
+              "message": {
+                "contextId": "sync-large-record-1",
+                "descriptor": {
+                  "dataCid": "bafkreibrdz52ofnxudjtoyrkhlige267226yxslkzpz6hs2hmz4ivvmez4",
+                  "dataFormat": "application/octet-stream",
+                  "dataSize": 30721,
+                  "dateCreated": "2025-01-01T00:03:02.000000Z",
+                  "interface": "Records",
+                  "messageTimestamp": "2025-01-01T00:03:02.000000Z",
+                  "method": "Write",
+                  "module": "https://example.com/protocol/notes",
+                  "modulePath": "note"
+                },
+                "recordId": "sync-large-record-1"
+              },
+              "messageCid": "bafyreiak7zqvkjxtvtqmrgmcm6cj7jsze746o3dn4n6pk6m36j7xl3zp4q"
+            }
+          ],
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          }
+        },
+        "request": {
+          "descriptor": {
+            "action": "diff",
+            "depth": 4,
+            "hashes": {
+              "0000": "7bae723b8823f759f352451d610b32a575b9a549c45da1562ca17e8f76e4681b",
+              "0001": "5d3f089360c2a49350a6c8559c95f9f3a7cdc4ea70826b77985a5f745abb51bc",
+              "0010": "1ee141d2d42555fb9a26123ff1df89a0e6396a4070ab962da1f43aea213c6d19",
+              "1111": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            },
+            "interface": "Messages",
+            "messageTimestamp": "2025-01-01T00:04:06.000000Z",
+            "method": "Sync",
+            "module": "https://example.com/protocol/notes"
+          },
+          "descriptorCid": "bafyreidwu2tqjjvqax4zd47lblrkqyla4vhnpmvganm5vj3mez357ai4mi"
+        },
+        "seedSet": "standard-sync-store",
+        "tenant": "did:example:alice"
+      }
+    }
+  ],
   "oracle": "rust-extension",
-  "source": {
-    "repository": "enboxorg/enbox",
-    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
-    "removedUpstreamAt": "25821eda3a551cc9b2f6605e2716a9705ebf3f63",
-    "issue": "https://github.com/enboxorg/enbox-rust-core/issues/188",
-    "note": "MessagesSync, StateIndexLevel, and the sparse-merkle-trie (smt) surfaces were deleted from upstream enbox in 25821eda ('chore(sync): remove legacy sync state surfaces'). This fixture records Rust-native behavior that no longer exists upstream and is tracked as an intentional Rust extension, not current-upstream parity.",
-    "functions": [
-      "MessagesSyncHandler.handle",
-      "MessagesSyncHandler.handleDiff",
-      "MessagesSyncHandler.buildDiffEntries",
-      "StateIndexLevel.getRoot",
-      "StateIndexLevel.getProtocolRoot",
-      "StateIndexLevel.getSubtreeHash",
-      "StateIndexLevel.getProtocolLeaves"
-    ]
-  },
+  "schemaVersion": 1,
   "seedSets": {
     "standard-sync-store": [
       {
+        "encodedData": "aGVsbG8gd29ybGQ",
         "id": "records-write-small-inline",
-        "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
         "indexes": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/notes",
-          "protocolPath": "note"
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
         },
         "message": {
-          "recordId": "sync-small-record-1",
+          "contextId": "sync-small-record-1",
           "descriptor": {
-            "interface": "Records",
-            "method": "Write",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note",
             "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+            "dataFormat": "text/plain",
             "dataSize": 11,
             "dateCreated": "2025-01-01T00:03:00.000000Z",
+            "interface": "Records",
             "messageTimestamp": "2025-01-01T00:03:00.000000Z",
-            "dataFormat": "text/plain"
+            "method": "Write",
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note"
           },
-          "contextId": "sync-small-record-1"
+          "recordId": "sync-small-record-1"
         },
-        "encodedData": "aGVsbG8gd29ybGQ"
+        "messageCid": "bafyreierf2snqorxatnxhhot3muc34peflp5p4wqwe7damzaeluthlns6q"
       },
       {
+        "encodedData": "aGVsbG8gd29ybGQ",
         "id": "records-write-grant-inline",
-        "messageCid": "bafyreic7uxfzjh3smvznwyjpgxmvfoknyjfrabpc5evdivtr4mddxhoq2e",
         "indexes": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/notes",
-          "protocolPath": "note"
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
         },
         "message": {
-          "recordId": "sync-small-record-2",
+          "contextId": "sync-small-record-2",
           "descriptor": {
-            "interface": "Records",
-            "method": "Write",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note",
             "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
+            "dataFormat": "text/plain",
             "dataSize": 11,
             "dateCreated": "2025-01-01T00:03:01.000000Z",
+            "interface": "Records",
             "messageTimestamp": "2025-01-01T00:03:01.000000Z",
-            "dataFormat": "text/plain",
+            "method": "Write",
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note",
             "permissionGrantId": "grant-write-123",
             "squash": true
           },
-          "contextId": "sync-small-record-2"
+          "recordId": "sync-small-record-2"
         },
-        "encodedData": "aGVsbG8gd29ybGQ"
+        "messageCid": "bafyreidxrmuluzamingnf2sd767kjhaf3bboke7fkmnr2pgddz7gzuwlpq"
       },
       {
+        "data": {
+          "byte": 97,
+          "encoding": "repeatByte",
+          "length": 30721
+        },
         "id": "records-write-large-external",
-        "messageCid": "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu",
         "indexes": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/notes",
-          "protocolPath": "note"
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
         },
         "message": {
-          "recordId": "sync-large-record-1",
+          "contextId": "sync-large-record-1",
           "descriptor": {
-            "interface": "Records",
-            "method": "Write",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note",
             "dataCid": "bafkreibrdz52ofnxudjtoyrkhlige267226yxslkzpz6hs2hmz4ivvmez4",
+            "dataFormat": "application/octet-stream",
             "dataSize": 30721,
             "dateCreated": "2025-01-01T00:03:02.000000Z",
+            "interface": "Records",
             "messageTimestamp": "2025-01-01T00:03:02.000000Z",
-            "dataFormat": "application/octet-stream"
+            "method": "Write",
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note"
           },
-          "contextId": "sync-large-record-1"
+          "recordId": "sync-large-record-1"
         },
-        "data": {
-          "encoding": "repeatByte",
-          "byte": 97,
-          "length": 30721
-        }
+        "messageCid": "bafyreiak7zqvkjxtvtqmrgmcm6cj7jsze746o3dn4n6pk6m36j7xl3zp4q"
       },
       {
+        "encodedData": "eyJkZXNjcmlwdGlvbiI6IlJlcXVlc3Qgd3JpdGUgYWNjZXNzIHRvIHByb3RvY29sIG5vdGVzLiIsImRlbGVnYXRlZCI6ZmFsc2UsInNjb3BlIjp7ImludGVyZmFjZSI6IlJlY29yZHMiLCJtZXRob2QiOiJXcml0ZSIsInByb3RvY29sIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS9wcm90b2NvbC9ub3RlcyIsInByb3RvY29sUGF0aCI6Im5vdGUifSwiY29uZGl0aW9ucyI6eyJwdWJsaWNhdGlvbiI6IlJlcXVpcmVkIn19",
         "id": "permissions-request-inline",
-        "messageCid": "bafyreiaa55vw6jq2yz4kwrirx4epy6deo2qpaunc3prdf5vqlkiv2y6v3y",
         "indexes": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://identity.foundation/dwn/permissions",
-          "protocolPath": "request"
+          "module": "https://identity.foundation/dwn/permissions",
+          "modulePath": "request"
         },
         "message": {
-          "recordId": "bafyreideqv6tfwj2ig4tjwlt5jgly6u2tgsmymcbqxinkyxcbgg22a6n5u",
-          "descriptor": {
-            "interface": "Records",
-            "method": "Write",
-            "protocol": "https://identity.foundation/dwn/permissions",
-            "protocolPath": "request",
-            "tags": {
-              "protocol": "https://example.com/protocol/notes"
-            },
-            "dataCid": "bafkreiarbxyibwglfrpizxngz6uzqwk64xdk3mz7psf46usqjvlz4kajb4",
-            "dataSize": 234,
-            "dateCreated": "2025-01-01T00:02:00.000000Z",
-            "messageTimestamp": "2025-01-01T00:02:00.000000Z",
-            "dataFormat": "application/json"
-          },
-          "contextId": "bafyreideqv6tfwj2ig4tjwlt5jgly6u2tgsmymcbqxinkyxcbgg22a6n5u",
           "authorization": {
             "signature": {
               "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWlkZXF2NnRmd2oyaWc0dGp3bHQ1amdseTZ1MnRnc215bWNicXhpbmt5eGNiZ2cyMmE2bjV1IiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlkcnpwNXVodGF2dHRvZ2tzdWJ3eXc1d3Vya2N5YnU3eWVqbTRzcWNkZWpiZG43dnlzcmh1IiwiY29udGV4dElkIjoiYmFmeXJlaWRlcXY2dGZ3ajJpZzR0andsdDVqZ2x5NnUydGdzbXltY2JxeGlua3l4Y2JnZzIyYTZuNXUifQ",
@@ -139,241 +432,42 @@
                 }
               ]
             }
-          }
+          },
+          "contextId": "bafyreideqv6tfwj2ig4tjwlt5jgly6u2tgsmymcbqxinkyxcbgg22a6n5u",
+          "descriptor": {
+            "dataCid": "bafkreiarbxyibwglfrpizxngz6uzqwk64xdk3mz7psf46usqjvlz4kajb4",
+            "dataFormat": "application/json",
+            "dataSize": 234,
+            "dateCreated": "2025-01-01T00:02:00.000000Z",
+            "interface": "Records",
+            "messageTimestamp": "2025-01-01T00:02:00.000000Z",
+            "method": "Write",
+            "module": "https://identity.foundation/dwn/permissions",
+            "modulePath": "request",
+            "tags": {
+              "module": "https://example.com/protocol/notes"
+            }
+          },
+          "recordId": "bafyreideqv6tfwj2ig4tjwlt5jgly6u2tgsmymcbqxinkyxcbgg22a6n5u"
         },
-        "encodedData": "eyJkZXNjcmlwdGlvbiI6IlJlcXVlc3Qgd3JpdGUgYWNjZXNzIHRvIHByb3RvY29sIG5vdGVzLiIsImRlbGVnYXRlZCI6ZmFsc2UsInNjb3BlIjp7ImludGVyZmFjZSI6IlJlY29yZHMiLCJtZXRob2QiOiJXcml0ZSIsInByb3RvY29sIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS9wcm90b2NvbC9ub3RlcyIsInByb3RvY29sUGF0aCI6Im5vdGUifSwiY29uZGl0aW9ucyI6eyJwdWJsaWNhdGlvbiI6IlJlcXVpcmVkIn19"
+        "messageCid": "bafyreif4hfvk5tyiyghmkaphetl6mwrz4unikunhwcncaggn456zrytbym"
       }
     ]
   },
-  "cases": [
-    {
-      "id": "messages-sync-reply-root-global",
-      "description": "Global MessagesSync root reply for a seeded tenant store.",
-      "rustStatus": "supported",
-      "sync": {
-        "tenant": "did:example:alice",
-        "seedSet": "standard-sync-store",
-        "request": {
-          "descriptor": {
-            "interface": "Messages",
-            "method": "Sync",
-            "messageTimestamp": "2025-01-01T00:04:00.000000Z",
-            "action": "root"
-          }
-        },
-        "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "root": "71028e80e38180e3481403d4149a1239b5e78a7f6b67e2120645c3cd3a221ee2"
-        }
-      }
-    },
-    {
-      "id": "messages-sync-reply-root-permissions-protocol",
-      "description": "Protocol-scoped MessagesSync root reply for PermissionsProtocol records tagged with an application protocol.",
-      "rustStatus": "supported",
-      "sync": {
-        "tenant": "did:example:alice",
-        "seedSet": "standard-sync-store",
-        "request": {
-          "descriptor": {
-            "interface": "Messages",
-            "method": "Sync",
-            "messageTimestamp": "2025-01-01T00:04:01.000000Z",
-            "action": "root",
-            "protocol": "https://identity.foundation/dwn/permissions"
-          }
-        },
-        "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "root": "80bf90441baba25365bfdaa0d3ec956b92b19a5e3c7b13ce6e6353570a069fb1"
-        }
-      }
-    },
-    {
-      "id": "messages-sync-reply-subtree-global",
-      "description": "MessagesSync subtree reply for a seeded bit prefix.",
-      "rustStatus": "supported",
-      "sync": {
-        "tenant": "did:example:alice",
-        "seedSet": "standard-sync-store",
-        "request": {
-          "descriptor": {
-            "interface": "Messages",
-            "method": "Sync",
-            "messageTimestamp": "2025-01-01T00:04:02.000000Z",
-            "action": "subtree",
-            "prefix": "00010100"
-          }
-        },
-        "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "hash": "f0ebbe83feb1c91f2149786c827401326ff8fa6987f430d1ef5424b8cb42bbee"
-        }
-      }
-    },
-    {
-      "id": "messages-sync-reply-leaves-notes-protocol",
-      "description": "Protocol-scoped MessagesSync leaves reply for note records including small inline and large external data records.",
-      "rustStatus": "supported",
-      "sync": {
-        "tenant": "did:example:alice",
-        "seedSet": "standard-sync-store",
-        "request": {
-          "descriptor": {
-            "interface": "Messages",
-            "method": "Sync",
-            "messageTimestamp": "2025-01-01T00:04:03.000000Z",
-            "action": "leaves",
-            "protocol": "https://example.com/protocol/notes",
-            "prefix": ""
-          }
-        },
-        "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "entries": [
-            "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
-            "bafyreic7uxfzjh3smvznwyjpgxmvfoknyjfrabpc5evdivtr4mddxhoq2e",
-            "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu"
-          ]
-        }
-      }
-    },
-    {
-      "id": "messages-sync-reply-leaves-permissions-protocol",
-      "description": "Protocol-scoped MessagesSync leaves reply for a PermissionsProtocol record carrying a protocol tag.",
-      "rustStatus": "supported",
-      "sync": {
-        "tenant": "did:example:alice",
-        "seedSet": "standard-sync-store",
-        "request": {
-          "descriptor": {
-            "interface": "Messages",
-            "method": "Sync",
-            "messageTimestamp": "2025-01-01T00:04:04.000000Z",
-            "action": "leaves",
-            "protocol": "https://identity.foundation/dwn/permissions",
-            "prefix": ""
-          }
-        },
-        "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "entries": ["bafyreiaa55vw6jq2yz4kwrirx4epy6deo2qpaunc3prdf5vqlkiv2y6v3y"]
-        }
-      }
-    },
-    {
-      "id": "messages-sync-reply-diff-only-remote-inline-and-large",
-      "description": "MessagesSync diff reply where the server has note records the client lacks, including inline data for small records and no inline data for a large record.",
-      "rustStatus": "supported",
-      "sync": {
-        "tenant": "did:example:alice",
-        "seedSet": "standard-sync-store",
-        "request": {
-          "descriptor": {
-            "interface": "Messages",
-            "method": "Sync",
-            "messageTimestamp": "2025-01-01T00:04:05.000000Z",
-            "action": "diff",
-            "protocol": "https://example.com/protocol/notes",
-            "depth": 0,
-            "hashes": {}
-          }
-        },
-        "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "onlyRemote": [
-            {
-              "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
-              "message": {
-                "recordId": "sync-small-record-1",
-                "descriptor": {
-                  "interface": "Records",
-                  "method": "Write",
-                  "protocol": "https://example.com/protocol/notes",
-                  "protocolPath": "note",
-                  "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
-                  "dataSize": 11,
-                  "dateCreated": "2025-01-01T00:03:00.000000Z",
-                  "messageTimestamp": "2025-01-01T00:03:00.000000Z",
-                  "dataFormat": "text/plain"
-                },
-                "contextId": "sync-small-record-1"
-              },
-              "encodedData": "aGVsbG8gd29ybGQ"
-            },
-            {
-              "messageCid": "bafyreic7uxfzjh3smvznwyjpgxmvfoknyjfrabpc5evdivtr4mddxhoq2e",
-              "message": {
-                "recordId": "sync-small-record-2",
-                "descriptor": {
-                  "interface": "Records",
-                  "method": "Write",
-                  "protocol": "https://example.com/protocol/notes",
-                  "protocolPath": "note",
-                  "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
-                  "dataSize": 11,
-                  "dateCreated": "2025-01-01T00:03:01.000000Z",
-                  "messageTimestamp": "2025-01-01T00:03:01.000000Z",
-                  "dataFormat": "text/plain",
-                  "permissionGrantId": "grant-write-123",
-                  "squash": true
-                },
-                "contextId": "sync-small-record-2"
-              },
-              "encodedData": "aGVsbG8gd29ybGQ"
-            },
-            {
-              "messageCid": "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu",
-              "message": {
-                "recordId": "sync-large-record-1",
-                "descriptor": {
-                  "interface": "Records",
-                  "method": "Write",
-                  "protocol": "https://example.com/protocol/notes",
-                  "protocolPath": "note",
-                  "dataCid": "bafkreibrdz52ofnxudjtoyrkhlige267226yxslkzpz6hs2hmz4ivvmez4",
-                  "dataSize": 30721,
-                  "dateCreated": "2025-01-01T00:03:02.000000Z",
-                  "messageTimestamp": "2025-01-01T00:03:02.000000Z",
-                  "dataFormat": "application/octet-stream"
-                },
-                "contextId": "sync-large-record-1"
-              }
-            }
-          ],
-          "onlyLocal": []
-        }
-      }
-    },
-    {
-      "id": "messages-sync-reply-diff-only-local-prefix",
-      "description": "MessagesSync diff reply where the client reports an additional non-empty prefix absent from the server.",
-      "rustStatus": "supported",
-      "sync": {
-        "tenant": "did:example:alice",
-        "seedSet": "standard-sync-store",
-        "request": {
-          "descriptor": {
-            "interface": "Messages",
-            "method": "Sync",
-            "messageTimestamp": "2025-01-01T00:04:06.000000Z",
-            "action": "diff",
-            "protocol": "https://example.com/protocol/notes",
-            "depth": 4,
-            "hashes": {
-              "0000": "7bae723b8823f759f352451d610b32a575b9a549c45da1562ca17e8f76e4681b",
-              "0001": "5d3f089360c2a49350a6c8559c95f9f3a7cdc4ea70826b77985a5f745abb51bc",
-              "0010": "1ee141d2d42555fb9a26123ff1df89a0e6396a4070ab962da1f43aea213c6d19",
-              "1111": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-            }
-          }
-        },
-        "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "onlyRemote": [],
-          "onlyLocal": ["1111"]
-        }
-      }
-    }
-  ]
+  "source": {
+    "commit": "1a227b0179f33e5d9ce3d68ba6275533ae306e2d",
+    "functions": [
+      "MessagesSyncHandler.handle",
+      "MessagesSyncHandler.handleDiff",
+      "MessagesSyncHandler.buildDiffEntries",
+      "StateIndexLevel.getRoot",
+      "StateIndexLevel.getProtocolRoot",
+      "StateIndexLevel.getSubtreeHash",
+      "StateIndexLevel.getProtocolLeaves"
+    ],
+    "issue": "https://github.com/enboxorg/enbox-rust-core/issues/188",
+    "note": "MessagesSync, StateIndexLevel, and the sparse-merkle-trie (smt) surfaces were deleted from upstream enbox in 25821eda ('chore(sync): remove legacy sync state surfaces'). This fixture records Rust-native behavior that no longer exists upstream and is tracked as an intentional Rust extension, not current-upstream parity.",
+    "removedUpstreamAt": "25821eda3a551cc9b2f6605e2716a9705ebf3f63",
+    "repository": "enboxorg/enbox"
+  }
 }

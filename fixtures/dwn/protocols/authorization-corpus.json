@@ -3,7 +3,7 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "functions": [
       "ProtocolsConfigure.validateDefinition",
       "GrantAuthorization.authorizeGenericMessage",
@@ -13,13 +13,16 @@
   "cases": [
     {
       "id": "protocol-valid-composition-ref",
-      "description": "Valid protocol composition using uses and a root $ref node.",
+      "description": "Valid module composition using uses, a root $ref attachment point with a local child, and an $ref node.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["uses", "$ref"],
+        "directives": [
+          "uses",
+          "$ref"
+        ],
         "expectedStatusCode": 202,
         "definition": {
-          "protocol": "http://example.com/comments",
+          "module": "http://example.com/comments",
           "published": true,
           "uses": {
             "threads": "http://example.com/threads"
@@ -27,16 +30,35 @@
           "types": {
             "comment": {
               "schema": "http://schema.example.com/comment",
-              "dataFormats": ["text/plain"]
+              "dataFormats": [
+                "text/plain"
+              ]
             }
           },
           "structure": {
             "thread": {
-              "$ref": "threads:thread"
+              "$ref": "threads:thread",
+              "comment": {
+                "$actions": [
+                  {
+                    "who": "anyone",
+                    "can": [
+                      "create",
+                      "read"
+                    ]
+                  }
+                ]
+              }
             },
             "comment": {
               "$actions": [
-                { "who": "anyone", "can": ["create", "read"] }
+                {
+                  "who": "anyone",
+                  "can": [
+                    "create",
+                    "read"
+                  ]
+                }
               ]
             }
           }
@@ -48,41 +70,81 @@
       "description": "Directives $role, $size, $tags, $recordLimit, $immutable, $delivery, and $squash. The $role path is rejected because upstream requires an authorized issuer for role records: 'anyone' cannot create or squash an initial role record.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["$role", "$size", "$tags", "$recordLimit", "$immutable", "$delivery", "$squash"],
+        "directives": [
+          "$role",
+          "$size",
+          "$tags",
+          "$recordLimit",
+          "$immutable",
+          "$delivery",
+          "$squash"
+        ],
         "expectedStatusCode": 400,
-        "expectedErrorCode": "ProtocolsConfigureInvalidRoleIssuance",
+        "expectedErrorCode": "ModulesConfigureInvalidRoleIssuance",
         "definition": {
-          "protocol": "http://example.com/tasks",
+          "module": "http://example.com/tasks",
           "published": true,
           "types": {
             "adminRole": {
               "schema": "http://schema.example.com/admin-role",
-              "dataFormats": ["application/json"]
+              "dataFormats": [
+                "application/json"
+              ]
             },
             "task": {
               "schema": "http://schema.example.com/task",
-              "dataFormats": ["application/json"]
+              "dataFormats": [
+                "application/json"
+              ]
             }
           },
           "structure": {
             "adminRole": {
               "$role": true,
               "$actions": [
-                { "who": "anyone", "can": ["create"] }
+                {
+                  "who": "anyone",
+                  "can": [
+                    "create"
+                  ]
+                }
               ]
             },
             "task": {
               "$actions": [
-                { "role": "adminRole", "can": ["create", "read"] }
+                {
+                  "role": "adminRole",
+                  "can": [
+                    "create",
+                    "read"
+                  ]
+                }
               ],
-              "$size": { "min": 1, "max": 4096 },
-              "$tags": {
-                "$requiredTags": ["status"],
-                "$allowUndefinedTags": false,
-                "status": { "type": "string", "enum": ["open", "closed"] },
-                "priority": { "type": "integer", "minimum": 1, "maximum": 5 }
+              "$size": {
+                "min": 1,
+                "max": 4096
               },
-              "$recordLimit": { "max": 100 },
+              "$tags": {
+                "$requiredTags": [
+                  "status"
+                ],
+                "$allowUndefinedTags": false,
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "closed"
+                  ]
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                }
+              },
+              "$recordLimit": {
+                "max": 100
+              },
               "$immutable": true,
               "$delivery": "direct",
               "$squash": true
@@ -96,10 +158,13 @@
       "description": "Valid cross-protocol role reference using an alias declared in uses.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["uses", "crossProtocolRole"],
+        "directives": [
+          "uses",
+          "crossProtocolRole"
+        ],
         "expectedStatusCode": 202,
         "definition": {
-          "protocol": "http://example.com/projects",
+          "module": "http://example.com/projects",
           "published": true,
           "uses": {
             "team": "http://example.com/team"
@@ -107,13 +172,21 @@
           "types": {
             "project": {
               "schema": "http://schema.example.com/project",
-              "dataFormats": ["application/json"]
+              "dataFormats": [
+                "application/json"
+              ]
             }
           },
           "structure": {
             "project": {
               "$actions": [
-                { "role": "team:member", "can": ["create", "read"] }
+                {
+                  "role": "team:member",
+                  "can": [
+                    "create",
+                    "read"
+                  ]
+                }
               ]
             }
           }
@@ -122,23 +195,39 @@
     },
     {
       "id": "protocol-invalid-uses-alias",
-      "description": "Invalid uses alias must be rejected.",
+      "description": "Invalid module composition where a 'uses' target URL is not normalized.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["uses"],
+        "directives": [
+          "uses"
+        ],
         "expectedStatusCode": 400,
-        "expectedErrorCode": "ProtocolsConfigureInvalidUsesAlias",
+        "expectedErrorCode": "ModulesConfigureInvalidUsesModuleUrl",
         "definition": {
-          "protocol": "http://example.com/invalid-uses",
+          "module": "http://example.com/invalid-uses",
           "published": true,
           "uses": {
-            "1bad": "http://example.com/other"
+            "external": "http://example.com/other/"
           },
           "types": {
-            "note": { "schema": "http://schema.example.com/note", "dataFormats": ["text/plain"] }
+            "note": {
+              "schema": "http://schema.example.com/note",
+              "dataFormats": [
+                "text/plain"
+              ]
+            }
           },
           "structure": {
-            "note": { "$actions": [{ "who": "anyone", "can": ["create"] }] }
+            "note": {
+              "$actions": [
+                {
+                  "who": "anyone",
+                  "can": [
+                    "create"
+                  ]
+                }
+              ]
+            }
           }
         }
       }
@@ -148,15 +237,19 @@
       "description": "A $ref alias that is missing from uses must be rejected.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["$ref"],
+        "directives": [
+          "$ref"
+        ],
         "expectedStatusCode": 400,
-        "expectedErrorCode": "ProtocolsConfigureInvalidRefAlias",
+        "expectedErrorCode": "ModulesConfigureInvalidRefAlias",
         "definition": {
-          "protocol": "http://example.com/invalid-ref",
+          "module": "http://example.com/invalid-ref",
           "published": true,
           "types": {},
           "structure": {
-            "thread": { "$ref": "missing:thread" }
+            "thread": {
+              "$ref": "missing:thread"
+            }
           }
         }
       }
@@ -166,19 +259,36 @@
       "description": "$size max must not be less than min.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["$size"],
+        "directives": [
+          "$size"
+        ],
         "expectedStatusCode": 400,
-        "expectedErrorCode": "ProtocolsConfigureInvalidSize",
+        "expectedErrorCode": "ModulesConfigureInvalidSize",
         "definition": {
-          "protocol": "http://example.com/invalid-size",
+          "module": "http://example.com/invalid-size",
           "published": true,
           "types": {
-            "entry": { "schema": "http://schema.example.com/entry", "dataFormats": ["text/plain"] }
+            "entry": {
+              "schema": "http://schema.example.com/entry",
+              "dataFormats": [
+                "text/plain"
+              ]
+            }
           },
           "structure": {
             "entry": {
-              "$actions": [{ "who": "anyone", "can": ["create"] }],
-              "$size": { "min": 10, "max": 1 }
+              "$actions": [
+                {
+                  "who": "anyone",
+                  "can": [
+                    "create"
+                  ]
+                }
+              ],
+              "$size": {
+                "min": 10,
+                "max": 1
+              }
             }
           }
         }
@@ -189,19 +299,35 @@
       "description": "$recordLimit max must be positive.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["$recordLimit"],
+        "directives": [
+          "$recordLimit"
+        ],
         "expectedStatusCode": 400,
-        "expectedErrorCode": "ProtocolsConfigureInvalidRecordLimit",
+        "expectedErrorCode": "ModulesConfigureInvalidRecordLimit",
         "definition": {
-          "protocol": "http://example.com/invalid-limit",
+          "module": "http://example.com/invalid-limit",
           "published": true,
           "types": {
-            "entry": { "schema": "http://schema.example.com/entry", "dataFormats": ["text/plain"] }
+            "entry": {
+              "schema": "http://schema.example.com/entry",
+              "dataFormats": [
+                "text/plain"
+              ]
+            }
           },
           "structure": {
             "entry": {
-              "$actions": [{ "who": "anyone", "can": ["create"] }],
-              "$recordLimit": { "max": 0 }
+              "$actions": [
+                {
+                  "who": "anyone",
+                  "can": [
+                    "create"
+                  ]
+                }
+              ],
+              "$recordLimit": {
+                "max": 5000
+              }
             }
           }
         }
@@ -212,18 +338,32 @@
       "description": "Update/delete/prune actions require create in the same action rule.",
       "rustStatus": "supported",
       "protocolAuthorization": {
-        "directives": ["$actions"],
+        "directives": [
+          "$actions"
+        ],
         "expectedStatusCode": 400,
-        "expectedErrorCode": "ProtocolsConfigureInvalidActionUpdateWithoutCreate",
+        "expectedErrorCode": "ModulesConfigureInvalidActionUpdateWithoutCreate",
         "definition": {
-          "protocol": "http://example.com/invalid-action",
+          "module": "http://example.com/invalid-action",
           "published": true,
           "types": {
-            "task": { "schema": "http://schema.example.com/task", "dataFormats": ["application/json"] }
+            "task": {
+              "schema": "http://schema.example.com/task",
+              "dataFormats": [
+                "application/json"
+              ]
+            }
           },
           "structure": {
             "task": {
-              "$actions": [{ "who": "anyone", "can": ["update"] }]
+              "$actions": [
+                {
+                  "who": "anyone",
+                  "can": [
+                    "update"
+                  ]
+                }
+              ]
             }
           }
         }
@@ -238,9 +378,22 @@
         "grantor": "did:example:alice",
         "grantee": "did:example:bob",
         "delegated": false,
-        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
-        "conditions": { "publication": "Required" },
-        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "scope": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
+        },
+        "conditions": {
+          "publication": "Required"
+        },
+        "incomingMessage": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note",
+          "published": true
+        },
         "expectedStatusCode": 202
       }
     },
@@ -253,9 +406,22 @@
         "grantor": "did:example:alice",
         "grantee": "did:example:bob",
         "delegated": false,
-        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
-        "conditions": { "publication": "Required" },
-        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": false },
+        "scope": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
+        },
+        "conditions": {
+          "publication": "Required"
+        },
+        "incomingMessage": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note",
+          "published": false
+        },
         "expectedStatusCode": 401,
         "expectedErrorCode": "RecordsGrantAuthorizationConditionPublicationRequired"
       }
@@ -269,8 +435,16 @@
         "grantor": "did:example:alice",
         "grantee": "did:example:bob",
         "delegated": false,
-        "scope": { "interface": "Protocols", "method": "Query", "protocol": "https://example.com/protocol/notes" },
-        "incomingMessage": { "interface": "Protocols", "method": "Query", "protocol": "https://example.com/protocol/notes" },
+        "scope": {
+          "interface": "Modules",
+          "method": "Query",
+          "module": "https://example.com/protocol/notes"
+        },
+        "incomingMessage": {
+          "interface": "Modules",
+          "method": "Query",
+          "module": "https://example.com/protocol/notes"
+        },
         "expectedStatusCode": 200
       }
     },
@@ -283,8 +457,16 @@
         "grantor": "did:example:alice",
         "grantee": "did:example:bob",
         "delegated": false,
-        "scope": { "interface": "Messages", "method": "Read", "protocol": "https://example.com/protocol/notes" },
-        "incomingMessage": { "interface": "Messages", "method": "Read", "protocol": "https://example.com/protocol/notes" },
+        "scope": {
+          "interface": "Messages",
+          "method": "Read",
+          "module": "https://example.com/protocol/notes"
+        },
+        "incomingMessage": {
+          "interface": "Messages",
+          "method": "Read",
+          "module": "https://example.com/protocol/notes"
+        },
         "expectedStatusCode": 200
       }
     },
@@ -297,10 +479,18 @@
         "grantor": "did:example:alice",
         "grantee": "did:example:bob",
         "delegated": false,
-        "scope": { "interface": "Messages", "method": "Read", "protocol": "https://example.com/protocol/notes" },
-        "incomingMessage": { "interface": "Messages", "method": "Subscribe", "protocol": "https://example.com/protocol/tasks" },
+        "scope": {
+          "interface": "Messages",
+          "method": "Read",
+          "module": "https://example.com/protocol/notes"
+        },
+        "incomingMessage": {
+          "interface": "Messages",
+          "method": "Subscribe",
+          "module": "https://example.com/protocol/tasks"
+        },
         "expectedStatusCode": 401,
-        "expectedErrorCode": "MessagesGrantAuthorizationMismatchedProtocol"
+        "expectedErrorCode": "MessagesGrantAuthorizationMismatchedModule"
       }
     },
     {
@@ -315,8 +505,19 @@
         "dateGranted": "2025-01-01T00:00:00.000000Z",
         "dateExpires": "2025-01-02T00:00:00.000000Z",
         "messageTimestamp": "2025-02-01T00:00:00.000000Z",
-        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
-        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "scope": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
+        },
+        "incomingMessage": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note",
+          "published": true
+        },
         "expectedStatusCode": 401,
         "expectedErrorCode": "GrantAuthorizationGrantExpired"
       }
@@ -330,9 +531,22 @@
         "grantor": "did:example:alice",
         "grantee": "did:example:device",
         "delegated": true,
-        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
-        "conditions": { "publication": "Required" },
-        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "scope": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
+        },
+        "conditions": {
+          "publication": "Required"
+        },
+        "incomingMessage": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note",
+          "published": true
+        },
         "expectedStatusCode": 202
       }
     },
@@ -349,8 +563,19 @@
         "revocationId": "revocation-records-write",
         "revokedAt": "2025-01-15T00:00:00.000000Z",
         "messageTimestamp": "2025-02-01T00:00:00.000000Z",
-        "scope": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note" },
-        "incomingMessage": { "interface": "Records", "method": "Write", "protocol": "https://example.com/protocol/notes", "protocolPath": "note", "published": true },
+        "scope": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
+        },
+        "incomingMessage": {
+          "interface": "Records",
+          "method": "Write",
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note",
+          "published": true
+        },
         "expectedStatusCode": 401,
         "expectedErrorCode": "GrantAuthorizationGrantRevoked"
       }

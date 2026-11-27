@@ -3,11 +3,11 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "functions": [
-      "PermissionsProtocol.createGrant",
+      "PermissionsModule.createGrant",
       "RecordsQuery.create",
-      "PermissionsProtocol.grantPath"
+      "PermissionsModule.grantPath"
     ]
   },
   "seedSets": {
@@ -22,47 +22,47 @@
           "isLatestBaseState": true,
           "squash": false,
           "author": "did:example:alice",
-          "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
-          "entryId": "did:example:alice/bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
-          "protocol": "https://identity.foundation/dwn/permissions",
-          "protocolPath": "grant",
+          "recordId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
+          "entryId": "did:example:alice/bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
+          "module": "https://identity.foundation/dwn/permissions",
+          "modulePath": "grant",
           "recipient": "did:example:bob",
           "dateCreated": "2025-01-01T00:02:01.000000Z",
           "messageTimestamp": "2025-01-01T00:02:01.000000Z",
-          "contextId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
-          "tag.protocol": "https://example.com/protocol/notes"
+          "contextId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
+          "tag.module": "https://example.com/protocol/notes"
         },
         "message": {
-          "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "recordId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
           "descriptor": {
             "interface": "Records",
             "method": "Write",
-            "protocol": "https://identity.foundation/dwn/permissions",
-            "protocolPath": "grant",
+            "module": "https://identity.foundation/dwn/permissions",
+            "modulePath": "grant",
             "recipient": "did:example:bob",
             "tags": {
-              "protocol": "https://example.com/protocol/notes"
+              "module": "https://example.com/protocol/notes"
             },
-            "dataCid": "bafkreig5nwatflcy3pux2dzt5djvkonryuy45vkutviguxdcee5rmj43f4",
-            "dataSize": 349,
+            "dataCid": "bafkreiguad5zdmgexpqwh5mhe4g3ezyt77dcskxty7j2zmy45dosjrru3y",
+            "dataSize": 345,
             "dateCreated": "2025-01-01T00:02:01.000000Z",
             "messageTimestamp": "2025-01-01T00:02:01.000000Z",
             "dataFormat": "application/json"
           },
-          "contextId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e",
+          "contextId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu",
           "authorization": {
             "signature": {
-              "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWljcmZqYTJubGlmaHliamdhZDJpeG82ajZsdGF6dXBsaXJ2dm4zeWJ2YXl6ZDdtNnVrbDNlIiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWljbXNncWdsNnk2YWduMjR1ZGVtNGJudnBpNm52d3M0emF3N2RwcXdhbmhrbGRqbnF3aXR5IiwiY29udGV4dElkIjoiYmFmeXJlaWNyZmphMm5saWZoeWJqZ2FkMml4bzZqNmx0YXp1cGxpcnZ2bjN5YnZheXpkN202dWtsM2UifQ",
+              "payload": "eyJyZWNvcmRJZCI6ImJhZnlyZWllNG91eXd1Y2d2bnFnZWtnbGZuNnJpZ29mb2J3Zm1vcHlrc25zaGxjamw2dm81NnlzaWh1IiwiZGVzY3JpcHRvckNpZCI6ImJhZnlyZWlhajJ4bDdsb2dqZm9qNm40cGQzdjZrYXluNWpicGdndTRiNDdoYmt6NXZzN2F3cWM2b2JhIiwiY29udGV4dElkIjoiYmFmeXJlaWU0b3V5d3VjZ3ZucWdla2dsZm42cmlnb2ZvYndmbW9weWtzbnNobGNqbDZ2bzU2eXNpaHUifQ",
               "signatures": [
                 {
                   "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
-                  "signature": "dirhPt1NAY_Z9ggjRabHTDoRqjHY0hNPPYHTqKR1dO8y6HKgwvDZwjCWt9ZrzvhBZ91sEhFp8nTfsxZsQ4gaBQ"
+                  "signature": "HUXULBjbOo4MAdKEzwNBaIm1tTuaWpnWUNB2e1_Bk5KANbitgZuaBiWftXem2sW9pV1oxfuBLuoU3raUbC2BCw"
                 }
               ]
             }
           }
         },
-        "encodedData": "eyJkYXRlRXhwaXJlcyI6IjIwMjUtMDItMDFUMDA6MDA6MDAuMDAwMDAwWiIsInJlcXVlc3RJZCI6ImJhZnlyZWlhYTU1dnc2anEyeXo0a3dyaXJ4NGVweTZkZW8ycXBhdW5jM3ByZGY1dnFsa2l2Mnk2djN5IiwiZGVzY3JpcHRpb24iOiJHcmFudCB3cml0ZSBhY2Nlc3MgdG8gcHJvdG9jb2wgbm90ZXMuIiwiZGVsZWdhdGVkIjp0cnVlLCJzY29wZSI6eyJpbnRlcmZhY2UiOiJSZWNvcmRzIiwibWV0aG9kIjoiV3JpdGUiLCJwcm90b2NvbCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vcHJvdG9jb2wvbm90ZXMiLCJwcm90b2NvbFBhdGgiOiJub3RlIn0sImNvbmRpdGlvbnMiOnsicHVibGljYXRpb24iOiJSZXF1aXJlZCJ9fQ"
+        "encodedData": "eyJkYXRlRXhwaXJlcyI6IjIwMjUtMDItMDFUMDA6MDA6MDAuMDAwMDAwWiIsInJlcXVlc3RJZCI6ImJhZnlyZWlmcWl4bGx0eTVkaWplbGRnZTZyb3o1emR0ZnJuaXZmMzU1ZndqZG1pbGZwczY0YTNnN3V1IiwiZGVzY3JpcHRpb24iOiJHcmFudCB3cml0ZSBhY2Nlc3MgdG8gcHJvdG9jb2wgbm90ZXMuIiwiZGVsZWdhdGVkIjp0cnVlLCJzY29wZSI6eyJpbnRlcmZhY2UiOiJSZWNvcmRzIiwibWV0aG9kIjoiV3JpdGUiLCJtb2R1bGUiOiJodHRwczovL2V4YW1wbGUuY29tL3Byb3RvY29sL25vdGVzIiwibW9kdWxlUGF0aCI6Im5vdGUifSwiY29uZGl0aW9ucyI6eyJwdWJsaWNhdGlvbiI6IlJlcXVpcmVkIn19"
       }
     ]
   },
@@ -78,19 +78,19 @@
             "descriptor": {
               "interface": "Records",
               "method": "Query",
-              "messageTimestamp": "2026-05-26T20:15:15.430515Z",
+              "messageTimestamp": "2026-11-27T21:02:11.694000Z",
               "filter": {
-                "protocol": "https://identity.foundation/dwn/permissions",
-                "protocolPath": "grant"
+                "module": "https://identity.foundation/dwn/permissions",
+                "modulePath": "grant"
               }
             },
             "authorization": {
               "signature": {
-                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWZsM2JzZHpiN2dreTZ0YXVpZzJremU3ZmpvYjRmNmw3aW4zM2lycnVwaXd4ZTc0eHBxcnkifQ",
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWdoa2lsa2FtdjRpc2txZ21zbHU1ZW9tcjI2c3RjZGptemNhaXhseWd3emdkYmV2emh2ZGkifQ",
                 "signatures": [
                   {
                     "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
-                    "signature": "ZU2833_fyYhRXkYKNrlLb1qkiT9TBrKbqdJoMDHvYJVmef5AvTexmuHHy_x8Z-w2S8MQB9q4hnT7ATF1rAnwAQ"
+                    "signature": "jHCJxrAQeAQWyN0Wfm6xuvpjAN4RvP2FzlEG1apdAMirDS-UYjgnBYSQo_G3uBi4ViN1Rx2zPRe8iQm5zNisCw"
                   }
                 ]
               }
@@ -104,7 +104,7 @@
           },
           "entries": [
             {
-              "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e"
+              "recordId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu"
             }
           ],
           "cursor": null
@@ -122,22 +122,22 @@
             "descriptor": {
               "interface": "Records",
               "method": "Query",
-              "messageTimestamp": "2026-05-26T20:15:15.453515Z",
+              "messageTimestamp": "2026-11-27T21:02:11.709000Z",
               "filter": {
-                "protocol": "https://identity.foundation/dwn/permissions",
-                "protocolPath": "grant",
+                "module": "https://identity.foundation/dwn/permissions",
+                "modulePath": "grant",
                 "tags": {
-                  "protocol": "https://example.com/protocol/notes"
+                  "module": "https://example.com/protocol/notes"
                 }
               }
             },
             "authorization": {
               "signature": {
-                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWdpd3B3a2tjaTJhcHFuMmdhYjNuNDZkbml1NndjYmd2c2FhNHV6ZXViY3V0aWdwZmp3b3EifQ",
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWJlb2x5YnY3bnppM21tZmcyNnQ2NWdvaHZ2NXBuN2N2cWEzeWJwMjRob2NiNm9jemlobXEifQ",
                 "signatures": [
                   {
                     "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
-                    "signature": "GBH3hDVC-pk6yPjftPOGqq2Cy-CUEcdeE4u9w_7lhG5pdIr24NA_FkNkkP9Mr0c0soJ10MfQxN8I4UxhAoE_DQ"
+                    "signature": "2RtCFTWdrOwjnVMxAUYj_5w1VBRD0aWGUgMe0ALrqkeXQr1uIcuHwAyYePNpoMbzHWpK1a7ORQeBjjJ22OcfBA"
                   }
                 ]
               }
@@ -151,7 +151,7 @@
           },
           "entries": [
             {
-              "recordId": "bafyreicrfja2nlifhybjgad2ixo6j6ltazuplirvvn3ybvayzd7m6ukl3e"
+              "recordId": "bafyreie4ouywucgvnqgekglfn6rigofobwfmopyksnshlcjl6vo56ysihu"
             }
           ],
           "cursor": null
@@ -169,22 +169,22 @@
             "descriptor": {
               "interface": "Records",
               "method": "Query",
-              "messageTimestamp": "2026-05-26T20:15:15.454515Z",
+              "messageTimestamp": "2026-11-27T21:02:11.710000Z",
               "filter": {
-                "protocol": "https://identity.foundation/dwn/permissions",
-                "protocolPath": "grant",
+                "module": "https://identity.foundation/dwn/permissions",
+                "modulePath": "grant",
                 "tags": {
-                  "protocol": "https://example.com/other"
+                  "module": "https://example.com/other"
                 }
               }
             },
             "authorization": {
               "signature": {
-                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWZ3NGl2Ymo0MnZ3Zm4yc2VqbWF5bGY1NTdiNWdkdWdldm5uZHQ3ZWtjajdpdmFldW9xeXUifQ",
+                "payload": "eyJkZXNjcmlwdG9yQ2lkIjoiYmFmeXJlaWI2ZzJvNmdsNW14cWVrZTdqenNhaWVoNnFidm5ybXJzdnEyYmVxNjRzc2Zmd2JldjJ4cHEifQ",
                 "signatures": [
                   {
                     "protected": "eyJraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkxIiwiYWxnIjoiRWREU0EifQ",
-                    "signature": "cajenLqNCmIg45gku0z_WGQSXRaLKxy8lCoEcPIfFMHF4wzSO413pWqKg-oGJPC-Ep_ilsiYCoI4t4scJy1eDg"
+                    "signature": "Et2GMoacWIKoLj5ZJWfYOTKbUcQgYx0BkDM8GIm6O4ntpmgnWnVf-07DeNAamnDGtK-kEvqBlmMzzKisoHB4BQ"
                   }
                 ]
               }

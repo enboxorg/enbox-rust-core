@@ -159,7 +159,11 @@ jobs:
 
       - name: Build Enbox DWN SDK for conformance adapters
         working-directory: enbox
-        run: bun run build --filter=@enbox/dwn-sdk-js
+        run: |
+          bun run build --filter=@enbox/common
+          bun run build --filter=@enbox/crypto
+          bun run build --filter=@enbox/dids
+          bun run build --filter=@enbox/dwn-sdk-js
 
       - name: Run TypeScript conformance tests
         env:

@@ -3,7 +3,7 @@
   "source": {
     "package": "@enbox/dwn-sdk-js",
     "repository": "enboxorg/enbox",
-    "commit": "c63bf424ac0997583db825e8a5fddf1507d30c40",
+    "commit": "1d02b19555f256ecb9f7df5a47048425c549a6d7",
     "handler": "MessagesQueryHandler.handle",
     "test": "packages/dwn-sdk-js/tests/handlers/messages-query.spec.ts"
   },
@@ -16,15 +16,15 @@
         "indexes": {
           "interface": "Records",
           "method": "Write",
-          "protocol": "https://example.com/protocol/notes",
-          "protocolPath": "note"
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
         },
         "message": {
           "descriptor": {
             "interface": "Records",
             "method": "Write",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note",
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note",
             "messageTimestamp": "2025-01-01T00:03:00.000000Z",
             "dataCid": "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e",
             "dataSize": 11,
@@ -41,15 +41,15 @@
         "indexes": {
           "interface": "Records",
           "method": "Delete",
-          "protocol": "https://example.com/protocol/notes",
-          "protocolPath": "note"
+          "module": "https://example.com/protocol/notes",
+          "modulePath": "note"
         },
         "message": {
           "descriptor": {
             "interface": "Records",
             "method": "Delete",
-            "protocol": "https://example.com/protocol/notes",
-            "protocolPath": "note",
+            "module": "https://example.com/protocol/notes",
+            "modulePath": "note",
             "messageTimestamp": "2025-01-01T00:03:01.000000Z",
             "recordId": "note-1"
           }
@@ -61,15 +61,15 @@
         "id": "protocols-configure-notes",
         "messageCid": "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu",
         "indexes": {
-          "interface": "Protocols",
+          "interface": "Modules",
           "method": "Configure",
-          "protocol": "https://example.com/protocol/notes"
+          "module": "https://example.com/protocol/notes"
         },
         "message": {
           "descriptor": {
-            "interface": "Protocols",
+            "interface": "Modules",
             "method": "Configure",
-            "protocol": "https://example.com/protocol/notes",
+            "module": "https://example.com/protocol/notes",
             "messageTimestamp": "2025-01-01T00:03:02.000000Z"
           }
         },
@@ -89,9 +89,14 @@
           "cidsOnly": false
         },
         "reply": {
-          "status": { "code": 200, "detail": "OK" },
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
           "entries": [],
-          "cursor": { "position": "0" },
+          "cursor": {
+            "position": "0"
+          },
           "drained": true,
           "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000"
         }
@@ -105,18 +110,30 @@
         "tenant": "did:example:alice",
         "seedSet": "query-feed",
         "request": {
-          "filters": [{ "interface": "Records", "method": "Write" }]
+          "filters": [
+            {
+              "interface": "Records",
+              "method": "Write"
+            }
+          ]
         },
         "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "entries": [{
-            "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
-            "isLatestBaseState": true,
-            "protocol": "https://example.com/protocol/notes",
-            "encodedData": "aGVsbG8gcXVlcnk",
-            "messageHasEncodedData": false
-          }],
-          "cursor": { "position": "3" },
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
+              "isLatestBaseState": true,
+              "module": "https://example.com/protocol/notes",
+              "encodedData": "aGVsbG8gcXVlcnk",
+              "messageHasEncodedData": false
+            }
+          ],
+          "cursor": {
+            "position": "3"
+          },
           "drained": true
         }
       }
@@ -129,24 +146,46 @@
         "tenant": "did:example:alice",
         "seedSet": "query-feed",
         "request": {
-          "filters": [{ "protocol": "https://example.com/protocol/notes" }],
+          "filters": [
+            {
+              "module": "https://example.com/protocol/notes"
+            }
+          ],
           "limit": 2,
           "cidsOnly": true
         },
         "reply": {
-          "status": { "code": 200, "detail": "OK" },
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
           "entries": [
-            { "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m" },
-            { "messageCid": "bafyreic7uxfzjh3smvznwyjpgxmvfoknyjfrabpc5evdivtr4mddxhoq2e" }
+            {
+              "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m"
+            },
+            {
+              "messageCid": "bafyreic7uxfzjh3smvznwyjpgxmvfoknyjfrabpc5evdivtr4mddxhoq2e"
+            }
           ],
-          "entryFieldsOmitted": ["message", "encodedData"],
-          "cursor": { "position": "2" },
+          "entryFieldsOmitted": [
+            "message",
+            "encodedData"
+          ],
+          "cursor": {
+            "position": "2"
+          },
           "drained": false
         },
         "resume": {
-          "cursor": { "position": "2" },
+          "cursor": {
+            "position": "2"
+          },
           "reply": {
-            "entries": [{ "messageCid": "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu" }],
+            "entries": [
+              {
+                "messageCid": "bafyreicwdyqxszsld7dwbzcprzqry7zrmdl3si2z32xtr6hwxiqbnhxwcu"
+              }
+            ],
             "drained": true
           }
         }
@@ -160,13 +199,25 @@
         "tenant": "did:example:alice",
         "seedSet": "query-feed",
         "request": {
-          "cursor": { "position": "1" },
-          "filters": [{ "interface": "Records", "method": "Write" }]
+          "cursor": {
+            "position": "1"
+          },
+          "filters": [
+            {
+              "interface": "Records",
+              "method": "Write"
+            }
+          ]
         },
         "reply": {
-          "status": { "code": 200, "detail": "OK" },
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
           "entries": [],
-          "cursor": { "position": "3" },
+          "cursor": {
+            "position": "3"
+          },
           "drained": true
         }
       }
@@ -180,8 +231,14 @@
         "seedSet": "query-feed",
         "transition": {
           "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
-          "from": { "position": "1", "encodedData": null },
-          "to": { "position": "1", "encodedData": "aGVsbG8gcXVlcnk" }
+          "from": {
+            "position": "1",
+            "encodedData": null
+          },
+          "to": {
+            "position": "1",
+            "encodedData": "aGVsbG8gcXVlcnk"
+          }
         },
         "reply": {
           "entryCount": 3,
@@ -199,17 +256,29 @@
         "author": "did:example:bob",
         "seedSet": "query-feed",
         "request": {
-          "filters": [{ "protocol": "https://example.com/protocol/notes", "protocolPathPrefix": "note" }],
-          "permissionGrantIds": ["grant-messages-read-notes"]
+          "filters": [
+            {
+              "module": "https://example.com/protocol/notes",
+              "modulePathPrefix": "note"
+            }
+          ],
+          "permissionGrantIds": [
+            "grant-messages-read-notes"
+          ]
         },
         "reply": {
-          "status": { "code": 200, "detail": "OK" },
-          "entries": [{
-            "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
-            "message": "present",
-            "encodedData": null,
-            "messageHasEncodedData": false
-          }]
+          "status": {
+            "code": 200,
+            "detail": "OK"
+          },
+          "entries": [
+            {
+              "messageCid": "bafyreid4sryquow54mk2izkkibglbnxsld67kpopa4xqd6dnfm5yn4c64m",
+              "message": "present",
+              "encodedData": null,
+              "messageHasEncodedData": false
+            }
+          ]
         }
       }
     },
@@ -221,11 +290,20 @@
         "tenant": "did:example:alice",
         "request": {
           "filters": [],
-          "cursor": { "streamId": "wrong-stream", "epoch": "wrong-epoch", "position": "0" }
+          "cursor": {
+            "streamId": "wrong-stream",
+            "epoch": "wrong-epoch",
+            "position": "0"
+          }
         },
         "reply": {
-          "status": { "code": 410 },
-          "error": { "code": "ProgressGap", "reason": "stream_mismatch" }
+          "status": {
+            "code": 410
+          },
+          "error": {
+            "code": "ProgressGap",
+            "reason": "stream_mismatch"
+          }
         }
       }
     },
@@ -236,10 +314,16 @@
       "query": {
         "tenant": "did:example:alice",
         "storeCapabilities": [],
-        "request": { "filters": [] },
+        "request": {
+          "filters": []
+        },
         "reply": {
-          "status": { "code": 501 },
-          "error": { "code": "MessagesQueryReplicationFeedUnimplemented" }
+          "status": {
+            "code": 501
+          },
+          "error": {
+            "code": "MessagesQueryReplicationFeedUnimplemented"
+          }
         }
       }
     }

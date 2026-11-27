@@ -40,8 +40,10 @@ if (commit !== pin) {
   );
 }
 
-// Stub the DHT gateway put; the vault throws when publication reports failure.
-globalThis.fetch = (async () => new Response(null, { status: 200 })) as typeof fetch;
+// Stub the DHT gateway: publish (PUT) succeeds; resolve (GET) reports NotFound
+// so recovery reconciles and publishes rather than decoding an empty packet.
+globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+  new Response(null, { status: init?.method === 'GET' ? 404 : 200 })) as typeof fetch;
 
 const { HdIdentityVault } = await import(
   resolve(enboxTsRoot, 'packages/agent/src/hd-identity-vault.ts')
@@ -61,43 +63,55 @@ const BINARY_PLAINTEXT = new Uint8Array([0, 1, 2, 250, 255, 16, 32]);
 const toBase64Url = (bytes: Uint8Array): string =>
   Buffer.from(bytes).toString('base64url');
 
-const store = new MemoryStore<string, string>();
-const vault = new HdIdentityVault({ keyDerivationWorkFactor: 1, store });
-const returnedPhrase = await vault.initialize({
-  password: PASSWORD,
-  recoveryPhrase: RECOVERY_PHRASE,
-  dwnEndpoints: DWN_ENDPOINTS,
-});
-if (returnedPhrase !== RECOVERY_PHRASE) {
-  throw new Error('vault returned a different recovery phrase than supplied');
+async function buildProfile(derivationVersion?: 1 | 2) {
+  const profileStore = new MemoryStore<string, string>();
+  const profileVault = new HdIdentityVault({ keyDerivationWorkFactor: 1, store: profileStore });
+  await profileVault.initialize({
+    password: PASSWORD,
+    recoveryPhrase: RECOVERY_PHRASE,
+    dwnEndpoints: DWN_ENDPOINTS,
+    derivationVersion,
+  });
+
+  const profileContentEncryptionKey = await profileStore.get('contentEncryptionKey');
+  const profileDid = await profileStore.get('did');
+  const profileVaultStatus = await profileStore.get('vaultStatus');
+  if (!profileContentEncryptionKey || !profileDid || !profileVaultStatus) {
+    throw new Error('vault did not write all three stored values');
+  }
+
+  const profilePortableDid = await profileVault.getDid();
+  const profileDataJwe = await profileVault.encryptData({ plaintext: DATA_PLAINTEXT });
+  const profileBinaryJwe = await profileVault.encryptData({ plaintext: BINARY_PLAINTEXT });
+
+  // Re-open from the stored values alone, as the Rust tests do.
+  const reopenStore = new MemoryStore<string, string>();
+  await reopenStore.set('contentEncryptionKey', profileContentEncryptionKey);
+  await reopenStore.set('did', profileDid);
+  await reopenStore.set('vaultStatus', profileVaultStatus);
+  const reopened = new HdIdentityVault({ keyDerivationWorkFactor: 1, store: reopenStore });
+  await reopened.unlock({ password: PASSWORD });
+  const reopenedDid = await reopened.getDid();
+  if (reopenedDid.uri !== profilePortableDid.uri) {
+    throw new Error('re-opened vault resolved a different DID');
+  }
+  const roundTrip = await reopened.decryptData({ jwe: profileDataJwe });
+  if (Buffer.from(roundTrip).toString('base64url') !== toBase64Url(DATA_PLAINTEXT)) {
+    throw new Error('re-opened vault decrypted different data');
+  }
+
+  return {
+    contentEncryptionKey: profileContentEncryptionKey,
+    did: profileDid,
+    vaultStatus: profileVaultStatus,
+    portableDidUri: profilePortableDid.uri,
+    dataJwe: profileDataJwe,
+    binaryJwe: profileBinaryJwe,
+  };
 }
 
-const contentEncryptionKey = await store.get('contentEncryptionKey');
-const did = await store.get('did');
-const vaultStatus = await store.get('vaultStatus');
-if (!contentEncryptionKey || !did || !vaultStatus) {
-  throw new Error('vault did not write all three stored values');
-}
-
-const portableDid = await vault.getDid();
-const dataJwe = await vault.encryptData({ plaintext: DATA_PLAINTEXT });
-const binaryJwe = await vault.encryptData({ plaintext: BINARY_PLAINTEXT });
-
-// Re-open from the stored values alone, as the Rust tests do.
-const reopenStore = new MemoryStore<string, string>();
-await reopenStore.set('contentEncryptionKey', contentEncryptionKey);
-await reopenStore.set('did', did);
-await reopenStore.set('vaultStatus', vaultStatus);
-const reopened = new HdIdentityVault({ keyDerivationWorkFactor: 1, store: reopenStore });
-await reopened.unlock({ password: PASSWORD });
-const reopenedDid = await reopened.getDid();
-if (reopenedDid.uri !== portableDid.uri) {
-  throw new Error('re-opened vault resolved a different DID');
-}
-const roundTrip = await reopened.decryptData({ jwe: dataJwe });
-if (Buffer.from(roundTrip).toString('base64url') !== toBase64Url(DATA_PLAINTEXT)) {
-  throw new Error('re-opened vault decrypted different data');
-}
+const v2Profile = await buildProfile(2);
+const v1Profile = await buildProfile(1);
 
 const fixture = {
   schemaVersion: 1,
@@ -116,13 +130,10 @@ const fixture = {
     dataPlaintext: toBase64Url(DATA_PLAINTEXT),
     binaryPlaintext: toBase64Url(BINARY_PLAINTEXT),
   },
-  vector: {
-    contentEncryptionKey,
-    did,
-    vaultStatus,
-    portableDidUri: portableDid.uri,
-    dataJwe,
-    binaryJwe,
+  vector: v1Profile,
+  profiles: {
+    v2: v2Profile,
+    v1: v1Profile,
   },
 };
 
@@ -130,4 +141,4 @@ const outDir = resolve(repoRoot, 'fixtures/interop');
 mkdirSync(outDir, { recursive: true });
 const outPath = resolve(outDir, 'vault-jwe.json');
 writeFileSync(outPath, JSON.stringify(fixture, null, 2) + '\n');
-console.log(`wrote ${outPath} for ${portableDid.uri}`);
+console.log(`wrote ${outPath} for ${v2Profile.portableDidUri} and ${v1Profile.portableDidUri}`);

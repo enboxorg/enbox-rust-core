@@ -65,7 +65,7 @@ const cases = [
     (
       await RecordsQuery.create({
         messageTimestamp: '2025-01-01T00:00:12.000000Z',
-        filter: { protocol: 'https://example.com/protocol' },
+        filter: { module: 'https://example.com/protocol' },
         permissionGrantId: 'grant-query-123',
       })
     ).message,
@@ -76,7 +76,7 @@ const cases = [
     (
       await RecordsCount.create({
         messageTimestamp: '2025-01-01T00:00:13.000000Z',
-        filter: { protocol: 'https://example.com/protocol' },
+        filter: { module: 'https://example.com/protocol' },
         permissionGrantId: 'grant-count-123',
       })
     ).message,
@@ -87,7 +87,7 @@ const cases = [
     (
       await RecordsSubscribe.create({
         messageTimestamp: '2025-01-01T00:00:14.000000Z',
-        filter: { protocol: 'https://example.com/protocol' },
+        filter: { module: 'https://example.com/protocol' },
         permissionGrantId: 'grant-subscribe-123',
       })
     ).message,
