@@ -939,11 +939,11 @@ where
         )
         .await;
     }
-    Err(
-        "ModuleAuthorizationActionNotAllowed: anonymous read is not authorized"
-            .to_string()
-            .into(),
+    Err(DwnError::new(
+        DwnErrorCode::ModuleAuthorizationActionNotAllowed,
+        "anonymous read is not authorized",
     )
+    .into())
 }
 
 pub(crate) async fn authorize_records_delete<MessageStore>(
@@ -992,8 +992,8 @@ pub(crate) struct ResolvedModuleRole {
     pub role_record_id: String,
 }
 
-/// A module-authorization failure. Role failures carry a stable
-/// [`DwnErrorCode`]; action-rule failures are plain unauthorized details.
+/// A module-authorization failure. `Code` carries a stable [`DwnErrorCode`];
+/// `Detail` is an action-rule rejection.
 #[derive(Debug)]
 pub(crate) enum ModuleAuthorizationError {
     Code(DwnError),
@@ -1072,8 +1072,9 @@ where
                             parsed.alias
                         ),
                     )
-                })?;
-            (role_module.clone(), parsed.module_path.to_string())
+                })?
+                .clone();
+            (role_module, parsed.module_path.to_string())
         }
         None => (module.to_string(), invoked_role.to_string()),
     };
@@ -1253,11 +1254,11 @@ where
         Action::Who(action) => action.who == Who::Anyone && action.can.contains(&can),
     });
     if !rule_allows {
-        return Err(
-            "ModuleAuthorizationActionNotAllowed: no action rule allows the invoked role"
-                .to_string()
-                .into(),
-        );
+        return Err(DwnError::new(
+            DwnErrorCode::ModuleAuthorizationActionNotAllowed,
+            "no action rule allows the invoked role",
+        )
+        .into());
     }
 
     Ok(resolved)
@@ -1313,7 +1314,8 @@ where
         .await?;
     }
     let chain = construct_record_chain(tenant, message, message_store).await?;
-    let actions = actions_for_message_kind(tenant, message, author, kind, message_store).await?;
+    let actions =
+        actions_for_message_kind(tenant, message, author, kind, rule_set, message_store).await?;
     authorize_actions(
         author,
         invoked_role,
@@ -1332,7 +1334,7 @@ pub(crate) fn authorize_actions(
     rule_set: &RuleSet,
     record_chain: &[Message<Descriptor>],
     definition: Option<&Definition>,
-) -> Result<(), String> {
+) -> Result<(), DwnError> {
     for action in &rule_set.actions {
         match action {
             Action::Who(action) => {
@@ -1379,7 +1381,10 @@ pub(crate) fn authorize_actions(
             }
         }
     }
-    Err("ModuleAuthorizationActionNotAllowed: inbound message action is not allowed".to_string())
+    Err(DwnError::new(
+        DwnErrorCode::ModuleAuthorizationActionNotAllowed,
+        format!("inbound message action for {author} is not allowed"),
+    ))
 }
 
 pub(crate) fn check_actor(
@@ -1517,22 +1522,31 @@ pub(crate) async fn actions_for_message_kind<MessageStore>(
     message: &Message<Descriptor>,
     author: &str,
     kind: RecordsAuthorizationKind,
+    rule_set: &RuleSet,
     message_store: &MessageStore,
-) -> Result<Vec<Can>, String>
+) -> Result<Vec<Can>, ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     match kind {
         RecordsAuthorizationKind::Write => {
-            if is_initial_write(message, author)? {
-                if records_write_descriptor(message)?.squash == Some(true) {
-                    Ok(vec![Can::Squash, Can::Create])
-                } else {
-                    Ok(vec![Can::Create])
+            if is_initial_write(message, author).map_err(|error| error.to_string())? {
+                if rule_set.actions.is_empty() {
+                    return Err(DwnError::new(
+                        DwnErrorCode::ModuleAuthorizationActionRulesNotFound,
+                        format!("no action rule defined for initial write by author {author}"),
+                    )
+                    .into());
                 }
+                let squash = records_write_descriptor(message)
+                    .map_err(|error| error.to_string())?
+                    .squash
+                    == Some(true);
+                Ok(rule_set.initial_write_actions(squash))
             } else if let Some(record_id) = record_id(message) {
-                let initial =
-                    fetch_initial_write_message(tenant, &record_id, message_store).await?;
+                let initial = fetch_initial_write_message(tenant, &record_id, message_store)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 if initial
                     .and_then(|message| extract_author(&message))
                     .as_deref()
@@ -1557,8 +1571,9 @@ where
                 vec![Can::CoDelete]
             };
             if let Some(record_id) = record_id(message).or_else(|| message_record_id(message)) {
-                let initial =
-                    fetch_initial_write_message(tenant, &record_id, message_store).await?;
+                let initial = fetch_initial_write_message(tenant, &record_id, message_store)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 if initial
                     .and_then(|message| extract_author(&message))
                     .as_deref()

@@ -138,6 +138,27 @@ pub struct RuleSet {
     pub rules: BTreeMap<String, RuleSet>,
 }
 
+impl RuleSet {
+    /// The actions an initial write at this path seeks. A rule set that names
+    /// `squash` makes it exclusive; `create` is a fallback only when no rule
+    /// names `squash`, so an ordinary create-only writer cannot craft a squash
+    /// against a path that declares one.
+    pub fn initial_write_actions(&self, squash: bool) -> Vec<Can> {
+        if !squash {
+            return vec![Can::Create];
+        }
+        let declares_squash = self.actions.iter().any(|action| match action {
+            Action::Who(action) => action.can.contains(&Can::Squash),
+            Action::Role(action) => action.can.contains(&Can::Squash),
+        });
+        if declares_squash {
+            vec![Can::Squash]
+        } else {
+            vec![Can::Squash, Can::Create]
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct RecordLimit {
     pub max: u64,

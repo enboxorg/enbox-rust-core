@@ -1586,6 +1586,304 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     );
 }
 
+// Covers: DWN-PROTO-001, ENBOX-ERR-001
+// A rule set that names `squash` makes it exclusive: create authority alone can
+// no longer craft a squash. A recipient-selected squash rule stands in for the
+// admin so the test does not need role records.
+#[tokio::test]
+async fn squash_action_is_exclusive_of_create_when_declared() {
+    const MODULE: &str = "http://example.com/exclusive-squash";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(
+        TENANT,
+        &message_store,
+        squash_definition(MODULE, true),
+        "2024-12-31T00:00:00.000000Z",
+    )
+    .await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    let editor_data = Bytes::from_static(b"editor squash");
+    let editor_squash = signed_write_message(WriteSpec {
+        author: "did:example:bob".to_string(),
+        signer: bob_signer(),
+        module: MODULE.to_string(),
+        module_path: "note".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&editor_data).to_string(),
+        data_size: editor_data.len() as u64,
+        squash: Some(true),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    let reply = handler.run(TENANT, &editor_squash, Some(editor_data)).await;
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationActionNotAllowed"),
+        "the explicit squash rule must reject a create-only writer"
+    );
+
+    let admin_data = Bytes::from_static(b"admin squash");
+    let admin_squash = signed_write_message(WriteSpec {
+        author: "did:example:bob".to_string(),
+        signer: bob_signer(),
+        module: MODULE.to_string(),
+        module_path: "note".to_string(),
+        recipient: Some("did:example:bob".to_string()),
+        data_cid: generate_dag_pb_cid_from_bytes(&admin_data).to_string(),
+        data_size: admin_data.len() as u64,
+        squash: Some(true),
+        ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(TENANT, &admin_squash, Some(admin_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    // Create-only authority still appends ordinary records.
+    let create_data = Bytes::from_static(b"ordinary note");
+    let create = signed_write_message(WriteSpec {
+        author: "did:example:bob".to_string(),
+        signer: bob_signer(),
+        module: MODULE.to_string(),
+        module_path: "note".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&create_data).to_string(),
+        data_size: create_data.len() as u64,
+        ..WriteSpec::new("2025-01-01T00:03:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        handler
+            .run(TENANT, &create, Some(create_data))
+            .await
+            .status
+            .code,
+        202
+    );
+}
+
+// Covers: DWN-PROTO-001
+// Without any explicit squash rule, create remains the fallback so a module
+// that never mentions squash does not forbid it.
+#[tokio::test]
+async fn squash_falls_back_to_create_when_no_squash_rule_is_declared() {
+    const MODULE: &str = "http://example.com/fallback-squash";
+
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(
+        TENANT,
+        &message_store,
+        squash_definition(MODULE, false),
+        "2024-12-31T00:00:00.000000Z",
+    )
+    .await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"create fallback squash");
+    let squash = signed_write_message(WriteSpec {
+        author: "did:example:bob".to_string(),
+        signer: bob_signer(),
+        module: MODULE.to_string(),
+        module_path: "note".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        squash: Some(true),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    let reply = handler.run(TENANT, &squash, Some(data)).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-001, ENBOX-ERR-001
+// An initial write with no action rules has nothing that could authorize it, so
+// it fails closed rather than falling through to the generic action rejection.
+#[tokio::test]
+async fn initial_write_without_action_rules_fails_closed() {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_notes_module_without_actions(TENANT, &message_store).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+
+    let data = Bytes::from_static(b"no rules");
+    let write = signed_write_message(WriteSpec {
+        author: "did:example:bob".to_string(),
+        signer: bob_signer(),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    let reply = handler.run(TENANT, &write, Some(data)).await;
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationActionRulesNotFound")
+    );
+}
+
+// Covers: DWN-PROTO-004
+// A stored squash is revalidated against the definition governing its own
+// timestamp: admitted under create fallback, contradicted once a late
+// historical configuration installs an explicit squash rule for another actor.
+#[tokio::test]
+async fn stored_squash_revalidation_follows_the_governing_definition() {
+    const MODULE: &str = "http://example.com/stored-squash";
+    const RECORD_TIMESTAMP: &str = "2025-01-03T00:00:00.000000Z";
+
+    let mut message_store = MemoryMessageStore::default();
+    message_store.open().await.unwrap();
+    put_module_definition(
+        TENANT,
+        &message_store,
+        stored_squash_definition(MODULE, false),
+        "2025-01-01T00:00:00.000000Z",
+    )
+    .await;
+
+    let squash = signed_write_message(WriteSpec {
+        author: "did:example:bob".to_string(),
+        signer: bob_signer(),
+        module: MODULE.to_string(),
+        module_path: "note".to_string(),
+        squash: Some(true),
+        ..WriteSpec::new(RECORD_TIMESTAMP)
+    })
+    .await;
+    let squash: Message<Descriptor> =
+        serde_json::from_value(squash).expect("the squash must deserialize");
+
+    let governing = crate::handlers::fetch_module_definition(
+        TENANT,
+        MODULE,
+        &message_store,
+        Some(RECORD_TIMESTAMP),
+    )
+    .await
+    .unwrap();
+    assert!(
+        verify_stored_create_action(
+            TENANT,
+            &squash,
+            governing.rule_at("note").expect("note is defined")
+        )
+        .is_ok(),
+        "create fallback still admits the stored squash"
+    );
+
+    // The explicit definition arrives late but governs the record's timestamp.
+    put_module_definition(
+        TENANT,
+        &message_store,
+        stored_squash_definition(MODULE, true),
+        "2025-01-02T00:00:00.000000Z",
+    )
+    .await;
+    let governing = crate::handlers::fetch_module_definition(
+        TENANT,
+        MODULE,
+        &message_store,
+        Some(RECORD_TIMESTAMP),
+    )
+    .await
+    .unwrap();
+    let error = verify_stored_create_action(
+        TENANT,
+        &squash,
+        governing.rule_at("note").expect("note is defined"),
+    )
+    .expect_err("an explicit squash rule excludes the create fallback");
+    let crate::handlers::records::control::ControlValidationError::Dwn(error) = error else {
+        panic!("expected a coded stored-revalidation failure");
+    };
+    assert_eq!(
+        error.code,
+        DwnErrorCode::ModuleAuthorizationStoredInitialWriteActionNotAllowed
+    );
+    assert!(error.code.is_control_invalidity());
+}
+
+fn squash_definition(module: &str, explicit_squash: bool) -> crate::modules::Definition {
+    use crate::modules::Type;
+
+    let mut actions = vec![crate::modules::Action::Who(crate::modules::ActionWho {
+        who: crate::modules::Who::Anyone,
+        of: None,
+        can: vec![crate::modules::Can::Create, crate::modules::Can::Read],
+    })];
+    if explicit_squash {
+        actions.push(crate::modules::Action::Who(crate::modules::ActionWho {
+            who: crate::modules::Who::Recipient,
+            of: Some("note".to_string()),
+            can: vec![crate::modules::Can::Squash],
+        }));
+    }
+    crate::modules::Definition {
+        module: module.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "note".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: None,
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "note".to_string(),
+            crate::modules::RuleSet {
+                squash: Some(true),
+                actions,
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+fn stored_squash_definition(module: &str, explicit_squash: bool) -> crate::modules::Definition {
+    let mut definition = squash_definition(module, false);
+    if explicit_squash {
+        definition
+            .structure
+            .get_mut("note")
+            .unwrap()
+            .actions
+            .push(crate::modules::Action::Role(crate::modules::ActionRole {
+                role: "note/admin".to_string(),
+                can: vec![crate::modules::Can::Squash],
+            }));
+    }
+    definition
+}
+
 #[tokio::test]
 async fn records_write_accepts_permission_grant_id_and_enforces_publication_condition() {
     let mut message_store = TestMessageStore::default();

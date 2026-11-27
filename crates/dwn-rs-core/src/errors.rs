@@ -64,6 +64,8 @@ pub enum DwnErrorCode {
     RecordsWriteImmutablePropertyChanged,
     ModuleAuthorizationImmutableRecord,
     ModuleAuthorizationSquashBackstop,
+    ModuleAuthorizationActionRulesNotFound,
+    ModuleAuthorizationActionNotAllowed,
     ModuleAuthorizationStoredInitialWriteActionRulesNotFound,
     ModuleAuthorizationStoredInitialWriteActionNotAllowed,
     // Message ingress (admission) stage; see `dwn::validation::ingest_message`.
@@ -202,6 +204,10 @@ impl DwnErrorCode {
             Self::RecordsWriteImmutablePropertyChanged => "RecordsWriteImmutablePropertyChanged",
             Self::ModuleAuthorizationImmutableRecord => "ModuleAuthorizationImmutableRecord",
             Self::ModuleAuthorizationSquashBackstop => "ModuleAuthorizationSquashBackstop",
+            Self::ModuleAuthorizationActionRulesNotFound => {
+                "ModuleAuthorizationActionRulesNotFound"
+            }
+            Self::ModuleAuthorizationActionNotAllowed => "ModuleAuthorizationActionNotAllowed",
             Self::ModuleAuthorizationStoredInitialWriteActionRulesNotFound => {
                 "ModuleAuthorizationStoredInitialWriteActionRulesNotFound"
             }
@@ -407,6 +413,10 @@ impl TryFrom<&str> for DwnErrorCode {
             }
             "ModuleAuthorizationImmutableRecord" => Ok(Self::ModuleAuthorizationImmutableRecord),
             "ModuleAuthorizationSquashBackstop" => Ok(Self::ModuleAuthorizationSquashBackstop),
+            "ModuleAuthorizationActionRulesNotFound" => {
+                Ok(Self::ModuleAuthorizationActionRulesNotFound)
+            }
+            "ModuleAuthorizationActionNotAllowed" => Ok(Self::ModuleAuthorizationActionNotAllowed),
             "ModuleAuthorizationStoredInitialWriteActionRulesNotFound" => {
                 Ok(Self::ModuleAuthorizationStoredInitialWriteActionRulesNotFound)
             }
