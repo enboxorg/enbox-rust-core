@@ -31,6 +31,8 @@ Fresh stores are required. A pre-cutover SQLite database holds signed
 translate. Open a new database file, initialize a new identity vault, and
 re-issue module configurations, records, grants, and encryption material. Keep
 old data only as a separate backup; never relabel it as new-format state.
+Delegate decryption/context keys and the `enbox:auth:*` secret-store envelopes
+must also be re-derived and re-issued across the cutover.
 Queued offline writes and sync checkpoints cannot cross the format boundary.
 
 ## API surface
