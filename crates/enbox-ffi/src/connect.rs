@@ -53,6 +53,6 @@ pub(crate) struct DeriveDelegateKeysInput {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeriveContextKeyInput {
     pub owner_did: PortableDid,
-    pub protocol: String,
+    pub module: String,
     pub context_id: String,
 }

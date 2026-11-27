@@ -18,7 +18,7 @@ use dwn_rs_agent::auth::connect::{
     DelegateDecryptionKey,
 };
 use dwn_rs_agent::auth::setup::{
-    inject_protocol_encryption, install_protocol_if_needed, push_protocol_if_needed,
+    inject_module_encryption, install_module_if_needed, push_module_if_needed,
     register_with_dwn_endpoints, run_restore_flow, TenantRegistrationRequest,
 };
 use dwn_rs_agent::SqliteSecretStore;
@@ -30,7 +30,7 @@ use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
 use dwn_rs_core::sync::ledger::SyncLedger;
 use dwn_rs_core::sync::{
     SyncCheckpoint, SyncConnectivity, SyncDirection, SyncIdentityOptions, SyncOnceRequest,
-    SyncOnceResult, SyncRunStatus,
+    SyncOnceResult, SyncProtocols, SyncRunStatus,
 };
 use dwn_rs_stores::SqliteNativeDwn;
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ use connect::{
     PermissionRequestInput,
 };
 use http_registration::HttpTenantRegistrationClient;
-use setup::{signer_from_portable_did, HttpDwnProtocolEndpoint, LocalDwnProtocolEndpoint};
+use setup::{signer_from_portable_did, HttpDwnModuleEndpoint, LocalDwnModuleEndpoint};
 use ssi_jwk::Algorithm;
 
 uniffi::setup_scaffolding!();
@@ -259,14 +259,14 @@ enum SyncBackend {
 }
 
 /// Optional filter for `list_pending_scopes` and `resume_pending`. A
-/// missing field matches everything; supplying `protocol: null`
+/// missing field matches everything; supplying `module: null`
 /// explicitly is treated identically to omitting it.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FfiPendingScopesQuery {
     tenant: String,
     remote: Option<String>,
-    protocol: Option<String>,
+    module: Option<String>,
     direction: Option<SyncDirection>,
 }
 
@@ -276,8 +276,8 @@ struct FfiPendingScopesQuery {
 struct FfiPendingScope {
     tenant: String,
     remote: String,
-    /// Protocol URI when scoped, or `None` for the global scope.
-    protocol: Option<String>,
+    /// Module URI when scoped, or `None` for the global scope.
+    module: Option<String>,
     direction: SyncDirection,
     pending_pull_count: usize,
     pending_push_count: usize,
@@ -294,7 +294,7 @@ impl FfiPendingScope {
         Self {
             tenant: checkpoint.tenant.clone(),
             remote: checkpoint.remote.clone(),
-            protocol: protocol_from_scope_id(&checkpoint.scope_id),
+            module: module_from_scope_id(&checkpoint.scope_id),
             direction: checkpoint.direction,
             pending_pull_count: checkpoint.pending_pull_prefixes.len(),
             pending_push_count: checkpoint.pending_push_prefixes.len(),
@@ -317,7 +317,7 @@ struct FfiResumePendingRequest {
     deadline_ms: Option<u64>,
     connectivity: Option<SyncConnectivity>,
     remote: Option<String>,
-    protocol: Option<String>,
+    module: Option<String>,
     direction: Option<SyncDirection>,
     max_records: Option<usize>,
     max_bytes: Option<u64>,
@@ -335,10 +335,10 @@ struct FfiResumePendingResult {
     deadline_exceeded: bool,
 }
 
-/// Map a `SyncCheckpoint.scope_id` (`global` or `protocol:<uri>`) back
-/// to the optional protocol filter used by [`SyncOnceRequest`].
-fn protocol_from_scope_id(scope_id: &str) -> Option<String> {
-    scope_id.strip_prefix("protocol:").map(str::to_string)
+/// Map a `SyncCheckpoint.scope_id` (`global` or `module:<uri>`) back
+/// to the optional module filter used by [`SyncOnceRequest`].
+fn module_from_scope_id(scope_id: &str) -> Option<String> {
+    scope_id.strip_prefix("module:").map(str::to_string)
 }
 
 /// True when a checkpoint still has unfinished work (pending prefixes
@@ -350,7 +350,7 @@ fn checkpoint_is_pending(checkpoint: &SyncCheckpoint) -> bool {
         || checkpoint.push_cursor.is_some()
 }
 
-/// Apply the `tenant` / `remote` / `protocol` / `direction` filter from
+/// Apply the `tenant` / `remote` / `module` / `direction` filter from
 /// a `FfiPendingScopesQuery` to a single ledger checkpoint.
 fn matches_scope_filter(checkpoint: &SyncCheckpoint, query: &FfiPendingScopesQuery) -> bool {
     if checkpoint.tenant != query.tenant {
@@ -366,9 +366,9 @@ fn matches_scope_filter(checkpoint: &SyncCheckpoint, query: &FfiPendingScopesQue
             return false;
         }
     }
-    if let Some(protocol) = query.protocol.as_deref() {
-        match protocol_from_scope_id(&checkpoint.scope_id) {
-            Some(scope_protocol) if scope_protocol == protocol => {}
+    if let Some(module) = query.module.as_deref() {
+        match module_from_scope_id(&checkpoint.scope_id) {
+            Some(scope_module) if scope_module == module => {}
             _ => return false,
         }
     }
@@ -382,7 +382,7 @@ struct FfiSyncOnceRequest {
     remote: String,
     #[serde(default = "default_sync_direction")]
     direction: SyncDirection,
-    protocol: Option<String>,
+    module: Option<String>,
     max_records: Option<usize>,
     max_bytes: Option<u64>,
     signer: Option<SyncSignerConfig>,
@@ -408,7 +408,33 @@ struct FfiSyncStatusQuery {
     tenant: String,
     remote: Option<String>,
     #[allow(unused, dead_code)]
-    protocol: Option<String>,
+    module: Option<String>,
+}
+
+/// Sync identity input. The core sync layer still names the scope list
+/// `protocols`; the FFI surface exposes it as `modules`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FfiSyncIdentityRequest {
+    did: String,
+    modules: FfiSyncModules,
+    delegate_did: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type", content = "values")]
+enum FfiSyncModules {
+    All,
+    Modules(Vec<String>),
+}
+
+impl From<FfiSyncModules> for SyncProtocols {
+    fn from(modules: FfiSyncModules) -> Self {
+        match modules {
+            FfiSyncModules::All => SyncProtocols::All,
+            FfiSyncModules::Modules(modules) => SyncProtocols::Protocols(modules),
+        }
+    }
 }
 
 fn default_sync_direction() -> SyncDirection {
@@ -698,12 +724,17 @@ impl EnboxCore {
         Ok(())
     }
 
-    /// Register a tenant DID and protocol scope for subsequent sync runs.
+    /// Register a tenant DID and module scope for subsequent sync runs.
     pub fn register_sync_identity(&self, identity_json: String) -> Result<(), EnboxError> {
-        let options: SyncIdentityOptions =
+        let request: FfiSyncIdentityRequest =
             serde_json::from_str(&identity_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
+        let options = SyncIdentityOptions {
+            did: request.did,
+            protocols: request.modules.into(),
+            delegate_did: request.delegate_did,
+        };
         let state = self.state.lock().map_err(|err| EnboxError::Store {
             detail: format!("core state lock poisoned: {err}"),
         })?;
@@ -764,7 +795,7 @@ impl EnboxCore {
 
     /// Enumerate pending sync scopes for a tenant without running any
     /// network work. Returns a JSON array of [`FfiPendingScope`] entries
-    /// matching the optional `remote` / `protocol` / `direction` filter.
+    /// matching the optional `remote` / `module` / `direction` filter.
     ///
     /// `query_json` is camelCase:
     /// `{ "tenant": "did:example:alice", "remote": "https://dwn.example/" }`.
@@ -801,7 +832,7 @@ impl EnboxCore {
 
     /// Resume any pending sync work for a tenant under the supplied
     /// deadline + connectivity. Iterates the durable checkpoint ledger,
-    /// filters by the optional `remote` / `protocol` / `direction`, and
+    /// filters by the optional `remote` / `module` / `direction`, and
     /// re-runs the sync engine on each pending scope until the work is
     /// drained or the deadline elapses. Scopes that didn't get a turn
     /// stay pending so the next call picks up where this one left off.
@@ -849,7 +880,7 @@ impl EnboxCore {
         let scope_query = FfiPendingScopesQuery {
             tenant: request.tenant.clone(),
             remote: request.remote.clone(),
-            protocol: request.protocol.clone(),
+            module: request.module.clone(),
             direction: request.direction,
         };
         let pending: Vec<SyncCheckpoint> = snapshot
@@ -896,7 +927,8 @@ impl EnboxCore {
                     tenant: checkpoint.tenant.clone(),
                     remote: checkpoint.remote.clone(),
                     direction: checkpoint.direction,
-                    protocol: protocol_from_scope_id(&checkpoint.scope_id),
+                    // The core sync layer names the scoped module `protocol`.
+                    protocol: module_from_scope_id(&checkpoint.scope_id),
                     max_records,
                     max_bytes,
                     connectivity: connectivity_clone.clone(),
@@ -982,17 +1014,17 @@ impl EnboxCore {
         })
     }
 
-    /// Install a protocol definition on the local DWN for the supplied tenant.
+    /// Install a module definition on the local DWN for the supplied tenant.
     ///
     /// `tenant_did_json` is a JSON-encoded [`PortableDid`] (typically the
     /// value returned by [`Self::current_agent_identity`]). `definition_json`
-    /// is a JSON-encoded [`Definition`]. If the protocol requires encryption,
-    /// it is injected before the `ProtocolsConfigure` is signed and
-    /// persisted; if the protocol is already installed, the call is a
-    /// no-op (mirrors [`install_protocol_if_needed`]).
+    /// is a JSON-encoded [`Definition`]. If the module requires encryption,
+    /// it is injected before the `ModulesConfigure` is signed and
+    /// persisted; if the module is already installed, the call is a
+    /// no-op (mirrors [`install_module_if_needed`]).
     ///
-    /// Returns JSON-encoded [`ProtocolInstallResult`].
-    pub fn install_protocol(
+    /// Returns JSON-encoded [`ModuleInstallResult`].
+    pub fn install_module(
         &self,
         tenant_did_json: String,
         definition_json: String,
@@ -1008,8 +1040,8 @@ impl EnboxCore {
 
         let (node, key_manager) = self.require_local_endpoint_components(&portable_did)?;
         let signer = signer_from_portable_did(&portable_did)?;
-        let endpoint = LocalDwnProtocolEndpoint::new(node, signer);
-        let result = self.runtime.block_on(install_protocol_if_needed(
+        let endpoint = LocalDwnModuleEndpoint::new(node, signer);
+        let result = self.runtime.block_on(install_module_if_needed(
             &endpoint,
             &key_manager,
             &portable_did,
@@ -1020,17 +1052,17 @@ impl EnboxCore {
         })
     }
 
-    /// Inject protocol-path encryption keys into a definition using the
+    /// Inject module-path encryption keys into a definition using the
     /// tenant's key-agreement root key.
     ///
     /// Pure function: does not touch the DWN or the vault. Useful for
-    /// previewing what `install_protocol` will persist for an encrypted
-    /// protocol, or for sharing a pre-augmented definition with another
-    /// agent that needs to push the same protocol.
+    /// previewing what `install_module` will persist for an encrypted
+    /// module, or for sharing a pre-augmented definition with another
+    /// agent that needs to push the same module.
     ///
     /// Returns JSON-encoded [`Definition`] with `$keyAgreement` populated at
     /// the definition root and each locally governed rule set.
-    pub fn inject_protocol_encryption(
+    pub fn inject_module_encryption(
         &self,
         tenant_did_json: String,
         definition_json: String,
@@ -1044,7 +1076,7 @@ impl EnboxCore {
                 detail: err.to_string(),
             })?;
         let (_node, key_manager) = self.require_local_endpoint_components(&portable_did)?;
-        let augmented = self.runtime.block_on(inject_protocol_encryption(
+        let augmented = self.runtime.block_on(inject_module_encryption(
             &definition,
             &key_manager,
             &portable_did,
@@ -1100,24 +1132,24 @@ impl EnboxCore {
             .map_err(Into::into)
     }
 
-    /// Push a protocol to a remote `@enbox/dwn-server` HTTP endpoint.
+    /// Push a module to a remote `@enbox/dwn-server` HTTP endpoint.
     ///
     /// Input is `{tenantDid, remoteUrl, definition}`. The method signs a
-    /// `ProtocolsQuery` against the remote first; when the protocol is
+    /// `ModulesQuery` against the remote first; when the module is
     /// already installed it returns `{installed: false, encryptionActive: …}`
     /// without sending a configure. Encryption injection mirrors the local
-    /// `install_protocol` path: protocols with `encryptionRequired: true`
+    /// `install_module` path: modules with `encryptionRequired: true`
     /// receive per-path key-agreement encryption derived from the tenant's
     /// `keyAgreement` verification method.
-    pub fn push_protocol(&self, request_json: String) -> Result<String, EnboxError> {
-        let input: setup::PushProtocolInput =
+    pub fn push_module(&self, request_json: String) -> Result<String, EnboxError> {
+        let input: setup::PushModuleInput =
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
                 detail: err.to_string(),
             })?;
         let key_manager = self.require_key_manager(&input.tenant_did)?;
         let signer = signer_from_portable_did(&input.tenant_did)?;
-        let endpoint = HttpDwnProtocolEndpoint::new(input.remote_url, signer)?;
-        let result = self.runtime.block_on(push_protocol_if_needed(
+        let endpoint = HttpDwnModuleEndpoint::new(input.remote_url, signer)?;
+        let result = self.runtime.block_on(push_module_if_needed(
             &endpoint,
             &key_manager,
             &input.tenant_did,
@@ -1128,12 +1160,12 @@ impl EnboxCore {
         })
     }
 
-    /// Replay protocol install + push across local and remote endpoints
+    /// Replay module install + push across local and remote endpoints
     /// for a recovered agent.
     ///
-    /// Input is `{agentDid, remoteUrl, protocols}`. The method:
-    /// 1. Signs and installs each protocol on the local SQLite DWN.
-    /// 2. Signs and pushes each protocol to the remote HTTP endpoint.
+    /// Input is `{agentDid, remoteUrl, modules}`. The method:
+    /// 1. Signs and installs each module on the local SQLite DWN.
+    /// 2. Signs and pushes each module to the remote HTTP endpoint.
     ///
     /// Returns the JSON-serialized `RestoreFlowResult` (ordered `steps`,
     /// `localInstalls`, `remotePushes`). Identity tenant restoration is
@@ -1145,14 +1177,14 @@ impl EnboxCore {
             })?;
         let (node, key_manager) = self.require_local_endpoint_components(&input.agent_did)?;
         let signer = signer_from_portable_did(&input.agent_did)?;
-        let local = LocalDwnProtocolEndpoint::new(node, signer.clone());
-        let remote = HttpDwnProtocolEndpoint::new(input.remote_url, signer)?;
+        let local = LocalDwnModuleEndpoint::new(node, signer.clone());
+        let remote = HttpDwnModuleEndpoint::new(input.remote_url, signer)?;
         let result = self.runtime.block_on(run_restore_flow(
             &local,
             &remote,
             &key_manager,
             &input.agent_did,
-            input.protocols,
+            input.modules,
         ))?;
         serde_json::to_string(&result).map_err(|err| EnboxError::Json {
             detail: err.to_string(),
@@ -1229,7 +1261,7 @@ impl EnboxCore {
     /// `MemoryKeyManager`, and `requests` are the `ConnectPermissionRequest`
     /// objects the connecting app sent. Returns the JSON-serialized
     /// `DelegateKeyDerivationResult` (decryption keys + multi-party
-    /// protocols that still need context-key delivery).
+    /// modules that still need context-key delivery).
     pub fn derive_delegate_keys(&self, request_json: String) -> Result<String, EnboxError> {
         let input: DeriveDelegateKeysInput =
             serde_json::from_str(&request_json).map_err(|err| EnboxError::Json {
@@ -1246,9 +1278,9 @@ impl EnboxCore {
         })
     }
 
-    /// Derive a context-scoped delegate key for multi-party protocol records.
+    /// Derive a context-scoped delegate key for multi-party module records.
     ///
-    /// Takes `{ownerDid, protocol, contextId}` and returns the
+    /// Takes `{ownerDid, module, contextId}` and returns the
     /// JSON-serialized `DelegateContextKey`. The owner's private keys
     /// rehydrate a per-call `MemoryKeyManager`; the derivation path uses
     /// the `dataFormats` derivation scheme bound to `contextId`.
@@ -1261,7 +1293,7 @@ impl EnboxCore {
         let key = self.runtime.block_on(derive_context_key(
             &key_manager,
             &input.owner_did,
-            input.protocol,
+            input.module,
             input.context_id,
         ))?;
         serde_json::to_string(&key).map_err(|err| EnboxError::Json {
@@ -1331,7 +1363,7 @@ impl EnboxCore {
         })
     }
 
-    /// Return the last sync outcome for the supplied tenant (and optional remote/protocol filter).
+    /// Return the last sync outcome for the supplied tenant (and optional remote/module filter).
     pub fn sync_status(&self, query_json: String) -> Result<EnboxSyncStatus, EnboxError> {
         let query: FfiSyncStatusQuery =
             serde_json::from_str(&query_json).map_err(|err| EnboxError::Json {
@@ -1348,8 +1380,8 @@ impl EnboxCore {
     /// Borrow the shared SQLite node and rebuild a per-call [`MemoryKeyManager`]
     /// rehydrated from the supplied [`PortableDid`]'s private keys.
     ///
-    /// Setup operations (install protocol, inject encryption) need both
-    /// pieces: the node for DWN dispatch and the key manager for protocol-
+    /// Setup operations (install module, inject encryption) need both
+    /// pieces: the node for DWN dispatch and the key manager for module-
     /// path encryption derivation. Keeping the key manager per-call mirrors
     /// the agent-identity FFI helper and keeps the only durable state in the
     /// SQLite secret store.
@@ -1382,7 +1414,8 @@ impl EnboxCore {
             tenant: request.tenant.clone(),
             remote: request.remote.clone(),
             direction: request.direction,
-            protocol: request.protocol.clone(),
+            // The core sync layer names the scoped module `protocol`.
+            protocol: request.module.clone(),
             max_records: request.max_records,
             max_bytes: request.max_bytes,
             connectivity: request.connectivity.clone().unwrap_or_default(),
@@ -1848,6 +1881,15 @@ fn sync_run_status_label(status: SyncRunStatus) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn module_scope_ids_map_to_the_module_filter() {
+        assert_eq!(module_from_scope_id("global"), None);
+        assert_eq!(
+            module_from_scope_id("module:https://module.example/notes").as_deref(),
+            Some("https://module.example/notes")
+        );
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct ProcessMessageSmokeRequest {
         tenant: String,
@@ -1942,7 +1984,7 @@ mod tests {
         core.register_sync_identity(
             serde_json::json!({
                 "did": "did:example:alice",
-                "protocols": { "type": "all" }
+                "modules": { "type": "all" }
             })
             .to_string(),
         )
@@ -2022,7 +2064,7 @@ mod tests {
         core.register_sync_identity(
             serde_json::json!({
                 "did": "did:example:alice",
-                "protocols": { "type": "all" }
+                "modules": { "type": "all" }
             })
             .to_string(),
         )
@@ -2231,7 +2273,7 @@ mod tests {
         core.register_sync_identity(
             serde_json::json!({
                 "did": "did:example:alice",
-                "protocols": { "type": "all" }
+                "modules": { "type": "all" }
             })
             .to_string(),
         )
@@ -2305,7 +2347,7 @@ mod tests {
         assert_eq!(array.len(), 1, "the seeded checkpoint shows up as pending");
         assert_eq!(array[0]["tenant"], "did:example:alice");
         assert_eq!(array[0]["remote"], "http://10.255.255.1:9/");
-        assert_eq!(array[0]["protocol"], serde_json::Value::Null);
+        assert_eq!(array[0]["module"], serde_json::Value::Null);
         assert_eq!(array[0]["direction"], "pull");
         assert_eq!(array[0]["pendingPullCount"], 1);
 
@@ -2870,7 +2912,7 @@ mod tests {
             Err(EnboxError::Locked)
         ));
         assert!(matches!(
-            core.inject_protocol_encryption(portable_did, plain_protocol_definition().to_string()),
+            core.inject_module_encryption(portable_did, plain_module_definition().to_string()),
             Err(EnboxError::Locked)
         ));
         // Metadata and pure surfaces stay available while locked.
@@ -2887,7 +2929,7 @@ mod tests {
                     "scope": {
                         "interface": "Records",
                         "method": "Read",
-                        "module": "https://protocol.example/notes",
+                        "module": "https://module.example/notes",
                         "modulePath": "note"
                     },
                     "delegated": false
@@ -3047,9 +3089,9 @@ mod tests {
                 .runtime
                 .block_on(core.credential_vault.get_did())
                 .unwrap();
-            let derived = serde_json::json!({"rootKeyId":"root", "derivationScheme":"protocolPath", "derivedPrivateKey":did.private_keys.last().unwrap()});
-            decryption = serde_json::json!([{"protocol":"https://example.com/protocol", "scope":{"kind":"protocol"}, "derivedPrivateKey":derived}]);
-            context = serde_json::json!([{"protocol":"https://example.com/protocol", "contextId":"context", "derivedPrivateKey":derived}]);
+            let derived = serde_json::json!({"rootKeyId":"root", "derivationScheme":"modulePath", "derivedPrivateKey":did.private_keys.last().unwrap()});
+            decryption = serde_json::json!([{"module":"https://example.com/module", "scope":{"kind":"module"}, "derivedPrivateKey":derived}]);
+            context = serde_json::json!([{"module":"https://example.com/module", "contextId":"context", "derivedPrivateKey":derived}]);
             core.save_delegate_decryption_keys(decryption.to_string())
                 .unwrap();
             core.save_delegate_context_keys(context.to_string())
@@ -3204,7 +3246,7 @@ mod tests {
     fn initialized_core_with_did() -> (Arc<EnboxCore>, serde_json::Value) {
         let core = EnboxCore::open_in_memory_with_work_factor(1).expect("core opens");
         // Local DWN dispatch verifies the tenant DID through the public
-        // gateway; the legacy DID is published, so protocol tests stay on v1.
+        // gateway; the legacy DID is published, so module tests stay on v1.
         let init_raw = core
             .initialize_vault(
                 serde_json::json!({
@@ -3858,9 +3900,9 @@ mod tests {
         }
     }
 
-    fn plain_protocol_definition() -> serde_json::Value {
+    fn plain_module_definition() -> serde_json::Value {
         serde_json::json!({
-            "module": "https://protocol.example/notes",
+            "module": "https://module.example/notes",
             "published": true,
             "types": {
                 "note": {
@@ -3876,9 +3918,9 @@ mod tests {
         })
     }
 
-    fn encrypted_protocol_definition() -> serde_json::Value {
+    fn encrypted_module_definition() -> serde_json::Value {
         serde_json::json!({
-            "module": "https://protocol.example/private-notes",
+            "module": "https://module.example/private-notes",
             "published": true,
             "types": {
                 "note": {
@@ -3896,22 +3938,22 @@ mod tests {
     }
 
     #[test]
-    fn install_protocol_persists_and_is_idempotent() {
+    fn install_module_persists_and_is_idempotent() {
         let (core, portable_did) = initialized_core_with_did();
         let tenant = portable_did.to_string();
-        let definition = plain_protocol_definition().to_string();
+        let definition = plain_module_definition().to_string();
 
         let first_raw = core
-            .install_protocol(tenant.clone(), definition.clone())
+            .install_module(tenant.clone(), definition.clone())
             .expect("install first time");
         let first: serde_json::Value =
             serde_json::from_str(&first_raw).expect("install result json");
         assert_eq!(first["installed"], true);
         assert_eq!(first["encryptionActive"], false);
-        assert_eq!(first["protocol"], "https://protocol.example/notes");
+        assert_eq!(first["module"], "https://module.example/notes");
 
         let second_raw = core
-            .install_protocol(tenant, definition)
+            .install_module(tenant, definition)
             .expect("install second time is no-op");
         let second: serde_json::Value =
             serde_json::from_str(&second_raw).expect("install result json");
@@ -3919,13 +3961,13 @@ mod tests {
     }
 
     #[test]
-    fn install_encrypted_protocol_injects_key_agreement() {
+    fn install_encrypted_module_injects_key_agreement() {
         let (core, portable_did) = initialized_core_with_did();
         let tenant_did_json = portable_did.to_string();
-        let definition_json = encrypted_protocol_definition().to_string();
+        let definition_json = encrypted_module_definition().to_string();
 
         let augmented_raw = core
-            .inject_protocol_encryption(tenant_did_json.clone(), definition_json.clone())
+            .inject_module_encryption(tenant_did_json.clone(), definition_json.clone())
             .expect("inject encryption");
         let augmented: serde_json::Value =
             serde_json::from_str(&augmented_raw).expect("definition json");
@@ -3935,8 +3977,8 @@ mod tests {
         );
 
         let install_raw = core
-            .install_protocol(tenant_did_json, definition_json)
-            .expect("install encrypted protocol");
+            .install_module(tenant_did_json, definition_json)
+            .expect("install encrypted module");
         let install: serde_json::Value =
             serde_json::from_str(&install_raw).expect("install result");
         assert_eq!(install["installed"], true);
@@ -3944,25 +3986,25 @@ mod tests {
     }
 
     #[test]
-    fn install_protocol_rejects_locked_core() {
+    fn install_module_rejects_locked_core() {
         let (core, portable_did) = initialized_core_with_did();
         core.lock().expect("lock");
         let err = core
-            .install_protocol(
+            .install_module(
                 portable_did.to_string(),
-                plain_protocol_definition().to_string(),
+                plain_module_definition().to_string(),
             )
             .expect_err("install must fail while locked");
         assert!(matches!(err, EnboxError::Locked));
     }
 
     #[test]
-    fn install_protocol_rejects_invalid_did() {
+    fn install_module_rejects_invalid_did() {
         let core = EnboxCore::open_in_memory().expect("core opens");
         let err = core
-            .install_protocol(
+            .install_module(
                 "not-json".to_string(),
-                plain_protocol_definition().to_string(),
+                plain_module_definition().to_string(),
             )
             .expect_err("invalid did must fail");
         assert!(matches!(err, EnboxError::Json { .. }));
@@ -3972,7 +4014,7 @@ mod tests {
         serde_json::json!({
             "interface": "Records",
             "method": "Read",
-            "module": "https://protocol.example/notes",
+            "module": "https://module.example/notes",
             "modulePath": "note"
         })
     }
@@ -4053,9 +4095,9 @@ mod tests {
         assert!(revocation["dateRevoked"].as_str().is_some());
     }
 
-    fn encrypted_connect_protocol_definition() -> serde_json::Value {
+    fn encrypted_connect_module_definition() -> serde_json::Value {
         serde_json::json!({
-            "module": "https://protocol.example/private-notes",
+            "module": "https://module.example/private-notes",
             "published": true,
             "types": {
                 "note": {
@@ -4077,11 +4119,11 @@ mod tests {
         let request = serde_json::json!({
             "ownerDid": portable_did,
             "requests": [{
-                "protocolDefinition": encrypted_connect_protocol_definition(),
+                "moduleDefinition": encrypted_connect_module_definition(),
                 "permissionScopes": [{
                     "interface": "Records",
                     "method": "Read",
-                    "module": "https://protocol.example/private-notes",
+                    "module": "https://module.example/private-notes",
                     "modulePath": "note"
                 }]
             }]
@@ -4094,30 +4136,27 @@ mod tests {
             .as_array()
             .expect("decryption keys array");
         assert_eq!(keys.len(), 1, "expected one decryption key: {result:?}");
-        assert_eq!(
-            keys[0]["protocol"],
-            "https://protocol.example/private-notes"
-        );
+        assert_eq!(keys[0]["module"], "https://module.example/private-notes");
         assert_eq!(
             keys[0]["derivedPrivateKey"]["derivedPrivateKey"]["crv"],
             "X25519"
         );
-        assert!(result["multiPartyProtocols"]
+        assert!(result["multiPartyModules"]
             .as_array()
             .is_some_and(Vec::is_empty));
     }
 
     #[test]
-    fn derive_delegate_keys_skips_protocols_that_do_not_require_encryption() {
+    fn derive_delegate_keys_skips_modules_that_do_not_require_encryption() {
         let (core, portable_did) = initialized_core_with_did();
         let request = serde_json::json!({
             "ownerDid": portable_did,
             "requests": [{
-                "protocolDefinition": plain_protocol_definition(),
+                "moduleDefinition": plain_module_definition(),
                 "permissionScopes": [{
                     "interface": "Records",
                     "method": "Read",
-                    "module": "https://protocol.example/notes",
+                    "module": "https://module.example/notes",
                     "modulePath": "note"
                 }]
             }]
@@ -4136,14 +4175,14 @@ mod tests {
         let (core, portable_did) = initialized_core_with_did();
         let request = serde_json::json!({
             "ownerDid": portable_did,
-            "protocol": "https://protocol.example/notes",
+            "module": "https://module.example/notes",
             "contextId": "context-abc"
         });
         let raw = core
             .derive_context_key(request.to_string())
             .expect("derive context key");
         let key: serde_json::Value = serde_json::from_str(&raw).expect("context key json");
-        assert_eq!(key["protocol"], "https://protocol.example/notes");
+        assert_eq!(key["module"], "https://module.example/notes");
         assert_eq!(key["contextId"], "context-abc");
         assert_eq!(
             key["derivedPrivateKey"]["derivedPrivateKey"]["crv"],
@@ -4160,11 +4199,11 @@ mod tests {
                 serde_json::json!({
                     "ownerDid": portable_did,
                     "requests": [{
-                        "protocolDefinition": encrypted_connect_protocol_definition(),
+                        "moduleDefinition": encrypted_connect_module_definition(),
                         "permissionScopes": [{
                             "interface": "Records",
                             "method": "Read",
-                            "module": "https://protocol.example/private-notes",
+                            "module": "https://module.example/private-notes",
                             "modulePath": "note"
                         }]
                     }]
@@ -4193,7 +4232,7 @@ mod tests {
             .derive_context_key(
                 serde_json::json!({
                     "ownerDid": portable_did,
-                    "protocol": "https://protocol.example/notes",
+                    "module": "https://module.example/notes",
                     "contextId": "context-1"
                 })
                 .to_string(),
@@ -4247,7 +4286,7 @@ mod tests {
             .derive_context_key(
                 serde_json::json!({
                     "ownerDid": portable_did,
-                    "protocol": "p",
+                    "module": "p",
                     "contextId": "c"
                 })
                 .to_string(),
@@ -4331,7 +4370,7 @@ mod tests {
         use tokio::sync::oneshot;
 
         use super::{
-            initialize_request, initialized_core_with_did, plain_protocol_definition, EnboxCore,
+            initialize_request, initialized_core_with_did, plain_module_definition, EnboxCore,
             EnboxError, TEST_PASSWORD, TEST_RECOVERY_PHRASE,
         };
 
@@ -4676,7 +4715,7 @@ mod tests {
         }
 
         #[test]
-        fn push_protocol_returns_installed_true_when_remote_is_empty() {
+        fn push_module_returns_installed_true_when_remote_is_empty() {
             let server = start_mock_server();
             {
                 let mut guard = server.state.lock().unwrap();
@@ -4690,19 +4729,19 @@ mod tests {
             }
             let (core, portable_did) = initialized_core_with_did();
             let raw = core
-                .push_protocol(
+                .push_module(
                     serde_json::json!({
                         "tenantDid": portable_did,
                         "remoteUrl": server.url,
-                        "definition": plain_protocol_definition()
+                        "definition": plain_module_definition()
                     })
                     .to_string(),
                 )
-                .expect("push protocol");
+                .expect("push module");
             let result: JsonValue = serde_json::from_str(&raw).expect("push result");
             assert_eq!(result["installed"], true);
             assert_eq!(result["encryptionActive"], false);
-            assert_eq!(result["protocol"], "https://protocol.example/notes");
+            assert_eq!(result["module"], "https://module.example/notes");
             let snapshot = server.snapshot();
             assert_eq!(
                 snapshot.dwn_calls.len(),
@@ -4712,7 +4751,7 @@ mod tests {
         }
 
         #[test]
-        fn push_protocol_is_idempotent_when_remote_already_has_definition() {
+        fn push_module_is_idempotent_when_remote_already_has_definition() {
             let server = start_mock_server();
             {
                 let mut guard = server.state.lock().unwrap();
@@ -4720,24 +4759,24 @@ mod tests {
                     "status": { "code": 200, "detail": "OK" },
                     "entries": [{
                         "descriptor": {
-                            "interface": "Protocols",
+                            "interface": "Modules",
                             "method": "Configure",
-                            "definition": plain_protocol_definition()
+                            "definition": plain_module_definition()
                         }
                     }]
                 }));
             }
             let (core, portable_did) = initialized_core_with_did();
             let raw = core
-                .push_protocol(
+                .push_module(
                     serde_json::json!({
                         "tenantDid": portable_did,
                         "remoteUrl": server.url,
-                        "definition": plain_protocol_definition()
+                        "definition": plain_module_definition()
                     })
                     .to_string(),
                 )
-                .expect("push protocol idempotent");
+                .expect("push module idempotent");
             let result: JsonValue = serde_json::from_str(&raw).expect("push result");
             assert_eq!(result["installed"], false);
             let snapshot = server.snapshot();
@@ -4767,7 +4806,7 @@ mod tests {
                     serde_json::json!({
                         "agentDid": portable_did,
                         "remoteUrl": server.url,
-                        "protocols": [plain_protocol_definition()]
+                        "modules": [plain_module_definition()]
                     })
                     .to_string(),
                 )
@@ -4776,8 +4815,8 @@ mod tests {
             let steps = result["steps"].as_array().expect("steps");
             assert_eq!(steps.len(), 3);
             assert_eq!(steps[0], "agent_did_sync");
-            assert_eq!(steps[1], "protocol_install");
-            assert_eq!(steps[2], "protocol_push");
+            assert_eq!(steps[1], "module_install");
+            assert_eq!(steps[2], "module_push");
             let local = result["localInstalls"].as_array().expect("local installs");
             let remote = result["remotePushes"].as_array().expect("remote pushes");
             assert_eq!(local.len(), 1);
@@ -4804,11 +4843,11 @@ mod tests {
                 .expect_err("register must fail while locked");
             assert!(matches!(err, EnboxError::Locked));
             let err = core
-                .push_protocol(
+                .push_module(
                     serde_json::json!({
                         "tenantDid": portable_did,
                         "remoteUrl": server.url,
-                        "definition": plain_protocol_definition()
+                        "definition": plain_module_definition()
                     })
                     .to_string(),
                 )
@@ -4819,7 +4858,7 @@ mod tests {
                     serde_json::json!({
                         "agentDid": portable_did,
                         "remoteUrl": server.url,
-                        "protocols": [plain_protocol_definition()]
+                        "modules": [plain_module_definition()]
                     })
                     .to_string(),
                 )
@@ -4840,7 +4879,7 @@ mod tests {
                 .expect_err("invalid json must fail");
             assert!(matches!(err, EnboxError::Json { .. }));
             let err = core
-                .push_protocol("not-json".to_string())
+                .push_module("not-json".to_string())
                 .expect_err("invalid json must fail");
             assert!(matches!(err, EnboxError::Json { .. }));
             let err = core

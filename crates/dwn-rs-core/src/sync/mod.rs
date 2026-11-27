@@ -121,7 +121,7 @@ impl SyncScope {
     pub fn id(&self) -> String {
         match self {
             Self::Full => "global".to_string(),
-            Self::Protocol { protocol } => format!("protocol:{protocol}"),
+            Self::Protocol { protocol } => format!("module:{protocol}"),
         }
     }
 }
@@ -1563,9 +1563,9 @@ fn scope_from_id(scope_id: &str) -> SyncResult<SyncScope> {
     if scope_id == SyncScope::Full.id() {
         return Ok(SyncScope::Full);
     }
-    if let Some(protocol) = scope_id.strip_prefix("protocol:") {
-        if !protocol.is_empty() {
-            return Ok(SyncScope::protocol(protocol));
+    if let Some(module) = scope_id.strip_prefix("module:") {
+        if !module.is_empty() {
+            return Ok(SyncScope::protocol(module));
         }
     }
     Err(SyncError::permanent(
@@ -1700,6 +1700,14 @@ mod tests {
     use crate::{Descriptor, Fields, Message};
 
     use super::*;
+
+    #[test]
+    fn module_scope_ids_round_trip() {
+        let scope = SyncScope::protocol("https://module.example/notes");
+        assert_eq!(scope.id(), "module:https://module.example/notes");
+        assert_eq!(scope_from_id(&scope.id()).unwrap(), scope);
+        assert!(scope_from_id("protocol:https://module.example/notes").is_err());
+    }
 
     #[tokio::test]
     async fn sync_once_bidirectional_pulls_then_pushes_topologically() {
