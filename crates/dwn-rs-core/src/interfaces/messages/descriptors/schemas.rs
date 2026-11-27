@@ -13,10 +13,10 @@ pub const MESSAGES_QUERY_SCHEMA: &str =
 pub const MESSAGES_SYNC_SCHEMA: &str =
     "https://identity.foundation/dwn/json-schemas/messages-sync.json";
 
-pub const PROTOCOLS_CONFIGURE_SCHEMA: &str =
-    "https://identity.foundation/dwn/json-schemas/protocols-configure.json";
-pub const PROTOCOLS_QUERY_SCHEMA: &str =
-    "https://identity.foundation/dwn/json-schemas/protocols-query.json";
+pub const MODULES_CONFIGURE_SCHEMA: &str =
+    "https://identity.foundation/dwn/json-schemas/modules-configure.json";
+pub const MODULES_QUERY_SCHEMA: &str =
+    "https://identity.foundation/dwn/json-schemas/modules-query.json";
 
 pub const RECORDS_COUNT_SCHEMA: &str =
     "https://identity.foundation/dwn/json-schemas/records-count.json";

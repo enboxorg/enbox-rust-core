@@ -1301,11 +1301,11 @@ fn evaluate_records_grant_authorization(
     grant: &GrantAuthorizationFixture,
 ) -> Result<(), String> {
     if grant.scope.protocol.as_deref() != incoming_message_str_optional(grant, "protocol") {
-        return Err("RecordsGrantAuthorizationScopeProtocolMismatch".to_string());
+        return Err("RecordsGrantAuthorizationScopeModuleMismatch".to_string());
     }
     if let Some(scope_protocol_path) = grant.scope.protocol_path.as_deref() {
         if incoming_message_str_optional(grant, "protocolPath") != Some(scope_protocol_path) {
-            return Err("RecordsGrantAuthorizationScopeProtocolPathMismatch".to_string());
+            return Err("RecordsGrantAuthorizationScopeModulePathMismatch".to_string());
         }
     }
 
@@ -1338,7 +1338,7 @@ fn evaluate_protocols_grant_authorization(
     if incoming_message_str_optional(grant, "protocol")
         .is_some_and(|protocol| protocol != scope_protocol)
     {
-        return Err("ProtocolsGrantAuthorizationQueryProtocolScopeMismatch".to_string());
+        return Err("ModulesGrantAuthorizationQueryModuleScopeMismatch".to_string());
     }
     Ok(())
 }
@@ -1356,7 +1356,7 @@ fn evaluate_messages_grant_authorization(
             .iter()
             .any(|protocol| *protocol != scope_protocol)
     {
-        return Err("MessagesGrantAuthorizationMismatchedProtocol".to_string());
+        return Err("MessagesGrantAuthorizationMismatchedModule".to_string());
     }
     Ok(())
 }

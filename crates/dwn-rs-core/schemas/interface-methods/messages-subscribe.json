@@ -9,7 +9,7 @@
   ],
   "properties": {
     "authorization": {
-      "$ref": "https://identity.foundation/dwn/json-schemas/authorization.json"
+      "$ref": "https://identity.foundation/dwn/json-schemas/authorization-delegated-grant.json"
     },
     "descriptor": {
       "type": "object",
@@ -44,7 +44,9 @@
         },
         "permissionGrantIds": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "minItems": 1,
           "uniqueItems": true
         },

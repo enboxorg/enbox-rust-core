@@ -1404,7 +1404,7 @@ fn validate_definition_rejects_invalid_protocol_rules() {
         max: Some(1),
     });
     let error = protocol_types::validate_definition(&descriptor.definition).unwrap_err();
-    assert_eq!(error.code, "ProtocolsConfigureInvalidSize");
+    assert_eq!(error.code, "ModulesConfigureInvalidSize");
 }
 
 fn enc_key_agreement() -> ProtocolKeyAgreement {
@@ -1482,7 +1482,7 @@ fn validate_definition_rejects_encrypted_types_without_top_level_key() {
     let mut definition = enc_reader_definition();
     definition.key_agreement = None;
     let error = protocol_types::validate_definition(&definition).unwrap_err();
-    assert_eq!(error.code, "ProtocolsConfigureMissingTopLevelKeyAgreement");
+    assert_eq!(error.code, "ModulesConfigureMissingTopLevelKeyAgreement");
 }
 
 #[test]
@@ -1492,7 +1492,7 @@ fn validate_definition_rejects_encrypted_path_without_path_key() {
     let error = protocol_types::validate_definition(&definition).unwrap_err();
     assert_eq!(
         error.code,
-        "ProtocolsConfigureMissingEncryptedPathKeyAgreement"
+        "ModulesConfigureMissingEncryptedPathKeyAgreement"
     );
 }
 
@@ -1510,7 +1510,7 @@ fn validate_definition_rejects_encrypted_path_readable_by_anyone() {
             can: vec![Can::Create, Can::Read],
         }));
     let error = protocol_types::validate_definition(&definition).unwrap_err();
-    assert_eq!(error.code, "ProtocolsConfigureInvalidEncryptedAnyoneRead");
+    assert_eq!(error.code, "ModulesConfigureInvalidEncryptedAnyoneRead");
 }
 
 #[test]
@@ -1522,7 +1522,7 @@ fn validate_definition_rejects_role_resolving_to_encrypted_type() {
         .unwrap()
         .encryption_required = Some(true);
     let error = protocol_types::validate_definition(&definition).unwrap_err();
-    assert_eq!(error.code, "ProtocolsConfigureInvalidEncryptedRoleType");
+    assert_eq!(error.code, "ModulesConfigureInvalidEncryptedRoleType");
 }
 
 #[test]
@@ -1536,7 +1536,7 @@ fn validate_definition_rejects_read_role_without_owning_key() {
     let error = protocol_types::validate_definition(&definition).unwrap_err();
     assert_eq!(
         error.code,
-        "ProtocolsConfigureInvalidEncryptedRoleMissingKeyAgreement"
+        "ModulesConfigureInvalidEncryptedRoleMissingKeyAgreement"
     );
 }
 
@@ -1629,7 +1629,7 @@ async fn protocols_configure_rejects_cross_protocol_role_with_encrypted_type() {
         reply
             .status
             .detail
-            .contains("ProtocolsConfigureInvalidEncryptedRoleType"),
+            .contains("ModulesConfigureInvalidEncryptedRoleType"),
         "{}",
         reply.status.detail
     );
@@ -1649,7 +1649,7 @@ fn validate_definition_rejects_cross_protocol_read_role_on_encrypted_path() {
     let error = protocol_types::validate_definition(&definition).unwrap_err();
     assert_eq!(
         error.code,
-        "ProtocolsConfigureInvalidEncryptedCrossProtocolRole"
+        "ModulesConfigureInvalidEncryptedCrossModuleRole"
     );
 }
 
@@ -1928,7 +1928,7 @@ async fn protocols_configure_rejects_plaintext_to_encrypted_flip_after_use() {
         reply
             .status
             .detail
-            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+            .contains("ModulesConfigureEncryptionPolicyImmutable"),
         "{}",
         reply.status.detail
     );
@@ -1962,7 +1962,7 @@ async fn protocols_configure_rejects_encrypted_to_plaintext_flip_after_use() {
         reply
             .status
             .detail
-            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+            .contains("ModulesConfigureEncryptionPolicyImmutable"),
         "{}",
         reply.status.detail
     );
@@ -2232,7 +2232,7 @@ async fn protocols_configure_rejects_historical_insert_matching_newest_policy() 
         reply
             .status
             .detail
-            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+            .contains("ModulesConfigureEncryptionPolicyImmutable"),
         "{}",
         reply.status.detail
     );
@@ -2270,7 +2270,7 @@ async fn protocols_configure_rejects_historical_insert_contradicting_records() {
         reply
             .status
             .detail
-            .contains("ProtocolsConfigureEncryptionPolicyImmutable"),
+            .contains("ModulesConfigureEncryptionPolicyImmutable"),
         "{}",
         reply.status.detail
     );
@@ -2471,7 +2471,7 @@ fn reserved_encryption_namespace_is_named_before_schema_validation() {
             .expect_err("reserved namespace must be rejected");
         assert_eq!(
             error.code,
-            crate::errors::DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath,
+            crate::errors::DwnErrorCode::ModulesConfigureReservedEncryptionControlPath,
             "{placement} placement must name the reservation, got: {error}"
         );
         assert!(
@@ -2519,7 +2519,7 @@ async fn reserved_encryption_namespace_is_rejected_during_construction() {
         assert!(
             error
                 .message
-                .contains("ProtocolsConfigureReservedEncryptionControlPath"),
+                .contains("ModulesConfigureReservedEncryptionControlPath"),
             "{placement} placement must name the reservation, got: {}",
             error.message
         );
@@ -2567,7 +2567,7 @@ fn reserved_namespace_is_named_even_when_the_definition_cannot_be_typed() {
             .expect_err("reserved namespace must still be named");
         assert_eq!(
             error.code,
-            crate::errors::DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath,
+            crate::errors::DwnErrorCode::ModulesConfigureReservedEncryptionControlPath,
             "{label} must name the reservation, got: {error}"
         );
     }

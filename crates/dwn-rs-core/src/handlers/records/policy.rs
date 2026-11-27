@@ -104,7 +104,7 @@ impl EffectivePolicy {
         let protocol_type = types.get(&type_name);
         if referenced.is_some() && protocol_type.is_none() {
             return Err(DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationInvalidType,
+                DwnErrorCode::ModuleAuthorizationInvalidType,
                 format!(
                     "type '{type_name}' is not defined in the referenced protocol for '$ref' path '{}'",
                     descriptor.protocol_path
@@ -145,7 +145,7 @@ where
         .and_then(|uses| uses.get(parsed.alias))
         .ok_or_else(|| {
             format!(
-                "ProtocolsConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' does not exist in the 'uses' map.",
+                "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' does not exist in the 'uses' map.",
                 parsed.alias, descriptor.protocol_path
             )
         })?;

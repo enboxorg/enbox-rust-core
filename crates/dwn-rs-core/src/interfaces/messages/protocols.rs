@@ -448,14 +448,14 @@ fn validate_uses(
     for (alias, protocol_uri) in uses {
         if !is_valid_uses_alias(alias) {
             return Err(protocol_error(
-                "ProtocolsConfigureInvalidUsesAlias",
+                "ModulesConfigureInvalidUsesAlias",
                 format!("invalid 'uses' alias '{alias}'"),
             ));
         }
 
         validate_normalized_protocol_url(protocol_uri).map_err(|_| {
             protocol_error(
-                "ProtocolsConfigureInvalidUsesProtocolUrl",
+                "ModulesConfigureInvalidUsesModuleUrl",
                 format!(
                     "invalid 'uses' protocol URL for alias '{alias}': '{protocol_uri}' is not a valid normalized protocol URL."
                 ),
@@ -464,7 +464,7 @@ fn validate_uses(
 
         if protocol_uri == own_protocol_uri {
             return Err(protocol_error(
-                "ProtocolsConfigureInvalidUsesSelfReference",
+                "ModulesConfigureInvalidUsesSelfReference",
                 format!(
                     "'uses' alias '{alias}' references the protocol's own URI '{own_protocol_uri}'."
                 ),
@@ -477,7 +477,7 @@ fn validate_uses(
 fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionError> {
     if definition.requires_encryption() && definition.key_agreement.is_none() {
         return Err(protocol_error(
-            "ProtocolsConfigureMissingTopLevelKeyAgreement",
+            "ModulesConfigureMissingTopLevelKeyAgreement",
             format!(
                 "Protocol '{}' declares encrypted types but has no top-level $keyAgreement.",
                 definition.protocol
@@ -507,7 +507,7 @@ fn fetch_role_paths(
 ) -> Result<(), ProtocolDefinitionError> {
     if !protocol_path.is_empty() && protocol_path.split('/').count() > 10 {
         return Err(protocol_error(
-            "ProtocolsConfigureRecordNestingDepthExceeded",
+            "ModulesConfigureRecordNestingDepthExceeded",
             "Record nesting depth exceeded 10 levels.",
         ));
     }
@@ -540,7 +540,7 @@ fn validate_rule_map(
                 .any(|candidate| candidate == record_type)
         {
             return Err(protocol_error(
-                "ProtocolsConfigureInvalidRuleSetRecordType",
+                "ModulesConfigureInvalidRuleSetRecordType",
                 format!(
                     "Rule set {record_type} is not declared as an allowed type in the protocol definition."
                 ),
@@ -574,7 +574,7 @@ fn validate_rule_set(
     if rule_set.reference.is_some() {
         if protocol_path.contains('/') {
             return Err(protocol_error(
-                "ProtocolsConfigureInvalidRefNotAtRoot",
+                "ModulesConfigureInvalidRefNotAtRoot",
                 format!(
                     "'$ref' at protocol path '{protocol_path}' is not allowed: '$ref' nodes are only supported at the root level of the structure."
                 ),
@@ -588,7 +588,7 @@ fn validate_rule_set(
         if let Some(max) = size.max {
             if max < min {
                 return Err(protocol_error(
-                    "ProtocolsConfigureInvalidSize",
+                    "ModulesConfigureInvalidSize",
                     format!(
                         "Invalid size range found: max limit {max} less than min limit {min} at protocol path '{protocol_path}'"
                     ),
@@ -600,7 +600,7 @@ fn validate_rule_set(
     if let Some(record_limit) = &rule_set.record_limit {
         if record_limit.max < 1 {
             return Err(protocol_error(
-                "ProtocolsConfigureInvalidRecordLimit",
+                "ModulesConfigureInvalidRecordLimit",
                 format!(
                     "Invalid $recordLimit at protocol path '{protocol_path}': max must be >= 1."
                 ),
@@ -633,7 +633,7 @@ fn validate_encrypted_path(
 
     if rule_set.role == Some(true) && path_encrypted {
         return Err(protocol_error(
-            "ProtocolsConfigureInvalidEncryptedRoleType",
+            "ModulesConfigureInvalidEncryptedRoleType",
             format!(
                 "Role path '{protocol_path}' resolves to encrypted type '{type_name}'; role records cannot be encrypted."
             ),
@@ -646,7 +646,7 @@ fn validate_encrypted_path(
 
     if rule_set.key_agreement.is_none() {
         return Err(protocol_error(
-            "ProtocolsConfigureMissingEncryptedPathKeyAgreement",
+            "ModulesConfigureMissingEncryptedPathKeyAgreement",
             format!("Encrypted protocol path '{protocol_path}' has no $keyAgreement."),
         ));
     }
@@ -656,7 +656,7 @@ fn validate_encrypted_path(
     });
     if anyone_can_read {
         return Err(protocol_error(
-            "ProtocolsConfigureInvalidEncryptedAnyoneRead",
+            "ModulesConfigureInvalidEncryptedAnyoneRead",
             format!(
                 "Encrypted protocol path '{protocol_path}' allows {{ who: 'anyone', can: ['read'] }}."
             ),
@@ -672,7 +672,7 @@ fn validate_encrypted_path(
         }
         if parse_cross_protocol_ref(&role.role).is_some() {
             return Err(protocol_error(
-                "ProtocolsConfigureInvalidEncryptedCrossProtocolRole",
+                "ModulesConfigureInvalidEncryptedCrossModuleRole",
                 format!(
                     "Encrypted protocol path '{protocol_path}' references cross-protocol read role '{}'.",
                     role.role
@@ -684,7 +684,7 @@ fn validate_encrypted_path(
             .is_some();
         if !role_keyed {
             return Err(protocol_error(
-                "ProtocolsConfigureInvalidEncryptedRoleMissingKeyAgreement",
+                "ModulesConfigureInvalidEncryptedRoleMissingKeyAgreement",
                 format!(
                     "Encrypted protocol path '{protocol_path}' references role '{}' with no $keyAgreement.",
                     role.role
@@ -704,7 +704,7 @@ fn validate_ref_node(
     let reference = rule_set.reference.as_deref().unwrap_or_default();
     let parsed = parse_cross_protocol_ref(reference).ok_or_else(|| {
         protocol_error(
-            "ProtocolsConfigureInvalidRefAlias",
+            "ModulesConfigureInvalidRefAlias",
             format!(
                 "'$ref' value '{reference}' at protocol path '{protocol_path}' must be in 'alias:typePath' format."
             ),
@@ -713,7 +713,7 @@ fn validate_ref_node(
 
     if uses.and_then(|uses| uses.get(parsed.alias)).is_none() {
         return Err(protocol_error(
-            "ProtocolsConfigureInvalidRefAlias",
+            "ModulesConfigureInvalidRefAlias",
             format!(
                 "'$ref' alias '{}' at protocol path '{}' does not exist in the 'uses' map.",
                 parsed.alias, protocol_path
@@ -732,7 +732,7 @@ fn validate_ref_node(
         || rule_set.squash.is_some()
     {
         return Err(protocol_error(
-            "ProtocolsConfigureInvalidRefNodeHasDirectives",
+            "ModulesConfigureInvalidRefNodeHasDirectives",
             format!("'$ref' node at protocol path '{protocol_path}' must not have directives."),
         ));
     }
@@ -758,11 +758,11 @@ fn validate_actions(
                         uses,
                         protocol_path,
                         "role",
-                        "ProtocolsConfigureInvalidCrossProtocolRole",
+                        "ModulesConfigureInvalidCrossModuleRole",
                     )?;
                 } else if !roles.iter().any(|role| role == &action.role) {
                     return Err(protocol_error(
-                        "ProtocolsConfigureRoleDoesNotExistAtGivenPath",
+                        "ModulesConfigureRoleDoesNotExistAtGivenPath",
                         format!(
                             "Role '{}' for rule set {} does not exist.",
                             action.role, protocol_path
@@ -772,7 +772,7 @@ fn validate_actions(
 
                 if seen_roles.iter().any(|role| role == &action.role) {
                     return Err(protocol_error(
-                        "ProtocolsConfigureDuplicateRoleInRuleSet",
+                        "ModulesConfigureDuplicateRoleInRuleSet",
                         format!(
                             "More than one action rule per role {} not allowed within a rule set.",
                             action.role
@@ -785,7 +785,7 @@ fn validate_actions(
             Action::Who(action) => {
                 if action.who == Who::Anyone && action.of.is_some() {
                     return Err(protocol_error(
-                        "ProtocolsConfigureInvalidActionOfNotAllowed",
+                        "ModulesConfigureInvalidActionOfNotAllowed",
                         format!("'of' is not allowed at rule set protocol path ({protocol_path})"),
                     ));
                 }
@@ -794,7 +794,7 @@ fn validate_actions(
                     let allowed = [Can::CoUpdate, Can::CoDelete, Can::CoPrune];
                     if action.can.iter().any(|can| !allowed.contains(can)) {
                         return Err(protocol_error(
-                            "ProtocolsConfigureInvalidRecipientOfAction",
+                            "ModulesConfigureInvalidRecipientOfAction",
                             "Rules for `recipient` without `of` property must have can containing only co-update, co-delete, and co-prune.",
                         ));
                     }
@@ -802,7 +802,7 @@ fn validate_actions(
 
                 if action.who == Who::Author && action.of.is_none() {
                     return Err(protocol_error(
-                        "ProtocolsConfigureInvalidActionMissingOf",
+                        "ModulesConfigureInvalidActionMissingOf",
                         "'of' is required when 'author' is specified as 'who'",
                     ));
                 }
@@ -814,14 +814,14 @@ fn validate_actions(
                             uses,
                             protocol_path,
                             "of",
-                            "ProtocolsConfigureInvalidCrossProtocolOf",
+                            "ModulesConfigureInvalidCrossModuleOf",
                         )?;
                     } else if !protocol_path.is_empty()
                         && protocol_path != of
                         && !protocol_path.starts_with(&format!("{of}/"))
                     {
                         return Err(protocol_error(
-                            "ProtocolsConfigureInvalidActionOfNotAnAncestor",
+                            "ModulesConfigureInvalidActionOfNotAnAncestor",
                             format!(
                                 "'of' value '{of}' is not an ancestor of protocol path '{protocol_path}'."
                             ),
@@ -834,7 +834,7 @@ fn validate_actions(
                     .any(|(who, of)| who == &action.who && of == &action.of)
                 {
                     return Err(protocol_error(
-                        "ProtocolsConfigureDuplicateActorInRuleSet",
+                        "ModulesConfigureDuplicateActorInRuleSet",
                         format!(
                             "More than one action rule per actor {:?} of {:?} not allowed within a rule set.",
                             action.who, action.of
@@ -873,7 +873,7 @@ fn validate_role_record_issuance(
     }
 
     Err(protocol_error(
-        "ProtocolsConfigureInvalidRoleIssuance",
+        "ModulesConfigureInvalidRoleIssuance",
         format!(
             "role assignments at protocol path '{protocol_path}' require an authorized issuer; 'anyone' cannot create or squash an initial role record."
         ),
@@ -885,15 +885,15 @@ fn validate_action_can(protocol_path: &str, can: &[Can]) -> Result<(), ProtocolD
     for (action, code) in [
         (
             Can::Update,
-            "ProtocolsConfigureInvalidActionUpdateWithoutCreate",
+            "ModulesConfigureInvalidActionUpdateWithoutCreate",
         ),
         (
             Can::Delete,
-            "ProtocolsConfigureInvalidActionDeleteWithoutCreate",
+            "ModulesConfigureInvalidActionDeleteWithoutCreate",
         ),
         (
             Can::Prune,
-            "ProtocolsConfigureInvalidActionPruneWithoutCreate",
+            "ModulesConfigureInvalidActionPruneWithoutCreate",
         ),
     ] {
         if can.contains(&action) && !has_create {
@@ -937,13 +937,13 @@ fn validate_cross_protocol_alias(
 fn validate_normalized_protocol_url(value: &str) -> Result<(), ProtocolDefinitionError> {
     let normalized = normalize_protocol_url(value).map_err(|_| {
         protocol_error(
-            "UrlProtocolNotNormalized",
+            "UrlModuleNotNormalized",
             format!("Protocol URI {value} must be normalized."),
         )
     })?;
     if value != normalized {
         return Err(protocol_error(
-            "UrlProtocolNotNormalized",
+            "UrlModuleNotNormalized",
             format!("Protocol URI {value} must be normalized."),
         ));
     }
@@ -1089,7 +1089,7 @@ fn scan_reserved_namespace(
 
 fn reserved_namespace_error(detail: String) -> DwnError {
     DwnError::new(
-        DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath,
+        DwnErrorCode::ModulesConfigureReservedEncryptionControlPath,
         detail,
     )
 }

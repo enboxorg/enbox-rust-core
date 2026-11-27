@@ -182,7 +182,7 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(
-            !error.contains("NestedProtocolPathContextIdInvalid"),
+            !error.contains("NestedModulePathContextIdInvalid"),
             "method code belongs to the calling handler, not the shared rule: {error}"
         );
     }

@@ -306,7 +306,7 @@ async fn rejects_plaintext_grant_key() {
     .await;
     // The generic encryption-required gate fires before the grant-key hook;
     // that earlier precedence is upstream behaviour, not a missed check.
-    assert_code(&reply, 400, "ProtocolAuthorizationEncryptionRequired");
+    assert_code(&reply, 400, "ModuleAuthorizationEncryptionRequired");
 }
 
 // Covers: ENBOX-ENC-002
@@ -332,7 +332,7 @@ async fn rejects_encrypted_wrapped_delivery() {
         Some(grant_key_envelope()),
     )
     .await;
-    assert_code(&reply, 400, "ProtocolAuthorizationEncryptionNotAllowed");
+    assert_code(&reply, 400, "ModuleAuthorizationEncryptionNotAllowed");
 }
 
 // Covers: ENBOX-ENC-002
@@ -363,7 +363,7 @@ async fn rejects_oversized_wrapped_delivery() {
     assert_code(
         &reply,
         400,
-        "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption",
+        "EncryptionModuleValidateEncryptedDeliveryMissingEncryption",
     );
 }
 
@@ -409,7 +409,7 @@ async fn rejects_malformed_tags() {
         assert_eq!(reply.status.code, 400, "{why}: {}", reply.status.detail);
         assert_eq!(
             reply.status.error_code.as_deref(),
-            Some("ProtocolAuthorizationTagsInvalidSchema"),
+            Some("ModuleAuthorizationTagsInvalidSchema"),
             "{why}"
         );
     }
@@ -562,7 +562,7 @@ async fn rejects_wrong_author_and_recipient() {
     assert_code(
         &reply,
         401,
-        "EncryptionProtocolValidateGrantKeyAuthorMismatch",
+        "EncryptionModuleValidateGrantKeyAuthorMismatch",
     );
 
     let reply = deliver(
@@ -581,7 +581,7 @@ async fn rejects_wrong_author_and_recipient() {
     assert_code(
         &reply,
         400,
-        "EncryptionProtocolValidateGrantKeyRecipientMismatch",
+        "EncryptionModuleValidateGrantKeyRecipientMismatch",
     );
 }
 
@@ -620,7 +620,7 @@ async fn rejects_ineligible_grants() {
         assert_code(
             &reply,
             400,
-            "EncryptionProtocolValidateGrantKeyGrantScopeMismatch",
+            "EncryptionModuleValidateGrantKeyGrantScopeMismatch",
         );
     }
 
@@ -651,7 +651,7 @@ async fn rejects_ineligible_grants() {
     assert_code(
         &reply,
         400,
-        "EncryptionProtocolValidateGrantKeyGrantScopeMismatch",
+        "EncryptionModuleValidateGrantKeyGrantScopeMismatch",
     );
 }
 
@@ -701,7 +701,7 @@ async fn read_coverage_follows_the_directional_table() {
         assert_code(
             &reply,
             400,
-            "EncryptionProtocolValidateGrantKeyGrantScopeMismatch",
+            "EncryptionModuleValidateGrantKeyGrantScopeMismatch",
         );
     }
 
@@ -762,7 +762,7 @@ async fn write_coverage_reaches_keyed_roles_only() {
         assert_code(
             &reply,
             400,
-            "EncryptionProtocolValidateGrantKeyGrantScopeMismatch",
+            "EncryptionModuleValidateGrantKeyGrantScopeMismatch",
         );
     }
 
@@ -815,7 +815,7 @@ async fn missing_history_stays_distinguishable_from_scope_denial() {
         Some(grant_key_envelope()),
     )
     .await;
-    assert_code(&reply, 400, "ProtocolAuthorizationProtocolNotFound");
+    assert_code(&reply, 400, "ModuleAuthorizationModuleNotFound");
 }
 
 // Covers: ENBOX-ENC-002
@@ -835,7 +835,7 @@ async fn representation_precedes_grant_lookup() {
         Some(grant_key_envelope()),
     )
     .await;
-    assert_code(&reply, 400, "ProtocolAuthorizationTagsInvalidSchema");
+    assert_code(&reply, 400, "ModuleAuthorizationTagsInvalidSchema");
 }
 
 // Covers: DWN-REC-003
@@ -948,7 +948,7 @@ async fn rejects_schema_invalid_wrapped_delivery() {
     assert_code(
         &reply,
         400,
-        "EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid",
+        "EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid",
     );
 }
 
@@ -971,7 +971,7 @@ async fn rejects_unparseable_wrapped_delivery() {
     assert_code(
         &reply,
         400,
-        "EncryptionProtocolValidateEncryptedDeliveryMissingEncryption",
+        "EncryptionModuleValidateEncryptedDeliveryMissingEncryption",
     );
 }
 
@@ -1041,7 +1041,7 @@ async fn rejects_undefined_tags() {
         Some(grant_key_envelope()),
     )
     .await;
-    assert_code(&reply, 400, "ProtocolAuthorizationTagsInvalidSchema");
+    assert_code(&reply, 400, "ModuleAuthorizationTagsInvalidSchema");
 }
 
 // Covers: ENBOX-ENC-002
@@ -1073,7 +1073,7 @@ async fn metadata_precedes_payload_validation() {
     })
     .await;
     let reply = fixture.handler.run(TENANT, &write, Some(data)).await;
-    assert_code(&reply, 400, "ProtocolAuthorizationTagsInvalidSchema");
+    assert_code(&reply, 400, "ModuleAuthorizationTagsInvalidSchema");
 }
 
 // Covers: ENBOX-ENC-002

@@ -9,10 +9,10 @@
           "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/messages-read-scope"
         },
         {
-          "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/protocols-configure-scope"
+          "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/modules-configure-scope"
         },
         {
-          "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/protocols-query-scope"
+          "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/modules-query-scope"
         },
         {
           "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/records-read-scope"
@@ -22,15 +22,6 @@
         },
         {
           "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/records-write-scope"
-        },
-        {
-          "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/records-query-scope"
-        },
-        {
-          "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/records-subscribe-scope"
-        },
-        {
-          "$ref": "https://identity.foundation/dwn/json-schemas/permissions/scopes.json#/$defs/records-count-scope"
         }
       ]
     },

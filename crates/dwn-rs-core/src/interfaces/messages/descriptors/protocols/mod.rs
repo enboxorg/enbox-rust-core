@@ -11,7 +11,7 @@ use dwn_rs_message_derive::interface;
 mod inner {
     use super::QueryFilter;
     use crate::interfaces::messages::descriptors::{
-        CONFIGURE, PROTOCOLS, PROTOCOLS_CONFIGURE_SCHEMA, PROTOCOLS_QUERY_SCHEMA, QUERY,
+        CONFIGURE, MODULES_CONFIGURE_SCHEMA, MODULES_QUERY_SCHEMA, PROTOCOLS, QUERY,
     };
     use crate::protocols;
 
@@ -20,7 +20,7 @@ mod inner {
     #[descriptor(
         method = CONFIGURE,
         variant = Configure,
-        schema_id = PROTOCOLS_CONFIGURE_SCHEMA,
+        schema_id = MODULES_CONFIGURE_SCHEMA,
         fields = crate::auth::Authorization,
         parameters = super::ConfigureParameters,
         grant = single
@@ -40,7 +40,7 @@ mod inner {
     #[descriptor(
         method = QUERY,
         variant = Query,
-        schema_id = PROTOCOLS_QUERY_SCHEMA,
+        schema_id = MODULES_QUERY_SCHEMA,
         fields = crate::auth::Authorization,
         parameters = super::QueryParameters,
         grant = single

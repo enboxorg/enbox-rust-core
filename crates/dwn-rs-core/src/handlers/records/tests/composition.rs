@@ -505,7 +505,7 @@ async fn missing_cross_protocol_parent_is_repairable() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationCrossProtocolParentNotFound")
+        Some("ModuleAuthorizationCrossModuleParentNotFound")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&comment), false),
@@ -533,7 +533,7 @@ async fn missing_local_parent_is_repairable() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationParentRecordNotFound")
+        Some("ModuleAuthorizationParentRecordNotFound")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&message), false),
@@ -570,7 +570,7 @@ async fn parent_with_matching_id_in_composing_protocol_does_not_satisfy_cross_pr
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationCrossProtocolParentNotFound")
+        Some("ModuleAuthorizationCrossModuleParentNotFound")
     );
 }
 
@@ -611,7 +611,7 @@ async fn parent_path_must_be_the_declared_parent_segment() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationIncorrectProtocolPath")
+        Some("ModuleAuthorizationIncorrectModulePath")
     );
 }
 
@@ -636,7 +636,7 @@ async fn context_id_must_equal_parent_context_plus_record_id() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationIncorrectContextId")
+        Some("ModuleAuthorizationIncorrectContextId")
     );
 }
 
@@ -654,7 +654,7 @@ async fn parentless_nested_path_is_rejected() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationParentlessIncorrectProtocolPath")
+        Some("ModuleAuthorizationParentlessIncorrectModulePath")
     );
 }
 
@@ -775,7 +775,7 @@ async fn pruned_parent_rejects_child_as_terminal() {
     // parent; prune is not disclosed on the wire.
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationCrossProtocolParentNotFound")
+        Some("ModuleAuthorizationCrossModuleParentNotFound")
     );
     // Without prune evidence the missing parent is a repairable dependency.
     assert_eq!(
@@ -841,7 +841,7 @@ async fn a_non_initial_parent_write_is_not_ancestry() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationCrossProtocolParentNotFound")
+        Some("ModuleAuthorizationCrossModuleParentNotFound")
     );
 
     // Control: a separate receiver that has the real initial write admits the
@@ -1372,7 +1372,7 @@ async fn cross_protocol_role_holder_without_record_is_repairable() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMatchingRoleRecordNotFound")
+        Some("ModuleAuthorizationMatchingRoleRecordNotFound")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&message), false),
@@ -1404,7 +1404,7 @@ async fn cross_protocol_role_in_sibling_context_does_not_authorize() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMatchingRoleRecordNotFound")
+        Some("ModuleAuthorizationMatchingRoleRecordNotFound")
     );
 }
 
@@ -1435,7 +1435,7 @@ async fn cross_protocol_role_revocation_denies() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMatchingRoleRecordNotFound")
+        Some("ModuleAuthorizationMatchingRoleRecordNotFound")
     );
 }
 
@@ -1469,7 +1469,7 @@ async fn cross_protocol_role_removed_from_referenced_definition_denies() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationNotARole")
+        Some("ModuleAuthorizationNotARole")
     );
 }
 
@@ -1495,7 +1495,7 @@ async fn unknown_cross_protocol_role_alias_denies() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationNotARole")
+        Some("ModuleAuthorizationNotARole")
     );
 }
 
@@ -1512,7 +1512,7 @@ async fn cross_protocol_nested_role_query_without_context_denies() {
         assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
         assert_eq!(
             reply.status.error_code.as_deref(),
-            Some("ProtocolAuthorizationMissingContextId")
+            Some("ModuleAuthorizationMissingContextId")
         );
     }
 }
@@ -1536,7 +1536,7 @@ async fn deep_cross_protocol_role_query_with_short_context_denies() {
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationMissingContextId")
+        Some("ModuleAuthorizationMissingContextId")
     );
 }
 
@@ -1560,7 +1560,7 @@ async fn referenced_definition_absent_is_repairable() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationProtocolNotFound")
+        Some("ModuleAuthorizationModuleNotFound")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&message), false),
@@ -1664,7 +1664,7 @@ async fn multi_segment_ref_target_makes_children_unattachable() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ProtocolAuthorizationIncorrectProtocolPath")
+        Some("ModuleAuthorizationIncorrectModulePath")
     );
 }
 

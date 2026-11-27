@@ -122,7 +122,7 @@ where
                 validate_nested_protocol_path_scope(&descriptor.filter, allow_bounded_path_wide)
             {
                 return Response::bad_request(format!(
-                    "RecordsSubscribeNestedProtocolPathContextIdInvalid: {reason}"
+                    "RecordsSubscribeNestedModulePathContextIdInvalid: {reason}"
                 ));
             }
             let auth = match authorize_collection(
@@ -568,7 +568,7 @@ where
         {
             return records_subscribe_reply(
                 Response::bad_request(format!(
-                    "RecordsSubscribeNestedProtocolPathContextIdInvalid: {reason}"
+                    "RecordsSubscribeNestedModulePathContextIdInvalid: {reason}"
                 )),
                 None,
             );

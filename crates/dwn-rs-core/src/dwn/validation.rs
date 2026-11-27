@@ -20,9 +20,8 @@ use crate::encryption::ENCRYPTION_AUDIENCE_SCHEMA;
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::interfaces::messages::descriptors::{
     MESSAGES_READ_SCHEMA, MESSAGES_SUBSCRIBE_SCHEMA, MESSAGES_SYNC_SCHEMA,
-    PROTOCOLS_CONFIGURE_SCHEMA, PROTOCOLS_QUERY_SCHEMA, RECORDS_COUNT_SCHEMA,
-    RECORDS_DELETE_SCHEMA, RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA,
-    RECORDS_WRITE_SCHEMA,
+    MODULES_CONFIGURE_SCHEMA, MODULES_QUERY_SCHEMA, RECORDS_COUNT_SCHEMA, RECORDS_DELETE_SCHEMA,
+    RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA, RECORDS_WRITE_SCHEMA,
 };
 use crate::protocols::validate_reserved_control_namespace;
 use crate::{Descriptor, Message, Response};
@@ -125,20 +124,20 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
         include_str!("../../schemas/interface-methods/progress-token.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/protocol-definition.json",
-        include_str!("../../schemas/interface-methods/protocol-definition.json"),
+        "https://identity.foundation/dwn/json-schemas/module-definition.json",
+        include_str!("../../schemas/interface-methods/module-definition.json"),
     ),
     (
-        "https://identity.foundation/dwn/json-schemas/protocol-rule-set.json",
-        include_str!("../../schemas/interface-methods/protocol-rule-set.json"),
+        "https://identity.foundation/dwn/json-schemas/module-rule-set.json",
+        include_str!("../../schemas/interface-methods/module-rule-set.json"),
     ),
     (
-        PROTOCOLS_CONFIGURE_SCHEMA,
-        include_str!("../../schemas/interface-methods/protocols-configure.json"),
+        MODULES_CONFIGURE_SCHEMA,
+        include_str!("../../schemas/interface-methods/modules-configure.json"),
     ),
     (
-        PROTOCOLS_QUERY_SCHEMA,
-        include_str!("../../schemas/interface-methods/protocols-query.json"),
+        MODULES_QUERY_SCHEMA,
+        include_str!("../../schemas/interface-methods/modules-query.json"),
     ),
     (
         RECORDS_COUNT_SCHEMA,
@@ -207,6 +206,10 @@ const SCHEMA_SOURCES: &[(&str, &str)] = &[
     (
         "https://identity.foundation/dwn/json-schemas/permissions/scopes.json",
         include_str!("../../schemas/permissions/scopes.json"),
+    ),
+    (
+        "https://identity.foundation/dwn/json-schemas/permissions/permission-scope.json",
+        include_str!("../../schemas/permissions/permission-scope.json"),
     ),
 ];
 
@@ -364,7 +367,7 @@ pub fn ingress_rejection<R: Default>(error: DwnError) -> Response<R> {
     match error.code {
         DwnErrorCode::SchemaValidatorFailure
         | DwnErrorCode::SchemaValidatorSchemaNotFound
-        | DwnErrorCode::ProtocolsConfigureReservedEncryptionControlPath => {
+        | DwnErrorCode::ModulesConfigureReservedEncryptionControlPath => {
             Response::bad_request_error(error)
         }
         _ => Response::bad_request(error.detail),

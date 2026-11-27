@@ -185,31 +185,31 @@ impl GrantKeyError {
     pub fn code(&self) -> Option<DwnErrorCode> {
         match self {
             Self::MissingEncryption(_) => {
-                Some(DwnErrorCode::EncryptionProtocolValidateEncryptedDeliveryMissingEncryption)
+                Some(DwnErrorCode::EncryptionModuleValidateEncryptedDeliveryMissingEncryption)
             }
             Self::EncryptionNotAllowed(_) => {
-                Some(DwnErrorCode::ProtocolAuthorizationEncryptionNotAllowed)
+                Some(DwnErrorCode::ModuleAuthorizationEncryptionNotAllowed)
             }
-            Self::InvalidTags(_) => Some(DwnErrorCode::ProtocolAuthorizationTagsInvalidSchema),
+            Self::InvalidTags(_) => Some(DwnErrorCode::ModuleAuthorizationTagsInvalidSchema),
             Self::AuthorMismatch(_) => {
-                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyAuthorMismatch)
+                Some(DwnErrorCode::EncryptionModuleValidateGrantKeyAuthorMismatch)
             }
             Self::RecipientMismatch(_) => {
-                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyRecipientMismatch)
+                Some(DwnErrorCode::EncryptionModuleValidateGrantKeyRecipientMismatch)
             }
             Self::ScopeMismatch(_) => {
-                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyGrantScopeMismatch)
+                Some(DwnErrorCode::EncryptionModuleValidateGrantKeyGrantScopeMismatch)
             }
             Self::NotYetActive(_) => Some(DwnErrorCode::GrantAuthorizationGrantNotYetActive),
             Self::GrantExpired(_) => Some(DwnErrorCode::GrantAuthorizationGrantExpired),
             Self::GrantRevoked(_) => Some(DwnErrorCode::GrantAuthorizationGrantRevoked),
             Self::GrantMissing(_) => Some(DwnErrorCode::GrantAuthorizationGrantMissing),
-            Self::ProtocolNotFound(_) => Some(DwnErrorCode::ProtocolAuthorizationProtocolNotFound),
+            Self::ProtocolNotFound(_) => Some(DwnErrorCode::ModuleAuthorizationModuleNotFound),
             Self::WrappedDeliveryInvalid(_) => {
-                Some(DwnErrorCode::EncryptionProtocolValidateGrantKeyWrappedDeliveryInvalid)
+                Some(DwnErrorCode::EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid)
             }
             Self::SchemaUnexpectedRecord(_) => {
-                Some(DwnErrorCode::EncryptionProtocolValidateSchemaUnexpectedRecord)
+                Some(DwnErrorCode::EncryptionModuleValidateSchemaUnexpectedRecord)
             }
             Self::Internal(_) => None,
         }
@@ -594,7 +594,7 @@ mod tests {
         let error = validate_encryption_record_schema(&message).expect_err("third path rejected");
         assert_eq!(
             error.code(),
-            Some(DwnErrorCode::EncryptionProtocolValidateSchemaUnexpectedRecord),
+            Some(DwnErrorCode::EncryptionModuleValidateSchemaUnexpectedRecord),
             "unexpected identity: {error:?}"
         );
     }

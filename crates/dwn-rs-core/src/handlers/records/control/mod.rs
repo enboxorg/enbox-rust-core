@@ -127,7 +127,7 @@ where
     .await
     .map_err(|error| match error {
         ProtocolDefinitionLookupError::NotFound(uri) => ControlValidationError::Dwn(DwnError::new(
-            DwnErrorCode::ProtocolAuthorizationProtocolNotFound,
+            DwnErrorCode::ModuleAuthorizationModuleNotFound,
             format!("unable to find protocol definition for {uri}"),
         )),
         ProtocolDefinitionLookupError::Store(detail) => ControlValidationError::Internal(detail),

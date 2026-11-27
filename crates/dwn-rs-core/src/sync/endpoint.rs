@@ -89,8 +89,8 @@ pub fn classify_apply_reply_with_parent_state(
                 ReplicationApplyOutcome::Superseded
             }
             Some(
-                DwnErrorCode::ProtocolAuthorizationParentRecordNotFound
-                | DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound,
+                DwnErrorCode::ModuleAuthorizationParentRecordNotFound
+                | DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound,
             ) if parent_pruned => ReplicationApplyOutcome::Superseded,
             Some(code) if code.is_missing_dependency() => ReplicationApplyOutcome::Incomplete,
             _ => ReplicationApplyOutcome::Invalid,
@@ -116,8 +116,8 @@ where
             .error_code
             .as_deref()
             .and_then(|code| DwnErrorCode::try_from(code).ok()),
-        Some(DwnErrorCode::ProtocolAuthorizationParentRecordNotFound)
-            | Some(DwnErrorCode::ProtocolAuthorizationCrossProtocolParentNotFound)
+        Some(DwnErrorCode::ModuleAuthorizationParentRecordNotFound)
+            | Some(DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound)
     );
     if !parent_missing {
         return false;
@@ -986,7 +986,7 @@ mod tests {
         let missing_parent = Status::from_error(
             400,
             DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationParentRecordNotFound,
+                DwnErrorCode::ModuleAuthorizationParentRecordNotFound,
                 "could not find parent record",
             ),
         );
@@ -1058,7 +1058,7 @@ mod tests {
         let immutable_permission = Status::from_error(
             400,
             DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationImmutableRecord,
+                DwnErrorCode::ModuleAuthorizationImmutableRecord,
                 "permission records cannot be updated",
             ),
         );
@@ -1067,19 +1067,19 @@ mod tests {
             ReplicationApplyOutcome::Invalid
         );
         let error = map_apply_error(immutable_permission, ReplicationApplyOutcome::Invalid);
-        assert_eq!(error.code, "ProtocolAuthorizationImmutableRecord");
+        assert_eq!(error.code, "ModuleAuthorizationImmutableRecord");
         assert!(!error.retryable);
 
         let missing_entry = Status::from_error(
             400,
             DwnError::new(
-                DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing,
+                DwnErrorCode::ModuleAuthorizationEncryptionRoleAudienceEntryMissing,
                 "encrypted record is missing a roleAudience entry",
             ),
         );
         assert_eq!(
-            DwnErrorCode::try_from("ProtocolAuthorizationEncryptionRoleAudienceEntryMissing"),
-            Ok(DwnErrorCode::ProtocolAuthorizationEncryptionRoleAudienceEntryMissing)
+            DwnErrorCode::try_from("ModuleAuthorizationEncryptionRoleAudienceEntryMissing"),
+            Ok(DwnErrorCode::ModuleAuthorizationEncryptionRoleAudienceEntryMissing)
         );
         assert_eq!(
             classify_apply_reply(&missing_entry, &write, false),

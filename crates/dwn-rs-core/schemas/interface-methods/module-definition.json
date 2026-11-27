@@ -1,23 +1,23 @@
 {
-  "$id": "https://identity.foundation/dwn/json-schemas/protocol-definition.json",
+  "$id": "https://identity.foundation/dwn/json-schemas/module-definition.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "protocol",
+    "module",
     "published",
     "types",
     "structure"
   ],
   "properties": {
-    "protocol": {
+    "module": {
       "type": "string"
     },
     "published": {
       "type": "boolean"
     },
     "uses": {
-      "$comment": "Maps alias names to external protocol URIs for composition. Each alias can be used in $ref values and cross-protocol role/of references using 'alias:path' syntax.",
+      "$comment": "Maps alias names to external module URIs for composition. Each alias can be used in $ref values and cross-module role/of references using 'alias:path' syntax.",
       "type": "object",
       "minProperties": 1,
       "patternProperties": {
@@ -90,7 +90,7 @@
       "additionalProperties": false,
       "patternProperties": {
         "^[^$].*$": {
-          "$ref": "https://identity.foundation/dwn/json-schemas/protocol-rule-set.json"
+          "$ref": "https://identity.foundation/dwn/json-schemas/module-rule-set.json"
         }
       }
     }

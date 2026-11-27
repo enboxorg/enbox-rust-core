@@ -44,7 +44,7 @@ pub enum GrantError {
     #[error("could not find permission grant with record ID: {0}")]
     NotFound(String),
 
-    #[error("invalid message type: must be PermissionsProtocol grant RecordsWrite")]
+    #[error("invalid message type: must be PermissionsModule grant RecordsWrite")]
     InvalidMessageType(#[from] GrantMessageTypeError),
 
     #[error("recordId is required")]
@@ -92,16 +92,16 @@ pub enum GrantError {
 
 #[derive(Error, Debug)]
 pub enum GrantMessageTypeError {
-    #[error("invalid message type: must be PermissionsProtocol")]
+    #[error("invalid message type: must be PermissionsModule")]
     InvalidMessageType,
 
-    #[error("invalid message type: must be PermissionsProtocol grant RecordsWrite")]
+    #[error("invalid message type: must be PermissionsModule grant RecordsWrite")]
     InvalidRecordsWriteMessageType,
 
-    #[error("invalid message type: must be PermissionsProtocol grant ProtocolsQuery")]
+    #[error("invalid message type: must be PermissionsModule grant ModulesQuery")]
     InvalidProtocolsQueryMessageType,
 
-    #[error("invalid message type: must be PermissionsProtocol grant ProtocolsConfigure")]
+    #[error("invalid message type: must be PermissionsModule grant ModulesConfigure")]
     InvalidProtocolsConfigureMessageType,
 }
 

@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
     println!(
-        "ProtocolsConfigure -> {} {}",
+        "ModulesConfigure -> {} {}",
         configure_reply.status.code, configure_reply.status.detail
     );
 
