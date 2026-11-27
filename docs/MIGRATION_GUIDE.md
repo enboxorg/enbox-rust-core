@@ -10,12 +10,50 @@ As of M5/M6, the Rust core ships everything an app previously got from the in-pr
 - Native sync engine (`sync_once`, `poll_reconcile`, `resume_pending`) with durable checkpoints.
 - Live subscriptions via the loopback WebSocket transport.
 - Agent identity (`initialize_vault`, `current_agent_identity`, key derivation, durable vault).
-- Tenant registration over HTTP, protocol install/push, restore flow.
+- Tenant registration over HTTP, module install/push, restore flow.
 - DWeb Connect: permission requests, delegate grants, revocations, delegate-key derivation, context-key derivation, persisted key delivery.
 
 The `enbox-ffi` facade exposes all of it through UniFFI; the loopback `desktop_server` exposes the same engine over the `@enbox/dwn-server` JSON-RPC contract for any TS clients that aren't ready to switch.
 
 Remote `@enbox/dwn-server` peers do not need to change. The Rust core writes the same JSON-RPC messages and CIDs as the pinned TypeScript reference.
+
+## Modules cutover (Protocols -> Modules)
+
+This release adopts the DWN `Protocols -> Modules` vocabulary. It is a hard
+cutover: there are no aliases, dual readers, or in-place conversions of signed
+messages, and the host surface is part of the break.
+
+| Before | After |
+| --- | --- |
+| `core.install_protocol(...)` | `core.install_module(...)` |
+| `core.inject_protocol_encryption(...)` | `core.inject_module_encryption(...)` |
+| `core.push_protocol(...)` | `core.push_module(...)` |
+| `ProtocolInstallResult` / `{ protocol, … }` | `ModuleInstallResult` / `{ module, … }` |
+| `run_restore_flow` field `protocols` | `modules` |
+| `derive_context_key` field `protocol` | `module` |
+| `ConnectPermissionRequest.protocolDefinition` | `moduleDefinition` |
+| `DelegateDecryptionKey.protocol` / `DelegateContextKey.protocol` | `module` |
+| `DelegateDecryptionScope` kinds `protocol` / `protocolPath` | `module` / `modulePath` |
+| `DelegateKeyDerivationResult.multiPartyProtocols` | `multiPartyModules` |
+| `register_sync_identity` field `protocols` | `modules` |
+| Sync scope IDs `protocol:<uri>` | `module:<uri>` |
+
+`RestoreFlowStep` values are now `module_install` and `module_push`, the
+pending-scope filter and `FfiPendingScope` field are `module`, and the
+`Records`/`Messages`/`Modules` scope fields and `modulePath` vocabulary come
+from the core cutover.
+
+### Fresh stores required
+
+Do not open a pre-cutover database. Initialize fresh DWN message, data, and
+task stores, a fresh agent/sync store, and fresh application sessions. The old
+SQLite file holds signed `Protocols` messages and sync checkpoints that this
+release cannot read, label, or translate: relabeling them would change their
+signatures, content identities, and potentially their derived keys. Keep old
+data only as a separate backup, then re-initialize the identity vault and
+re-issue module configurations, records, grants, and encryption material.
+Previously queued offline writes and sync checkpoints cannot cross this format
+boundary.
 
 ## Old → New API mapping
 
@@ -23,7 +61,7 @@ The Rust core does not aim to be a 1:1 type-for-type port of `dwn-sdk-js`. The w
 
 | TypeScript pattern | Rust facade |
 | --- | --- |
-| `Dwn.create({ messageStore, dataStore, ... })` | `EnboxCore.open("/path/to/enbox.sqlite")` (opens or migrates SQLite in place). |
+| `Dwn.create({ messageStore, dataStore, ... })` | `EnboxCore.open("/path/to/enbox.sqlite")` (opens or migrates a same-format SQLite store; see the Modules cutover for the fresh-store requirement). |
 | `dwn.processMessage(tenant, message, options)` | `core.process_message(tenant, messageJson)` (signed messages required; unsigned `RecordsQuery` flows are also accepted). |
 | `MessageStoreLevel`, `DataStoreLevel`, `StateIndexLevel`, `ResumableTaskStoreLevel`, `EventEmitterEventLog` constructors | Dropped; `EnboxCore::open` wires all stores from the same `SqliteStore` handle. |
 | `UniversalResolver` + `DidResolverCacheLevel` | Built into the Rust core; supports `did:jwk` + `did:key` Ed25519 verification. Static fallback registration is in `crates/dwn-rs-core/src/auth/jws.rs`. |
@@ -34,7 +72,7 @@ The Rust core does not aim to be a 1:1 type-for-type port of `dwn-sdk-js`. The w
 | `ReadableStream<Uint8Array>` for record data | Plain `Vec<u8>` over the FFI. For large records, the host should stream over WebSocket or sync, not embed in `processMessage`. |
 | Local LevelDB / IndexedDB profile path | A single SQLite database path (`/Documents/enbox.sqlite`, `/data/data/<pkg>/databases/enbox.sqlite`, ...). |
 
-Wire-level message JSON, CIDs, JWS/JWE shapes, protocol definitions, and status code semantics stay compatible with `@enbox/dwn-sdk-js` as pinned in `.enbox-version`. The CI `dwn-sdk-js-reference` and `typescript-conformance` jobs gate that contract.
+Wire-level message JSON, CIDs, JWS/JWE shapes, module definitions, and status code semantics stay compatible with `@enbox/dwn-sdk-js` as pinned in `.enbox-version`. The CI `dwn-sdk-js-reference` and `typescript-conformance` jobs gate that contract.
 
 ## Adoption order
 
@@ -65,7 +103,7 @@ await core.configureSyncSigner(JSON.stringify({
 }));
 await core.registerSyncIdentity(JSON.stringify({
   did: aliceDid,
-  protocols: { type: 'all' },
+  modules: { type: 'all' },
 }));
 
 // Foreground manual sync:
@@ -167,8 +205,8 @@ LevelDB / IndexedDB layouts produced by the TypeScript stores are not a stable p
 Three supported paths:
 
 1. **Fresh install** — easiest. Open `EnboxCore.open("/path/enbox.sqlite")` against a new file and start writing.
-2. **Resync from a remote `@enbox/dwn-server`** — if the user has any remote tenant, `core.runRestoreFlow(...)` installs protocols locally and pulls every message. The resulting SQLite is byte-for-byte equivalent to a fresh install that synced from the same remote.
-3. **Bridge mode** — keep the TS DWN warm for one app launch, copy messages out via `dwn.processRequest({...messagesQuery})`, write them into the Rust core via `core.processMessage(...)`, then drop the TS path. This is the path for apps with no remote tenant and no acceptable resync window.
+2. **Resync from a remote `@enbox/dwn-server`** — if the user has any remote tenant, `core.runRestoreFlow(...)` installs modules locally and pulls every message. The resulting SQLite is byte-for-byte equivalent to a fresh install that synced from the same remote.
+3. **Bridge mode** — only valid when the TS DWN already emits `Modules` messages. Keep the TS DWN warm for one app launch, copy messages out via `dwn.processRequest({...messagesQuery})`, write them into the Rust core via `core.processMessage(...)`, then drop the TS path. Legacy `Protocols` messages cannot be bridged: the engine rejects them and relabeling them would invalidate their signatures and derived keys.
 
 There is no in-place LevelDB → SQLite migration tool today and one is not planned: the cost of validating CIDs / signatures across two engines exceeds the cost of a remote resync for the typical app.
 
@@ -180,14 +218,14 @@ Identity migration runs independently of DWN store migration:
 
 - Portable DID material and BIP-39 recovery phrases round-trip through `derive_agent_keys_from_phrase` and `initialize_vault`. Both Ed25519 signing keys and X25519 key-agreement keys survive.
 - `SqliteSecretStore` is a raw backend. `IdentityVault` protects its key material, and `VaultBackedSecretStore` encrypts auth credentials before persistence. Identity and credentials use that one vault through `initialize_vault`, `unlock`, and the rest of the lifecycle surface.
-- Wallet recovery must prove that encrypted protocol records can be decrypted after restoring the seed/vault. The integration test `crates/dwn-rs-agent/tests/wallet_recovery.rs` exercises this exact flow.
-- Data migration must not introduce a plaintext fallback for records whose protocol requires encryption. The Rust handler enforces the encryption requirement on every `RecordsWrite`.
+- Wallet recovery must prove that encrypted module records can be decrypted after restoring the seed/vault. The integration test `crates/dwn-rs-agent/tests/wallet_recovery.rs` exercises this exact flow.
+- Data migration must not introduce a plaintext fallback for records whose module requires encryption. The Rust handler enforces the encryption requirement on every `RecordsWrite`.
 
 ## Remote server compatibility
 
 Remote Enbox DWN servers stay compatible through the wire protocol:
 
-- Rust local nodes send the same message JSON, CIDs, JWS/JWE, and protocol records as TypeScript.
+- Rust local nodes send the same message JSON, CIDs, JWS/JWE, and module records as TypeScript.
 - Rust-native `MessagesSync` root / subtree / leaves / diff replies are an intentional extension; upstream removed `MessagesSync`/`StateIndex` (`25821eda`). The Rust-native sync fixtures are validated in Rust only, and the loopback `MessagesSync` scenario is disabled pending the durable-feed migration (#187/#188/#192).
 - Remote servers don't need to know whether a client local node is TypeScript or Rust.
 - Server-side data migration is out of scope for local Rust migration; remote nodes can be migrated independently.
@@ -199,7 +237,7 @@ Stable across the migration (covered by `typescript-conformance` + `dwn-sdk-js-r
 - DWN wire messages and replies.
 - CID calculation and descriptor CIDs.
 - General JWS and the current A256CTR / X25519-HKDF-SHA256+A256KW JWE wire shapes.
-- Protocol definitions and permission-grant semantics.
+- Module definitions and permission-grant semantics.
 - Records data CID and data size behavior.
 - Rust-native sync roots, subtree hashes, leaves, progress tokens, and gap semantics (intentional extension; upstream removed the legacy sync surfaces).
 

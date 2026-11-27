@@ -28,7 +28,7 @@ Required request fields:
 
 Optional request fields:
 
-- `protocol`: protocol URI for scoped sync; omitted means global sync.
+- `module`: module URI for scoped sync; omitted means global sync.
 - `max_records`: max message records to process before yielding.
 - `max_bytes`: max data bytes to upload/download before yielding.
 - `allow_metered`: whether metered network use is allowed.
@@ -56,7 +56,7 @@ Required request fields:
 Optional request fields:
 
 - `remote`
-- `protocol`
+- `module`
 - `direction`
 - `max_records`
 - `max_bytes`
@@ -71,7 +71,7 @@ Query fields:
 
 - `tenant`
 - `remote` optional
-- `protocol` optional
+- `module` optional
 
 Result fields:
 
@@ -99,7 +99,7 @@ Checkpoint identity should include:
 
 - `tenant`
 - `remote`
-- `protocol` or `global`
+- `module:<uri>` or `global`
 - `direction`
 
 Checkpoint state should include:
@@ -117,7 +117,7 @@ Checkpoints must be written before crossing a deadline-sensitive boundary: befor
 
 ## Idempotency And Locking
 
-Background sync may be started by multiple native triggers. The Rust core should enforce a per-scope lease keyed by tenant, remote, protocol/global, and direction.
+Background sync may be started by multiple native triggers. The Rust core should enforce a per-scope lease keyed by tenant, remote, module/global, and direction.
 
 Rules:
 

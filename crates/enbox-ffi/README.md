@@ -2,6 +2,37 @@
 
 UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN core.
 
+## Modules cutover
+
+This release follows the DWN `Protocols -> Modules` wire cutover. The host
+surface is part of the break: there are no aliases, dual readers, or in-place
+migrations.
+
+| Before | After |
+| --- | --- |
+| `install_protocol` | `install_module` |
+| `inject_protocol_encryption` | `inject_module_encryption` |
+| `push_protocol` | `push_module` |
+| `ProtocolInstallResult` / `{ protocol, … }` | `ModuleInstallResult` / `{ module, … }` |
+| `run_restore_flow` field `protocols` | `modules` |
+| `derive_context_key` field `protocol` | `module` |
+| `ConnectPermissionRequest.protocolDefinition` | `moduleDefinition` |
+| `DelegateDecryptionKey.protocol` / `DelegateContextKey.protocol` | `module` |
+| `DelegateDecryptionScope` kinds `protocol` / `protocolPath` | `module` / `modulePath` |
+| `DelegateKeyDerivationResult.multiPartyProtocols` | `multiPartyModules` |
+| `register_sync_identity` field `protocols` | `modules` |
+| Sync scope IDs `protocol:<uri>` | `module:<uri>` |
+
+`RestoreFlowStep` values are now `module_install` and `module_push`, and the
+`FfiPendingScope` / pending-scope filter field is `module`.
+
+Fresh stores are required. A pre-cutover SQLite database holds signed
+`Protocols` messages and old sync checkpoints that this release cannot read or
+translate. Open a new database file, initialize a new identity vault, and
+re-issue module configurations, records, grants, and encryption material. Keep
+old data only as a separate backup; never relabel it as new-format state.
+Queued offline writes and sync checkpoints cannot cross the format boundary.
+
 ## API surface
 
 | Method | Purpose |
@@ -12,7 +43,7 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `EnboxCore.open_with_work_factor(database_path, work_factor)` | Durable node with a host-chosen PBES2 work factor (0 rejected) |
 | `process_message(tenant, message_json)` | Dispatch a DWN message; returns JSON `DwnReply` |
 | `configure_sync_signer(signer_json)` | Install a private JWK for signing HTTP sync requests |
-| `register_sync_identity(identity_json)` | Register tenant DID + protocol scope for sync |
+| `register_sync_identity(identity_json)` | Register tenant DID + module scope for sync |
 | `sync_once(request_json)` | Run one sync cycle against a remote DWN URL |
 | `poll_reconcile(request_json)` | Pull-only poll reconciliation (live-degraded HTTP fallback) |
 | `sync_status(query_json)` | Last sync outcome (in-progress flag, status, error, counters) |
@@ -27,11 +58,11 @@ UniFFI facade for iOS, Android, and other hosts embedding the Enbox Rust DWN cor
 | `delete_registration_tokens()` | Delete the persisted token entry while locked or unlocked; returns whether it existed |
 | `current_agent_identity()` | Decrypt the shared vault’s `PortableDid` JSON, or `None` before initialization |
 | `derive_agent_keys_from_phrase(phrase)` | Derive the four-key set (vault/identity/signing/encryption) without persisting; for recovery-screen validation |
-| `install_protocol(tenant_did_json, definition_json)` | Install a protocol on the local DWN (signs a `ProtocolsConfigure`, injects encryption when required); idempotent |
-| `inject_protocol_encryption(tenant_did_json, definition_json)` | Augment a protocol `Definition` with per-path key-agreement encryption; pure (no I/O) |
+| `install_module(tenant_did_json, definition_json)` | Install a module on the local DWN (signs a `ModulesConfigure`, injects encryption when required); idempotent |
+| `inject_module_encryption(tenant_did_json, definition_json)` | Augment a module `Definition` with per-path key-agreement encryption; pure (no I/O) |
 | `register_tenant(request_json)` | Register agent + connected DIDs with one or more `@enbox/dwn-server` HTTP endpoints; refreshes provider-auth tokens when expired |
-| `push_protocol(request_json)` | Push a protocol to a remote `@enbox/dwn-server` (signs `ProtocolsQuery` first; idempotent) |
-| `run_restore_flow(request_json)` | Replay protocol install + push across local + remote endpoints for a recovered agent |
+| `push_module(request_json)` | Push a module to a remote `@enbox/dwn-server` (signs `ModulesQuery` first; idempotent) |
+| `run_restore_flow(request_json)` | Replay module install + push across local + remote endpoints for a recovered agent |
 | `create_permission_request(request_json)` | Build a `PermissionRequestRecord` for DWeb Connect; pure |
 | `create_delegate_grant(request_json)` | Build a `DelegateGrant` (`{grantor, grantee, scope, dateExpires, description?}`); pure |
 | `create_grant_revocation(request_json)` | Build a `GrantRevocation` for an existing grant; pure |
@@ -78,15 +109,15 @@ resolver cache). Its raw-store constructor argument, `initialize_from_recovery`,
 and `stored_agent_did` are removed. Durable identity creation and reads belong to
 `IdentityVault`; hosts must unlock it with a password rather than read legacy rows.
 
-## Protocol install workflow
+## Module install workflow
 
-Once an identity exists, install user protocols on the local DWN:
+Once an identity exists, install user modules on the local DWN:
 
 ```json
-install_protocol(
+install_module(
   <portable_did_json>,
   {
-    "protocol": "https://protocol.example/notes",
+    "module": "https://module.example/notes",
     "published": true,
     "types": { "note": { "schema": "…", "dataFormats": ["text/plain"] } },
     "structure": { "note": { "$actions": [...] } }
@@ -94,13 +125,13 @@ install_protocol(
 )
 ```
 
-Returns JSON `ProtocolInstallResult` (`{protocol, installed, encryptionActive}`). Subsequent calls for the same protocol return `installed: false` — the helper queries before configuring, matching [`install_protocol_if_needed`](../dwn-rs-agent/src/auth/setup.rs).
+Returns JSON `ModuleInstallResult` (`{module, installed, encryptionActive}`). Subsequent calls for the same module return `installed: false` — the helper queries before configuring, matching [`install_module_if_needed`](../dwn-rs-agent/src/auth/setup.rs).
 
-Encrypted protocols (those with `encryptionRequired: true`) have per-path key-agreement encryption injected automatically. For preview or sharing the augmented definition with another agent, call `inject_protocol_encryption` separately — it is pure and does not touch the DWN.
+Encrypted modules (those with `encryptionRequired: true`) have per-path key-agreement encryption injected automatically. For preview or sharing the augmented definition with another agent, call `inject_module_encryption` separately — it is pure and does not touch the DWN.
 
 ## Remote setup workflow
 
-For HTTP-backed registration and protocol push (closes #145), three additional methods sit alongside the local install helpers:
+For HTTP-backed registration and module push (closes #145), three additional methods sit alongside the local install helpers:
 
 1. Register the agent with one or more endpoints:
    ```json
@@ -121,24 +152,24 @@ For HTTP-backed registration and protocol push (closes #145), three additional m
    })
    ```
    The agent calls `GET <endpoint>/info` to discover requirements, refreshes any expired `provider-auth-v0` tokens (`POST <refreshUrl>`), then `POST <endpoint>/registration` per DID. When `persistTokens: true`, the token map is read from and written back to the agent secret store as a vault envelope under `enbox:auth:registrationTokens` (the credential vault must be unlocked). Returns a `TenantRegistrationResult` (per-endpoint `records` + final token map).
-2. Push a protocol to a remote DWN:
+2. Push a module to a remote DWN:
    ```json
-   push_protocol({
+   push_module({
      "tenantDid": <portable_did_json>,
      "remoteUrl": "https://dwn.example/",
-     "definition": <protocol_definition>
+     "definition": <module_definition>
    })
    ```
-   Signs a `ProtocolsQuery` against the remote first (idempotent path), otherwise signs and sends a `ProtocolsConfigure` (with encryption injected when required). Same JSON-RPC transport as `HttpSyncEndpoint`: body-framed request on `POST <url>/`, response read from `dwn-response` header or body.
+   Signs a `ModulesQuery` against the remote first (idempotent path), otherwise signs and sends a `ModulesConfigure` (with encryption injected when required). Same JSON-RPC transport as `HttpSyncEndpoint`: body-framed request on `POST <url>/`, response read from `dwn-response` header or body.
 3. Replay a recovery flow across local + remote endpoints:
    ```json
    run_restore_flow({
      "agentDid": <portable_did_json>,
      "remoteUrl": "https://dwn.example/",
-     "protocols": [<definition>, ...]
+     "modules": [<definition>, ...]
    })
    ```
-   For each protocol: local `install_protocol_if_needed` then remote `push_protocol_if_needed`. Returns a `RestoreFlowResult` (`steps`, `localInstalls`, `remotePushes`). Identity tenant restoration is out of scope (see [`run_restore_flow`](../dwn-rs-agent/src/auth/setup.rs) docs).
+   For each module: local `install_module_if_needed` then remote `push_module_if_needed`. Returns a `RestoreFlowResult` (`steps`, `localInstalls`, `remotePushes`). Identity tenant restoration is out of scope (see [`run_restore_flow`](../dwn-rs-agent/src/auth/setup.rs) docs).
 
 ## DWeb Connect workflow
 
@@ -150,11 +181,11 @@ The connect FFI mirrors [`dwn_rs_agent::auth::connect`](../dwn-rs-agent/src/auth
    ```json
    derive_delegate_keys({
      "ownerDid": <portable_did_json>,
-     "requests": [{ "protocolDefinition": <Definition>, "permissionScopes": [<PermissionScope>, ...] }]
+     "requests": [{ "moduleDefinition": <Definition>, "permissionScopes": [<PermissionScope>, ...] }]
    })
    ```
-   Returns `DelegateKeyDerivationResult` (`decryptionKeys`, `contextKeys`, `multiPartyProtocols`).
-4. For multi-party protocols, derive a context key per record context: `derive_context_key({ ownerDid, protocol, contextId })`.
+   Returns `DelegateKeyDerivationResult` (`decryptionKeys`, `contextKeys`, `multiPartyModules`).
+4. For multi-party modules, derive a context key per record context: `derive_context_key({ ownerDid, module, contextId })`.
 5. Initialize/unlock the credential vault, then persist the derived keys as encrypted envelopes for re-use across launches:
    `save_delegate_decryption_keys(keys_json)` / `save_delegate_context_keys(keys_json)`.
    Re-load them with `load_delegate_decryption_keys()` / `load_delegate_context_keys()` (each returns `[]` when nothing is stored yet).
@@ -180,7 +211,7 @@ The Rust facade tracks the bookkeeping a mobile host needs to coordinate biometr
 
 1. Open a durable node: `EnboxCore.open("/path/to/enbox.sqlite")`
 2. Configure signing keys for sync: `configure_sync_signer(...)`
-3. Register identities: `register_sync_identity({"did":"…","protocols":{"type":"all"}})`
+3. Register identities: `register_sync_identity({"did":"…","modules":{"type":"all"}})`
 4. Run sync: `sync_once({"tenant":"…","remote":"https://dwn.example/","direction":"pull"})`
 5. After a live subscription drop, repair with `poll_reconcile` (same request shape as `sync_once`)
 6. Poll UI state: `sync_status({"tenant":"…","remote":"https://dwn.example/"})`
@@ -200,7 +231,7 @@ Background-safe request fields (see [`docs/BACKGROUND_SYNC.md`](../../docs/BACKG
 
 For hosts that want to "drain any leftover work" without recomputing which scopes need attention (background wake hooks, app cold-start), the facade exposes a checkpoint-driven path:
 
-- `list_pending_scopes({"tenant": "did:..."})` — returns an array of `FfiPendingScope` entries (`{tenant, remote, protocol, direction, pendingPullCount, pendingPushCount, hasCursor, recordsPulled, recordsPushed, bytesDownloaded, bytesUploaded}`) for any checkpoint whose pending prefixes or cursors are non-empty. Pure read; never touches the network. Optional filters: `remote`, `protocol`, `direction`.
+- `list_pending_scopes({"tenant": "did:..."})` — returns an array of `FfiPendingScope` entries (`{tenant, remote, module, direction, pendingPullCount, pendingPushCount, hasCursor, recordsPulled, recordsPushed, bytesDownloaded, bytesUploaded}`) for any checkpoint whose pending prefixes or cursors are non-empty. Pure read; never touches the network. Optional filters: `remote`, `module`, `direction`.
 - `resume_pending({"tenant": "did:...", "deadlineMs": 25000, "connectivity": {...}})` — iterates those scopes and re-runs `sync_once` on each under the supplied deadline. The deadline budgets the entire batch, not each scope, so scopes that didn't get a turn stay pending in the ledger for the next call. Optional filters and budgets mirror `sync_once`.
 
 The returned `FfiResumePendingResult` is `{attempted, results, deadlineExceeded}`:

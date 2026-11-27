@@ -9,7 +9,7 @@ This repository was cloned from [`enmand/dwn-rs`](https://github.com/enmand/dwn-
 - Provide a DWN engine that runs without Bun, Node.js, or JavaScript.
 - Preserve Enbox DWN behavior from `@enbox/dwn-sdk-js`, including handlers, authorization, protocol rules, storage semantics, and sync.
 - Support mobile and desktop local DWN nodes through native storage and native bindings.
-- Support wallet and agent flows: identity lifecycle, tenant registration, protocol installation, delegated grants, encrypted protocol data, key delivery, and sync.
+- Support wallet and agent flows: identity lifecycle, tenant registration, module installation, delegated grants, encrypted module data, key delivery, and sync.
 - Keep provenance and attribution for the original `dwn-rs` work while evolving the repository structure as needed.
 
 ## Current State
@@ -58,9 +58,9 @@ See [`docs/TEST_COVERAGE.md`](docs/TEST_COVERAGE.md) for the full matrix. CI run
 
 - DWN message dispatch and HTTP sync (M4): `process_message`, `sync_once`, `poll_reconcile`, `sync_status`, `lock`/`unlock`.
 - Agent identity and vault (M5, [#148](https://github.com/enboxorg/enbox-rust-core/pull/148)): `initialize_vault`, `current_agent_identity`, `derive_agent_keys_from_phrase`; durable `SqliteSecretStore`.
-- Protocol install and encryption (M5, [#149](https://github.com/enboxorg/enbox-rust-core/pull/149)): `install_protocol`, `inject_protocol_encryption` against the local `SqliteNativeDwn`.
+- Module install and encryption (M5, [#149](https://github.com/enboxorg/enbox-rust-core/pull/149)): `install_module`, `inject_module_encryption` against the local `SqliteNativeDwn`.
 - DWeb Connect (M5, [#150](https://github.com/enboxorg/enbox-rust-core/pull/150)): `create_permission_request`, `create_delegate_grant`, `create_grant_revocation`, `derive_delegate_keys`, `derive_context_key`, persisted decryption/context keys.
-- HTTP register / push / restore (M5, [#151](https://github.com/enboxorg/enbox-rust-core/pull/151)): `register_tenant`, `push_protocol`, `run_restore_flow` against `@enbox/dwn-server`-style endpoints.
+- HTTP register / push / restore (M5, [#151](https://github.com/enboxorg/enbox-rust-core/pull/151)): `register_tenant`, `push_module`, `run_restore_flow` against `@enbox/dwn-server`-style endpoints.
 
 See the [FFI README](crates/enbox-ffi/README.md). Android/iOS Nix flake builds were wired in [#142](https://github.com/enboxorg/enbox-rust-core/pull/142).
 
@@ -70,7 +70,7 @@ See the [FFI README](crates/enbox-ffi/README.md). Android/iOS Nix flake builds w
 |-----------|------|---------|
 | **M8** | [#102](https://github.com/enboxorg/enbox-rust-core/issues/102) | Loopback interop, real `message.process` replies, shared fixtures, TestSuite injection scaffold |
 | **M4** | [#103](https://github.com/enboxorg/enbox-rust-core/issues/103) | End-to-end sync, WebSocket loopback, FFI sync, HTTP live/poll reconciliation |
-| **M5** | #143–#146 | Agent identity, protocol install/push/restore, DWeb Connect, HTTP registration — all exposed via `enbox-ffi` |
+| **M5** | #143–#146 | Agent identity, module install/push/restore, DWeb Connect, HTTP registration — all exposed via `enbox-ffi` |
 
 Handler modules are split per method under `handlers/{records,messages,protocols}/` ([#68](https://github.com/enboxorg/enbox-rust-core/issues/68), [#93](https://github.com/enboxorg/enbox-rust-core/issues/93)).
 
