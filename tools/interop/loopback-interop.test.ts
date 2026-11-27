@@ -48,13 +48,10 @@ type HttpDwnRpcClient = {
 };
 
 type DwnSdkModule = {
-  MessagesSync: {
+  ModulesConfigure: {
     create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
   };
-  ProtocolsConfigure: {
-    create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
-  };
-  ProtocolsQuery: {
+  ModulesQuery: {
     create(input: Record<string, unknown>): Promise<{ message: Record<string, unknown> }>;
   };
   RecordsRead: {
@@ -82,8 +79,8 @@ type DwnSdkModule = {
       dataBytes: Uint8Array;
     }>;
   };
-  defaultTestProtocolDefinition: {
-    protocol: string;
+  defaultTestModuleDefinition: {
+    module: string;
     published: boolean;
     types: Record<string, Record<string, unknown>>;
     structure: Record<string, Record<string, unknown>>;
@@ -114,15 +111,15 @@ if (!existsSync(wsClientModulePath)) {
 
 const { HttpDwnRpcClient } = await import(httpClientModulePath) as HttpDwnRpcClientModule;
 const { WebSocketDwnRpcClient } = await import(wsClientModulePath) as WebSocketDwnRpcClientModule;
-const { MessagesSync, ProtocolsConfigure, ProtocolsQuery, RecordsRead, RecordsDelete } =
+const { ModulesConfigure, ModulesQuery, RecordsRead, RecordsDelete } =
   await import(dwnSdkModulePath) as DwnSdkModule;
-const { TestDataGenerator, defaultTestProtocolDefinition } = await import(testDataGeneratorPath) as {
+const { TestDataGenerator, defaultTestModuleDefinition } = await import(testDataGeneratorPath) as {
   TestDataGenerator: DwnSdkModule['TestDataGenerator'];
-  defaultTestProtocolDefinition: DwnSdkModule['defaultTestProtocolDefinition'];
+  defaultTestModuleDefinition: DwnSdkModule['defaultTestModuleDefinition'];
 };
 
-const loopbackProtocolDefinition = {
-  ...defaultTestProtocolDefinition,
+const loopbackModuleDefinition = {
+  ...defaultTestModuleDefinition,
   published: true,
 };
 
@@ -187,11 +184,11 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     expect(reply.status.detail).toContain('Both interface and method must be present');
   });
 
-  test('ProtocolsConfigure installs a published protocol', async () => {
+  test('ModulesConfigure installs a published module', async () => {
     const client = new HttpDwnRpcClient();
     const alice = await getLoopbackPersona();
-    const { message } = await ProtocolsConfigure.create({
-      definition: loopbackProtocolDefinition,
+    const { message } = await ModulesConfigure.create({
+      definition: loopbackModuleDefinition,
       signer: alice.signer,
     });
 
@@ -204,66 +201,11 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     expect(reply.status.code).toBe(202);
   });
 
-  test.skip('MessagesSync root over HTTP changes after RecordsWrite', async () => {
-    // MessagesSync and StateIndex were removed upstream
-    // (enbox@25821eda "chore(sync): remove legacy sync state surfaces"). The
-    // Rust-native MessagesSync surface is retained as an intentional Rust
-    // extension; reconciliation parity is tracked in #187/#188/#192. This
-    // interop scenario is disabled until a current-upstream durable-feed
-    // surface replaces it.
-    const client = new HttpDwnRpcClient();
-    const alice = await getLoopbackPersona();
-
-    await installLoopbackProtocol(client);
-
-    const { message: rootMessage } = await MessagesSync.create({
-      signer: alice.signer,
-      action: 'root',
-    });
-    const emptyRootReply = await client.sendDwnRequest({
-      dwnUrl: endpoint,
-      targetDid: LOOPBACK_TENANT,
-      message: rootMessage,
-    });
-    expect(emptyRootReply.status.code).toBe(200);
-    const emptyRootBody = (emptyRootReply as { body?: { root?: string } }).body
-      ?? emptyRootReply as { root?: string };
-    const emptyRoot = emptyRootBody.root;
-    expect(emptyRoot).toMatch(/^[a-f0-9]{64}$/);
-
-    const { message: writeMessage, dataBytes } = await TestDataGenerator.generateRecordsWrite({
-      author: alice,
-      schema: 'foo/bar',
-    });
-    const writeReply = await client.sendDwnRequest({
-      dwnUrl: endpoint,
-      targetDid: LOOPBACK_TENANT,
-      message: writeMessage,
-      data: dataBytes,
-    });
-    expect(writeReply.status.code).toBe(202);
-
-    const { message: rootAfterWrite } = await MessagesSync.create({
-      signer: alice.signer,
-      action: 'root',
-    });
-    const afterWriteReply = await client.sendDwnRequest({
-      dwnUrl: endpoint,
-      targetDid: LOOPBACK_TENANT,
-      message: rootAfterWrite,
-    });
-    expect(afterWriteReply.status.code).toBe(200);
-    const afterWriteBody = (afterWriteReply as { body?: { root?: string } }).body
-      ?? afterWriteReply as { root?: string };
-    expect(afterWriteBody.root).toMatch(/^[a-f0-9]{64}$/);
-    expect(afterWriteBody.root).not.toBe(emptyRoot);
-  });
-
   test('RecordsWrite then RecordsRead round-trip signed record', async () => {
     const client = new HttpDwnRpcClient();
     const alice = await getLoopbackPersona();
 
-    await installLoopbackProtocol(client);
+    await installLoopbackModule(client);
 
     const { message: writeMessage, dataBytes } = await TestDataGenerator.generateRecordsWrite({
       author: alice,
@@ -306,7 +248,7 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     const alice = await getLoopbackPersona();
     const wsEndpoint = endpoint.replace(/^http/, 'ws');
 
-    await installLoopbackProtocol(httpClient);
+    await installLoopbackModule(httpClient);
 
     const {
       message: writeMessage,
@@ -388,7 +330,7 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     ]));
   });
 
-  test('writes a PermissionsProtocol grant over loopback', async () => {
+  test('writes a Permissions module grant over loopback', async () => {
     const client = new HttpDwnRpcClient();
     const alice = await getLoopbackPersona();
 
@@ -407,15 +349,15 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     expect(grantReply.status.code).toBe(202);
   });
 
-  test('ProtocolsQuery returns a configured protocol', async () => {
+  test('ModulesQuery returns a configured module', async () => {
     const client = new HttpDwnRpcClient();
     const alice = await getLoopbackPersona();
 
-    await installLoopbackProtocol(client);
+    await installLoopbackModule(client);
 
-    const { message: queryMessage } = await ProtocolsQuery.create({
+    const { message: queryMessage } = await ModulesQuery.create({
       signer: alice.signer,
-      filter: { protocol: loopbackProtocolDefinition.protocol },
+      filter: { module: loopbackModuleDefinition.module },
     });
 
     const queryReply = await client.sendDwnRequest({
@@ -430,15 +372,15 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     const entries = body.entries ?? (queryReply as { entries?: unknown[] }).entries ?? [];
     expect(Array.isArray(entries)).toBe(true);
     expect(entries.length).toBeGreaterThan(0);
-    const first = entries[0] as { descriptor?: { definition?: { protocol?: string } } };
-    expect(first.descriptor?.definition?.protocol).toBe(loopbackProtocolDefinition.protocol);
+    const first = entries[0] as { descriptor?: { definition?: { module?: string } } };
+    expect(first.descriptor?.definition?.module).toBe(loopbackModuleDefinition.module);
   });
 
   test('RecordsWrite then RecordsDelete makes a subsequent RecordsRead return 404', async () => {
     const client = new HttpDwnRpcClient();
     const alice = await getLoopbackPersona();
 
-    await installLoopbackProtocol(client);
+    await installLoopbackModule(client);
 
     const { message: writeMessage, dataBytes } = await TestDataGenerator.generateRecordsWrite({
       author: alice,
@@ -479,7 +421,7 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
     const client = new HttpDwnRpcClient();
     const alice = await getLoopbackPersona();
 
-    await installLoopbackProtocol(client);
+    await installLoopbackModule(client);
 
     const { message: writeMessage, dataBytes } = await TestDataGenerator.generateRecordsWrite({
       author: alice,
@@ -520,10 +462,10 @@ describe('Loopback RPC interop (Rust server, TS client)', () => {
   });
 });
 
-async function installLoopbackProtocol(client: HttpDwnRpcClient): Promise<void> {
+async function installLoopbackModule(client: HttpDwnRpcClient): Promise<void> {
   const alice = await getLoopbackPersona();
-  const { message } = await ProtocolsConfigure.create({
-    definition: loopbackProtocolDefinition,
+  const { message } = await ModulesConfigure.create({
+    definition: loopbackModuleDefinition,
     signer: alice.signer,
   });
   const reply = await client.sendDwnRequest({
@@ -532,6 +474,6 @@ async function installLoopbackProtocol(client: HttpDwnRpcClient): Promise<void> 
     message,
   });
   if (reply.status.code !== 202) {
-    throw new Error(`Failed to install loopback protocol: ${reply.status.code} ${reply.status.detail}`);
+    throw new Error(`Failed to install loopback module: ${reply.status.code} ${reply.status.detail}`);
   }
 }
