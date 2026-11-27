@@ -3,7 +3,7 @@
 //! "Agent" here means the Enbox user-agent runtime that owns a DID, a key
 //! manager, and a secret store on behalf of one user. It does not mean a
 //! delegated software/AI principal acting under a grant; that principal is
-//! described by the protocol and permission types in `dwn-rs-core`.
+//! described by the module and permission types in `dwn-rs-core`.
 //!
 //! Owned surfaces:
 //!
@@ -14,12 +14,12 @@
 //!   connect/delegate-grant helpers.
 //! - [`SqliteSecretStore`] (feature `sqlite`) owns the SQLite secret-store
 //!   backend. Future agent/runtime work lands here: vault lifecycle, DWN-backed
-//!   stores, read-through/protocol caches, and sessions. Permission and
+//!   stores, read-through/module caches, and sessions. Permission and
 //!   headless-auth helpers land under [`auth`].
 //!
 //! Consumed seams:
 //!
-//! - DWN message, protocol, permission, and encryption types come from
+//! - DWN message, module, permission, and encryption types come from
 //!   `dwn-rs-core`. The agent never redefines them.
 //! - The SQLite backend shares one database file with `dwn-rs-stores`; the
 //!   `agent_secrets` table schema stays owned by the `dwn-rs-stores`
@@ -27,7 +27,7 @@
 //! - Host applications inject storage and network capability through the
 //!   traits in [`agent`] (`SecretStore`, `CredentialStore`, `AgentKeyManager`,
 //!   `PortableDidStore`, `DidProvider`) and [`auth`] (`TenantRegistrationClient`,
-//!   `ProtocolEndpoint`). There is no composed runtime type.
+//!   `ModuleEndpoint`). There is no composed runtime type.
 //!
 //! Host-application exclusions: keychain/Secure Enclave/TPM binding, UI for
 //! registration approval, and background-task scheduling stay with the host.

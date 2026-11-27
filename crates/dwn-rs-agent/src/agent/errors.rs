@@ -56,12 +56,12 @@ pub enum AgentIdentityError {
     DelegateKeyAgreement { detail: String },
     #[error("DelegateKeyMissingX25519: {detail}")]
     DelegateKeyX25519 { detail: String },
-    #[error("ProtocolInstallInvalidPath: {detail}")]
-    ProtocolPath { detail: String },
-    #[error("ProtocolInstallMissingKeyAgreement: {detail}")]
-    ProtocolAgreement { detail: String },
-    #[error("ProtocolInstallMissingX25519: {detail}")]
-    ProtocolX25519 { detail: String },
+    #[error("ModuleInstallInvalidPath: {detail}")]
+    ModulePath { detail: String },
+    #[error("ModuleInstallMissingKeyAgreement: {detail}")]
+    ModuleAgreement { detail: String },
+    #[error("ModuleInstallMissingX25519: {detail}")]
+    ModuleX25519 { detail: String },
     #[error("{code}: {detail}")]
     Backend { code: String, detail: String },
 }
@@ -100,9 +100,9 @@ impl AgentIdentityError {
             "DelegateSecretInvalid" => Self::DelegateSecret { detail },
             "DelegateKeyMissingKeyAgreement" => Self::DelegateKeyAgreement { detail },
             "DelegateKeyMissingX25519" => Self::DelegateKeyX25519 { detail },
-            "ProtocolInstallInvalidPath" => Self::ProtocolPath { detail },
-            "ProtocolInstallMissingKeyAgreement" => Self::ProtocolAgreement { detail },
-            "ProtocolInstallMissingX25519" => Self::ProtocolX25519 { detail },
+            "ModuleInstallInvalidPath" => Self::ModulePath { detail },
+            "ModuleInstallMissingKeyAgreement" => Self::ModuleAgreement { detail },
+            "ModuleInstallMissingX25519" => Self::ModuleX25519 { detail },
             _ => Self::Backend { code, detail },
         }
     }
@@ -132,9 +132,9 @@ impl AgentIdentityError {
             Self::DelegateSecret { .. } => "DelegateSecretInvalid",
             Self::DelegateKeyAgreement { .. } => "DelegateKeyMissingKeyAgreement",
             Self::DelegateKeyX25519 { .. } => "DelegateKeyMissingX25519",
-            Self::ProtocolPath { .. } => "ProtocolInstallInvalidPath",
-            Self::ProtocolAgreement { .. } => "ProtocolInstallMissingKeyAgreement",
-            Self::ProtocolX25519 { .. } => "ProtocolInstallMissingX25519",
+            Self::ModulePath { .. } => "ModuleInstallInvalidPath",
+            Self::ModuleAgreement { .. } => "ModuleInstallMissingKeyAgreement",
+            Self::ModuleX25519 { .. } => "ModuleInstallMissingX25519",
             Self::Backend { code, .. } => code,
         }
     }
@@ -162,9 +162,9 @@ impl AgentIdentityError {
             | Self::DelegateSecret { detail }
             | Self::DelegateKeyAgreement { detail }
             | Self::DelegateKeyX25519 { detail }
-            | Self::ProtocolPath { detail }
-            | Self::ProtocolAgreement { detail }
-            | Self::ProtocolX25519 { detail }
+            | Self::ModulePath { detail }
+            | Self::ModuleAgreement { detail }
+            | Self::ModuleX25519 { detail }
             | Self::Backend { detail, .. } => detail,
         }
     }
@@ -283,20 +283,20 @@ impl AgentIdentityError {
         }
     }
 
-    pub(crate) fn protocol_path(detail: impl Into<String>) -> Self {
-        Self::ProtocolPath {
+    pub(crate) fn module_path(detail: impl Into<String>) -> Self {
+        Self::ModulePath {
             detail: detail.into(),
         }
     }
 
-    pub(crate) fn protocol_agreement(detail: impl Into<String>) -> Self {
-        Self::ProtocolAgreement {
+    pub(crate) fn module_agreement(detail: impl Into<String>) -> Self {
+        Self::ModuleAgreement {
             detail: detail.into(),
         }
     }
 
-    pub(crate) fn protocol_x25519(detail: impl Into<String>) -> Self {
-        Self::ProtocolX25519 {
+    pub(crate) fn module_x25519(detail: impl Into<String>) -> Self {
+        Self::ModuleX25519 {
             detail: detail.into(),
         }
     }
@@ -368,17 +368,14 @@ mod tests {
                 AgentIdentityError::delegate_key_x25519,
                 "DelegateKeyMissingX25519",
             ),
+            (AgentIdentityError::module_path, "ModuleInstallInvalidPath"),
             (
-                AgentIdentityError::protocol_path,
-                "ProtocolInstallInvalidPath",
+                AgentIdentityError::module_agreement,
+                "ModuleInstallMissingKeyAgreement",
             ),
             (
-                AgentIdentityError::protocol_agreement,
-                "ProtocolInstallMissingKeyAgreement",
-            ),
-            (
-                AgentIdentityError::protocol_x25519,
-                "ProtocolInstallMissingX25519",
+                AgentIdentityError::module_x25519,
+                "ModuleInstallMissingX25519",
             ),
         ];
         for (build, code) in cases {

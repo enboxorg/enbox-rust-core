@@ -14,8 +14,8 @@ use dwn_rs_agent::auth::connect::{
     KeyDeliveryStore, MemoryKeyDeliveryStore,
 };
 use dwn_rs_agent::auth::setup::{
-    install_protocol_if_needed, register_with_dwn_endpoints, run_restore_flow, DwnServerInfo,
-    MemoryProtocolEndpoint, ProtocolEndpoint, RegistrationTokenData, SetupFuture,
+    install_module_if_needed, register_with_dwn_endpoints, run_restore_flow, DwnServerInfo,
+    MemoryModuleEndpoint, ModuleEndpoint, RegistrationTokenData, SetupFuture,
     TenantRegistrationClient, TenantRegistrationRequest, TenantRegistrationResult,
 };
 use dwn_rs_core::interfaces::messages::modules::{
@@ -113,7 +113,7 @@ async fn key_manager_failures_keep_codes_and_hide_secrets() {
     }
 
     let error = manager
-        .derive_private_jwk("urn:jwk:missing", vec!["protocolPath".to_string()])
+        .derive_private_jwk("urn:jwk:missing", vec!["modulePath".to_string()])
         .await
         .unwrap_err();
     assert_eq!(error.code(), "AgentIdentityKeyManagerError");
@@ -132,21 +132,21 @@ async fn missing_key_agreement_keeps_codes() {
     let error = derive_delegate_keys(
         &key_manager,
         &portable_did,
-        &[read_request("https://protocol.example/notes")],
+        &[read_request("https://module.example/notes")],
     )
     .await
     .unwrap_err();
     assert_eq!(error.code(), "DelegateKeyMissingKeyAgreement");
 
-    let error = install_protocol_if_needed(
-        &MemoryProtocolEndpoint::default(),
+    let error = install_module_if_needed(
+        &MemoryModuleEndpoint::default(),
         &key_manager,
         &portable_did,
-        encrypted_protocol(),
+        encrypted_module(),
     )
     .await
     .unwrap_err();
-    assert_eq!(error.code(), "ProtocolInstallMissingKeyAgreement");
+    assert_eq!(error.code(), "ModuleInstallMissingKeyAgreement");
 }
 
 #[tokio::test]
@@ -156,22 +156,22 @@ async fn non_x25519_key_agreement_keeps_codes() {
     let error = derive_delegate_keys(
         &key_manager,
         &did,
-        &[read_request("https://protocol.example/notes")],
+        &[read_request("https://module.example/notes")],
     )
     .await
     .unwrap_err();
     assert_eq!(error.code(), "DelegateKeyMissingX25519");
     assert!(error.detail().contains("X25519"));
 
-    let error = install_protocol_if_needed(
-        &MemoryProtocolEndpoint::default(),
+    let error = install_module_if_needed(
+        &MemoryModuleEndpoint::default(),
         &key_manager,
         &did,
-        encrypted_protocol(),
+        encrypted_module(),
     )
     .await
     .unwrap_err();
-    assert_eq!(error.code(), "ProtocolInstallMissingX25519");
+    assert_eq!(error.code(), "ModuleInstallMissingX25519");
     assert!(error.detail().contains("X25519"));
 }
 
@@ -263,8 +263,8 @@ async fn arc_dyn_backends_match_concrete_backends() {
     .unwrap();
     assert_eq!(registration.records.len(), 1);
 
-    let local: Arc<dyn ProtocolEndpoint> = Arc::new(MemoryProtocolEndpoint::default());
-    let remote: Arc<dyn ProtocolEndpoint> = Arc::new(MemoryProtocolEndpoint::default());
+    let local: Arc<dyn ModuleEndpoint> = Arc::new(MemoryModuleEndpoint::default());
+    let remote: Arc<dyn ModuleEndpoint> = Arc::new(MemoryModuleEndpoint::default());
     let key_manager: Arc<dyn AgentKeyManager> = Arc::new(MemoryKeyManager::default());
     for private_jwk in &dynamic.portable_did.private_keys {
         key_manager
@@ -277,7 +277,7 @@ async fn arc_dyn_backends_match_concrete_backends() {
         &remote,
         &key_manager,
         &dynamic.portable_did,
-        vec![encrypted_protocol()],
+        vec![encrypted_module()],
     )
     .await
     .unwrap();
@@ -288,7 +288,7 @@ async fn arc_dyn_backends_match_concrete_backends() {
     let context_key = derive_context_key(
         &key_manager,
         &dynamic.portable_did,
-        "https://protocol.example/notes",
+        "https://module.example/notes",
         "context-1",
     )
     .await
@@ -297,7 +297,7 @@ async fn arc_dyn_backends_match_concrete_backends() {
         &delivery,
         &dynamic.portable_did.uri,
         "did:example:delegate",
-        "https://protocol.example/notes",
+        "https://module.example/notes",
         "context-1",
         context_key.clone(),
     )
@@ -308,7 +308,7 @@ async fn arc_dyn_backends_match_concrete_backends() {
         .fetch_context_key(
             &dynamic.portable_did.uri,
             "did:example:delegate",
-            "https://protocol.example/notes",
+            "https://module.example/notes",
             "context-1",
         )
         .await
@@ -398,7 +398,7 @@ async fn debug_omits_secrets_but_keeps_identifiers() {
     let context_key = derive_context_key(
         service.key_manager(),
         &init.portable_did,
-        "https://protocol.example/notes",
+        "https://module.example/notes",
         "context-1",
     )
     .await
@@ -517,12 +517,12 @@ async fn agent_did_with_non_x25519_agreement() -> (PortableDid, MemoryKeyManager
     (portable_did, key_manager)
 }
 
-fn read_request(protocol: &str) -> ConnectPermissionRequest {
+fn read_request(module: &str) -> ConnectPermissionRequest {
     ConnectPermissionRequest {
-        protocol_definition: encrypted_protocol_for(protocol),
+        module_definition: encrypted_module_for(module),
         permission_scopes: vec![PermissionScope::Records(RecordsScope {
             method: RecordsMethod::Read,
-            module: protocol.to_string(),
+            module: module.to_string(),
             selector: Some(RecordsSelector::ModulePath(
                 dwn_rs_core::permissions::ModulePath("note".to_string()),
             )),
@@ -530,13 +530,13 @@ fn read_request(protocol: &str) -> ConnectPermissionRequest {
     }
 }
 
-fn encrypted_protocol() -> Definition {
-    encrypted_protocol_for("https://protocol.example/notes")
+fn encrypted_module() -> Definition {
+    encrypted_module_for("https://module.example/notes")
 }
 
-fn encrypted_protocol_for(protocol: &str) -> Definition {
+fn encrypted_module_for(module: &str) -> Definition {
     Definition {
-        module: protocol.to_string(),
+        module: module.to_string(),
         published: true,
         uses: None,
         key_agreement: None,

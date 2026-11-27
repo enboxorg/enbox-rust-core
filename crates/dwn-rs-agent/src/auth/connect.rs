@@ -19,16 +19,16 @@ pub type ConnectFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<
 
 pub const DELEGATE_DECRYPTION_KEYS_KEY: &str = "enbox:auth:delegateDecryptionKeys";
 pub const DELEGATE_CONTEXT_KEYS_KEY: &str = "enbox:auth:delegateContextKeys";
-pub const DELEGATE_MULTI_PARTY_PROTOCOLS_KEY: &str = "enbox:auth:delegateMultiPartyProtocols";
+pub const DELEGATE_MULTI_PARTY_MODULES_KEY: &str = "enbox:auth:delegateMultiPartyModules";
 pub const SESSION_REVOCATIONS_KEY: &str = "enbox:auth:sessionRevocations";
 
-const PROTOCOL_PATH_DERIVATION_SCHEME: &str = "modulePath";
-const PROTOCOL_CONTEXT_DERIVATION_SCHEME: &str = "protocolContext";
+const MODULE_PATH_DERIVATION_SCHEME: &str = "modulePath";
+const MODULE_CONTEXT_DERIVATION_SCHEME: &str = "moduleContext";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectPermissionRequest {
-    pub protocol_definition: Definition,
+    pub module_definition: Definition,
     pub permission_scopes: Vec<PermissionScope>,
 }
 
@@ -91,9 +91,9 @@ impl std::fmt::Debug for DerivedPrivateJwk {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum DelegateDecryptionScope {
-    Protocol,
-    ProtocolPath {
-        protocol_path: String,
+    Module,
+    ModulePath {
+        module_path: String,
         #[serde(rename = "match")]
         match_: String,
     },
@@ -102,7 +102,7 @@ pub enum DelegateDecryptionScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DelegateDecryptionKey {
-    pub protocol: String,
+    pub module: String,
     pub scope: DelegateDecryptionScope,
     pub derived_private_key: DerivedPrivateJwk,
 }
@@ -110,7 +110,7 @@ pub struct DelegateDecryptionKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DelegateContextKey {
-    pub protocol: String,
+    pub module: String,
     pub context_id: String,
     pub derived_private_key: DerivedPrivateJwk,
 }
@@ -120,7 +120,7 @@ pub struct DelegateContextKey {
 pub struct DelegateKeyDerivationResult {
     pub decryption_keys: Vec<DelegateDecryptionKey>,
     pub context_keys: Vec<DelegateContextKey>,
-    pub multi_party_protocols: Vec<String>,
+    pub multi_party_modules: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +129,7 @@ pub struct ContextKeyDeliveryRecord {
     pub id: String,
     pub tenant_did: String,
     pub recipient_did: String,
-    pub source_protocol: String,
+    pub source_module: String,
     pub source_context_id: String,
     pub context_key: DelegateContextKey,
 }
@@ -147,7 +147,7 @@ pub trait KeyDeliveryStore: Send + Sync + 'static {
         &'a self,
         owner_did: &'a str,
         requester_did: &'a str,
-        source_protocol: &'a str,
+        source_module: &'a str,
         source_context_id: &'a str,
     ) -> ConnectFuture<'a, Option<DelegateContextKey>>;
 
@@ -166,10 +166,10 @@ impl<T: ?Sized + KeyDeliveryStore> KeyDeliveryStore for Arc<T> {
         &'a self,
         owner_did: &'a str,
         requester_did: &'a str,
-        source_protocol: &'a str,
+        source_module: &'a str,
         source_context_id: &'a str,
     ) -> ConnectFuture<'a, Option<DelegateContextKey>> {
-        (**self).fetch_context_key(owner_did, requester_did, source_protocol, source_context_id)
+        (**self).fetch_context_key(owner_did, requester_did, source_module, source_context_id)
     }
 
     fn delete_for_recipient<'a>(&'a self, recipient_did: &'a str) -> ConnectFuture<'a, usize> {
@@ -258,13 +258,13 @@ where
         AgentIdentityError::delegate_key_x25519,
     )?;
     let mut result = DelegateKeyDerivationResult::default();
-    let mut multi_party_protocols = BTreeSet::new();
+    let mut multi_party_modules = BTreeSet::new();
 
     for request in requests {
-        if !request.protocol_definition.requires_encryption() {
+        if !request.module_definition.requires_encryption() {
             continue;
         }
-        let multi_party = request.protocol_definition.allows_multi_party();
+        let multi_party = request.module_definition.allows_multi_party();
         for scope in &request.permission_scopes {
             if !is_read_like_scope(scope) {
                 continue;
@@ -274,48 +274,43 @@ where
             }
             if multi_party {
                 if scope.module_path().is_none() {
-                    multi_party_protocols.insert(request.protocol_definition.module.clone());
+                    multi_party_modules.insert(request.module_definition.module.clone());
                 }
                 continue;
             }
-            let protocol = request.protocol_definition.module.clone();
+            let module = request.module_definition.module.clone();
             let (derivation_path, decryption_scope) = match scope.module_path() {
-                Some(protocol_path) => {
-                    let mut derivation_path = vec![
-                        PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-                        protocol.clone(),
-                    ];
+                Some(module_path) => {
+                    let mut derivation_path =
+                        vec![MODULE_PATH_DERIVATION_SCHEME.to_string(), module.clone()];
                     derivation_path.extend(
-                        protocol_path
+                        module_path
                             .split('/')
                             .filter(|segment| !segment.is_empty())
                             .map(ToString::to_string),
                     );
                     (
                         derivation_path,
-                        DelegateDecryptionScope::ProtocolPath {
-                            protocol_path: protocol_path.to_string(),
+                        DelegateDecryptionScope::ModulePath {
+                            module_path: module_path.to_string(),
                             match_: "exact".to_string(),
                         },
                     )
                 }
                 None => (
-                    vec![
-                        PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-                        protocol.clone(),
-                    ],
-                    DelegateDecryptionScope::Protocol,
+                    vec![MODULE_PATH_DERIVATION_SCHEME.to_string(), module.clone()],
+                    DelegateDecryptionScope::Module,
                 ),
             };
             let derived_private_key = key_manager
                 .derive_private_jwk(&root_key_id, derivation_path.clone())
                 .await?;
             result.decryption_keys.push(DelegateDecryptionKey {
-                protocol,
+                module,
                 scope: decryption_scope,
                 derived_private_key: DerivedPrivateJwk {
                     root_key_id: root_key_id.clone(),
-                    derivation_scheme: PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                    derivation_scheme: MODULE_PATH_DERIVATION_SCHEME.to_string(),
                     derivation_path,
                     derived_private_key,
                 },
@@ -323,15 +318,15 @@ where
         }
     }
 
-    result.multi_party_protocols = multi_party_protocols.into_iter().collect();
+    result.multi_party_modules = multi_party_modules.into_iter().collect();
     Ok(result)
 }
 
-/// Derive the context key for one protocol context.
+/// Derive the context key for one module context.
 pub async fn derive_context_key<K>(
     key_manager: &K,
     owner_did: &PortableDid,
-    protocol: impl Into<String>,
+    module: impl Into<String>,
     context_id: impl Into<String>,
 ) -> AgentIdentityResult<DelegateContextKey>
 where
@@ -344,18 +339,18 @@ where
     )?;
     let context_id = context_id.into();
     let derivation_path = vec![
-        PROTOCOL_CONTEXT_DERIVATION_SCHEME.to_string(),
+        MODULE_CONTEXT_DERIVATION_SCHEME.to_string(),
         context_id.clone(),
     ];
     let derived_private_key = key_manager
         .derive_private_jwk(&root_key_id, derivation_path.clone())
         .await?;
     Ok(DelegateContextKey {
-        protocol: protocol.into(),
+        module: module.into(),
         context_id,
         derived_private_key: DerivedPrivateJwk {
             root_key_id,
-            derivation_scheme: PROTOCOL_CONTEXT_DERIVATION_SCHEME.to_string(),
+            derivation_scheme: MODULE_CONTEXT_DERIVATION_SCHEME.to_string(),
             derivation_path,
             derived_private_key,
         },
@@ -366,7 +361,7 @@ pub async fn write_context_key_record<S>(
     store: &S,
     tenant_did: impl Into<String>,
     recipient_did: impl Into<String>,
-    source_protocol: impl Into<String>,
+    source_module: impl Into<String>,
     source_context_id: impl Into<String>,
     context_key: DelegateContextKey,
 ) -> AgentIdentityResult<String>
@@ -377,7 +372,7 @@ where
         id: Ulid::generate().to_string(),
         tenant_did: tenant_did.into(),
         recipient_did: recipient_did.into(),
-        source_protocol: source_protocol.into(),
+        source_module: source_module.into(),
         source_context_id: source_context_id.into(),
         context_key,
     };
@@ -462,7 +457,7 @@ struct DelegateSessionState {
     grants: BTreeMap<String, DelegateGrant>,
     decryption_keys: Vec<DelegateDecryptionKey>,
     context_keys: Vec<DelegateContextKey>,
-    multi_party_protocols: BTreeSet<String>,
+    multi_party_modules: BTreeSet<String>,
     revocations: Vec<GrantRevocation>,
 }
 
@@ -492,11 +487,11 @@ impl DelegateSessionCache {
         Ok(())
     }
 
-    pub fn set_multi_party_protocols(&self, protocols: Vec<String>) -> AgentIdentityResult<()> {
+    pub fn set_multi_party_modules(&self, modules: Vec<String>) -> AgentIdentityResult<()> {
         self.state
             .write()
             .map_err(AgentIdentityError::lock_poisoned)?
-            .multi_party_protocols = protocols.into_iter().collect();
+            .multi_party_modules = modules.into_iter().collect();
         Ok(())
     }
 
@@ -530,21 +525,21 @@ impl DelegateSessionCache {
         let Some(grant) = state.grants.remove(grant_id) else {
             return Ok(false);
         };
-        let revoked_protocol = grant.scope.module().map(str::to_owned);
+        let revoked_module = grant.scope.module().map(str::to_owned);
         state.decryption_keys.retain(|key| {
-            revoked_protocol
+            revoked_module
                 .as_ref()
-                .is_some_and(|protocol| key.protocol != *protocol)
+                .is_some_and(|module| key.module != *module)
         });
         state.context_keys.retain(|key| {
-            revoked_protocol
+            revoked_module
                 .as_ref()
-                .is_some_and(|protocol| key.protocol != *protocol)
+                .is_some_and(|module| key.module != *module)
         });
-        if let Some(protocol) = &revoked_protocol {
-            state.multi_party_protocols.remove(protocol);
+        if let Some(module) = &revoked_module {
+            state.multi_party_modules.remove(module);
         } else {
-            state.multi_party_protocols.clear();
+            state.multi_party_modules.clear();
         }
         state
             .revocations
@@ -580,7 +575,7 @@ impl KeyDeliveryStore for MemoryKeyDeliveryStore {
         &'a self,
         owner_did: &'a str,
         requester_did: &'a str,
-        source_protocol: &'a str,
+        source_module: &'a str,
         source_context_id: &'a str,
     ) -> ConnectFuture<'a, Option<DelegateContextKey>> {
         Box::pin(async move {
@@ -592,7 +587,7 @@ impl KeyDeliveryStore for MemoryKeyDeliveryStore {
                 .find(|record| {
                     record.tenant_did == owner_did
                         && record.recipient_did == requester_did
-                        && record.source_protocol == source_protocol
+                        && record.source_module == source_module
                         && record.source_context_id == source_context_id
                 })
                 .map(|record| record.context_key.clone()))
@@ -640,13 +635,13 @@ mod tests {
     #[tokio::test]
     async fn read_like_scope_receives_decryption_key_and_write_only_does_not() {
         let (owner_did, key_manager) = owner_did_with_keys().await;
-        let protocol_definition = encrypted_protocol(false);
+        let module_definition = encrypted_module(false);
 
         let read_result = derive_delegate_keys(
             &key_manager,
             &owner_did,
             &[ConnectPermissionRequest {
-                protocol_definition: protocol_definition.clone(),
+                module_definition: module_definition.clone(),
                 permission_scopes: vec![records_scope("Read", Some("note"))],
             }],
         )
@@ -656,7 +651,7 @@ mod tests {
             &key_manager,
             &owner_did,
             &[ConnectPermissionRequest {
-                protocol_definition,
+                module_definition,
                 permission_scopes: vec![records_scope("Write", Some("note"))],
             }],
         )
@@ -666,7 +661,7 @@ mod tests {
         assert_eq!(read_result.decryption_keys.len(), 1);
         assert!(matches!(
             read_result.decryption_keys[0].scope,
-            DelegateDecryptionScope::ProtocolPath { .. }
+            DelegateDecryptionScope::ModulePath { .. }
         ));
         assert_eq!(
             jwk_curve(
@@ -685,7 +680,7 @@ mod tests {
         let context_key = derive_context_key(
             &key_manager,
             &owner_did,
-            "https://protocol.example/notes",
+            "https://module.example/notes",
             "context-1",
         )
         .await
@@ -696,7 +691,7 @@ mod tests {
             &store,
             &owner_did.uri,
             "did:example:delegate",
-            "https://protocol.example/notes",
+            "https://module.example/notes",
             "context-1",
             context_key.clone(),
         )
@@ -706,7 +701,7 @@ mod tests {
             .fetch_context_key(
                 &owner_did.uri,
                 "did:example:delegate",
-                "https://protocol.example/notes",
+                "https://module.example/notes",
                 "context-1",
             )
             .await
@@ -726,15 +721,15 @@ mod tests {
             Utc::now() + Duration::days(1),
             None,
         );
-        let protocol = grant.scope.module().unwrap().to_string();
+        let module = grant.scope.module().unwrap().to_string();
         cache.insert_grant(grant.clone()).unwrap();
         cache
-            .set_decryption_keys(vec![sample_decryption_key(&protocol)])
+            .set_decryption_keys(vec![sample_decryption_key(&module)])
             .unwrap();
         cache
-            .set_context_keys(vec![sample_context_key(&protocol)])
+            .set_context_keys(vec![sample_context_key(&module)])
             .unwrap();
-        cache.set_multi_party_protocols(vec![protocol]).unwrap();
+        cache.set_multi_party_modules(vec![module]).unwrap();
 
         assert!(cache.revoke_grant(&grant.id, "revocation-grant").unwrap());
 
@@ -783,7 +778,7 @@ mod tests {
         (initialization.portable_did, key_manager)
     }
 
-    fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
+    fn records_scope(method: &str, module_path: Option<&str>) -> PermissionScope {
         PermissionScope::Records(RecordsScope {
             method: match method {
                 "Read" => RecordsMethod::Read,
@@ -791,13 +786,13 @@ mod tests {
                 "Delete" => RecordsMethod::Delete,
                 _ => panic!("unsupported Records permission method in test: {method}"),
             },
-            module: "https://protocol.example/notes".to_string(),
-            selector: protocol_path
+            module: "https://module.example/notes".to_string(),
+            selector: module_path
                 .map(|path| RecordsSelector::ModulePath(ModulePath(path.to_string()))),
         })
     }
 
-    fn encrypted_protocol(multi_party: bool) -> Definition {
+    fn encrypted_module(multi_party: bool) -> Definition {
         let mut note_rule = RuleSet {
             actions: vec![Action::Who(ActionWho {
                 who: Who::Anyone,
@@ -810,7 +805,7 @@ mod tests {
             note_rule.role = Some(true);
         }
         Definition {
-            module: "https://protocol.example/notes".to_string(),
+            module: "https://module.example/notes".to_string(),
             published: true,
             uses: None,
             key_agreement: None,
@@ -826,17 +821,17 @@ mod tests {
         }
     }
 
-    fn sample_decryption_key(protocol: &str) -> DelegateDecryptionKey {
+    fn sample_decryption_key(module: &str) -> DelegateDecryptionKey {
         DelegateDecryptionKey {
-            protocol: protocol.to_string(),
-            scope: DelegateDecryptionScope::Protocol,
+            module: module.to_string(),
+            scope: DelegateDecryptionScope::Module,
             derived_private_key: sample_derived_private_key(),
         }
     }
 
-    fn sample_context_key(protocol: &str) -> DelegateContextKey {
+    fn sample_context_key(module: &str) -> DelegateContextKey {
         DelegateContextKey {
-            protocol: protocol.to_string(),
+            module: module.to_string(),
             context_id: "context-1".to_string(),
             derived_private_key: sample_derived_private_key(),
         }
@@ -845,8 +840,8 @@ mod tests {
     fn sample_derived_private_key() -> DerivedPrivateJwk {
         DerivedPrivateJwk {
             root_key_id: "did:example:owner#enc".to_string(),
-            derivation_scheme: PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-            derivation_path: vec![PROTOCOL_PATH_DERIVATION_SCHEME.to_string()],
+            derivation_scheme: MODULE_PATH_DERIVATION_SCHEME.to_string(),
+            derivation_path: vec![MODULE_PATH_DERIVATION_SCHEME.to_string()],
             derived_private_key: serde_json::from_value(serde_json::json!({
                 "kty": "OKP",
                 "crv": "X25519",

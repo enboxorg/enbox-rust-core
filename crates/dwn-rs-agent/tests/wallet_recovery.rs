@@ -14,9 +14,8 @@ use dwn_rs_agent::auth::connect::{
     save_delegate_decryption_keys, ConnectPermissionRequest,
 };
 use dwn_rs_agent::auth::setup::{
-    install_protocol_if_needed, register_with_dwn_endpoints, run_restore_flow, DwnServerInfo,
-    MemoryProtocolEndpoint, RegistrationMethod, TenantRegistrationClient,
-    TenantRegistrationRequest,
+    install_module_if_needed, register_with_dwn_endpoints, run_restore_flow, DwnServerInfo,
+    MemoryModuleEndpoint, RegistrationMethod, TenantRegistrationClient, TenantRegistrationRequest,
 };
 use dwn_rs_agent::auth::setup::{RegistrationTokenData, SetupFuture};
 use dwn_rs_core::interfaces::messages::modules::{
@@ -28,11 +27,11 @@ const RECOVERY_PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 #[tokio::test]
-async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
+async fn wallet_recovery_restores_encrypted_module_and_delegate_read_state() {
     let original = recovered_agent(RECOVERY_PHRASE).await;
-    let protocol = encrypted_protocol();
-    let local = MemoryProtocolEndpoint::default();
-    let remote = MemoryProtocolEndpoint::default();
+    let module = encrypted_module();
+    let local = MemoryModuleEndpoint::default();
+    let remote = MemoryModuleEndpoint::default();
     let identities = IdentityTenantStore::default();
     let identity = PortableIdentity {
         portable_did: original.portable_did.clone(),
@@ -50,23 +49,23 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         &remote,
         &original.key_manager,
         &original.portable_did,
-        vec![protocol.clone()],
+        vec![module.clone()],
     )
     .await
     .unwrap();
     assert_eq!(setup.local_installs.len(), 1);
     assert_eq!(setup.remote_pushes.len(), 1);
     let installed = local
-        .protocol(&original.portable_did.uri, &protocol.module)
+        .module(&original.portable_did.uri, &module.module)
         .unwrap()
-        .expect("installed protocol");
+        .expect("installed module");
     assert!(installed.structure["note"].key_agreement.is_some());
 
     let delegate_read = derive_delegate_keys(
         &original.key_manager,
         &original.portable_did,
         &[ConnectPermissionRequest {
-            protocol_definition: protocol.clone(),
+            module_definition: module.clone(),
             permission_scopes: vec![records_scope("Read", Some("note"))],
         }],
     )
@@ -76,7 +75,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         &original.key_manager,
         &original.portable_did,
         &[ConnectPermissionRequest {
-            protocol_definition: protocol.clone(),
+            module_definition: module.clone(),
             permission_scopes: vec![records_scope("Write", Some("note"))],
         }],
     )
@@ -120,11 +119,11 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         .iter()
         .all(|record| record.method == RegistrationMethod::Anonymous));
 
-    let pulled_remote_protocol = remote
-        .protocol(&restored.portable_did.uri, &protocol.module)
+    let pulled_remote_module = remote
+        .module(&restored.portable_did.uri, &module.module)
         .unwrap()
-        .expect("pulled remote protocol");
-    assert!(pulled_remote_protocol.structure["note"]
+        .expect("pulled remote module");
+    assert!(pulled_remote_module.structure["note"]
         .key_agreement
         .is_some());
 
@@ -143,7 +142,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         Utc::now() + Duration::days(1),
         None,
     );
-    assert_eq!(grant.scope.module(), Some(protocol.module.as_str()));
+    assert_eq!(grant.scope.module(), Some(module.module.as_str()));
 
     let mut no_encryption_did = restored.portable_did.clone();
     no_encryption_did
@@ -151,16 +150,16 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         .verification_relationships
         .key_agreement
         .clear();
-    let plaintext_fallback = install_protocol_if_needed(
-        &MemoryProtocolEndpoint::default(),
+    let plaintext_fallback = install_module_if_needed(
+        &MemoryModuleEndpoint::default(),
         &restored.key_manager,
         &no_encryption_did,
-        protocol,
+        module,
     )
     .await;
     assert_eq!(
         plaintext_fallback.unwrap_err().code(),
-        "ProtocolInstallMissingKeyAgreement"
+        "ModuleInstallMissingKeyAgreement"
     );
 }
 
@@ -297,7 +296,7 @@ impl TenantRegistrationClient for MockRegistrationClient {
     }
 }
 
-fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
+fn records_scope(method: &str, module_path: Option<&str>) -> PermissionScope {
     PermissionScope::Records(dwn_rs_core::permissions::RecordsScope {
         method: match method {
             "Read" => dwn_rs_core::permissions::RecordsMethod::Read,
@@ -305,8 +304,8 @@ fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
             "Delete" => dwn_rs_core::permissions::RecordsMethod::Delete,
             _ => panic!("unsupported Records permission method in test: {method}"),
         },
-        module: "https://protocol.example/notes".to_string(),
-        selector: protocol_path.map(|path| {
+        module: "https://module.example/notes".to_string(),
+        selector: module_path.map(|path| {
             dwn_rs_core::permissions::RecordsSelector::ModulePath(
                 dwn_rs_core::permissions::ModulePath(path.to_string()),
             )
@@ -314,9 +313,9 @@ fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
     })
 }
 
-fn encrypted_protocol() -> Definition {
+fn encrypted_module() -> Definition {
     Definition {
-        module: "https://protocol.example/notes".to_string(),
+        module: "https://module.example/notes".to_string(),
         published: true,
         uses: None,
         key_agreement: None,
