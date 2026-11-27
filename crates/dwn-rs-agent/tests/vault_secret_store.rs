@@ -487,17 +487,17 @@ async fn auth_helpers_use_envelopes_and_propagate_lock_and_legacy_errors() {
         .clone();
     let derived = DerivedPrivateJwk {
         root_key_id: "test-key".into(),
-        derivation_scheme: "protocolPath".into(),
+        derivation_scheme: "modulePath".into(),
         derivation_path: vec![],
         derived_private_key: private_key,
     };
     let decryption = vec![DelegateDecryptionKey {
-        protocol: "https://example.com/protocol".into(),
-        scope: DelegateDecryptionScope::Protocol,
+        module: "https://module.example/notes".into(),
+        scope: DelegateDecryptionScope::Module,
         derived_private_key: derived.clone(),
     }];
     let context = vec![DelegateContextKey {
-        protocol: "https://example.com/protocol".into(),
+        module: "https://module.example/notes".into(),
         context_id: "context".into(),
         derived_private_key: derived,
     }];
@@ -734,11 +734,9 @@ async fn credential_keys_cannot_modify_vault_entries() {
 // Covers: ENBOX-AGENT-008, ENBOX-AGENT-013
 #[tokio::test]
 async fn auth_key_families_and_locked_expiry_use_the_same_envelope_contract() {
-    use dwn_rs_agent::auth::connect::{
-        DELEGATE_MULTI_PARTY_PROTOCOLS_KEY, SESSION_REVOCATIONS_KEY,
-    };
+    use dwn_rs_agent::auth::connect::{DELEGATE_MULTI_PARTY_MODULES_KEY, SESSION_REVOCATIONS_KEY};
     let (raw, vault, secrets, _) = setup().await;
-    for key in [DELEGATE_MULTI_PARTY_PROTOCOLS_KEY, SESSION_REVOCATIONS_KEY] {
+    for key in [DELEGATE_MULTI_PARTY_MODULES_KEY, SESSION_REVOCATIONS_KEY] {
         secrets.put(key, b"secret".to_vec(), None).await.unwrap();
         assert!(
             serde_json::from_slice::<Value>(&raw.get(key).await.unwrap().unwrap()).unwrap()["jwe"]

@@ -67,7 +67,7 @@ impl<T: ?Sized + SecretStore> SecretStore for Arc<T> {
     }
 }
 
-/// Host key manager: owns private JWKs and derives protocol/context keys.
+/// Host key manager: owns private JWKs and derives module/context keys.
 ///
 /// Dyn-compatible so hosts supply backends at runtime as `Arc<dyn AgentKeyManager>`.
 pub trait AgentKeyManager: Send + Sync + 'static {

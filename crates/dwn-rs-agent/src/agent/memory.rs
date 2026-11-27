@@ -143,7 +143,7 @@ impl AgentKeyManager for MemoryKeyManager {
             let params = okp_params(&private_jwk)?;
             if params.curve != "X25519" {
                 return Err(AgentIdentityError::key_manager(
-                    "protocol encryption derivation requires an X25519 private key",
+                    "module encryption derivation requires an X25519 private key",
                 ));
             }
             let Some(private_key) = params.private_key.as_ref() else {

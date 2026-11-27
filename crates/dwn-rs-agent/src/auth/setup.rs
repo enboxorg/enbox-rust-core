@@ -15,7 +15,7 @@ pub type SetupFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>
 
 pub const REGISTRATION_TOKENS_KEY: &str = "enbox:auth:registrationTokens";
 const PROVIDER_AUTH_V0: &str = "provider-auth-v0";
-const PROTOCOL_PATH_DERIVATION_SCHEME: &str = "modulePath";
+const MODULE_PATH_DERIVATION_SCHEME: &str = "modulePath";
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -302,45 +302,45 @@ fn unique_dids(dids: [String; 2]) -> Vec<String> {
         .collect()
 }
 
-/// Host seam for protocol install/query against a DWN (local engine or remote server).
+/// Host seam for module install/query against a DWN (local engine or remote server).
 ///
-/// Dyn-compatible so hosts supply backends at runtime as `Arc<dyn ProtocolEndpoint>`.
-pub trait ProtocolEndpoint: Send + Sync + 'static {
-    fn query_protocol<'a>(
+/// Dyn-compatible so hosts supply backends at runtime as `Arc<dyn ModuleEndpoint>`.
+pub trait ModuleEndpoint: Send + Sync + 'static {
+    fn query_module<'a>(
         &'a self,
         tenant: &'a str,
-        protocol: &'a str,
+        module: &'a str,
     ) -> SetupFuture<'a, Option<Definition>>;
 
-    fn configure_protocol<'a>(
+    fn configure_module<'a>(
         &'a self,
         tenant: &'a str,
         definition: Definition,
     ) -> SetupFuture<'a, ()>;
 }
 
-impl<T: ?Sized + ProtocolEndpoint> ProtocolEndpoint for Arc<T> {
-    fn query_protocol<'a>(
+impl<T: ?Sized + ModuleEndpoint> ModuleEndpoint for Arc<T> {
+    fn query_module<'a>(
         &'a self,
         tenant: &'a str,
-        protocol: &'a str,
+        module: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
-        (**self).query_protocol(tenant, protocol)
+        (**self).query_module(tenant, module)
     }
 
-    fn configure_protocol<'a>(
+    fn configure_module<'a>(
         &'a self,
         tenant: &'a str,
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
-        (**self).configure_protocol(tenant, definition)
+        (**self).configure_module(tenant, definition)
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProtocolInstallResult {
-    pub protocol: String,
+pub struct ModuleInstallResult {
+    pub module: String,
     pub installed: bool,
     pub encryption_active: bool,
 }
@@ -349,36 +349,36 @@ pub struct ProtocolInstallResult {
 #[serde(rename_all = "snake_case")]
 pub enum RestoreFlowStep {
     AgentDidSync,
-    ProtocolInstall,
-    ProtocolPush,
+    ModuleInstall,
+    ModulePush,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreFlowResult {
     pub steps: Vec<RestoreFlowStep>,
-    pub local_installs: Vec<ProtocolInstallResult>,
-    pub remote_pushes: Vec<ProtocolInstallResult>,
+    pub local_installs: Vec<ModuleInstallResult>,
+    pub remote_pushes: Vec<ModuleInstallResult>,
 }
 
-/// Install a protocol locally when the endpoint does not already serve it.
-pub async fn install_protocol_if_needed<E, K>(
+/// Install a module locally when the endpoint does not already serve it.
+pub async fn install_module_if_needed<E, K>(
     endpoint: &E,
     key_manager: &K,
     tenant_did: &PortableDid,
     definition: Definition,
-) -> AgentIdentityResult<ProtocolInstallResult>
+) -> AgentIdentityResult<ModuleInstallResult>
 where
-    E: ProtocolEndpoint,
+    E: ModuleEndpoint,
     K: AgentKeyManager,
 {
     let installed = endpoint
-        .query_protocol(&tenant_did.uri, &definition.module)
+        .query_module(&tenant_did.uri, &definition.module)
         .await?;
     let requires_encryption = definition.requires_encryption();
     if let Some(installed) = installed {
-        return Ok(ProtocolInstallResult {
-            protocol: definition.module,
+        return Ok(ModuleInstallResult {
+            module: definition.module,
             installed: false,
             encryption_active: requires_encryption && installed.has_encryption(),
         });
@@ -386,33 +386,33 @@ where
 
     let encryption_active = requires_encryption;
     let definition = if requires_encryption {
-        inject_protocol_encryption(&definition, key_manager, tenant_did).await?
+        inject_module_encryption(&definition, key_manager, tenant_did).await?
     } else {
         definition
     };
-    let protocol = definition.module.clone();
+    let module = definition.module.clone();
     endpoint
-        .configure_protocol(&tenant_did.uri, definition)
+        .configure_module(&tenant_did.uri, definition)
         .await?;
-    Ok(ProtocolInstallResult {
-        protocol,
+    Ok(ModuleInstallResult {
+        module,
         installed: true,
         encryption_active,
     })
 }
 
-/// Push a protocol to a remote endpoint when it does not already serve it.
-pub async fn push_protocol_if_needed<E, K>(
+/// Push a module to a remote endpoint when it does not already serve it.
+pub async fn push_module_if_needed<E, K>(
     endpoint: &E,
     key_manager: &K,
     tenant_did: &PortableDid,
     definition: Definition,
-) -> AgentIdentityResult<ProtocolInstallResult>
+) -> AgentIdentityResult<ModuleInstallResult>
 where
-    E: ProtocolEndpoint,
+    E: ModuleEndpoint,
     K: AgentKeyManager,
 {
-    install_protocol_if_needed(endpoint, key_manager, tenant_did, definition).await
+    install_module_if_needed(endpoint, key_manager, tenant_did, definition).await
 }
 
 /// Replay local installs then remote pushes for a recovered agent.
@@ -423,34 +423,34 @@ pub async fn run_restore_flow<L, R, K>(
     remote: &R,
     key_manager: &K,
     agent_did: &PortableDid,
-    protocol_definitions: Vec<Definition>,
+    module_definitions: Vec<Definition>,
 ) -> AgentIdentityResult<RestoreFlowResult>
 where
-    L: ProtocolEndpoint,
-    R: ProtocolEndpoint,
+    L: ModuleEndpoint,
+    R: ModuleEndpoint,
     K: AgentKeyManager,
 {
     let mut result = RestoreFlowResult::default();
     result.steps.push(RestoreFlowStep::AgentDidSync);
-    result.steps.push(RestoreFlowStep::ProtocolInstall);
-    for definition in protocol_definitions.clone() {
+    result.steps.push(RestoreFlowStep::ModuleInstall);
+    for definition in module_definitions.clone() {
         result
             .local_installs
-            .push(install_protocol_if_needed(local, key_manager, agent_did, definition).await?);
+            .push(install_module_if_needed(local, key_manager, agent_did, definition).await?);
     }
-    result.steps.push(RestoreFlowStep::ProtocolPush);
-    for definition in protocol_definitions {
+    result.steps.push(RestoreFlowStep::ModulePush);
+    for definition in module_definitions {
         result
             .remote_pushes
-            .push(push_protocol_if_needed(remote, key_manager, agent_did, definition).await?);
+            .push(push_module_if_needed(remote, key_manager, agent_did, definition).await?);
     }
     Ok(result)
 }
 
-/// Return a copy of the protocol definition with per-path key-agreement encryption injected.
+/// Return a copy of the module definition with per-path key-agreement encryption injected.
 ///
 /// Pure: touches no DWN endpoint.
-pub async fn inject_protocol_encryption<K>(
+pub async fn inject_module_encryption<K>(
     definition: &Definition,
     key_manager: &K,
     tenant_did: &PortableDid,
@@ -461,14 +461,14 @@ where
     let mut clone = definition.clone();
     let root_key_id = key_agreement_root_key_id(
         tenant_did,
-        AgentIdentityError::protocol_agreement,
-        AgentIdentityError::protocol_x25519,
+        AgentIdentityError::module_agreement,
+        AgentIdentityError::module_x25519,
     )?;
     let root_key_jwk = key_manager
         .derive_public_jwk(
             &root_key_id,
             vec![
-                PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                MODULE_PATH_DERIVATION_SCHEME.to_string(),
                 clone.module.clone(),
             ],
         )
@@ -478,11 +478,11 @@ where
     });
     let mut paths = Vec::new();
     for (root, rule_set) in &clone.structure {
-        collect_protocol_paths(rule_set, vec![root.clone()], &mut paths);
+        collect_module_paths(rule_set, vec![root.clone()], &mut paths);
     }
     for relative_path in paths {
         let mut derivation_path = vec![
-            PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+            MODULE_PATH_DERIVATION_SCHEME.to_string(),
             clone.module.clone(),
         ];
         derivation_path.extend(relative_path.clone());
@@ -494,7 +494,7 @@ where
     Ok(clone)
 }
 
-fn collect_protocol_paths(
+fn collect_module_paths(
     rule_set: &RuleSet,
     current_path: Vec<String>,
     paths: &mut Vec<Vec<String>>,
@@ -505,7 +505,7 @@ fn collect_protocol_paths(
     for (child_name, child_rule_set) in &rule_set.rules {
         let mut child_path = current_path.clone();
         child_path.push(child_name.clone());
-        collect_protocol_paths(child_rule_set, child_path, paths);
+        collect_module_paths(child_rule_set, child_path, paths);
     }
 }
 
@@ -515,20 +515,20 @@ fn set_path_encryption(
     public_key_jwk: JWK,
 ) -> AgentIdentityResult<()> {
     let Some((root, rest)) = relative_path.split_first() else {
-        return Err(AgentIdentityError::protocol_path(
-            "protocol path must not be empty",
+        return Err(AgentIdentityError::module_path(
+            "module path must not be empty",
         ));
     };
     let mut rule_set = definition.structure.get_mut(root).ok_or_else(|| {
-        AgentIdentityError::protocol_path(format!(
-            "protocol path {} was not found",
+        AgentIdentityError::module_path(format!(
+            "module path {} was not found",
             relative_path.join("/")
         ))
     })?;
     for segment in rest {
         rule_set = rule_set.rules.get_mut(segment).ok_or_else(|| {
-            AgentIdentityError::protocol_path(format!(
-                "protocol path {} was not found",
+            AgentIdentityError::module_path(format!(
+                "module path {} was not found",
                 relative_path.join("/")
             ))
         })?;
@@ -539,53 +539,49 @@ fn set_path_encryption(
     Ok(())
 }
 
-/// In-memory `ProtocolEndpoint` for development, tests, and the wallet
-/// recovery reference flow. Holds protocol definitions per `(tenant,
-/// protocol)`. **Not durable.** Production setups will use a real DWN
+/// In-memory `ModuleEndpoint` for development, tests, and the wallet
+/// recovery reference flow. Holds module definitions per `(tenant,
+/// module)`. **Not durable.** Production setups will use a real DWN
 /// (local or remote) as the endpoint.
 #[derive(Clone, Default)]
-pub struct MemoryProtocolEndpoint {
-    protocols: Arc<RwLock<BTreeMap<(String, String), Definition>>>,
+pub struct MemoryModuleEndpoint {
+    modules: Arc<RwLock<BTreeMap<(String, String), Definition>>>,
 }
 
-impl MemoryProtocolEndpoint {
-    pub fn protocol(
-        &self,
-        tenant: &str,
-        protocol: &str,
-    ) -> AgentIdentityResult<Option<Definition>> {
+impl MemoryModuleEndpoint {
+    pub fn module(&self, tenant: &str, module: &str) -> AgentIdentityResult<Option<Definition>> {
         Ok(self
-            .protocols
+            .modules
             .read()
             .map_err(AgentIdentityError::lock_poisoned)?
-            .get(&(tenant.to_string(), protocol.to_string()))
+            .get(&(tenant.to_string(), module.to_string()))
             .cloned())
     }
 }
 
-impl ProtocolEndpoint for MemoryProtocolEndpoint {
-    fn query_protocol<'a>(
+impl ModuleEndpoint for MemoryModuleEndpoint {
+    fn query_module<'a>(
         &'a self,
         tenant: &'a str,
-        protocol: &'a str,
+        module: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
         Box::pin(async move {
             Ok(self
-                .protocols
+                .modules
                 .read()
                 .map_err(AgentIdentityError::lock_poisoned)?
-                .get(&(tenant.to_string(), protocol.to_string()))
+                .get(&(tenant.to_string(), module.to_string()))
                 .cloned())
         })
     }
 
-    fn configure_protocol<'a>(
+    fn configure_module<'a>(
         &'a self,
         tenant: &'a str,
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
         Box::pin(async move {
-            self.protocols
+            self.modules
                 .write()
                 .map_err(AgentIdentityError::lock_poisoned)?
                 .insert((tenant.to_string(), definition.module.clone()), definition);
@@ -704,11 +700,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protocol_install_injects_encryption_keys_and_pushes_remote() {
+    async fn module_install_injects_encryption_keys_and_pushes_remote() {
         let (agent_did, key_manager) = agent_did_with_keys().await;
-        let local = MemoryProtocolEndpoint::default();
-        let remote = MemoryProtocolEndpoint::default();
-        let definition = encrypted_protocol();
+        let local = MemoryModuleEndpoint::default();
+        let remote = MemoryModuleEndpoint::default();
+        let definition = encrypted_module();
 
         let result = run_restore_flow(
             &local,
@@ -724,16 +720,16 @@ mod tests {
             result.steps,
             vec![
                 RestoreFlowStep::AgentDidSync,
-                RestoreFlowStep::ProtocolInstall,
-                RestoreFlowStep::ProtocolPush,
+                RestoreFlowStep::ModuleInstall,
+                RestoreFlowStep::ModulePush,
             ]
         );
         assert!(result.local_installs[0].installed);
         assert!(result.remote_pushes[0].installed);
         let installed = local
-            .protocol(&agent_did.uri, &definition.module)
+            .module(&agent_did.uri, &definition.module)
             .unwrap()
-            .expect("installed protocol");
+            .expect("installed module");
         assert!(installed.key_agreement.is_some());
         let rule = installed.structure.get("note").unwrap();
         let key_agreement = rule.key_agreement.as_ref().unwrap();
@@ -742,7 +738,7 @@ mod tests {
             JsonValue::String("X25519".to_string())
         );
         assert!(remote
-            .protocol(&agent_did.uri, &definition.module)
+            .module(&agent_did.uri, &definition.module)
             .unwrap()
             .is_some());
     }
@@ -754,22 +750,22 @@ mod tests {
         let definition = composed_notes_definition();
         let snapshot = definition.clone();
 
-        let augmented = inject_protocol_encryption(&definition, &key_manager, &agent_did)
+        let augmented = inject_module_encryption(&definition, &key_manager, &agent_did)
             .await
             .unwrap();
         assert_eq!(definition, snapshot);
 
         let root_key_id = key_agreement_root_key_id(
             &agent_did,
-            AgentIdentityError::protocol_agreement,
-            AgentIdentityError::protocol_x25519,
+            AgentIdentityError::module_agreement,
+            AgentIdentityError::module_x25519,
         )
         .unwrap();
         let expected_root = key_manager
             .derive_public_jwk(
                 &root_key_id,
                 vec![
-                    PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                    MODULE_PATH_DERIVATION_SCHEME.to_string(),
                     definition.module.clone(),
                 ],
             )
@@ -786,7 +782,7 @@ mod tests {
             .derive_public_jwk(
                 &root_key_id,
                 vec![
-                    PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
+                    MODULE_PATH_DERIVATION_SCHEME.to_string(),
                     definition.module.clone(),
                     "post".to_string(),
                     "comment".to_string(),
@@ -807,7 +803,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn encrypted_protocol_install_fails_without_x25519_key_agreement() {
+    async fn encrypted_module_install_fails_without_x25519_key_agreement() {
         let (mut agent_did, key_manager) = agent_did_with_keys().await;
         agent_did
             .document
@@ -817,14 +813,14 @@ mod tests {
         agent_did
             .private_keys
             .retain(|jwk| jwk_curve(jwk) != Some("X25519"));
-        let endpoint = MemoryProtocolEndpoint::default();
+        let endpoint = MemoryModuleEndpoint::default();
 
         let error =
-            install_protocol_if_needed(&endpoint, &key_manager, &agent_did, encrypted_protocol())
+            install_module_if_needed(&endpoint, &key_manager, &agent_did, encrypted_module())
                 .await
                 .unwrap_err();
 
-        assert_eq!(error.code(), "ProtocolInstallMissingKeyAgreement");
+        assert_eq!(error.code(), "ModuleInstallMissingKeyAgreement");
     }
 
     #[derive(Clone, Default)]
@@ -942,11 +938,11 @@ mod tests {
 
     fn composed_notes_definition() -> Definition {
         Definition {
-            module: "https://protocol.example/composed-notes".to_string(),
+            module: "https://module.example/composed-notes".to_string(),
             published: true,
             uses: Some(BTreeMap::from([(
                 "blog".to_string(),
-                "https://protocol.example/blog".to_string(),
+                "https://module.example/blog".to_string(),
             )])),
             key_agreement: None,
             types: BTreeMap::from([(
@@ -968,9 +964,9 @@ mod tests {
         }
     }
 
-    fn encrypted_protocol() -> Definition {
+    fn encrypted_module() -> Definition {
         Definition {
-            module: "https://protocol.example/notes".to_string(),
+            module: "https://module.example/notes".to_string(),
             published: true,
             uses: None,
             key_agreement: None,
