@@ -4,13 +4,13 @@
 //! `#[descriptor]`/`#[interface]` macros and by the descriptor unions.
 
 use crate::descriptors::messages::MessagesMethod;
-use crate::descriptors::protocols::ProtocolsMethod;
+use crate::descriptors::modules::ModulesMethod;
 use crate::descriptors::records::RecordsMethod;
 use crate::descriptors::{ConcreteDescriptor, MessageDescriptor};
 use crate::Descriptor;
 
 pub const RECORDS: &str = "Records";
-pub const PROTOCOLS: &str = "Protocols";
+pub const MODULES: &str = "Modules";
 pub const MESSAGES: &str = "Messages";
 
 pub const READ: &str = "Read";
@@ -22,13 +22,13 @@ pub const SYNC: &str = "Sync";
 pub const CONFIGURE: &str = "Configure";
 pub const COUNT: &str = "Count";
 
-/// The three DWN interfaces. The typed counterpart to the `RECORDS`/`PROTOCOLS`/`MESSAGES` wire
+/// The three DWN interfaces. The typed counterpart to the `RECORDS`/`MODULES`/`MESSAGES` wire
 /// strings, used as the interface discriminant in [`MessageKind`](super::MessageKind) and (later) the
 /// permission layer. `as_str` round-trips to the same wire strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Interface {
     Records,
-    Protocols,
+    Modules,
     Messages,
 }
 
@@ -37,7 +37,7 @@ impl Interface {
     pub fn as_str(&self) -> &'static str {
         match self {
             Interface::Records => RECORDS,
-            Interface::Protocols => PROTOCOLS,
+            Interface::Modules => MODULES,
             Interface::Messages => MESSAGES,
         }
     }
@@ -46,8 +46,8 @@ impl Interface {
     pub fn from_str_opt(s: &str) -> Option<Self> {
         if s == RECORDS {
             Some(Interface::Records)
-        } else if s == PROTOCOLS {
-            Some(Interface::Protocols)
+        } else if s == MODULES {
+            Some(Interface::Modules)
         } else if s == MESSAGES {
             Some(Interface::Messages)
         } else {
@@ -59,7 +59,7 @@ impl Interface {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MessageKind {
     Records(RecordsMethod),
-    Protocols(ProtocolsMethod),
+    Modules(ModulesMethod),
     Messages(MessagesMethod),
 }
 
@@ -67,7 +67,7 @@ impl MessageKind {
     pub fn interface(&self) -> Interface {
         match self {
             MessageKind::Records(_) => Interface::Records,
-            MessageKind::Protocols(_) => Interface::Protocols,
+            MessageKind::Modules(_) => Interface::Modules,
             MessageKind::Messages(_) => Interface::Messages,
         }
     }
@@ -76,7 +76,7 @@ impl MessageKind {
     pub fn method(&self) -> &'static str {
         match self {
             MessageKind::Records(method) => method.as_str(),
-            MessageKind::Protocols(method) => method.as_str(),
+            MessageKind::Modules(method) => method.as_str(),
             MessageKind::Messages(method) => method.as_str(),
         }
     }
@@ -86,7 +86,7 @@ impl MessageKind {
     pub fn schema_id(&self) -> Option<&'static str> {
         match self {
             MessageKind::Records(method) => method.schema_id(),
-            MessageKind::Protocols(method) => method.schema_id(),
+            MessageKind::Modules(method) => method.schema_id(),
             MessageKind::Messages(method) => method.schema_id(),
         }
     }
@@ -100,7 +100,7 @@ impl MessageKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             MessageKind::Records(method) => method.key(),
-            MessageKind::Protocols(method) => method.key(),
+            MessageKind::Modules(method) => method.key(),
             MessageKind::Messages(method) => method.key(),
         }
     }
@@ -108,9 +108,7 @@ impl MessageKind {
     pub fn from_parts(interface: &str, method: &str) -> Option<Self> {
         match Interface::from_str_opt(interface)? {
             Interface::Records => RecordsMethod::from_str_opt(method).map(MessageKind::Records),
-            Interface::Protocols => {
-                ProtocolsMethod::from_str_opt(method).map(MessageKind::Protocols)
-            }
+            Interface::Modules => ModulesMethod::from_str_opt(method).map(MessageKind::Modules),
             Interface::Messages => MessagesMethod::from_str_opt(method).map(MessageKind::Messages),
         }
     }
@@ -154,11 +152,7 @@ mod tests {
 
     #[test]
     fn dwn_interface_round_trips() {
-        for iface in [
-            Interface::Records,
-            Interface::Protocols,
-            Interface::Messages,
-        ] {
+        for iface in [Interface::Records, Interface::Modules, Interface::Messages] {
             assert_eq!(Interface::from_str_opt(iface.as_str()), Some(iface));
         }
     }
@@ -172,7 +166,7 @@ mod tests {
     #[test]
     fn generated_method_enums_round_trip() {
         use super::super::{
-            messages::MessagesMethod, protocols::ProtocolsMethod, records::RecordsMethod,
+            messages::MessagesMethod, modules::ModulesMethod, records::RecordsMethod,
         };
 
         // (variant, expected wire string)
@@ -193,12 +187,12 @@ mod tests {
         );
         assert_eq!(RecordsMethod::from_str_opt("Bogus"), None);
 
-        assert_eq!(ProtocolsMethod::Configure.as_str(), CONFIGURE);
+        assert_eq!(ModulesMethod::Configure.as_str(), CONFIGURE);
         assert_eq!(
-            ProtocolsMethod::from_str_opt(QUERY),
-            Some(ProtocolsMethod::Query)
+            ModulesMethod::from_str_opt(QUERY),
+            Some(ModulesMethod::Query)
         );
-        assert_eq!(ProtocolsMethod::from_str_opt(WRITE), None);
+        assert_eq!(ModulesMethod::from_str_opt(WRITE), None);
 
         assert_eq!(MessagesMethod::Read.as_str(), READ);
         assert_eq!(MessagesMethod::Sync.as_str(), SYNC);
@@ -218,9 +212,9 @@ mod tests {
         let cases = [
             (RECORDS, WRITE, MessageKind::Records(RecordsMethod::Write)),
             (
-                PROTOCOLS,
+                MODULES,
                 CONFIGURE,
-                MessageKind::Protocols(ProtocolsMethod::Configure),
+                MessageKind::Modules(ModulesMethod::Configure),
             ),
             (
                 MESSAGES,
@@ -244,7 +238,7 @@ mod tests {
     fn message_kind_from_parts_rejects_unknown() {
         // Unknown interface.
         assert_eq!(MessageKind::from_parts("Bogus", WRITE), None);
-        // Known interface, but a method not valid for it (Configure is Protocols-only).
+        // Known interface, but a method not valid for it (Configure is Modules-only).
         assert_eq!(MessageKind::from_parts(RECORDS, CONFIGURE), None);
         // Known interface, unknown method.
         assert_eq!(MessageKind::from_parts(MESSAGES, "Bogus"), None);
@@ -260,8 +254,8 @@ mod tests {
             Some("https://identity.foundation/dwn/json-schemas/records-read.json")
         );
         assert_eq!(
-            MessageKind::Protocols(ProtocolsMethod::Configure).schema_id(),
-            Some("https://identity.foundation/dwn/json-schemas/protocols-configure.json")
+            MessageKind::Modules(ModulesMethod::Configure).schema_id(),
+            Some("https://identity.foundation/dwn/json-schemas/modules-configure.json")
         );
         assert_eq!(
             MessageKind::Messages(MessagesMethod::Sync).schema_id(),

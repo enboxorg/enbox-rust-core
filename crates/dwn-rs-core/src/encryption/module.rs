@@ -1,22 +1,22 @@
-//! Fixed core definition for the DWN encryption protocol.
+//! Fixed core definition for the DWN encryption module.
 //!
-//! Mirrors `EncryptionProtocol.definition` from `@enbox/dwn-sdk-js`
-//! (`protocols/encryption.ts:54-100`): the two immutable root types
+//! Mirrors `EncryptionModule.definition` from `@enbox/dwn-sdk-js`
+//! (`modules/encryption.ts:54-100`): the two immutable root types
 //! `grantKey` (encrypted) and `wrappedGrantKey` (plaintext envelope), with
 //! create/anyone and read/recipient-of-that-path actions. Like every core
-//! protocol this definition is returned by lookup precedence, never installed.
+//! module this definition is returned by lookup precedence, never installed.
 
 use std::collections::BTreeMap;
 
 use crate::descriptors::records::{records_write_descriptor, write_fields};
 use crate::descriptors::Descriptor;
 use crate::encryption::{
-    ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
-    ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH,
+    ENCRYPTION_MODULE_GRANT_KEY_PATH, ENCRYPTION_MODULE_URI,
+    ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH,
 };
 use crate::errors::{DwnError, DwnErrorCode};
-use crate::handlers::configure::{fetch_protocol_definition, ProtocolDefinitionLookupError};
-use crate::interfaces::messages::protocols::{
+use crate::handlers::configure::{fetch_module_definition, ModuleDefinitionLookupError};
+use crate::interfaces::messages::modules::{
     Action, ActionWho, Can, Definition, ProvidedTags, RuleSet, TagType, Tags, Type, Who,
 };
 use crate::interfaces::replies::{Response, Status};
@@ -67,7 +67,7 @@ fn delivery_tags() -> Tags {
     Tags {
         required_tags: vec![
             "grantId".to_string(),
-            "protocol".to_string(),
+            "module".to_string(),
             "keyId".to_string(),
         ],
         allow_undefined_tags: Some(false),
@@ -80,8 +80,8 @@ fn delivery_tags() -> Tags {
                 "keyId".to_string(),
                 string_tag(Some(KEY_ID_LEN), Some(KEY_ID_LEN)),
             ),
-            ("protocol".to_string(), string_tag(None, None)),
-            ("protocolPath".to_string(), string_tag(None, None)),
+            ("module".to_string(), string_tag(None, None)),
+            ("modulePath".to_string(), string_tag(None, None)),
         ]),
     }
 }
@@ -106,15 +106,15 @@ fn delivery_rule_set(path: &str) -> RuleSet {
     }
 }
 
-pub fn encryption_protocol_definition() -> Definition {
+pub fn encryption_module_definition() -> Definition {
     Definition {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
         types: BTreeMap::from([
             (
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
+                ENCRYPTION_MODULE_GRANT_KEY_PATH.to_string(),
                 Type {
                     schema: Some(GRANT_KEY_PAYLOAD_SCHEMA_URI.to_string()),
                     data_formats: Some(vec!["application/json".to_string()]),
@@ -122,7 +122,7 @@ pub fn encryption_protocol_definition() -> Definition {
                 },
             ),
             (
-                ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+                ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH.to_string(),
                 Type {
                     schema: Some(WRAPPED_GRANT_KEY_ENVELOPE_SCHEMA_URI.to_string()),
                     data_formats: Some(vec!["application/json".to_string()]),
@@ -132,12 +132,12 @@ pub fn encryption_protocol_definition() -> Definition {
         ]),
         structure: BTreeMap::from([
             (
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
-                delivery_rule_set(ENCRYPTION_PROTOCOL_GRANT_KEY_PATH),
+                ENCRYPTION_MODULE_GRANT_KEY_PATH.to_string(),
+                delivery_rule_set(ENCRYPTION_MODULE_GRANT_KEY_PATH),
             ),
             (
-                ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
-                delivery_rule_set(ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH),
+                ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH.to_string(),
+                delivery_rule_set(ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH),
             ),
         ]),
     }
@@ -169,7 +169,7 @@ pub enum GrantKeyError {
     #[error("{0}")]
     GrantMissing(String),
     #[error("{0}")]
-    ProtocolNotFound(String),
+    ModuleNotFound(String),
     #[error("{0}")]
     WrappedDeliveryInvalid(String),
     #[error("{0}")]
@@ -204,7 +204,7 @@ impl GrantKeyError {
             Self::GrantExpired(_) => Some(DwnErrorCode::GrantAuthorizationGrantExpired),
             Self::GrantRevoked(_) => Some(DwnErrorCode::GrantAuthorizationGrantRevoked),
             Self::GrantMissing(_) => Some(DwnErrorCode::GrantAuthorizationGrantMissing),
-            Self::ProtocolNotFound(_) => Some(DwnErrorCode::ModuleAuthorizationModuleNotFound),
+            Self::ModuleNotFound(_) => Some(DwnErrorCode::ModuleAuthorizationModuleNotFound),
             Self::WrappedDeliveryInvalid(_) => {
                 Some(DwnErrorCode::EncryptionModuleValidateGrantKeyWrappedDeliveryInvalid)
             }
@@ -227,7 +227,7 @@ impl GrantKeyError {
             | Self::GrantExpired(detail)
             | Self::GrantRevoked(detail)
             | Self::GrantMissing(detail)
-            | Self::ProtocolNotFound(detail)
+            | Self::ModuleNotFound(detail)
             | Self::WrappedDeliveryInvalid(detail)
             | Self::SchemaUnexpectedRecord(detail)
             | Self::Internal(detail) => detail,
@@ -282,12 +282,11 @@ where
 {
     let descriptor = records_write_descriptor(message)
         .map_err(|error| GrantKeyError::Internal(error.to_string()))?;
-    if descriptor.protocol.as_str() != ENCRYPTION_PROTOCOL_URI {
+    if descriptor.module.as_str() != ENCRYPTION_MODULE_URI {
         return Ok(());
     }
-    let is_grant_key = descriptor.protocol_path.as_str() == ENCRYPTION_PROTOCOL_GRANT_KEY_PATH;
-    let is_wrapped =
-        descriptor.protocol_path.as_str() == ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH;
+    let is_grant_key = descriptor.module_path.as_str() == ENCRYPTION_MODULE_GRANT_KEY_PATH;
+    let is_wrapped = descriptor.module_path.as_str() == ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH;
     if !is_grant_key && !is_wrapped {
         return Ok(());
     }
@@ -318,20 +317,18 @@ where
 
     let tags = descriptor.tags.as_ref();
     if let Some(tags) = tags {
-        if let Some(name) = tags.keys().find(|name| {
-            !matches!(
-                name.as_str(),
-                "grantId" | "protocol" | "protocolPath" | "keyId"
-            )
-        }) {
+        if let Some(name) = tags
+            .keys()
+            .find(|name| !matches!(name.as_str(), "grantId" | "module" | "modulePath" | "keyId"))
+        {
             return Err(GrantKeyError::InvalidTags(format!(
                 "grantKey records must not carry undefined tag '{name}'."
             )));
         }
     }
     let grant_id = required_tag(tags, "grantId")?;
-    let protocol = required_tag(tags, "protocol")?;
-    let protocol_path = optional_tag(tags, "protocolPath")?;
+    let module = required_tag(tags, "module")?;
+    let module_path = optional_tag(tags, "modulePath")?;
     let key_id = required_tag(tags, "keyId")?;
     if key_id.len() != KEY_ID_LEN
         || !key_id
@@ -379,44 +376,44 @@ where
             "grant-key must reference an eligible Records Read or Write grant.".into(),
         ));
     };
-    if eligible.protocol != protocol {
+    if eligible.module != module {
         return Err(GrantKeyError::ScopeMismatch(format!(
-            "grant-key protocol {protocol} is outside the permission grant scope."
+            "grant-key module {module} is outside the permission grant scope."
         )));
     }
     let delivered = DeliveredScope {
-        protocol: &protocol,
-        protocol_path: protocol_path.as_deref(),
+        module: &module,
+        module_path: module_path.as_deref(),
     };
     if grant_covers_delivered_scope(&eligible, &delivered, None) {
         return Ok(());
     }
-    if protocol_path.is_none() {
+    if module_path.is_none() {
         return Err(scope_mismatch(None));
     }
-    let definition = fetch_protocol_definition(
+    let definition = fetch_module_definition(
         tenant,
-        &protocol,
+        &module,
         message_store,
         Some(&canonical_rfc3339(message_timestamp)),
     )
     .await
     .map_err(|error| match error {
-        ProtocolDefinitionLookupError::NotFound(uri) => {
-            GrantKeyError::ProtocolNotFound(format!("unable to find protocol definition for {uri}"))
+        ModuleDefinitionLookupError::NotFound(uri) => {
+            GrantKeyError::ModuleNotFound(format!("unable to find module definition for {uri}"))
         }
         error => GrantKeyError::Internal(error.to_string()),
     })?;
     if grant_covers_delivered_scope(&eligible, &delivered, Some(&definition)) {
         return Ok(());
     }
-    Err(scope_mismatch(protocol_path.as_deref()))
+    Err(scope_mismatch(module_path.as_deref()))
 }
 
-fn scope_mismatch(protocol_path: Option<&str>) -> GrantKeyError {
+fn scope_mismatch(module_path: Option<&str>) -> GrantKeyError {
     GrantKeyError::ScopeMismatch(format!(
-        "grant-key protocolPath {} is outside the permission grant scope.",
-        protocol_path.unwrap_or("<protocol>")
+        "grant-key modulePath {} is outside the permission grant scope.",
+        module_path.unwrap_or("<module>")
     ))
 }
 
@@ -452,15 +449,15 @@ fn tag_str(value: &Value) -> Option<String> {
 }
 /// Validates wrapped delivery bytes once data is present. `grantKey`
 /// records pass through: the node never inspects their plaintext. Anything
-/// else under this protocol is owned by record validation, not payloads.
+/// else under this module is owned by record validation, not payloads.
 pub fn validate_encryption_delivery(
     message: &Message<Descriptor>,
     data: &[u8],
 ) -> Result<(), GrantKeyError> {
     let descriptor = records_write_descriptor(message)
         .map_err(|error| GrantKeyError::Internal(error.to_string()))?;
-    if descriptor.protocol.as_str() != ENCRYPTION_PROTOCOL_URI
-        || descriptor.protocol_path.as_str() != ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH
+    if descriptor.module.as_str() != ENCRYPTION_MODULE_URI
+        || descriptor.module_path.as_str() != ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH
     {
         return Ok(());
     }
@@ -474,7 +471,7 @@ pub fn validate_encryption_delivery(
     Ok(())
 }
 
-/// Rejects records under the encryption protocol at any path other than the
+/// Rejects records under the encryption module at any path other than the
 /// two delivery roots. Payload validation needs the data bytes and lands
 /// separately; this runs on descriptor metadata alone.
 pub fn validate_encryption_record_schema(
@@ -482,13 +479,13 @@ pub fn validate_encryption_record_schema(
 ) -> Result<(), GrantKeyError> {
     let descriptor = records_write_descriptor(message)
         .map_err(|error| GrantKeyError::Internal(error.to_string()))?;
-    if descriptor.protocol.as_str() != ENCRYPTION_PROTOCOL_URI {
+    if descriptor.module.as_str() != ENCRYPTION_MODULE_URI {
         return Ok(());
     }
-    match descriptor.protocol_path.as_str() {
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH | ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH => Ok(()),
-        protocol_path => Err(GrantKeyError::SchemaUnexpectedRecord(format!(
-            "unexpected encryption record: {protocol_path}"
+    match descriptor.module_path.as_str() {
+        ENCRYPTION_MODULE_GRANT_KEY_PATH | ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH => Ok(()),
+        module_path => Err(GrantKeyError::SchemaUnexpectedRecord(format!(
+            "unexpected encryption record: {module_path}"
         ))),
     }
 }
@@ -501,15 +498,15 @@ mod tests {
 
     // Covers: ENBOX-ENC-002
     #[test]
-    fn encryption_protocol_definition_matches_typescript() {
-        let definition = encryption_protocol_definition();
+    fn encryption_module_definition_matches_typescript() {
+        let definition = encryption_module_definition();
         assert_eq!(
-            definition.protocol, ENCRYPTION_PROTOCOL_URI,
+            definition.module, ENCRYPTION_MODULE_URI,
             "published core URI"
         );
         assert!(definition.published, "core definition is published");
 
-        let grant_key = &definition.types[ENCRYPTION_PROTOCOL_GRANT_KEY_PATH];
+        let grant_key = &definition.types[ENCRYPTION_MODULE_GRANT_KEY_PATH];
         assert_eq!(
             grant_key.data_formats.as_deref(),
             Some(["application/json".to_string()].as_slice())
@@ -520,7 +517,7 @@ mod tests {
             Some(GRANT_KEY_PAYLOAD_SCHEMA_URI)
         );
 
-        let wrapped = &definition.types[ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH];
+        let wrapped = &definition.types[ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH];
         assert_eq!(
             wrapped.data_formats.as_deref(),
             Some(["application/json".to_string()].as_slice())
@@ -533,12 +530,12 @@ mod tests {
 
         for (path, of) in [
             (
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
-                ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+                ENCRYPTION_MODULE_GRANT_KEY_PATH,
+                ENCRYPTION_MODULE_GRANT_KEY_PATH,
             ),
             (
-                ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH,
-                ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH,
+                ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH,
+                ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH,
             ),
         ] {
             let rule_set = definition
@@ -566,7 +563,7 @@ mod tests {
                 tags.required_tags,
                 vec![
                     "grantId".to_string(),
-                    "protocol".to_string(),
+                    "module".to_string(),
                     "keyId".to_string()
                 ]
             );
@@ -581,8 +578,8 @@ mod tests {
     #[test]
     fn encryption_record_schema_accepts_only_delivery_paths() {
         for path in [
-            ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
-            ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH,
+            ENCRYPTION_MODULE_GRANT_KEY_PATH,
+            ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH,
         ] {
             let message = delivery_message(path);
             assert!(
@@ -599,12 +596,12 @@ mod tests {
         );
     }
 
-    fn delivery_message(protocol_path: &str) -> Message<Descriptor> {
+    fn delivery_message(module_path: &str) -> Message<Descriptor> {
         Message {
             descriptor: Descriptor::Records(Box::new(Records::Write(Box::new(
                 RecordsWriteDescriptor {
-                    protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-                    protocol_path: protocol_path.to_string(),
+                    module: ENCRYPTION_MODULE_URI.to_string(),
+                    module_path: module_path.to_string(),
                     ..Default::default()
                 },
             )))),

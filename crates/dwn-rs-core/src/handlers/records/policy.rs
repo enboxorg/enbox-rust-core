@@ -8,22 +8,22 @@
 
 use crate::descriptors::records::records_write_descriptor;
 use crate::descriptors::{Descriptor, RecordsWriteDescriptor};
-use crate::dwn::core_protocol::CoreProtocolRegistry;
+use crate::dwn::core_module::CoreModuleRegistry;
 use crate::errors::{DwnError, DwnErrorCode};
-use crate::handlers::protocols::configure::fetch_protocol_definition;
-use crate::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
+use crate::handlers::modules::configure::fetch_module_definition;
+use crate::interfaces::messages::modules::{Definition, ModuleKeyAgreement, RuleSet};
 use crate::Message;
 
 use super::common::governing_timestamp;
 use super::write::RecordsWriteValidationError;
 
-/// The protocol rules governing one write, resolved for its timestamp.
+/// The module rules governing one write, resolved for its timestamp.
 pub(crate) struct EffectivePolicy {
     pub definition: Definition,
     pub rule_set: RuleSet,
     pub type_name: String,
     pub encryption_required: bool,
-    pub key_agreement: Option<ProtocolKeyAgreement>,
+    pub key_agreement: Option<ModuleKeyAgreement>,
 }
 
 impl EffectivePolicy {
@@ -31,7 +31,7 @@ impl EffectivePolicy {
         tenant: &str,
         message: &Message<Descriptor>,
         author: &str,
-        registry: &CoreProtocolRegistry,
+        registry: &CoreModuleRegistry,
         message_store: &MessageStore,
     ) -> Result<Self, RecordsWriteValidationError>
     where
@@ -41,40 +41,38 @@ impl EffectivePolicy {
         let governing_timestamp =
             governing_timestamp(tenant, message, message_store, author).await?;
 
-        // check if protocol is defined in the core_protocol_registry and use that
-        // definition, otherwise fetch the protocol definition from the message store
-        let definition = if registry.has(&descriptor.protocol) {
-            registry
-                .get_definition(&descriptor.protocol)
-                .ok_or_else(|| {
-                    format!(
-                        "ProtocolAuthorizationInvalidProtocol: {} is not defined",
-                        descriptor.protocol
-                    )
-                })?
+        // check if module is defined in the core_module_registry and use that
+        // definition, otherwise fetch the module definition from the message store
+        let definition = if registry.has(&descriptor.module) {
+            registry.get_definition(&descriptor.module).ok_or_else(|| {
+                format!(
+                    "ModuleAuthorizationInvalidModule: {} is not defined",
+                    descriptor.module
+                )
+            })?
         } else {
-            fetch_protocol_definition(
+            fetch_module_definition(
                 tenant,
-                &descriptor.protocol,
+                &descriptor.module,
                 message_store,
                 Some(&governing_timestamp),
             )
             .await?
         };
         let rule_set = definition
-            .rule_at(descriptor.protocol_path.as_str())
+            .rule_at(descriptor.module_path.as_str())
             .ok_or_else(|| {
                 format!(
-                    "ProtocolAuthorizationInvalidProtocolPath: {} is not defined",
-                    descriptor.protocol_path
+                    "ModuleAuthorizationInvalidModulePath: {} is not defined",
+                    descriptor.module_path
                 )
             })?
             .clone();
 
         // Covers: DWN-PROTO-001, DWN-PROTO-004, DWN-PROTO-005, DWN-ENC-001
-        // Protocol-declared encryption representation is enforced at admission
+        // Module-declared encryption representation is enforced at admission
         // against the definition governing the record timestamp. A record at
-        // a `$ref` position resolves its type from the referenced protocol's
+        // a `$ref` position resolves its type from the referenced module's
         // `types`, keyed by the local structure key; locally declared
         // descendants follow the composing type map. The key agreement is
         // always the composing rule set at the declared path: a `$ref` node
@@ -88,33 +86,33 @@ impl EffectivePolicy {
             message_store,
         )
         .await?;
-        let ref_position = definition.ref_position(descriptor.protocol_path.as_str());
+        let ref_position = definition.ref_position(descriptor.module_path.as_str());
         let (types, type_name) = match (&referenced, &ref_position) {
-            (Some(referenced), Some(_)) => (&referenced.types, descriptor.protocol_path.clone()),
+            (Some(referenced), Some(_)) => (&referenced.types, descriptor.module_path.clone()),
             _ => (
                 &definition.types,
                 descriptor
-                    .protocol_path
+                    .module_path
                     .split('/')
                     .next_back()
                     .unwrap_or_default()
                     .to_string(),
             ),
         };
-        let protocol_type = types.get(&type_name);
-        if referenced.is_some() && protocol_type.is_none() {
+        let module_type = types.get(&type_name);
+        if referenced.is_some() && module_type.is_none() {
             return Err(DwnError::new(
                 DwnErrorCode::ModuleAuthorizationInvalidType,
                 format!(
-                    "type '{type_name}' is not defined in the referenced protocol for '$ref' path '{}'",
-                    descriptor.protocol_path
+                    "type '{type_name}' is not defined in the referenced module for '$ref' path '{}'",
+                    descriptor.module_path
                 ),
             )
             .into());
         }
         let key_agreement = rule_set.key_agreement.clone();
         let encryption_required =
-            protocol_type.and_then(|protocol_type| protocol_type.encryption_required) == Some(true);
+            module_type.and_then(|module_type| module_type.encryption_required) == Some(true);
 
         Ok(Self {
             definition,
@@ -136,7 +134,7 @@ async fn referenced_definition_for_ref_path<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let Some(parsed) = definition.ref_position(descriptor.protocol_path.as_str()) else {
+    let Some(parsed) = definition.ref_position(descriptor.module_path.as_str()) else {
         return Ok(None);
     };
     let ref_uri = definition
@@ -145,12 +143,11 @@ where
         .and_then(|uses| uses.get(parsed.alias))
         .ok_or_else(|| {
             format!(
-                "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' does not exist in the 'uses' map.",
-                parsed.alias, descriptor.protocol_path
+                "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at module path '{}' does not exist in the 'uses' map.",
+                parsed.alias, descriptor.module_path
             )
         })?;
     Ok(Some(
-        fetch_protocol_definition(tenant, ref_uri, message_store, Some(governing_timestamp))
-            .await?,
+        fetch_module_definition(tenant, ref_uri, message_store, Some(governing_timestamp)).await?,
     ))
 }

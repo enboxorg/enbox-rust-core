@@ -1,5 +1,5 @@
 use crate::canonical_rfc3339;
-use crate::protocols::parse_cross_protocol_ref;
+use crate::modules::parse_cross_module_ref;
 
 use super::*;
 
@@ -45,7 +45,7 @@ where
 /// control record's key material stands on.
 ///
 /// A grant that does not cover the role does not *deny* the write: the actor
-/// may still hold independent create authority through the protocol, and
+/// may still hold independent create authority through the module, and
 /// falling back is what lets a role holder mint keys without a grant. An
 /// invalid grant is different and has already failed in `resolve_control_actor`.
 pub(super) async fn actor_can_create_role<MessageStore>(
@@ -70,7 +70,7 @@ where
     }
 
     let record_chain = role_parent_chain(tenant, id, message_store).await?;
-    let invoked_role = signature.protocol_role();
+    let invoked_role = signature.module_role();
 
     for action in &role.rule_set.actions {
         match action {
@@ -121,7 +121,7 @@ where
 
 /// Whether a Records Write grant covers creating this role.
 ///
-/// Scope comparison is exact protocol plus a path-boundary subtree, so a grant
+/// Scope comparison is exact module plus a path-boundary subtree, so a grant
 /// over `message` never reaches `member`. A context-scoped grant matches
 /// nothing here: the target has no context dimension to compare against.
 fn grant_covers_role_create(scope: &PermissionScope, id: &AudienceId) -> bool {
@@ -131,9 +131,9 @@ fn grant_covers_role_create(scope: &PermissionScope, id: &AudienceId) -> bool {
     if records.method != RecordsMethod::Write {
         return false;
     }
-    scope.matches_protocol_target(&ProtocolScopeTarget {
-        protocol: Some(&id.scope.protocol),
-        protocol_path: Some(&id.scope.role_path),
+    scope.matches_module_target(&ModuleScopeTarget {
+        module: Some(&id.scope.module),
+        module_path: Some(&id.scope.role_path),
         context_id: None,
     })
 }
@@ -149,24 +149,24 @@ async fn invoked_role_is_held<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let (protocol, role_path) = match parse_cross_protocol_ref(role_reference) {
+    let (module, role_path) = match parse_cross_module_ref(role_reference) {
         Some(parsed) => {
-            let Some(protocol) = definition
+            let Some(module) = definition
                 .uses
                 .as_ref()
                 .and_then(|uses| uses.get(parsed.alias))
             else {
                 return Ok(false);
             };
-            (protocol.clone(), parsed.protocol_path.to_string())
+            (module.clone(), parsed.module_path.to_string())
         }
-        None => (id.scope.protocol.clone(), role_reference.to_string()),
+        None => (id.scope.module.clone(), role_reference.to_string()),
     };
 
     role_record_exists(
         tenant,
         actor,
-        &protocol,
+        &module,
         &role_path,
         Some(id.scope.context_id.as_str()),
         message_store,

@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use dwn_rs_core::auth::jws::Algorithm;
 use dwn_rs_core::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver};
 use dwn_rs_core::cid::generate_cid_from_json;
-use dwn_rs_core::descriptors::ConfigureDescriptor;
-use dwn_rs_core::interfaces::messages::protocols::{
+use dwn_rs_core::descriptors::ModulesConfigureDescriptor;
+use dwn_rs_core::interfaces::messages::modules::{
     Action, ActionWho, Can, Definition, RuleSet, Type, Who,
 };
 use dwn_rs_stores::SqliteNativeDwn;
@@ -60,12 +60,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn signed_configure_message(
-    protocol: &str,
+    module: &str,
     published: bool,
     timestamp: &str,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let definition = Definition {
-        protocol: protocol.to_string(),
+        module: module.to_string(),
         published,
         uses: None,
         key_agreement: None,
@@ -89,7 +89,7 @@ async fn signed_configure_message(
             },
         )]),
     };
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: timestamp.parse()?,
         permission_grant_id: None,
         definition,

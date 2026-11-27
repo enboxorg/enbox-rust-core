@@ -1121,7 +1121,7 @@ where
                     Value::String(value) => value == "true",
                     _ => false,
                 }),
-            protocol: entry.indexes.get("protocol").and_then(|value| match value {
+            module: entry.indexes.get("module").and_then(|value| match value {
                 Value::String(value) => Some(value.clone()),
                 _ => None,
             }),

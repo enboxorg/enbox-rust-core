@@ -14,7 +14,7 @@
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::testing::{
-    bob_signer, put_limited_threads_protocol, put_notes_protocol_without_actions,
+    bob_signer, put_limited_threads_module, put_notes_module_without_actions,
     signature_for_descriptor, signed_delete_message, signed_write_message, test_resolver,
     unsigned_count_message, unsigned_query_message, unsigned_read_message, WriteSpec,
 };
@@ -45,7 +45,7 @@ async fn fresh_nodes() -> Nodes {
         .await
         .expect("open disk node");
     for node in [&mem, &disk] {
-        put_notes_protocol_without_actions(TENANT, node.store()).await;
+        put_notes_module_without_actions(TENANT, node.store()).await;
     }
     Nodes { mem, disk, _db: db }
 }
@@ -228,8 +228,8 @@ async fn broad_read_skips_an_unpublished_top_candidate() {
                 "method": "Read",
                 "messageTimestamp": T4,
                 "filter": {
-                    "protocol": "http://example.com/notes",
-                    "protocolPath": "note"
+                    "module": "http://example.com/notes",
+                    "modulePath": "note"
                 },
                 "dateSort": "createdDescending"
             }
@@ -366,7 +366,7 @@ async fn unpublished_writes_stay_invisible_to_anonymous_query() {
     // Serialize file-backed tests process-wide.
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
-        put_notes_protocol_without_actions(TENANT, node.store()).await;
+        put_notes_module_without_actions(TENANT, node.store()).await;
         let data = payload("hidden");
         let (code, _) = write(
             node,
@@ -390,10 +390,10 @@ async fn unpublished_writes_stay_invisible_to_anonymous_query() {
     assert!(mem_entries.is_empty());
 }
 
-const LIMITED_PROTOCOL: &str = "http://example.com/limited";
+const LIMITED_MODULE: &str = "http://example.com/limited";
 
 fn limited_filter(extra: JsonValue) -> JsonValue {
-    let mut filter = json!({ "protocol": LIMITED_PROTOCOL, "published": true });
+    let mut filter = json!({ "module": LIMITED_MODULE, "published": true });
     for (key, value) in extra.as_object().expect("extra filter must be an object") {
         filter[key] = value.clone();
     }
@@ -405,8 +405,8 @@ fn limited_post(day: &str) -> (WriteSpec, Bytes) {
     let data = payload(&format!("post-{day}"));
     (
         WriteSpec {
-            protocol: LIMITED_PROTOCOL.to_string(),
-            protocol_path: "post".to_string(),
+            module: LIMITED_MODULE.to_string(),
+            module_path: "post".to_string(),
             data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
             data_size: data.len() as u64,
             published: Some(true),
@@ -425,7 +425,7 @@ async fn record_limit_root_bounds_all_read_surfaces() {
     let nodes = fresh_nodes().await;
     let mut posts = Vec::new();
     for node in [&nodes.mem, &nodes.disk] {
-        put_limited_threads_protocol(TENANT, node.store()).await;
+        put_limited_threads_module(TENANT, node.store()).await;
         let mut ids = Vec::new();
         for day in ["01", "02", "03"] {
             let (spec, data) = limited_post(day);
@@ -436,7 +436,7 @@ async fn record_limit_root_bounds_all_read_surfaces() {
         posts.push(ids);
     }
 
-    let scope = || limited_filter(json!({ "protocolPath": "post" }));
+    let scope = || limited_filter(json!({ "modulePath": "post" }));
     for (node, ids) in [&nodes.mem, &nodes.disk].into_iter().zip(posts) {
         let (status, entries) = query_entries(node, scope()).await;
         assert_eq!(status, 200);
@@ -458,7 +458,7 @@ async fn record_limit_root_bounds_all_read_surfaces() {
                 "interface": "Records",
                 "method": "Subscribe",
                 "messageTimestamp": T4,
-                "filter": limited_filter(json!({ "protocolPath": "post" })),
+                "filter": limited_filter(json!({ "modulePath": "post" })),
             },
         });
         let reply = node.dwn().process_message(TENANT, subscribe).await;
@@ -495,14 +495,14 @@ async fn record_limit_root_bounds_all_read_surfaces() {
 async fn record_limit_nested_groups_bound_query_and_count() {
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
-        put_limited_threads_protocol(TENANT, node.store()).await;
+        put_limited_threads_module(TENANT, node.store()).await;
 
         let thread_data = payload("thread");
         let (code, thread_id) = write(
             node,
             WriteSpec {
-                protocol: LIMITED_PROTOCOL.to_string(),
-                protocol_path: "thread".to_string(),
+                module: LIMITED_MODULE.to_string(),
+                module_path: "thread".to_string(),
                 data_cid: generate_dag_pb_cid_from_bytes(&thread_data).to_string(),
                 data_size: thread_data.len() as u64,
                 published: Some(true),
@@ -521,8 +521,8 @@ async fn record_limit_nested_groups_bound_query_and_count() {
             let (code, _) = write(
                 node,
                 WriteSpec {
-                    protocol: LIMITED_PROTOCOL.to_string(),
-                    protocol_path: "thread/message".to_string(),
+                    module: LIMITED_MODULE.to_string(),
+                    module_path: "thread/message".to_string(),
                     parent_id: Some(thread_id.clone()),
                     // Root records carry their record ID as context.
                     parent_context_id: Some(thread_id.clone()),
@@ -540,7 +540,7 @@ async fn record_limit_nested_groups_bound_query_and_count() {
         }
 
         let filter = limited_filter(json!({
-            "protocolPath": "thread/message",
+            "modulePath": "thread/message",
             "parentId": thread_id,
         }));
         let (status, entries) = query_entries(node, filter.clone()).await;
@@ -591,7 +591,7 @@ async fn published_false_with_published_sort_is_rejected() {
 async fn record_limit_squash_recomputes_from_current_state() {
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
-        put_limited_threads_protocol(TENANT, node.store()).await;
+        put_limited_threads_module(TENANT, node.store()).await;
         for day in ["01", "02"] {
             let (spec, data) = limited_post(day);
             let (code, _) = write(node, spec, data).await;
@@ -602,8 +602,8 @@ async fn record_limit_squash_recomputes_from_current_state() {
         let (code, squash_id) = write(
             node,
             WriteSpec {
-                protocol: LIMITED_PROTOCOL.to_string(),
-                protocol_path: "post".to_string(),
+                module: LIMITED_MODULE.to_string(),
+                module_path: "post".to_string(),
                 data_cid: generate_dag_pb_cid_from_bytes(&squash_data).to_string(),
                 data_size: squash_data.len() as u64,
                 published: Some(true),
@@ -617,7 +617,7 @@ async fn record_limit_squash_recomputes_from_current_state() {
         .await;
         assert_eq!(code, 202, "squash write must admit");
 
-        let scope = || limited_filter(json!({ "protocolPath": "post" }));
+        let scope = || limited_filter(json!({ "modulePath": "post" }));
         let (status, entries) = query_entries(node, scope()).await;
         assert_eq!(status, 200);
         let visible: Vec<String> = entries
@@ -631,7 +631,7 @@ async fn record_limit_squash_recomputes_from_current_state() {
         assert_eq!(count, 1);
     }
 
-    let scope = || limited_filter(json!({ "protocolPath": "post" }));
+    let scope = || limited_filter(json!({ "modulePath": "post" }));
     let (_, mem_entries) = query_entries(&nodes.mem, scope()).await;
     let (_, disk_entries) = query_entries(&nodes.disk, scope()).await;
     assert_eq!(mem_entries, disk_entries);
@@ -644,7 +644,7 @@ async fn record_limit_squash_recomputes_from_current_state() {
 async fn broad_read_skips_non_occupant_top1() {
     let nodes = fresh_nodes().await;
     for node in [&nodes.mem, &nodes.disk] {
-        put_limited_threads_protocol(TENANT, node.store()).await;
+        put_limited_threads_module(TENANT, node.store()).await;
         let mut ids = Vec::new();
         for day in ["01", "02", "03"] {
             let (spec, data) = limited_post(day);
@@ -658,7 +658,7 @@ async fn broad_read_skips_non_occupant_top1() {
                 "interface": "Records",
                 "method": "Read",
                 "messageTimestamp": T4,
-                "filter": limited_filter(json!({ "protocolPath": "post" })),
+                "filter": limited_filter(json!({ "modulePath": "post" })),
                 "dateSort": "updatedDescending",
             },
         });

@@ -55,7 +55,7 @@ use crate::{
 };
 use crate::{Descriptor, Value};
 use crate::{Dwn, Response};
-use put_limited_threads_protocol;
+use put_limited_threads_module;
 
 use super::common::*;
 use super::control::repair::{
@@ -66,7 +66,7 @@ use super::subscribe::{
     RecordsSubscribeHandler,
 };
 use super::*;
-use crate::handlers::configure::ProtocolsConfigureHandler;
+use crate::handlers::configure::ModulesConfigureHandler;
 
 const TENANT: &str = "did:example:alice";
 
@@ -124,7 +124,7 @@ async fn records_write_read_query_and_count_published_inline_data() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
 
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -182,7 +182,7 @@ async fn records_write_update_without_data_copies_previous_inline_data_and_keeps
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
@@ -246,7 +246,7 @@ async fn records_write_missing_initial_is_repairable_after_dependency_arrives() 
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
@@ -299,7 +299,7 @@ async fn records_write_preserves_structured_commit_validation_errors() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store,
         data_store,
@@ -375,7 +375,7 @@ async fn records_write_retains_initial_feed_position_without_extra_wake() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
@@ -437,7 +437,7 @@ async fn records_write_data_bearing_exact_replay_is_non_mutating() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
@@ -503,7 +503,7 @@ async fn exact_replay_returns_conflict_without_resolving_the_signer() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
 
     let write = signed_write_message(WriteSpec {
         published: Some(true),
@@ -593,7 +593,7 @@ async fn a_forged_owner_countersignature_is_rejected() {
         let mut data_store = TestDataStore::default();
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
-        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        put_notes_module_without_actions(TENANT, &message_store).await;
         RecordsWriteHandler::<_, _>::new(message_store, data_store, Some(Arc::new(test_resolver())))
             .run(TENANT, message, None)
             .await
@@ -704,7 +704,7 @@ async fn stale_initial_data_replay_cannot_replace_an_update_or_resurrect_a_delet
         let mut data_store = TestDataStore::default();
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
-        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        put_notes_module_without_actions(TENANT, &message_store).await;
         let write_handler = RecordsWriteHandler::<_, _>::new(
             message_store.clone(),
             data_store.clone(),
@@ -801,7 +801,7 @@ async fn records_delete_retains_initial_feed_position_without_extra_wake() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -887,7 +887,7 @@ async fn records_delete_older_than_current_write_wins_in_both_arrival_orders() {
         let mut data_store = TestDataStore::default();
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
-        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        put_notes_module_without_actions(TENANT, &message_store).await;
         let write_handler = RecordsWriteHandler::<_, _>::new(
             message_store.clone(),
             data_store.clone(),
@@ -977,7 +977,7 @@ async fn records_prune_wins_over_newer_plain_delete_in_both_arrival_orders() {
         let mut data_store = TestDataStore::default();
         message_store.open().await.unwrap();
         data_store.open().await.unwrap();
-        put_notes_protocol_without_actions(TENANT, &message_store).await;
+        put_notes_module_without_actions(TENANT, &message_store).await;
         let write_handler = RecordsWriteHandler::<_, _>::new(
             message_store.clone(),
             data_store.clone(),
@@ -1042,7 +1042,7 @@ async fn records_write_rejects_older_conflicting_write() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
@@ -1084,7 +1084,7 @@ async fn records_write_rejects_older_conflicting_write() {
 }
 
 #[tokio::test]
-async fn records_write_exact_replay_is_classified_before_mutable_protocol_validation() {
+async fn records_write_exact_replay_is_classified_before_mutable_module_validation() {
     // Covers: DWN-REC-003
     // Covers: DWN-AUTH-006
     const TENANT: &str = "did:example:alice";
@@ -1093,14 +1093,14 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
         Some(Arc::new(test_resolver())),
     );
 
-    let data = Bytes::from_static(b"admitted before protocol removal");
+    let data = Bytes::from_static(b"admitted before module removal");
     let write = signed_write_message(WriteSpec {
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
@@ -1111,15 +1111,15 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
     let reply = handler.run(TENANT, &write, Some(data.clone())).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let protocol_cids = message_store
+    let module_cids = message_store
         .rows
         .read()
         .unwrap()
         .iter()
-        .filter(|row| matches!(row.message.descriptor, Descriptor::Protocols(_)))
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Modules(_)))
         .map(|row| row.cid.clone())
         .collect::<Vec<_>>();
-    for cid in protocol_cids {
+    for cid in module_cids {
         message_store.delete(TENANT, &cid).await.unwrap();
     }
 
@@ -1138,7 +1138,7 @@ async fn records_write_exact_replay_is_classified_before_mutable_protocol_valida
 }
 
 #[tokio::test]
-async fn records_delete_exact_replay_is_classified_before_mutable_protocol_validation() {
+async fn records_delete_exact_replay_is_classified_before_mutable_module_validation() {
     // Covers: DWN-REC-003
     // Covers: DWN-AUTH-006
     // Covers: DWN-SYNC-002
@@ -1148,7 +1148,7 @@ async fn records_delete_exact_replay_is_classified_before_mutable_protocol_valid
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -1160,7 +1160,7 @@ async fn records_delete_exact_replay_is_classified_before_mutable_protocol_valid
         Some(Arc::new(test_resolver())),
     );
 
-    let data = Bytes::from_static(b"delete admitted before protocol removal");
+    let data = Bytes::from_static(b"delete admitted before module removal");
     let initial = signed_write_message(WriteSpec {
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
@@ -1191,15 +1191,15 @@ async fn records_delete_exact_replay_is_classified_before_mutable_protocol_valid
         .filter(|row| matches!(row.message.descriptor, Descriptor::Records(_)))
         .count();
 
-    let protocol_cids = message_store
+    let module_cids = message_store
         .rows
         .read()
         .unwrap()
         .iter()
-        .filter(|row| matches!(row.message.descriptor, Descriptor::Protocols(_)))
+        .filter(|row| matches!(row.message.descriptor, Descriptor::Modules(_)))
         .map(|row| row.cid.clone())
         .collect::<Vec<_>>();
-    for cid in protocol_cids {
+    for cid in module_cids {
         message_store.delete(TENANT, &cid).await.unwrap();
     }
 
@@ -1228,7 +1228,7 @@ async fn records_read_returns_gone_when_external_data_is_missing() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -1275,7 +1275,7 @@ async fn records_delete_prune_purges_descendant_records() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_limited_threads_protocol("did:example:alice", &message_store).await;
+    put_limited_threads_module("did:example:alice", &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -1290,8 +1290,8 @@ async fn records_delete_prune_purges_descendant_records() {
     let data = Bytes::from_static(b"parent");
     let data_cid = generate_dag_pb_cid_from_bytes(&data).to_string();
     let parent = signed_write_message(WriteSpec {
-        protocol: "http://example.com/limited".to_string(),
-        protocol_path: "thread".to_string(),
+        module: "http://example.com/limited".to_string(),
+        module_path: "thread".to_string(),
         data_cid,
         data_size: data.len() as u64,
         published: Some(true),
@@ -1312,8 +1312,8 @@ async fn records_delete_prune_purges_descendant_records() {
     let child_data = Bytes::from_static(b"child");
     let child_data_cid = generate_dag_pb_cid_from_bytes(&child_data).to_string();
     let child = signed_write_message(WriteSpec {
-        protocol: "http://example.com/limited".to_string(),
-        protocol_path: "thread/message".to_string(),
+        module: "http://example.com/limited".to_string(),
+        module_path: "thread/message".to_string(),
         parent_id: Some(parent_record_id.clone()),
         parent_context_id: Some(parent_context_id),
         data_cid: child_data_cid,
@@ -1353,7 +1353,7 @@ async fn records_delete_cleanup_failure_is_safe_and_resumable() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -1430,7 +1430,7 @@ async fn superseded_prune_task_rechecks_winner_and_does_not_purge_descendants() 
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -1510,7 +1510,7 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_squash_protocol("did:example:alice", &message_store).await;
+    put_squash_module("did:example:alice", &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -1519,8 +1519,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
 
     let old_data = Bytes::from_static(b"old note");
     let old = signed_write_message(WriteSpec {
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&old_data).to_string(),
         data_size: old_data.len() as u64,
         published: Some(true),
@@ -1534,8 +1534,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
 
     let squash_data = Bytes::from_static(b"snapshot");
     let squash = signed_write_message(WriteSpec {
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&squash_data).to_string(),
         data_size: squash_data.len() as u64,
         published: Some(true),
@@ -1560,8 +1560,8 @@ async fn records_write_squash_purges_older_sibling_records_and_sets_backstop() {
 
     let late_old_data = Bytes::from_static(b"late old");
     let late_old = signed_write_message(WriteSpec {
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&late_old_data).to_string(),
         data_size: late_old_data.len() as u64,
         published: Some(true),
@@ -1592,7 +1592,7 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
 
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -1600,13 +1600,13 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
         Some(Arc::new(test_resolver())),
     );
 
-    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"conditions":{"publication":"Required"}}"#);
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","module":"http://example.com/notes","modulePath":"note"},"conditions":{"publication":"Required"}}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
@@ -1629,8 +1629,8 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     let unpublished = signed_write_message(WriteSpec {
         author: "did:example:bob".to_string(),
         signer: bob_signer(),
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&unpublished_data).to_string(),
         data_size: unpublished_data.len() as u64,
         permission_grant_id: Some(grant_id.clone()),
@@ -1651,8 +1651,8 @@ async fn records_write_accepts_permission_grant_id_and_enforces_publication_cond
     let published = signed_write_message(WriteSpec {
         author: "did:example:bob".to_string(),
         signer: bob_signer(),
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&published_data).to_string(),
         data_size: published_data.len() as u64,
         published: Some(true),
@@ -1678,17 +1678,17 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
         data_store,
         Some(Arc::new(test_resolver())),
     );
-    let scope = r#"{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}"#;
+    let scope = r#"{"interface":"Records","method":"Write","module":"http://example.com/notes","modulePath":"note"}"#;
     let tags = Some(MapValue::from([(
-        "protocol".to_string(),
+        "module".to_string(),
         Value::String("http://example.com/notes".to_string()),
     )]));
     let grant_data = Bytes::from(format!(
         r#"{{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{scope}}}"#
     ));
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         tags: tags.clone(),
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
@@ -1709,8 +1709,8 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
 
     let request_data = Bytes::from(format!(r#"{{"delegated":false,"scope":{scope}}}"#));
     let request = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_REQUEST_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_REQUEST_PATH.to_string(),
         tags: tags.clone(),
         data_cid: generate_dag_pb_cid_from_bytes(&request_data).to_string(),
         data_size: request_data.len() as u64,
@@ -1729,8 +1729,8 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
 
     let revocation_data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
         parent_id: Some(grant_id.clone()),
         parent_context_id: Some(grant_id),
         tags,
@@ -1773,8 +1773,8 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
         update_spec.parent_id = initial["descriptor"]["parentId"]
             .as_str()
             .map(str::to_string);
-        update_spec.protocol = permissions::PERMISSIONS_PROTOCOL_URI.to_string();
-        update_spec.protocol_path = path.to_string();
+        update_spec.module = permissions::PERMISSIONS_MODULE_URI.to_string();
+        update_spec.module_path = path.to_string();
         update_spec.recipient = initial["descriptor"]["recipient"]
             .as_str()
             .map(str::to_string);
@@ -1795,7 +1795,7 @@ async fn permissions_request_grant_and_revocation_reject_updates() {
         assert_eq!(
             reply.status.detail,
             format!(
-                "ModuleAuthorizationImmutableRecord: record at protocol path '{path}' is immutable: updates are not allowed."
+                "ModuleAuthorizationImmutableRecord: record at module path '{path}' is immutable: updates are not allowed."
             )
         );
     }
@@ -1807,7 +1807,7 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
 
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -1815,13 +1815,13 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
         Some(Arc::new(test_resolver())),
     );
 
-    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#);
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","module":"http://example.com/notes","modulePath":"note"},"delegated":true}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
@@ -1843,8 +1843,8 @@ async fn records_write_accepts_embedded_author_delegated_grant() {
     let note = signed_write_message(WriteSpec {
         author: "did:example:alice".to_string(),
         signer: bob_signer(),
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
         data_size: note_data.len() as u64,
         ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
@@ -1875,11 +1875,11 @@ async fn an_embedded_delegated_grant_must_be_the_one_that_was_signed() {
     ) -> serde_json::Value {
         let data = Bytes::from_static(data);
         let grant = signed_write_message(WriteSpec {
-            protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-            protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+            module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+            module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
             recipient: Some("did:example:bob".to_string()),
             tags: Some(MapValue::from([(
-                "protocol".to_string(),
+                "module".to_string(),
                 Value::String("http://example.com/notes".to_string()),
             )])),
             data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -1905,7 +1905,7 @@ async fn an_embedded_delegated_grant_must_be_the_one_that_was_signed() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store,
@@ -1914,7 +1914,7 @@ async fn an_embedded_delegated_grant_must_be_the_one_that_was_signed() {
 
     let signed_grant = grant_with(
         &handler,
-        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#,
+        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","module":"http://example.com/notes","modulePath":"note"},"delegated":true}"#,
         "2025-01-01T00:00:00.000000Z",
     )
     .await;
@@ -1922,13 +1922,13 @@ async fn an_embedded_delegated_grant_must_be_the_one_that_was_signed() {
     // would rather have been given.
     let substituted = grant_with(
         &handler,
-        br#"{"dateExpires":"2025-03-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":true}"#,
+        br#"{"dateExpires":"2025-03-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","module":"http://example.com/notes","modulePath":"note"},"delegated":true}"#,
         "2025-01-01T00:00:30.000000Z",
     )
     .await;
     let undelegated = grant_with(
         &handler,
-        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"},"delegated":false}"#,
+        br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","module":"http://example.com/notes","modulePath":"note"},"delegated":false}"#,
         "2025-01-01T00:00:45.000000Z",
     )
     .await;
@@ -1938,8 +1938,8 @@ async fn an_embedded_delegated_grant_must_be_the_one_that_was_signed() {
         signed_write_message(WriteSpec {
             author: TENANT.to_string(),
             signer: bob_signer(),
-            protocol: "http://example.com/notes".to_string(),
-            protocol_path: "note".to_string(),
+            module: "http://example.com/notes".to_string(),
+            module_path: "note".to_string(),
             data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
             data_size: note_data.len() as u64,
             ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
@@ -1990,7 +1990,7 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
 
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -1998,13 +1998,13 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
         Some(Arc::new(test_resolver())),
     );
 
-    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-02-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Write","module":"http://example.com/notes","modulePath":"note"}}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
@@ -2027,8 +2027,8 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
     let note = signed_write_message(WriteSpec {
         author: "did:example:bob".to_string(),
         signer: bob_signer(),
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&note_data).to_string(),
         data_size: note_data.len() as u64,
         permission_grant_id: Some(grant_id.clone()),
@@ -2047,12 +2047,12 @@ async fn permissions_revocation_cleans_grant_authorized_messages() {
 
     let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
         parent_id: Some(grant_id.clone()),
         parent_context_id: Some(grant_id.clone()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
@@ -2123,7 +2123,7 @@ async fn records_event_log_subscribe_replays_from_cursor_and_sends_eose() {
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
-            protocol: Some("http://example.com/notes".to_string()),
+            module: Some("http://example.com/notes".to_string()),
             ..Default::default()
         },
         Some(first),
@@ -2206,7 +2206,7 @@ async fn records_event_log_subscribe_rejects_through_the_shared_ingress() {
     // and reaches authorization.
     let admitted = signed_records_subscribe_message(
         RecordsFilter {
-            protocol: Some("http://example.com/notes".to_string()),
+            module: Some("http://example.com/notes".to_string()),
             ..Default::default()
         },
         None,
@@ -2252,7 +2252,7 @@ async fn records_event_log_subscribe_maps_progress_gap_to_410() {
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
-            protocol: Some("http://example.com/notes".to_string()),
+            module: Some("http://example.com/notes".to_string()),
             ..Default::default()
         },
         Some(stale_cursor),
@@ -2295,7 +2295,7 @@ async fn records_event_log_subscribe_without_cursor_returns_snapshot_and_live_su
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
-            protocol: Some("http://example.com/notes".to_string()),
+            module: Some("http://example.com/notes".to_string()),
             ..Default::default()
         },
         None,
@@ -2767,7 +2767,7 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
 
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -2778,13 +2778,13 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
     // Records.Read grant to bob with far-future expiry: open validates at
     // request time while delivery validates at now, so the grant must cover
     // both for the baseline to establish.
-    let grant_data = Bytes::from_static(br#"{"dateExpires":"2030-01-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2030-01-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","module":"http://example.com/notes","modulePath":"note"}}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(BOB.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
@@ -2804,8 +2804,8 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
     );
 
     let filter = RecordsFilter {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        module: Some("http://example.com/notes".to_string()),
+        module_path: Some("note".to_string()),
         ..Default::default()
     };
     let request =
@@ -2820,7 +2820,7 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
             delegated_grant_id: None,
             permission_grant_id: Some(grant_id.clone()),
             permission_grant_ids: None,
-            protocol_role: None,
+            module_role: None,
         }),
         permission_grant_invocation: PermissionGrantInvocation::Single(grant_id.clone()),
         author_delegated_grant: None,
@@ -2842,12 +2842,12 @@ async fn subscribe_delivery_grant_revoked_is_terminal() {
 
     let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
         parent_id: Some(grant_id.clone()),
         parent_context_id: Some(grant_id.clone()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
@@ -2884,7 +2884,7 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
 
     let handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -2894,13 +2894,13 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
 
     // Expired after the request but before delivery: valid at open (request
     // time), terminal at now. Fixed past dates keep this deterministic.
-    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-06-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","protocol":"http://example.com/notes","protocolPath":"note"}}"#);
+    let grant_data = Bytes::from_static(br#"{"dateExpires":"2025-06-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","module":"http://example.com/notes","modulePath":"note"}}"#);
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(BOB.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
@@ -2920,8 +2920,8 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
     );
 
     let filter = RecordsFilter {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        module: Some("http://example.com/notes".to_string()),
+        module_path: Some("note".to_string()),
         ..Default::default()
     };
     let request =
@@ -2939,7 +2939,7 @@ async fn subscribe_delivery_expired_grant_is_terminal() {
                 delegated_grant_id: None,
                 permission_grant_id: Some(grant_id.clone()),
                 permission_grant_ids: None,
-                protocol_role: None,
+                module_role: None,
             }),
             permission_grant_invocation: PermissionGrantInvocation::Single(grant_id),
             author_delegated_grant: None,
@@ -2971,7 +2971,7 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
     message_store.open().await.unwrap();
     let mut data_store = TestDataStore::default();
     data_store.open().await.unwrap();
-    put_limited_threads_protocol(TENANT, &message_store).await;
+    put_limited_threads_module(TENANT, &message_store).await;
 
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -2991,8 +2991,8 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
         let timestamp = format!("2025-01-{day}T00:00:00.000000Z");
         let data = Bytes::from(format!("limited-post-{day}").into_bytes());
         let message = signed_write_message(WriteSpec {
-            protocol: "http://example.com/limited".to_string(),
-            protocol_path: "post".to_string(),
+            module: "http://example.com/limited".to_string(),
+            module_path: "post".to_string(),
             data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
             data_size: data.len() as u64,
             published: Some(true),
@@ -3023,8 +3023,8 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
     );
     let request = signed_records_subscribe_message(
         RecordsFilter {
-            protocol: Some(LIMITED.to_string()),
-            protocol_path: Some("post".to_string()),
+            module: Some(LIMITED.to_string()),
+            module_path: Some("post".to_string()),
             ..Default::default()
         },
         None,
@@ -3044,8 +3044,8 @@ async fn subscribe_delivery_suppresses_non_occupant_but_stays_live() {
     // A live non-occupant must be suppressed without closing the stream.
     let fourth_data = Bytes::from_static(b"limited-post-04");
     let fourth = signed_write_message(WriteSpec {
-        protocol: LIMITED.to_string(),
-        protocol_path: "post".to_string(),
+        module: LIMITED.to_string(),
+        module_path: "post".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&fourth_data).to_string(),
         data_size: fourth_data.len() as u64,
         published: Some(true),
@@ -3112,8 +3112,8 @@ async fn subscribe_nested_without_scope_rejected_unless_bounded() {
     let handler = RecordsSubscribeHandler::new(message_store, Some(Arc::new(test_resolver())));
 
     let unscoped = RecordsFilter {
-        protocol: Some("https://example.com/protocol/chat".to_string()),
-        protocol_path: Some(NESTED.to_string()),
+        module: Some("https://example.com/module/chat".to_string()),
+        module_path: Some(NESTED.to_string()),
         ..Default::default()
     };
     assert_eq!(
@@ -3128,8 +3128,8 @@ async fn subscribe_nested_without_scope_rejected_unless_bounded() {
     );
 
     let scoped = RecordsFilter {
-        protocol: Some("https://example.com/protocol/chat".to_string()),
-        protocol_path: Some(NESTED.to_string()),
+        module: Some("https://example.com/module/chat".to_string()),
+        module_path: Some(NESTED.to_string()),
         parent_id: Some("thread-1".to_string()),
         ..Default::default()
     };
@@ -3156,8 +3156,8 @@ async fn event_log_subscribe_nested_without_scope_rejected_unless_bounded() {
     );
 
     let unscoped = RecordsFilter {
-        protocol: Some("https://example.com/protocol/chat".to_string()),
-        protocol_path: Some("thread/message".to_string()),
+        module: Some("https://example.com/module/chat".to_string()),
+        module_path: Some("thread/message".to_string()),
         ..Default::default()
     };
     let unbounded = signed_records_subscribe_with_pagination(
@@ -3308,8 +3308,8 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
         let data = Bytes::from(format!("gated-{record_id}").into_bytes());
         let message: Message<Descriptor> = serde_json::from_value(
             signed_write_message(WriteSpec {
-                protocol: "http://example.com/notes".to_string(),
-                protocol_path: "note".to_string(),
+                module: "http://example.com/notes".to_string(),
+                module_path: "note".to_string(),
                 record_id: Some(record_id.to_string()),
                 data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
                 data_size: data.len() as u64,
@@ -3333,7 +3333,7 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
         release: Arc::new(AtomicBool::new(true)),
     };
     gated.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &gated).await;
+    put_notes_module_without_actions(TENANT, &gated).await;
     put_note(&gated.inner, "gated-a", "2025-01-01T00:01:00.000000Z").await;
 
     // Freeze snapshot queries, then open the subscription: its listener is
@@ -3348,7 +3348,7 @@ async fn subscribe_snapshot_cannot_miss_write_landing_mid_setup() {
     let request = Arc::new(
         signed_records_subscribe_message(
             RecordsFilter {
-                protocol: Some("http://example.com/notes".to_string()),
+                module: Some("http://example.com/notes".to_string()),
                 ..Default::default()
             },
             None,
@@ -3414,15 +3414,15 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
         delegated: Some(true),
         scope: PermissionScope::Records(RecordsScope {
             method: RecordsMethod::Read,
-            protocol: "http://example.com/notes".to_string(),
+            module: "http://example.com/notes".to_string(),
             selector: None,
         }),
         conditions: None,
         connect_session: None,
     };
     let filter = RecordsFilter {
-        protocol: Some("http://example.com/notes".to_string()),
-        protocol_path: Some("note".to_string()),
+        module: Some("http://example.com/notes".to_string()),
+        module_path: Some("note".to_string()),
         ..Default::default()
     };
     let request =
@@ -3440,7 +3440,7 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
                 delegated_grant_id: Some("delegated-grant-1".to_string()),
                 permission_grant_id: None,
                 permission_grant_ids: None,
-                protocol_role: None,
+                module_role: None,
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: Some(grant),
@@ -3463,12 +3463,12 @@ async fn subscribe_delivery_expired_delegated_grant_is_terminal() {
 
 use crate::encryption::{
     ContentEncryptionAlgorithm, EncryptionEnvelope, KeyAgreementAlgorithm, KeyEncryption,
-    ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
+    ENCRYPTION_MODULE_GRANT_KEY_PATH, ENCRYPTION_MODULE_URI,
 };
-use crate::protocols::{Action, ActionRole, Can, Definition, ProtocolKeyAgreement, RuleSet, Type};
+use crate::modules::{Action, ActionRole, Can, Definition, ModuleKeyAgreement, RuleSet, Type};
 use ssi_jwk::JWK;
 
-const ENC_NOTES_PROTOCOL: &str = "http://example.com/enc-notes";
+const ENC_NOTES_MODULE: &str = "http://example.com/enc-notes";
 const ENC_T1: &str = "2024-12-01T00:00:00.000000Z";
 const ENC_MID: &str = "2024-12-15T00:00:00.000000Z";
 const ENC_T2: &str = "2025-01-01T00:00:00.000000Z";
@@ -3491,7 +3491,7 @@ fn path_key_id() -> String {
 
 fn keyed_rule_set() -> RuleSet {
     RuleSet {
-        key_agreement: Some(ProtocolKeyAgreement {
+        key_agreement: Some(ModuleKeyAgreement {
             public_key_jwk: path_key_jwk(),
         }),
         ..Default::default()
@@ -3500,11 +3500,11 @@ fn keyed_rule_set() -> RuleSet {
 
 fn enc_notes_definition(encrypted: bool, keyed: bool) -> Definition {
     Definition {
-        protocol: ENC_NOTES_PROTOCOL.to_string(),
+        module: ENC_NOTES_MODULE.to_string(),
         published: true,
         uses: None,
         key_agreement: if keyed {
-            Some(ProtocolKeyAgreement {
+            Some(ModuleKeyAgreement {
                 public_key_jwk: path_key_jwk(),
             })
         } else {
@@ -3529,8 +3529,8 @@ fn enc_notes_definition(encrypted: bool, keyed: bool) -> Definition {
     }
 }
 
-fn protocol_path_entry(key_id: &str) -> KeyEncryption {
-    KeyEncryption::ProtocolPath {
+fn module_path_entry(key_id: &str) -> KeyEncryption {
+    KeyEncryption::ModulePath {
         algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
         key_id: key_id.to_string(),
         ephemeral_public_key: path_key_jwk(),
@@ -3539,16 +3539,16 @@ fn protocol_path_entry(key_id: &str) -> KeyEncryption {
 }
 
 fn role_audience_entry() -> KeyEncryption {
-    role_audience_entry_for(ENC_NOTES_PROTOCOL, "note/role", "role-kid")
+    role_audience_entry_for(ENC_NOTES_MODULE, "note/role", "role-kid")
 }
 
-fn role_audience_entry_for(protocol: &str, role_path: &str, key_id: &str) -> KeyEncryption {
+fn role_audience_entry_for(module: &str, role_path: &str, key_id: &str) -> KeyEncryption {
     KeyEncryption::RoleAudience {
         algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
         key_id: key_id.to_string(),
         ephemeral_public_key: path_key_jwk(),
         encrypted_key: "a2V5".to_string(),
-        protocol: protocol.to_string(),
+        module: module.to_string(),
         role_path: role_path.to_string(),
     }
 }
@@ -3605,17 +3605,17 @@ fn enc_role_definition(
 
 async fn put_retained_audience(
     message_store: &TestMessageStore,
-    protocol: &str,
+    module: &str,
     role_path: &str,
     context_id: &str,
     key_id: &str,
     timestamp: &str,
 ) {
     let message = signed_write_message(WriteSpec {
-        protocol: protocol.to_string(),
-        protocol_path: "$encryption/audience".to_string(),
+        module: module.to_string(),
+        module_path: "$encryption/audience".to_string(),
         tags: Some(MapValue::from([
-            ("protocol".to_string(), Value::String(protocol.to_string())),
+            ("module".to_string(), Value::String(module.to_string())),
             ("rolePath".to_string(), Value::String(role_path.to_string())),
             (
                 "contextId".to_string(),
@@ -3632,16 +3632,13 @@ async fn put_retained_audience(
             Value::String("Records".to_string()),
         ),
         ("method".to_string(), Value::String("Write".to_string())),
-        ("protocol".to_string(), Value::String(protocol.to_string())),
+        ("module".to_string(), Value::String(module.to_string())),
         (
-            "protocolPath".to_string(),
+            "modulePath".to_string(),
             Value::String("$encryption/audience".to_string()),
         ),
         ("isLatestBaseState".to_string(), Value::Bool(true)),
-        (
-            "tag.protocol".to_string(),
-            Value::String(protocol.to_string()),
-        ),
+        ("tag.module".to_string(), Value::String(module.to_string())),
         (
             "tag.rolePath".to_string(),
             Value::String(role_path.to_string()),
@@ -3666,16 +3663,16 @@ fn envelope_with_entries(entries: Vec<KeyEncryption>) -> EncryptionEnvelope {
     }
 }
 
-async fn enc_protocol_write(
-    protocol: &str,
-    protocol_path: &str,
+async fn enc_module_write(
+    module: &str,
+    module_path: &str,
     timestamp: &str,
     envelope: Option<EncryptionEnvelope>,
 ) -> serde_json::Value {
     let data = Bytes::from_static(SECRET_DATA);
     signed_write_message(WriteSpec {
-        protocol: protocol.to_string(),
-        protocol_path: protocol_path.to_string(),
+        module: module.to_string(),
+        module_path: module_path.to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
         encryption: envelope,
@@ -3707,7 +3704,7 @@ fn write_data() -> Option<Bytes> {
 #[tokio::test]
 async fn records_write_encrypted_path_with_matching_entry_is_accepted() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         enc_notes_definition(true, true),
@@ -3716,9 +3713,8 @@ async fn records_write_encrypted_path_with_matching_entry_is_accepted() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-    let write =
-        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
+    let write = enc_module_write(ENC_NOTES_MODULE, "note", ENC_WRITE_TIME, Some(envelope)).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
@@ -3727,7 +3723,7 @@ async fn records_write_encrypted_path_with_matching_entry_is_accepted() {
 #[tokio::test]
 async fn records_write_encrypted_path_without_envelope_is_rejected() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         enc_notes_definition(true, true),
@@ -3736,7 +3732,7 @@ async fn records_write_encrypted_path_without_envelope_is_rejected() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let write = enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, None).await;
+    let write = enc_module_write(ENC_NOTES_MODULE, "note", ENC_WRITE_TIME, None).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -3749,11 +3745,11 @@ async fn records_write_encrypted_path_without_envelope_is_rejected() {
 #[tokio::test]
 async fn records_write_plaintext_path_with_envelope_is_rejected() {
     let (message_store, data_store) = open_stores().await;
-    put_notes_protocol_without_actions("did:example:alice", &message_store).await;
+    put_notes_module_without_actions("did:example:alice", &message_store).await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-    let write = enc_protocol_write(
+    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
+    let write = enc_module_write(
         "http://example.com/notes",
         "note",
         ENC_WRITE_TIME,
@@ -3772,7 +3768,7 @@ async fn records_write_plaintext_path_with_envelope_is_rejected() {
 #[tokio::test]
 async fn records_write_encrypted_path_without_path_key_is_rejected() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         enc_notes_definition(true, false),
@@ -3781,9 +3777,8 @@ async fn records_write_encrypted_path_without_path_key_is_rejected() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-    let write =
-        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
+    let write = enc_module_write(ENC_NOTES_MODULE, "note", ENC_WRITE_TIME, Some(envelope)).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -3796,7 +3791,7 @@ async fn records_write_encrypted_path_without_path_key_is_rejected() {
 #[tokio::test]
 async fn records_write_encrypted_path_with_wrong_entry_is_rejected() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         enc_notes_definition(true, true),
@@ -3805,9 +3800,8 @@ async fn records_write_encrypted_path_with_wrong_entry_is_rejected() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let wrong_key = envelope_with_entries(vec![protocol_path_entry("other-kid")]);
-    let write =
-        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(wrong_key)).await;
+    let wrong_key = envelope_with_entries(vec![module_path_entry("other-kid")]);
+    let write = enc_module_write(ENC_NOTES_MODULE, "note", ENC_WRITE_TIME, Some(wrong_key)).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -3816,8 +3810,8 @@ async fn records_write_encrypted_path_with_wrong_entry_is_rejected() {
     );
 
     let role_only = envelope_with_entries(vec![role_audience_entry()]);
-    let write = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let write = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         "2025-01-03T00:01:00.000000Z",
         Some(role_only),
@@ -3835,7 +3829,7 @@ async fn records_write_encrypted_path_with_wrong_entry_is_rejected() {
 #[tokio::test]
 async fn records_write_encrypted_path_with_extra_entries_is_accepted() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         enc_notes_definition(true, true),
@@ -3845,12 +3839,11 @@ async fn records_write_encrypted_path_with_extra_entries_is_accepted() {
     let handler = enc_test_handler(message_store, data_store).await;
 
     let envelope = envelope_with_entries(vec![
-        protocol_path_entry("other-kid"),
+        module_path_entry("other-kid"),
         role_audience_entry(),
-        protocol_path_entry(&path_key_id()),
+        module_path_entry(&path_key_id()),
     ]);
-    let write =
-        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let write = enc_module_write(ENC_NOTES_MODULE, "note", ENC_WRITE_TIME, Some(envelope)).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
@@ -3859,7 +3852,7 @@ async fn records_write_encrypted_path_with_extra_entries_is_accepted() {
 #[tokio::test]
 async fn records_write_role_audience_distinguishes_entry_from_audience_dependency() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &message_store,
         enc_role_definition("member", vec![Can::Read], None),
@@ -3868,14 +3861,14 @@ async fn records_write_role_audience_distinguishes_entry_from_audience_dependenc
     .await;
     let handler = enc_test_handler(message_store.clone(), data_store).await;
 
-    let missing_entry = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let missing_entry = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         ENC_WRITE_TIME,
         Some(envelope_with_entries(vec![
-            protocol_path_entry(&path_key_id()),
-            role_audience_entry_for("http://example.com/wrong", "member", "wrong-protocol"),
-            role_audience_entry_for(ENC_NOTES_PROTOCOL, "other-role", "wrong-role"),
+            module_path_entry(&path_key_id()),
+            role_audience_entry_for("http://example.com/wrong", "member", "wrong-module"),
+            role_audience_entry_for(ENC_NOTES_MODULE, "other-role", "wrong-role"),
         ])),
     )
     .await;
@@ -3890,13 +3883,13 @@ async fn records_write_role_audience_distinguishes_entry_from_audience_dependenc
         ReplicationApplyOutcome::Invalid
     );
 
-    let missing_audience = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let missing_audience = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         "2025-01-03T00:01:00.000000Z",
         Some(envelope_with_entries(vec![
-            protocol_path_entry(&path_key_id()),
-            role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "missing-key"),
+            module_path_entry(&path_key_id()),
+            role_audience_entry_for(ENC_NOTES_MODULE, "member", "missing-key"),
         ])),
     )
     .await;
@@ -3917,7 +3910,7 @@ async fn records_write_role_audience_distinguishes_entry_from_audience_dependenc
 #[tokio::test]
 async fn records_write_role_audience_accepts_any_retained_matching_key() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &message_store,
         enc_role_definition("member", vec![Can::Read], None),
@@ -3926,7 +3919,7 @@ async fn records_write_role_audience_accepts_any_retained_matching_key() {
     .await;
     put_retained_audience(
         &message_store,
-        ENC_NOTES_PROTOCOL,
+        ENC_NOTES_MODULE,
         "member",
         "",
         "old-key",
@@ -3935,7 +3928,7 @@ async fn records_write_role_audience_accepts_any_retained_matching_key() {
     .await;
     put_retained_audience(
         &message_store,
-        ENC_NOTES_PROTOCOL,
+        ENC_NOTES_MODULE,
         "member",
         "",
         "new-key",
@@ -3944,13 +3937,12 @@ async fn records_write_role_audience_accepts_any_retained_matching_key() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
     let envelope = envelope_with_entries(vec![
-        protocol_path_entry(&path_key_id()),
+        module_path_entry(&path_key_id()),
         role_audience_entry_for("http://example.com/wrong", "member", "old-key"),
-        role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "missing-key"),
-        role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "old-key"),
+        role_audience_entry_for(ENC_NOTES_MODULE, "member", "missing-key"),
+        role_audience_entry_for(ENC_NOTES_MODULE, "member", "old-key"),
     ]);
-    let write =
-        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope)).await;
+    let write = enc_module_write(ENC_NOTES_MODULE, "note", ENC_WRITE_TIME, Some(envelope)).await;
     let reply = handler.run(TENANT, &write, write_data()).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
@@ -3964,7 +3956,7 @@ async fn records_write_role_audience_uses_root_nested_and_unresolved_contexts() 
         ("note/role/deep", false),
     ] {
         let (message_store, data_store) = open_stores().await;
-        put_protocol_definition(
+        put_module_definition(
             TENANT,
             &message_store,
             enc_role_definition(role, vec![Can::Read], None),
@@ -3976,16 +3968,12 @@ async fn records_write_role_audience_uses_root_nested_and_unresolved_contexts() 
         } else {
             ENC_WRITE_TIME
         };
-        let mut entries = vec![protocol_path_entry(&path_key_id())];
+        let mut entries = vec![module_path_entry(&path_key_id())];
         if requires_entry {
-            entries.push(role_audience_entry_for(
-                ENC_NOTES_PROTOCOL,
-                role,
-                "role-key",
-            ));
+            entries.push(role_audience_entry_for(ENC_NOTES_MODULE, role, "role-key"));
         }
-        let write = enc_protocol_write(
-            ENC_NOTES_PROTOCOL,
+        let write = enc_module_write(
+            ENC_NOTES_MODULE,
             "note",
             timestamp,
             Some(envelope_with_entries(entries)),
@@ -4000,7 +3988,7 @@ async fn records_write_role_audience_uses_root_nested_and_unresolved_contexts() 
             };
             put_retained_audience(
                 &message_store,
-                ENC_NOTES_PROTOCOL,
+                ENC_NOTES_MODULE,
                 role,
                 context,
                 "role-key",
@@ -4017,38 +4005,38 @@ async fn records_write_role_audience_uses_root_nested_and_unresolved_contexts() 
 // Covers: ENBOX-ENC-001, DWN-PROTO-005
 #[tokio::test]
 async fn records_write_role_audience_resolves_uses_and_skips_unresolved_rules() {
-    let role_protocol = "http://example.com/roles";
+    let role_module = "http://example.com/roles";
     for uses in [
         None,
         Some(BTreeMap::from([(
             "roles".to_string(),
-            role_protocol.to_string(),
+            role_module.to_string(),
         )])),
     ] {
         let (message_store, data_store) = open_stores().await;
         let resolved = uses.is_some();
-        put_protocol_definition(
+        put_module_definition(
             TENANT,
             &message_store,
             enc_role_definition("roles:member", vec![Can::Read], uses),
             ENC_T1,
         )
         .await;
-        let mut entries = vec![protocol_path_entry(&path_key_id())];
+        let mut entries = vec![module_path_entry(&path_key_id())];
         if resolved {
             put_retained_audience(
                 &message_store,
-                role_protocol,
+                role_module,
                 "member",
                 "",
                 "role-key",
                 ENC_T2,
             )
             .await;
-            entries.push(role_audience_entry_for(role_protocol, "member", "role-key"));
+            entries.push(role_audience_entry_for(role_module, "member", "role-key"));
         }
-        let write = enc_protocol_write(
-            ENC_NOTES_PROTOCOL,
+        let write = enc_module_write(
+            ENC_NOTES_MODULE,
             "note",
             ENC_WRITE_TIME,
             Some(envelope_with_entries(entries)),
@@ -4064,18 +4052,18 @@ async fn records_write_role_audience_resolves_uses_and_skips_unresolved_rules() 
 #[tokio::test]
 async fn records_write_non_read_role_rule_imposes_no_audience() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &message_store,
         enc_role_definition("member", vec![Can::Query, Can::Subscribe], None),
         ENC_T1,
     )
     .await;
-    let write = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let write = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         ENC_WRITE_TIME,
-        Some(envelope_with_entries(vec![protocol_path_entry(
+        Some(envelope_with_entries(vec![module_path_entry(
             &path_key_id(),
         )])),
     )
@@ -4089,14 +4077,14 @@ async fn records_write_non_read_role_rule_imposes_no_audience() {
 #[tokio::test]
 async fn records_write_role_audience_uses_the_timestamped_definition() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &message_store,
         enc_notes_definition(true, true),
         ENC_T1,
     )
     .await;
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &message_store,
         enc_role_definition("member", vec![Can::Read], None),
@@ -4105,11 +4093,11 @@ async fn records_write_role_audience_uses_the_timestamped_definition() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let historical = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let historical = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         ENC_MID,
-        Some(envelope_with_entries(vec![protocol_path_entry(
+        Some(envelope_with_entries(vec![module_path_entry(
             &path_key_id(),
         )])),
     )
@@ -4117,11 +4105,11 @@ async fn records_write_role_audience_uses_the_timestamped_definition() {
     let reply = handler.run(TENANT, &historical, write_data()).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let current = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let current = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         ENC_LATE,
-        Some(envelope_with_entries(vec![protocol_path_entry(
+        Some(envelope_with_entries(vec![module_path_entry(
             &path_key_id(),
         )])),
     )
@@ -4137,7 +4125,7 @@ async fn records_write_role_audience_uses_the_timestamped_definition() {
 #[tokio::test]
 async fn records_write_role_audience_store_failures_are_internal_but_replay_stays_duplicate() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &message_store,
         enc_role_definition("member", vec![Can::Read], None),
@@ -4146,7 +4134,7 @@ async fn records_write_role_audience_store_failures_are_internal_but_replay_stay
     .await;
     put_retained_audience(
         &message_store,
-        ENC_NOTES_PROTOCOL,
+        ENC_NOTES_MODULE,
         "member",
         "",
         "role-key",
@@ -4156,12 +4144,12 @@ async fn records_write_role_audience_store_failures_are_internal_but_replay_stay
     let handler = enc_test_handler(message_store.clone(), data_store).await;
     let envelope = || {
         envelope_with_entries(vec![
-            protocol_path_entry(&path_key_id()),
-            role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "role-key"),
+            module_path_entry(&path_key_id()),
+            role_audience_entry_for(ENC_NOTES_MODULE, "member", "role-key"),
         ])
     };
     let accepted =
-        enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_WRITE_TIME, Some(envelope())).await;
+        enc_module_write(ENC_NOTES_MODULE, "note", ENC_WRITE_TIME, Some(envelope())).await;
     assert_eq!(
         handler
             .run(TENANT, &accepted, write_data())
@@ -4177,8 +4165,8 @@ async fn records_write_role_audience_store_failures_are_internal_but_replay_stay
     let replay = handler.run(TENANT, &accepted, write_data()).await;
     assert_eq!(replay.status.code, 409, "{}", replay.status.detail);
 
-    let fresh = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let fresh = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         "2025-01-03T00:03:00.000000Z",
         Some(envelope()),
@@ -4193,7 +4181,7 @@ async fn records_write_role_audience_store_failures_are_internal_but_replay_stay
 #[tokio::test]
 async fn records_write_role_regrants_share_the_same_audience_identity() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &message_store,
         enc_role_definition("member", vec![Can::Read], None),
@@ -4205,8 +4193,8 @@ async fn records_write_role_regrants_share_the_same_audience_identity() {
     for timestamp in [ENC_T2, ENC_LATE] {
         let data = Bytes::from_static(b"role");
         let role = signed_write_message(WriteSpec {
-            protocol: ENC_NOTES_PROTOCOL.to_string(),
-            protocol_path: "member".to_string(),
+            module: ENC_NOTES_MODULE.to_string(),
+            module_path: "member".to_string(),
             recipient: Some("did:example:bob".to_string()),
             data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
             data_size: data.len() as u64,
@@ -4220,7 +4208,7 @@ async fn records_write_role_regrants_share_the_same_audience_identity() {
     assert_ne!(role_ids[0], role_ids[1]);
     put_retained_audience(
         &message_store,
-        ENC_NOTES_PROTOCOL,
+        ENC_NOTES_MODULE,
         "member",
         "",
         "shared-key",
@@ -4228,13 +4216,13 @@ async fn records_write_role_regrants_share_the_same_audience_identity() {
     )
     .await;
 
-    let write = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let write = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         ENC_WRITE_TIME,
         Some(envelope_with_entries(vec![
-            protocol_path_entry(&path_key_id()),
-            role_audience_entry_for(ENC_NOTES_PROTOCOL, "member", "shared-key"),
+            module_path_entry(&path_key_id()),
+            role_audience_entry_for(ENC_NOTES_MODULE, "member", "shared-key"),
         ])),
     )
     .await;
@@ -4244,14 +4232,14 @@ async fn records_write_role_regrants_share_the_same_audience_identity() {
 
 // Covers: DWN-PROTO-004, DWN-AUTH-006
 #[tokio::test]
-async fn records_write_missing_protocol_stays_a_repairable_dependency() {
+async fn records_write_missing_module_stays_a_repairable_dependency() {
     let (message_store, data_store) = open_stores().await;
     let handler = enc_test_handler(message_store, data_store).await;
-    let write = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let write = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         ENC_WRITE_TIME,
-        Some(envelope_with_entries(vec![protocol_path_entry(
+        Some(envelope_with_entries(vec![module_path_entry(
             &path_key_id(),
         )])),
     )
@@ -4274,11 +4262,11 @@ async fn encryption_definition_resolves_without_installation() {
     let (message_store, data_store) = open_stores().await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    // No tenant ProtocolsConfigure: the core definition still governs, so a
+    // No tenant ModulesConfigure: the core definition still governs, so a
     // plaintext grantKey fails the encryption-required gate.
-    let bare = enc_protocol_write(
-        ENCRYPTION_PROTOCOL_URI,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+    let bare = enc_module_write(
+        ENCRYPTION_MODULE_URI,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         "2025-01-03T00:01:00.000000Z",
         None,
     )
@@ -4291,12 +4279,12 @@ async fn encryption_definition_resolves_without_installation() {
     );
 }
 
-const REF_BLOG_PROTOCOL: &str = "http://example.com/blog";
-const COMPOSED_PROTOCOL: &str = "http://example.com/composed";
+const REF_BLOG_MODULE: &str = "http://example.com/blog";
+const COMPOSED_MODULE: &str = "http://example.com/composed";
 
 fn referenced_blog_definition(encrypted: bool) -> Definition {
     Definition {
-        protocol: REF_BLOG_PROTOCOL.to_string(),
+        module: REF_BLOG_MODULE.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -4314,11 +4302,11 @@ fn referenced_blog_definition(encrypted: bool) -> Definition {
 
 fn composed_definition() -> Definition {
     Definition {
-        protocol: COMPOSED_PROTOCOL.to_string(),
+        module: COMPOSED_MODULE.to_string(),
         published: true,
         uses: Some(BTreeMap::from([(
             "blog".to_string(),
-            REF_BLOG_PROTOCOL.to_string(),
+            REF_BLOG_MODULE.to_string(),
         )])),
         key_agreement: None,
         types: BTreeMap::from([(
@@ -4351,10 +4339,10 @@ fn composed_definition() -> Definition {
 
 fn keyed_blog_definition() -> Definition {
     Definition {
-        protocol: REF_BLOG_PROTOCOL.to_string(),
+        module: REF_BLOG_MODULE.to_string(),
         published: true,
         uses: None,
-        key_agreement: Some(ProtocolKeyAgreement {
+        key_agreement: Some(ModuleKeyAgreement {
             public_key_jwk: path_key_jwk(),
         }),
         types: BTreeMap::from([(
@@ -4373,14 +4361,14 @@ fn keyed_blog_definition() -> Definition {
 #[tokio::test]
 async fn records_write_ref_position_follows_referenced_type_policy() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         referenced_blog_definition(true),
         ENC_T1,
     )
     .await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         composed_definition(),
@@ -4389,7 +4377,7 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, None).await;
+    let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, None).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -4398,14 +4386,14 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
     );
 
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         referenced_blog_definition(false),
         ENC_T1,
     )
     .await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         composed_definition(),
@@ -4414,8 +4402,8 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, Some(envelope)).await;
+    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
+    let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, Some(envelope)).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -4428,14 +4416,14 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
 #[tokio::test]
 async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_key() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         keyed_blog_definition(),
         ENC_T1,
     )
     .await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         composed_definition(),
@@ -4447,7 +4435,7 @@ async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_
     // The referenced `post` type requires encryption, but a `$ref` node carries
     // no `$keyAgreement`, so a plaintext write is rejected and an encrypted one
     // has no key namespace to protect it.
-    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, None).await;
+    let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, None).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -4455,8 +4443,8 @@ async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_
         Some("ModuleAuthorizationEncryptionRequired")
     );
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-    let write = enc_protocol_write(COMPOSED_PROTOCOL, "post", ENC_WRITE_TIME, Some(envelope)).await;
+    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
+    let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, Some(envelope)).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -4466,7 +4454,7 @@ async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_
 
     // The `$ref` position type is looked up by the local structure key, so a
     // renamed key with no matching referenced type is invalid.
-    let write = enc_protocol_write(COMPOSED_PROTOCOL, "article", ENC_WRITE_TIME, None).await;
+    let write = enc_module_write(COMPOSED_MODULE, "article", ENC_WRITE_TIME, None).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
@@ -4479,14 +4467,14 @@ async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_
 #[tokio::test]
 async fn records_write_local_child_below_ref_uses_composing_key_namespace() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         referenced_blog_definition(false),
         ENC_T1,
     )
     .await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         composed_definition(),
@@ -4497,8 +4485,8 @@ async fn records_write_local_child_below_ref_uses_composing_key_namespace() {
 
     let post_data = Bytes::from_static(b"post");
     let post = signed_write_message(WriteSpec {
-        protocol: REF_BLOG_PROTOCOL.to_string(),
-        protocol_path: "post".to_string(),
+        module: REF_BLOG_MODULE.to_string(),
+        module_path: "post".to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&post_data).to_string(),
         data_size: post_data.len() as u64,
         ..WriteSpec::new("2024-12-02T00:00:00.000000Z")
@@ -4512,10 +4500,10 @@ async fn records_write_local_child_below_ref_uses_composing_key_namespace() {
     let post_context_id = post["contextId"].as_str().unwrap().to_string();
 
     let comment_data = Bytes::from_static(SECRET_DATA);
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
+    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
     let write = signed_write_message(WriteSpec {
-        protocol: COMPOSED_PROTOCOL.to_string(),
-        protocol_path: "post/comment".to_string(),
+        module: COMPOSED_MODULE.to_string(),
+        module_path: "post/comment".to_string(),
         parent_id: Some(post_record_id),
         parent_context_id: Some(post_context_id),
         data_cid: generate_dag_pb_cid_from_bytes(&comment_data).to_string(),
@@ -4534,14 +4522,14 @@ async fn records_write_local_child_below_ref_uses_composing_key_namespace() {
 #[tokio::test]
 async fn records_write_policy_follows_governing_definition_over_time() {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         enc_notes_definition(true, true),
         ENC_T2,
     )
     .await;
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         enc_notes_definition(false, false),
@@ -4550,11 +4538,11 @@ async fn records_write_policy_follows_governing_definition_over_time() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let mid = enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_MID, None).await;
+    let mid = enc_module_write(ENC_NOTES_MODULE, "note", ENC_MID, None).await;
     let reply = handler.run("did:example:alice", &mid, write_data()).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let late_bare = enc_protocol_write(ENC_NOTES_PROTOCOL, "note", ENC_LATE, None).await;
+    let late_bare = enc_module_write(ENC_NOTES_MODULE, "note", ENC_LATE, None).await;
     let reply = handler
         .run("did:example:alice", &late_bare, write_data())
         .await;
@@ -4564,9 +4552,9 @@ async fn records_write_policy_follows_governing_definition_over_time() {
         Some("ModuleAuthorizationEncryptionRequired")
     );
 
-    let envelope = envelope_with_entries(vec![protocol_path_entry(&path_key_id())]);
-    let late_keyed = enc_protocol_write(
-        ENC_NOTES_PROTOCOL,
+    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
+    let late_keyed = enc_module_write(
+        ENC_NOTES_MODULE,
         "note",
         "2025-01-02T00:01:00.000000Z",
         Some(envelope),
@@ -4578,17 +4566,17 @@ async fn records_write_policy_follows_governing_definition_over_time() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
-const ANCESTRY_PROTOCOL: &str = "http://example.com/ancestry";
+const ANCESTRY_MODULE: &str = "http://example.com/ancestry";
 
-fn ancestry_definition() -> crate::protocols::Definition {
-    use crate::protocols::{Definition, RuleSet, Type};
+fn ancestry_definition() -> crate::modules::Definition {
+    use crate::modules::{Definition, RuleSet, Type};
     let text = || Type {
         schema: None,
         data_formats: None,
         encryption_required: None,
     };
     Definition {
-        protocol: ANCESTRY_PROTOCOL.to_string(),
+        module: ANCESTRY_MODULE.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -4607,7 +4595,7 @@ fn ancestry_definition() -> crate::protocols::Definition {
 }
 
 async fn ancestry_write(
-    protocol_path: &str,
+    module_path: &str,
     parent: Option<(&str, &str)>,
     timestamp: &str,
     data: &'static [u8],
@@ -4620,8 +4608,8 @@ async fn ancestry_write(
         None => (None, None),
     };
     let message = signed_write_message(WriteSpec {
-        protocol: ANCESTRY_PROTOCOL.to_string(),
-        protocol_path: protocol_path.to_string(),
+        module: ANCESTRY_MODULE.to_string(),
+        module_path: module_path.to_string(),
         parent_id,
         parent_context_id,
         data_cid: generate_dag_pb_cid_from_bytes(&bytes).to_string(),
@@ -4639,7 +4627,7 @@ async fn ancestry_fixture() -> (
     RecordsDeleteHandler<TestMessageStore, TestDataStore>,
 ) {
     let (message_store, data_store) = open_stores().await;
-    put_protocol_definition(TENANT, &message_store, ancestry_definition(), T_INSTALL).await;
+    put_module_definition(TENANT, &message_store, ancestry_definition(), T_INSTALL).await;
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -4661,7 +4649,7 @@ fn record_string(message: &serde_json::Value, key: &str) -> String {
 
 // Covers: DWN-REC-004, DWN-REC-005
 #[tokio::test]
-async fn soft_deleted_same_protocol_parent_still_proves_ancestry() {
+async fn soft_deleted_same_module_parent_still_proves_ancestry() {
     let (message_store, data_store, write_handler, delete_handler) = ancestry_fixture().await;
 
     let (thread, thread_data) =
@@ -4714,7 +4702,7 @@ async fn soft_deleted_same_protocol_parent_still_proves_ancestry() {
 
 // Covers: DWN-REC-004, DWN-SYNC-003
 #[tokio::test]
-async fn pruned_same_protocol_parent_rejects_child() {
+async fn pruned_same_module_parent_rejects_child() {
     let (message_store, _data_store, write_handler, delete_handler) = ancestry_fixture().await;
 
     let (thread, thread_data) =
@@ -4780,8 +4768,8 @@ async fn updates_then_soft_delete_still_proves_ancestry() {
     // An update displaces the initial write from latest state; the initial
     // write is retained and remains the structural ancestor.
     let update = signed_write_message(WriteSpec {
-        protocol: ANCESTRY_PROTOCOL.to_string(),
-        protocol_path: "thread".to_string(),
+        module: ANCESTRY_MODULE.to_string(),
+        module_path: "thread".to_string(),
         record_id: Some(thread_id.clone()),
         context_id: Some(thread_ctx.clone()),
         date_created: "2025-01-01T00:00:00.000000Z".to_string(),
@@ -4877,6 +4865,7 @@ async fn owner_read_message(record_id: &str, timestamp: &str) -> serde_json::Val
         },
         permission_grant_id: None,
         date_sort: None,
+        include_replication_support: None,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let signature = signature_for_descriptor(&descriptor_json, json!({}), test_signer()).await;
@@ -4930,8 +4919,8 @@ async fn seed_prune_row(message_store: &TestMessageStore, tenant: &str, record_i
 async fn parent_missing_entry(parent_id: &str) -> SyncMessageEntry {
     let message = parsed_value(
         &signed_write_message(WriteSpec {
-            protocol: ANCESTRY_PROTOCOL.to_string(),
-            protocol_path: "thread/message".to_string(),
+            module: ANCESTRY_MODULE.to_string(),
+            module_path: "thread/message".to_string(),
             parent_id: Some(parent_id.to_string()),
             ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
         })
@@ -5001,8 +4990,8 @@ async fn direct_sync_endpoint_settles_a_late_descendant_of_a_pruned_subtree() {
 async fn descendant_entry(parent_id: &str, root_ancestor: &str) -> SyncMessageEntry {
     let message = parsed_value(
         &signed_write_message(WriteSpec {
-            protocol: ANCESTRY_PROTOCOL.to_string(),
-            protocol_path: "thread/message/reply".to_string(),
+            module: ANCESTRY_MODULE.to_string(),
+            module_path: "thread/message/reply".to_string(),
             parent_id: Some(parent_id.to_string()),
             parent_context_id: Some(format!("{root_ancestor}/{parent_id}")),
             ..WriteSpec::new("2025-01-01T00:00:00.000000Z")

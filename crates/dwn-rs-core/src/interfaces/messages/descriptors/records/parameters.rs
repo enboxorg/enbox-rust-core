@@ -26,8 +26,13 @@ pub struct ReadParameters {
     pub permission_grant_id: Option<String>,
     #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
     pub date_sort: Option<DateSort>,
-    #[serde(rename = "protocolRole")]
-    pub protocol_role: Option<String>,
+    #[serde(
+        rename = "includeReplicationSupport",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub include_replication_support: Option<bool>,
+    #[serde(rename = "moduleRole")]
+    pub module_role: Option<String>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
 }
@@ -48,6 +53,7 @@ impl MessageParameters for ReadParameters {
             filter: self.filters.clone(),
             permission_grant_id: self.permission_grant_id.clone(),
             date_sort: self.date_sort.clone(),
+            include_replication_support: self.include_replication_support,
         };
 
         Ok((descriptor, None))
@@ -61,8 +67,8 @@ impl MessageParameters for ReadParameters {
         self.permission_grant_id.clone()
     }
 
-    fn protocol_rule(&self) -> Option<String> {
-        self.protocol_role.clone()
+    fn module_rule(&self) -> Option<String> {
+        self.module_role.clone()
     }
 }
 
@@ -71,8 +77,8 @@ pub struct CountParameters {
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub filter: RecordsFilter,
-    #[serde(rename = "protocolRole")]
-    pub protocol_role: Option<String>,
+    #[serde(rename = "moduleRole")]
+    pub module_role: Option<String>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
     #[serde(rename = "permissionGrantId")]
@@ -103,8 +109,8 @@ impl MessageParameters for CountParameters {
         self.delegated_grant.clone()
     }
 
-    fn protocol_rule(&self) -> Option<String> {
-        self.protocol_role.clone()
+    fn module_rule(&self) -> Option<String> {
+        self.module_role.clone()
     }
 
     fn permission_grant_id(&self) -> Option<String> {
@@ -120,8 +126,8 @@ pub struct QueryParameters {
     #[serde(rename = "dateSort")]
     pub date_sort: Option<DateSort>,
     pub pagination: Option<Pagination>,
-    #[serde(rename = "protocolRole")]
-    pub protocol_role: Option<String>,
+    #[serde(rename = "moduleRole")]
+    pub module_role: Option<String>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<WriteDescriptor>>,
     #[serde(rename = "permissionGrantId")]
@@ -170,8 +176,8 @@ impl MessageParameters for QueryParameters {
         self.delegated_grant.clone()
     }
 
-    fn protocol_rule(&self) -> Option<String> {
-        self.protocol_role.clone()
+    fn module_rule(&self) -> Option<String> {
+        self.module_role.clone()
     }
 
     fn permission_grant_id(&self) -> Option<String> {
@@ -200,11 +206,11 @@ pub enum DateSort {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct WriteParameters {
     pub recipient: Option<String>,
-    pub protocol: Option<String>,
-    #[serde(rename = "protocolPath")]
-    pub protocol_path: Option<String>,
-    #[serde(rename = "protocolRole")]
-    pub protocol_role: Option<String>,
+    pub module: Option<String>,
+    #[serde(rename = "modulePath")]
+    pub module_path: Option<String>,
+    #[serde(rename = "moduleRole")]
+    pub module_role: Option<String>,
     pub schema: Option<String>,
     pub tags: Option<MapValue>,
     #[serde(rename = "recordId")]
@@ -235,15 +241,15 @@ pub struct WriteParameters {
 
 impl MessageValidator for WriteParameters {
     fn validate(&self) -> Result<(), ValidationError> {
-        let Some(protocol) = self.protocol.clone() else {
+        let Some(module) = self.module.clone() else {
             return Err(ValidationError {
-                message: "protocol is required".to_string(),
+                message: "module is required".to_string(),
             });
         };
 
-        if self.protocol_path.is_none() {
+        if self.module_path.is_none() {
             return Err(ValidationError {
-                message: "protocolPath is required".to_string(),
+                message: "modulePath is required".to_string(),
             });
         }
 
@@ -268,11 +274,11 @@ impl MessageValidator for WriteParameters {
                 .key_encryption_inputs
                 .iter()
                 .try_for_each(|input| {
-                    if input.derivation_scheme() == DerivationScheme::ProtocolPath
-                        && protocol.is_empty()
+                    if input.derivation_scheme() == DerivationScheme::ModulePath
+                        && module.is_empty()
                     {
                         return Err(ValidationError {
-                            message: "'protocols' encryption requires a protocol".to_string(),
+                            message: "'modules' encryption requires a module".to_string(),
                         });
                     }
                     Ok(())
@@ -293,7 +299,7 @@ impl MessageParameters for WriteParameters {
         fields: &Self::Fields,
         delegated_grant_id: Option<cid::Cid>,
         permission_grant: PermissionGrantInvocation,
-        protocol_role: Option<String>,
+        module_role: Option<String>,
     ) -> Result<SigningPayload, ValidationError> {
         let grant = match permission_grant {
             PermissionGrantInvocation::Multi(_) => {
@@ -340,7 +346,7 @@ impl MessageParameters for WriteParameters {
             encryption_cid,
             grant,
             delegated_grant_id,
-            protocol_role,
+            module_role,
         )
         .map(SigningPayload::RecordsWrite)
         .map_err(|e| ValidationError {
@@ -366,23 +372,23 @@ impl MessageParameters for WriteParameters {
 
         let now = chrono::Utc::now();
 
-        let Some(protocol) = &self.protocol else {
+        let Some(module) = &self.module else {
             return Err(ValidationError {
-                message: "protocol is required".to_string(),
+                message: "module is required".to_string(),
             });
         };
 
-        let Some(protocol_path) = self.protocol_path.clone() else {
+        let Some(module_path) = self.module_path.clone() else {
             return Err(ValidationError {
-                message: "protocolPath is required".to_string(),
+                message: "modulePath is required".to_string(),
             });
         };
 
         let mut descriptor = WriteDescriptor {
-            protocol: normalize_url(protocol.as_str()).map_err(|e| ValidationError {
+            module: normalize_url(module.as_str()).map_err(|e| ValidationError {
                 message: e.to_string(),
             })?,
-            protocol_path,
+            module_path,
             recipient: self.recipient.clone(),
             schema: self.schema.as_ref().and_then(|url| normalize_url(url).ok()),
             tags: self.tags.clone(),
@@ -436,8 +442,8 @@ impl MessageParameters for WriteParameters {
         self.permission_grant_id.clone()
     }
 
-    fn protocol_rule(&self) -> Option<String> {
-        self.protocol_role.clone()
+    fn module_rule(&self) -> Option<String> {
+        self.module_role.clone()
     }
 }
 
@@ -446,8 +452,8 @@ pub struct SubscribeParameters {
     pub filters: RecordsFilter,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(rename = "protocolRole")]
-    pub protocol_role: Option<String>,
+    #[serde(rename = "moduleRole")]
+    pub module_role: Option<String>,
     #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
     pub date_sort: Option<DateSort>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -487,8 +493,8 @@ impl MessageParameters for SubscribeParameters {
         self.delegated_grant.clone()
     }
 
-    fn protocol_rule(&self) -> Option<String> {
-        self.protocol_role.clone()
+    fn module_rule(&self) -> Option<String> {
+        self.module_role.clone()
     }
 
     fn permission_grant_id(&self) -> Option<String> {
@@ -502,8 +508,8 @@ pub struct DeleteParameters {
     pub record_id: String,
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(rename = "protocolRole")]
-    pub protocol_role: Option<String>,
+    #[serde(rename = "moduleRole")]
+    pub module_role: Option<String>,
     #[serde(rename = "prune")]
     pub prune: Option<bool>,
     #[serde(rename = "delegatedGrant")]
@@ -547,7 +553,7 @@ impl MessageParameters for DeleteParameters {
         self.permission_grant_id.clone()
     }
 
-    fn protocol_rule(&self) -> Option<String> {
-        self.protocol_role.clone()
+    fn module_rule(&self) -> Option<String> {
+        self.module_role.clone()
     }
 }

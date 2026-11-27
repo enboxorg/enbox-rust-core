@@ -238,7 +238,7 @@ fn filters_from_json(value: &JsonValue) -> Result<Filters, String> {
     // NOTE: `Filter` deserializes untagged with `Equal` first, so every JSON
     // value would land as `Equal` (ranges, prefixes, and subtrees included).
     // Subtree shapes are intercepted here at the raw level; only `contextId`
-    // and `protocolPath` carry hierarchical path semantics, matching the
+    // and `modulePath` carry hierarchical path semantics, matching the
     // SDK's `assertValidSubtreeFilters`. Other non-equal shapes remain a
     // known gap of this bridge.
     let raw: Vec<BTreeMap<String, JsonValue>> =
@@ -251,7 +251,7 @@ fn filters_from_json(value: &JsonValue) -> Result<Filters, String> {
                 map.len() == 1 && map.get("subtree").is_some_and(|v| v.is_string())
             });
             let filter = if is_subtree {
-                if key != "contextId" && key != "protocolPath" {
+                if key != "contextId" && key != "modulePath" {
                     return Err(format!("SubtreeFilter is not supported for index '{key}'"));
                 }
                 Filter::Subtree(dwn_rs_core::filters::SubtreeFilter {

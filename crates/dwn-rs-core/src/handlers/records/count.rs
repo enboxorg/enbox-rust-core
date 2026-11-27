@@ -5,7 +5,7 @@ use crate::auth::resolver::DidResolver;
 use crate::canonical_rfc3339;
 use crate::descriptors::RecordsCountDescriptor;
 use crate::dwn::{Handler, HandlerContext};
-use crate::filters::context::validate_nested_protocol_path_scope;
+use crate::filters::context::validate_nested_module_path_scope;
 use crate::handlers::records::common::{resolve_record_limit_policy, store_error_reply};
 use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
@@ -40,7 +40,7 @@ where
                 ..
             } = ctx;
 
-            if let Err(reason) = validate_nested_protocol_path_scope(&descriptor.filter, false) {
+            if let Err(reason) = validate_nested_module_path_scope(&descriptor.filter, false) {
                 return Response::bad_request(format!(
                     "RecordsCountNestedModulePathContextIdInvalid: {reason}"
                 ));

@@ -250,7 +250,7 @@ pub struct DesktopProcessMessageResult {
 #[serde(rename_all = "camelCase")]
 pub enum DesktopDeliveryKind {
     EndpointForwarding,
-    ProtocolDelivery,
+    ModuleDelivery,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

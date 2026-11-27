@@ -175,12 +175,12 @@ impl StateIndex for SqliteStateIndex {
         self.inner.get_root(tenant)
     }
 
-    fn get_protocol_root(
+    fn get_module_root(
         &self,
         tenant: &str,
         protocol: &str,
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send {
-        self.inner.get_protocol_root(tenant, protocol)
+        self.inner.get_module_root(tenant, protocol)
     }
 
     fn get_subtree_hash(
@@ -191,14 +191,13 @@ impl StateIndex for SqliteStateIndex {
         self.inner.get_subtree_hash(tenant, prefix)
     }
 
-    fn get_protocol_subtree_hash(
+    fn get_module_subtree_hash(
         &self,
         tenant: &str,
         protocol: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send {
-        self.inner
-            .get_protocol_subtree_hash(tenant, protocol, prefix)
+        self.inner.get_module_subtree_hash(tenant, protocol, prefix)
     }
 
     fn get_leaves(
@@ -209,12 +208,12 @@ impl StateIndex for SqliteStateIndex {
         self.inner.get_leaves(tenant, prefix)
     }
 
-    fn get_protocol_leaves(
+    fn get_module_leaves(
         &self,
         tenant: &str,
         protocol: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send {
-        self.inner.get_protocol_leaves(tenant, protocol, prefix)
+        self.inner.get_module_leaves(tenant, protocol, prefix)
     }
 }

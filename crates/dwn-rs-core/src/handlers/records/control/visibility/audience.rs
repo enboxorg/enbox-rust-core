@@ -62,15 +62,15 @@ pub(crate) fn filter_pins_an_audience_scope(filter: &RecordsFilter) -> bool {
 
 /// The three-field scope the caller pinned, if it pinned one.
 fn audience_scope_pinned_by(filter: &RecordsFilter) -> Option<(&str, &str, &str)> {
-    if filter.protocol_path.as_deref() != Some(ControlKind::Audience.protocol_path()) {
+    if filter.module_path.as_deref() != Some(ControlKind::Audience.module_path()) {
         return None;
     }
-    let protocol = pinned_tag(filter, "protocol")?;
-    if filter.protocol.as_deref() != Some(protocol) {
+    let module = pinned_tag(filter, "module")?;
+    if filter.module.as_deref() != Some(module) {
         return None;
     }
     Some((
-        protocol,
+        module,
         pinned_tag(filter, "rolePath")?,
         pinned_tag(filter, "contextId")?,
     ))
@@ -80,7 +80,7 @@ fn audience_scope_pinned_by(filter: &RecordsFilter) -> Option<(&str, &str, &str)
 pub(super) fn pins_audience_scope(filter: &RecordsFilter, id: &AudienceId) -> bool {
     audience_scope_pinned_by(filter)
         == Some((
-            id.scope.protocol.as_str(),
+            id.scope.module.as_str(),
             id.scope.role_path.as_str(),
             id.scope.context_id.as_str(),
         ))

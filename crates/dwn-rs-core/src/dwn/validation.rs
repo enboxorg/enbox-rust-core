@@ -10,10 +10,10 @@ use jsonschema::{Draft, Registry, Resource, Validator};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::descriptors::protocols::ProtocolsMethod;
+use crate::descriptors::modules::ModulesMethod;
 use crate::descriptors::MESSAGES_QUERY_SCHEMA;
 use crate::dwn::MessageKind;
-use crate::encryption::protocol::{
+use crate::encryption::module::{
     GRANT_KEY_PAYLOAD_SCHEMA_URI, WRAPPED_GRANT_KEY_ENVELOPE_SCHEMA_URI,
 };
 use crate::encryption::ENCRYPTION_AUDIENCE_SCHEMA;
@@ -23,7 +23,7 @@ use crate::interfaces::messages::descriptors::{
     MODULES_CONFIGURE_SCHEMA, MODULES_QUERY_SCHEMA, RECORDS_COUNT_SCHEMA, RECORDS_DELETE_SCHEMA,
     RECORDS_QUERY_SCHEMA, RECORDS_READ_SCHEMA, RECORDS_SUBSCRIBE_SCHEMA, RECORDS_WRITE_SCHEMA,
 };
-use crate::protocols::validate_reserved_control_namespace;
+use crate::modules::validate_reserved_control_namespace;
 use crate::{Descriptor, Message, Response};
 
 // Test-only tally of `validate_message` calls on the current thread, so "schema validation
@@ -276,7 +276,7 @@ pub fn validate_message(raw_message: &Value) -> Result<(), DwnError> {
 /// Validate any JSON against one embedded schema by `$id`.
 ///
 /// Messages reach this through [`validate_message`]; record *payloads* whose
-/// shape a protocol fixes — the encryption-control audience document — call it
+/// shape a module fixes — the encryption-control audience document — call it
 /// directly. Both share the one compiled registry, so a payload schema
 /// resolves `public-jwk.json` and `defs.json` the same way a message schema
 /// does.
@@ -319,7 +319,7 @@ fn validate_before_schema(kind: &MessageKind, raw_message: &Value) -> Result<(),
     match kind {
         // The parsing route. The construction route is
         // checked in `ConfigureParameters::build`.
-        MessageKind::Protocols(ProtocolsMethod::Configure) => {
+        MessageKind::Modules(ModulesMethod::Configure) => {
             validate_reserved_control_namespace(descriptor_field(raw_message, "definition"))
         }
         _ => Ok(()),
@@ -410,7 +410,7 @@ mod tests {
                 "keyEncryption": [{
                     "algorithm": "X25519-HKDF-SHA256+A256KW",
                     "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
-                    "derivationScheme": "protocolPath",
+                    "derivationScheme": "modulePath",
                     "ephemeralPublicKey": {
                         "kty": "OKP",
                         "crv": "X25519",
@@ -427,23 +427,23 @@ mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 38,
                 "dataFormat": "text/plain",
-                "protocol": "https://example.com/protocol/jwe",
-                "protocolPath": "thread/message"
+                "module": "https://example.com/module/jwe",
+                "modulePath": "thread/message"
             }
         });
 
         validate_message(&message).expect("current encrypted RecordsWrite must validate");
     }
 
-    fn keyed_protocol_configure() -> serde_json::Value {
+    fn keyed_module_configure() -> serde_json::Value {
         serde_json::json!({
             "authorization": {},
             "descriptor": {
-                "interface": "Protocols",
+                "interface": "Modules",
                 "method": "Configure",
                 "messageTimestamp": "2025-01-01T00:00:00.000000Z",
                 "definition": {
-                    "protocol": "https://example.com/enc",
+                    "module": "https://example.com/enc",
                     "published": true,
                     "$keyAgreement": {
                         "publicKeyJwk": {
@@ -474,8 +474,8 @@ mod tests {
     type SchemaCase = (&'static str, fn(&mut serde_json::Value));
 
     #[test]
-    fn protocol_definition_schema_rejects_legacy_and_malformed_key_material() {
-        validate_message(&keyed_protocol_configure()).expect("keyed definition must validate");
+    fn module_definition_schema_rejects_legacy_and_malformed_key_material() {
+        validate_message(&keyed_module_configure()).expect("keyed definition must validate");
 
         let cases: &[SchemaCase] = &[
             ("legacy $encryption", |message| {
@@ -513,7 +513,7 @@ mod tests {
             }),
         ];
         for (name, mutate) in cases {
-            let mut message = keyed_protocol_configure();
+            let mut message = keyed_module_configure();
             mutate(&mut message);
             assert!(
                 validate_message(&message).is_err(),
@@ -571,7 +571,7 @@ mod ingress_tests {
     }
 
     fn valid_query() -> Value {
-        unsigned_query_message(json!({ "protocol": "http://example.com/notes" }))
+        unsigned_query_message(json!({ "module": "http://example.com/notes" }))
     }
 
     /// The same input through dispatch and through the shared ingress must produce the same
@@ -769,7 +769,7 @@ mod ingress_tests {
         assert_eq!(raw, before);
         assert_eq!(
             message.cid().unwrap().to_string(),
-            "bafyreiaobbfej4hmwrzfaxcem33fa4fvlqwbjs25xfatk57d3lzhdx3qya"
+            "bafyreiahakvroub2ok7vta7fvuwocylw47cvcsuennonbgt23n2o2ephc4"
         );
     }
 
@@ -778,7 +778,7 @@ mod ingress_tests {
     /// "reject mismatched field variants" conversion is not written against a false premise.
     #[tokio::test]
     async fn untagged_fields_resolve_every_message_to_the_write_variant() {
-        let filter = json!({ "protocol": "http://example.com/notes" });
+        let filter = json!({ "module": "http://example.com/notes" });
         let messages = [
             ("query", unsigned_query_message(filter.clone())),
             ("count", unsigned_count_message(filter.clone())),

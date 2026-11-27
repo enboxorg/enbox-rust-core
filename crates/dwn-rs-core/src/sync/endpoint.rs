@@ -227,7 +227,7 @@ where
         let scope = scope.clone();
         Box::pin(async move {
             let root = match scope.protocol_uri() {
-                Some(protocol) => state_index.get_protocol_root(tenant, protocol).await,
+                Some(protocol) => state_index.get_module_root(tenant, protocol).await,
                 None => state_index.get_root(tenant).await,
             }
             .map_err(|err| SyncError::transient("StateIndexRootFailed", err.to_string()))?;
@@ -710,7 +710,7 @@ async fn subtree_hash<SI: StateIndex>(
     match protocol {
         Some(protocol) => {
             state_index
-                .get_protocol_subtree_hash(tenant, protocol, prefix)
+                .get_module_subtree_hash(tenant, protocol, prefix)
                 .await
         }
         None => state_index.get_subtree_hash(tenant, prefix).await,
@@ -726,7 +726,7 @@ async fn leaves<SI: StateIndex>(
     match protocol {
         Some(protocol) => {
             state_index
-                .get_protocol_leaves(tenant, protocol, prefix)
+                .get_module_leaves(tenant, protocol, prefix)
                 .await
         }
         None => state_index.get_leaves(tenant, prefix).await,
@@ -912,7 +912,7 @@ impl SyncRequestAuthorizer for JwsSyncAuthorizer {
             let parameters = SyncParameters {
                 message_timestamp: Self::timestamp(),
                 action,
-                protocol: scope.protocol_uri().map(|s| s.to_string()),
+                module: scope.protocol_uri().map(|s| s.to_string()),
                 prefix: prefix.map(|s| s.to_string()),
                 permission_grant_ids: permission_grant_id.map(|s| vec![s]),
                 hashes,

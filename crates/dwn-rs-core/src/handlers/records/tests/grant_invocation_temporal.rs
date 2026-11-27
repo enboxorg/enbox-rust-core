@@ -34,8 +34,8 @@ async fn not_yet_active_and_missing_grants_rejected() {
             "scope": {
                 "interface": "Records",
                 "method": "Read",
-                "protocol": "http://example.com/notes",
-                "protocolPath": "note",
+                "module": "http://example.com/notes",
+                "modulePath": "note",
             },
         }))
         .unwrap(),
@@ -46,11 +46,11 @@ async fn not_yet_active_and_missing_grants_rejected() {
         Some(Arc::new(test_resolver())),
     );
     let activating = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&activating_grant_data).to_string(),
@@ -225,7 +225,7 @@ async fn revoked_grant_drains_count() {
 }
 
 // A grant scoped to one context does not cover a contextless filter over the
-// same protocol path: context is a boundary, not a hint.
+// same module path: context is a boundary, not a hint.
 #[tokio::test]
 // Covers: DWN-AUTH-003
 async fn context_scoped_grant_rejects_contextless_filter() {
@@ -238,7 +238,7 @@ async fn context_scoped_grant_rejects_contextless_filter() {
             "scope": {
                 "interface": "Records",
                 "method": "Read",
-                "protocol": "http://example.com/notes",
+                "module": "http://example.com/notes",
                 "contextId": "some-context",
             },
         }))
@@ -250,11 +250,11 @@ async fn context_scoped_grant_rejects_contextless_filter() {
         Some(Arc::new(test_resolver())),
     );
     let scoped = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&scoped_data).to_string(),
@@ -425,7 +425,7 @@ async fn live_subscription_terminates_when_grant_revoked() {
     message_store.open().await.unwrap();
     let mut data_store = TestDataStore::default();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
 
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),

@@ -230,7 +230,7 @@ mod tests {
                 encryption: Some(EncryptionEnvelope {
                     algorithm: ContentEncryptionAlgorithm::A256Ctr,
                     initialization_vector: "initialization_vector".to_string(),
-                    key_encryption: vec![KeyEncryption::ProtocolPath {
+                    key_encryption: vec![KeyEncryption::ModulePath {
                         algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
                         key_id: "root_key_id".to_string(),
                         ephemeral_public_key: jwk.clone(),
@@ -261,7 +261,7 @@ mod tests {
                                 "keyId": "root_key_id",
                                 "ephemeralPublicKey": {jwk},
                                 "encryptedKey": "encrypted_key",
-                                "derivationScheme": "protocolPath"
+                                "derivationScheme": "modulePath"
                             }}
                         ]
                     }},
@@ -315,7 +315,7 @@ mod tests {
                             "keyId": "root_key_id",
                             "ephemeralPublicKey": {jwk},
                             "encryptedKey": "encrypted_key",
-                            "derivationScheme": "protocolPath"
+                            "derivationScheme": "modulePath"
                         }}
                     ]
                 }},

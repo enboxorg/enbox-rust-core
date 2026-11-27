@@ -18,7 +18,7 @@ use dwn_rs_agent::auth::setup::{
     MemoryProtocolEndpoint, ProtocolEndpoint, RegistrationTokenData, SetupFuture,
     TenantRegistrationClient, TenantRegistrationRequest, TenantRegistrationResult,
 };
-use dwn_rs_core::interfaces::messages::protocols::{
+use dwn_rs_core::interfaces::messages::modules::{
     Action, ActionWho, Can, Definition, RuleSet, Type, Who,
 };
 use dwn_rs_core::permissions::{PermissionScope, RecordsMethod, RecordsScope, RecordsSelector};
@@ -522,9 +522,9 @@ fn read_request(protocol: &str) -> ConnectPermissionRequest {
         protocol_definition: encrypted_protocol_for(protocol),
         permission_scopes: vec![PermissionScope::Records(RecordsScope {
             method: RecordsMethod::Read,
-            protocol: protocol.to_string(),
-            selector: Some(RecordsSelector::ProtocolPath(
-                dwn_rs_core::permissions::ProtocolPath("note".to_string()),
+            module: protocol.to_string(),
+            selector: Some(RecordsSelector::ModulePath(
+                dwn_rs_core::permissions::ModulePath("note".to_string()),
             )),
         })],
     }
@@ -536,7 +536,7 @@ fn encrypted_protocol() -> Definition {
 
 fn encrypted_protocol_for(protocol: &str) -> Definition {
     Definition {
-        protocol: protocol.to_string(),
+        module: protocol.to_string(),
         published: true,
         uses: None,
         key_agreement: None,

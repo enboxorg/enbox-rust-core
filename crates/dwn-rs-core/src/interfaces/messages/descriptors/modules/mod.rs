@@ -7,16 +7,16 @@ pub use parameters::*;
 
 use dwn_rs_message_derive::interface;
 
-#[interface(PROTOCOLS, union = Protocols)]
+#[interface(MODULES, union = Modules)]
 mod inner {
     use super::QueryFilter;
     use crate::interfaces::messages::descriptors::{
-        CONFIGURE, MODULES_CONFIGURE_SCHEMA, MODULES_QUERY_SCHEMA, PROTOCOLS, QUERY,
+        CONFIGURE, MODULES, MODULES_CONFIGURE_SCHEMA, MODULES_QUERY_SCHEMA, QUERY,
     };
-    use crate::protocols;
+    use crate::modules;
 
-    /// ConfigureDescriptor represents the ProtocolsConfigure interface method for configuring a
-    /// protocol on the DWN.
+    /// ModulesConfigureDescriptor represents the ModulesConfigure interface method for configuring a
+    /// module on the DWN.
     #[descriptor(
         method = CONFIGURE,
         variant = Configure,
@@ -25,18 +25,18 @@ mod inner {
         parameters = super::ConfigureParameters,
         grant = single
     )]
-    pub struct ConfigureDescriptor {
+    pub struct ModulesConfigureDescriptor {
         #[serde(
             rename = "messageTimestamp",
             serialize_with = "crate::ser::serialize_datetime"
         )]
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
-        pub definition: protocols::Definition,
+        pub definition: modules::Definition,
         #[serde(rename = "permissionGrantId", skip_serializing_if = "Option::is_none")]
         pub permission_grant_id: Option<String>,
     }
 
-    /// QueryDescriptor represents the ProtocolsQuery interface method for querying protocols.
+    /// ModulesQueryDescriptor represents the ModulesQuery interface method for querying modules.
     #[descriptor(
         method = QUERY,
         variant = Query,
@@ -45,7 +45,7 @@ mod inner {
         parameters = super::QueryParameters,
         grant = single
     )]
-    pub struct QueryDescriptor {
+    pub struct ModulesQueryDescriptor {
         #[serde(
             rename = "messageTimestamp",
             serialize_with = "crate::ser::serialize_datetime"

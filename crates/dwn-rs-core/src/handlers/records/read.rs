@@ -18,7 +18,7 @@ use crate::handlers::records::common::{
     fetch_initial_write_message, fetch_newest_write, filter_map, message_record_id,
     message_record_limit_policy, published_sort_name, records_delete_descriptor,
     records_filter_to_filter_map, set_encoded_data, store_error_reply, string_filter,
-    ProtocolAuthorizationError,
+    ModuleAuthorizationError,
 };
 use crate::handlers::records::control;
 use crate::permissions::{self};
@@ -189,8 +189,8 @@ where
                                 ("interface", string_filter(RECORDS_INTERFACE)),
                                 ("method", string_filter(WRITE_METHOD)),
                                 ("isLatestBaseState", bool_filter(true)),
-                                ("protocol", string_filter(&policy.protocol)),
-                                ("protocolPath", string_filter(&policy.protocol_path)),
+                                ("module", string_filter(&policy.module)),
+                                ("modulePath", string_filter(&policy.module_path)),
                                 ("recordId", string_filter(&candidate_record_id)),
                             ]);
                             match self
@@ -220,11 +220,11 @@ where
                         .await
                         {
                             Ok(true) => Ok(()),
-                            Ok(false) => Err(ProtocolAuthorizationError::Detail("EncryptionControlReadUnauthorized: requester is not authorized to read the encryption control record".to_string())),
+                            Ok(false) => Err(ModuleAuthorizationError::Detail("EncryptionControlReadUnauthorized: requester is not authorized to read the encryption control record".to_string())),
                             Err(control::ControlValidationError::Internal(detail)) => {
                                 return store_error_reply(detail)
                             }
-                            Err(error) => Err(ProtocolAuthorizationError::Detail(error.to_string())),
+                            Err(error) => Err(ModuleAuthorizationError::Detail(error.to_string())),
                         }
                     } else {
                         authorize_records_read(

@@ -132,8 +132,8 @@ where
         tenant: &str,
         descriptor: &MessagesSyncDescriptor,
     ) -> Response<messages::Sync> {
-        let root = match descriptor.protocol.as_deref() {
-            Some(protocol) => self.state_index.get_protocol_root(tenant, protocol).await,
+        let root = match descriptor.module.as_deref() {
+            Some(module) => self.state_index.get_module_root(tenant, module).await,
             None => self.state_index.get_root(tenant).await,
         };
         match root {
@@ -154,10 +154,10 @@ where
             Ok(prefix) => prefix,
             Err(detail) => return Response::bad_request(detail.to_string()),
         };
-        let hash = match descriptor.protocol.as_deref() {
-            Some(protocol) => {
+        let hash = match descriptor.module.as_deref() {
+            Some(module) => {
                 self.state_index
-                    .get_protocol_subtree_hash(tenant, protocol, &prefix)
+                    .get_module_subtree_hash(tenant, module, &prefix)
                     .await
             }
             None => self.state_index.get_subtree_hash(tenant, &prefix).await,
@@ -181,7 +181,7 @@ where
             Err(detail) => return Response::bad_request(detail.to_string()),
         };
         match self
-            .leaves(tenant, descriptor.protocol.as_deref(), &prefix)
+            .leaves(tenant, descriptor.module.as_deref(), &prefix)
             .await
         {
             Ok(entries) => Response::ok().with_reply(messages::Sync {
@@ -204,7 +204,7 @@ where
             Err(detail) => return Response::bad_request(detail.to_string()),
         };
         let server_hashes = match self
-            .collect_subtree_hashes(tenant, descriptor.protocol.as_deref(), depth)
+            .collect_subtree_hashes(tenant, descriptor.module.as_deref(), depth)
             .await
         {
             Ok(hashes) => hashes,
@@ -238,7 +238,7 @@ where
                 Err(detail) => return Response::bad_request(detail.to_string()),
             };
             match self
-                .leaves(tenant, descriptor.protocol.as_deref(), &bit_prefix)
+                .leaves(tenant, descriptor.module.as_deref(), &bit_prefix)
                 .await
             {
                 Ok(leaves) => only_remote_cids.extend(leaves),
@@ -264,7 +264,7 @@ where
     async fn collect_subtree_hashes(
         &self,
         tenant: &str,
-        protocol: Option<&str>,
+        module: Option<&str>,
         depth: usize,
     ) -> Result<BTreeMap<String, String>, String> {
         if depth > MAX_SYNC_DEPTH {
@@ -277,7 +277,7 @@ where
         let mut stack = vec![String::new()];
         while let Some(prefix) = stack.pop() {
             let bits = parse_bit_prefix(&prefix)?;
-            let hash = self.subtree_hash(tenant, protocol, &bits).await?;
+            let hash = self.subtree_hash(tenant, module, &bits).await?;
             if hash == default_hash(bits.len())? {
                 continue;
             }
@@ -294,13 +294,13 @@ where
     async fn subtree_hash(
         &self,
         tenant: &str,
-        protocol: Option<&str>,
+        module: Option<&str>,
         prefix: &[bool],
     ) -> Result<StateHash, String> {
-        match protocol {
-            Some(protocol) => {
+        match module {
+            Some(module) => {
                 self.state_index
-                    .get_protocol_subtree_hash(tenant, protocol, prefix)
+                    .get_module_subtree_hash(tenant, module, prefix)
                     .await
             }
             None => self.state_index.get_subtree_hash(tenant, prefix).await,
@@ -311,13 +311,13 @@ where
     async fn leaves(
         &self,
         tenant: &str,
-        protocol: Option<&str>,
+        module: Option<&str>,
         prefix: &[bool],
     ) -> Result<Vec<String>, String> {
-        match protocol {
-            Some(protocol) => {
+        match module {
+            Some(module) => {
                 self.state_index
-                    .get_protocol_leaves(tenant, protocol, prefix)
+                    .get_module_leaves(tenant, module, prefix)
                     .await
             }
             None => self.state_index.get_leaves(tenant, prefix).await,

@@ -19,7 +19,7 @@ use dwn_rs_agent::auth::setup::{
     TenantRegistrationRequest,
 };
 use dwn_rs_agent::auth::setup::{RegistrationTokenData, SetupFuture};
-use dwn_rs_core::interfaces::messages::protocols::{
+use dwn_rs_core::interfaces::messages::modules::{
     Action, ActionWho, Can, Definition, RuleSet, Type, Who,
 };
 use dwn_rs_core::permissions::PermissionScope;
@@ -57,7 +57,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
     assert_eq!(setup.local_installs.len(), 1);
     assert_eq!(setup.remote_pushes.len(), 1);
     let installed = local
-        .protocol(&original.portable_did.uri, &protocol.protocol)
+        .protocol(&original.portable_did.uri, &protocol.module)
         .unwrap()
         .expect("installed protocol");
     assert!(installed.structure["note"].key_agreement.is_some());
@@ -121,7 +121,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         .all(|record| record.method == RegistrationMethod::Anonymous));
 
     let pulled_remote_protocol = remote
-        .protocol(&restored.portable_did.uri, &protocol.protocol)
+        .protocol(&restored.portable_did.uri, &protocol.module)
         .unwrap()
         .expect("pulled remote protocol");
     assert!(pulled_remote_protocol.structure["note"]
@@ -143,7 +143,7 @@ async fn wallet_recovery_restores_encrypted_protocol_and_delegate_read_state() {
         Utc::now() + Duration::days(1),
         None,
     );
-    assert_eq!(grant.scope.protocol(), Some(protocol.protocol.as_str()));
+    assert_eq!(grant.scope.module(), Some(protocol.module.as_str()));
 
     let mut no_encryption_did = restored.portable_did.clone();
     no_encryption_did
@@ -305,10 +305,10 @@ fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
             "Delete" => dwn_rs_core::permissions::RecordsMethod::Delete,
             _ => panic!("unsupported Records permission method in test: {method}"),
         },
-        protocol: "https://protocol.example/notes".to_string(),
+        module: "https://protocol.example/notes".to_string(),
         selector: protocol_path.map(|path| {
-            dwn_rs_core::permissions::RecordsSelector::ProtocolPath(
-                dwn_rs_core::permissions::ProtocolPath(path.to_string()),
+            dwn_rs_core::permissions::RecordsSelector::ModulePath(
+                dwn_rs_core::permissions::ModulePath(path.to_string()),
             )
         }),
     })
@@ -316,7 +316,7 @@ fn records_scope(method: &str, protocol_path: Option<&str>) -> PermissionScope {
 
 fn encrypted_protocol() -> Definition {
     Definition {
-        protocol: "https://protocol.example/notes".to_string(),
+        module: "https://protocol.example/notes".to_string(),
         published: true,
         uses: None,
         key_agreement: None,

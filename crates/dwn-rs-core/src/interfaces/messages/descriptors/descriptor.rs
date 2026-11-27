@@ -4,9 +4,9 @@ use crate::auth::jws::PermissionGrantInvocation;
 use crate::Fields;
 
 use super::{
-    messages::Messages, protocols::Protocols, records::Records, HasMessageTimestamp,
+    messages::Messages, modules::Modules, records::Records, HasMessageTimestamp,
     HasPermissionGrantInvocation, MessageDescriptor, MessageValidator, ValidationError, MESSAGES,
-    PROTOCOLS, RECORDS,
+    MODULES, RECORDS,
 };
 
 /// Interfaces represent the different Decentralized Web Node message interface types.
@@ -15,7 +15,7 @@ use super::{
 #[serde(untagged)]
 pub enum Descriptor {
     Records(Box<Records>),
-    Protocols(Box<Protocols>),
+    Modules(Box<Modules>),
     Messages(Box<Messages>),
 }
 
@@ -23,7 +23,7 @@ impl MessageValidator for Descriptor {
     fn validate(&self) -> Result<(), ValidationError> {
         match self {
             Descriptor::Records(_) => Ok(()),
-            Descriptor::Protocols(_) => Ok(()),
+            Descriptor::Modules(_) => Ok(()),
             Descriptor::Messages(_) => Ok(()),
         }
     }
@@ -33,7 +33,7 @@ impl HasMessageTimestamp for Descriptor {
     fn message_timestamp(&self) -> chrono::DateTime<chrono::Utc> {
         match self {
             Descriptor::Records(records) => records.message_timestamp(),
-            Descriptor::Protocols(protocols) => protocols.message_timestamp(),
+            Descriptor::Modules(modules) => modules.message_timestamp(),
             Descriptor::Messages(messages) => messages.message_timestamp(),
         }
     }
@@ -43,7 +43,7 @@ impl HasPermissionGrantInvocation for Descriptor {
     fn permission_grant_invocation(&self) -> PermissionGrantInvocation {
         match self {
             Descriptor::Records(records) => records.permission_grant_invocation(),
-            Descriptor::Protocols(protocols) => protocols.permission_grant_invocation(),
+            Descriptor::Modules(modules) => modules.permission_grant_invocation(),
             Descriptor::Messages(messages) => messages.permission_grant_invocation(),
         }
     }
@@ -56,7 +56,7 @@ impl MessageDescriptor for Descriptor {
     fn interface(&self) -> &'static str {
         match self {
             Descriptor::Records(_) => RECORDS,
-            Descriptor::Protocols(_) => PROTOCOLS,
+            Descriptor::Modules(_) => MODULES,
             Descriptor::Messages(_) => MESSAGES,
         }
     }
@@ -64,7 +64,7 @@ impl MessageDescriptor for Descriptor {
     fn method(&self) -> &'static str {
         match self {
             Descriptor::Records(records) => records.method(),
-            Descriptor::Protocols(protocols) => protocols.method(),
+            Descriptor::Modules(modules) => modules.method(),
             Descriptor::Messages(messages) => messages.method(),
         }
     }
@@ -87,6 +87,7 @@ mod test {
             filter: RecordsFilter::default(),
             permission_grant_id: None,
             date_sort: None,
+            include_replication_support: None,
         }))));
         let serialized = json!(&desc);
 

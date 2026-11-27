@@ -2,23 +2,23 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use crate::descriptors::{ConfigureDescriptor, Descriptor, Protocols};
+use crate::descriptors::{Descriptor, Modules, ModulesConfigureDescriptor};
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::interfaces::messages::protocols::{self as protocol_types, Definition, RuleSet};
+use crate::interfaces::messages::modules::{self as module_types, Definition, RuleSet};
 use crate::interfaces::replies::Status;
 use crate::stores::KeyValues;
 use crate::{canonical_rfc3339, permissions, Response};
 use crate::{Message, Value};
 
-const PROTOCOLS_INTERFACE: &str = "Protocols";
+const MODULES_INTERFACE: &str = "Modules";
 const CONFIGURE_METHOD: &str = "Configure";
 
-pub(crate) fn protocols_configure_descriptor(
+pub(crate) fn modules_configure_descriptor(
     message: &Message<Descriptor>,
-) -> Result<&ConfigureDescriptor, String> {
+) -> Result<&ModulesConfigureDescriptor, String> {
     match &message.descriptor {
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            Protocols::Configure(descriptor) => Ok(descriptor),
+        Descriptor::Modules(modules) => match modules.as_ref() {
+            Modules::Configure(descriptor) => Ok(descriptor),
             _ => Err("expected ModulesConfigure message".to_string()),
         },
         _ => Err("expected ModulesConfigure message".to_string()),
@@ -32,19 +32,19 @@ pub(crate) fn message_cid(message: &Message<Descriptor>) -> Result<String, Strin
         .map_err(|err| err.to_string())
 }
 
-pub(crate) fn protocol_configure_filters(protocol: &str, latest_only: bool) -> Filters {
+pub(crate) fn module_configure_filters(module: &str, latest_only: bool) -> Filters {
     let mut filters = BTreeMap::new();
     filters.insert(
         FilterKey::Index("interface".to_string()),
-        Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+        Filter::Equal(Value::String(MODULES_INTERFACE.to_string())),
     );
     filters.insert(
         FilterKey::Index("method".to_string()),
         Filter::Equal(Value::String(CONFIGURE_METHOD.to_string())),
     );
     filters.insert(
-        FilterKey::Index("protocol".to_string()),
-        Filter::Equal(Value::String(protocol.to_string())),
+        FilterKey::Index("module".to_string()),
+        Filter::Equal(Value::String(module.to_string())),
     );
     if latest_only {
         filters.insert(
@@ -59,7 +59,7 @@ pub(crate) fn latest_configure_filters() -> Filters {
     let mut filters = BTreeMap::new();
     filters.insert(
         FilterKey::Index("interface".to_string()),
-        Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+        Filter::Equal(Value::String(MODULES_INTERFACE.to_string())),
     );
     filters.insert(
         FilterKey::Index("method".to_string()),
@@ -72,22 +72,22 @@ pub(crate) fn latest_configure_filters() -> Filters {
     Filters::from(filters)
 }
 
-pub(crate) fn protocol_definition_lookup_filters(
-    protocol: &str,
+pub(crate) fn module_definition_lookup_filters(
+    module: &str,
     message_timestamp: Option<&str>,
 ) -> Filters {
     let mut filters = BTreeMap::new();
     filters.insert(
         FilterKey::Index("interface".to_string()),
-        Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+        Filter::Equal(Value::String(MODULES_INTERFACE.to_string())),
     );
     filters.insert(
         FilterKey::Index("method".to_string()),
         Filter::Equal(Value::String(CONFIGURE_METHOD.to_string())),
     );
     filters.insert(
-        FilterKey::Index("protocol".to_string()),
-        Filter::Equal(Value::String(protocol.to_string())),
+        FilterKey::Index("module".to_string()),
+        Filter::Equal(Value::String(module.to_string())),
     );
 
     if let Some(timestamp) = message_timestamp {
@@ -108,32 +108,32 @@ pub(crate) fn protocol_definition_lookup_filters(
     Filters::from(filters)
 }
 
-pub(crate) fn protocol_definition_history_filters(protocol: &str) -> Filters {
+pub(crate) fn module_definition_history_filters(module: &str) -> Filters {
     let mut filters = BTreeMap::new();
     filters.insert(
         FilterKey::Index("interface".to_string()),
-        Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+        Filter::Equal(Value::String(MODULES_INTERFACE.to_string())),
     );
     filters.insert(
         FilterKey::Index("method".to_string()),
         Filter::Equal(Value::String(CONFIGURE_METHOD.to_string())),
     );
     filters.insert(
-        FilterKey::Index("protocol".to_string()),
-        Filter::Equal(Value::String(protocol.to_string())),
+        FilterKey::Index("module".to_string()),
+        Filter::Equal(Value::String(module.to_string())),
     );
     Filters::from(filters)
 }
 
 pub(crate) fn configure_indexes(
-    descriptor: &ConfigureDescriptor,
+    descriptor: &ModulesConfigureDescriptor,
     author: Option<&str>,
     is_latest_base_state: bool,
 ) -> KeyValues {
     let mut indexes = BTreeMap::new();
     indexes.insert(
         "interface".to_string(),
-        Value::String(PROTOCOLS_INTERFACE.to_string()),
+        Value::String(MODULES_INTERFACE.to_string()),
     );
     indexes.insert(
         "method".to_string(),
@@ -144,8 +144,8 @@ pub(crate) fn configure_indexes(
         Value::String(canonical_rfc3339(descriptor.message_timestamp)),
     );
     indexes.insert(
-        "protocol".to_string(),
-        Value::String(descriptor.definition.protocol.clone()),
+        "module".to_string(),
+        Value::String(descriptor.definition.module.clone()),
     );
     indexes.insert(
         "published".to_string(),
@@ -173,10 +173,10 @@ pub(crate) fn compare_configure_messages(
     right_cid: &str,
     right: &Message<Descriptor>,
 ) -> Ordering {
-    let left_timestamp = protocols_configure_descriptor(left)
+    let left_timestamp = modules_configure_descriptor(left)
         .map(|descriptor| descriptor.message_timestamp)
         .ok();
-    let right_timestamp = protocols_configure_descriptor(right)
+    let right_timestamp = modules_configure_descriptor(right)
         .map(|descriptor| descriptor.message_timestamp)
         .ok();
     left_timestamp
@@ -190,39 +190,39 @@ pub(crate) fn extract_author(message: &Message<Descriptor>) -> Option<String> {
 
 pub(crate) fn validate_refs_and_roles_recursively(
     rule_set: &BTreeMap<String, RuleSet>,
-    protocol_path: &str,
+    module_path: &str,
     referenced: &BTreeMap<String, Definition>,
 ) -> Result<(), String> {
     for (key, child_rule_set) in rule_set {
-        let child_protocol_path = if protocol_path.is_empty() {
+        let child_module_path = if module_path.is_empty() {
             key.clone()
         } else {
-            format!("{protocol_path}/{key}")
+            format!("{module_path}/{key}")
         };
 
         if let Some(reference) = &child_rule_set.reference {
-            if let Some(parsed) = protocol_types::parse_cross_protocol_ref(reference) {
+            if let Some(parsed) = module_types::parse_cross_module_ref(reference) {
                 let definition = referenced.get(parsed.alias).ok_or_else(|| {
                     format!(
-                        "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{}' was not found.",
-                        parsed.alias, child_protocol_path
+                        "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at module path '{}' was not found.",
+                        parsed.alias, child_module_path
                     )
                 })?;
                 let mut current = &definition.structure;
                 let mut traversed = Vec::new();
-                for segment in parsed.protocol_path.split('/') {
+                for segment in parsed.module_path.split('/') {
                     traversed.push(segment);
                     let Some(node) = current.get(segment) else {
                         return Err(format!(
-                            "ModulesConfigureInvalidRefProtocolPath: '$ref' at protocol path '{child_protocol_path}' references type path '{}' which does not exist in protocol '{}'.",
-                            parsed.protocol_path, definition.protocol
+                            "ModulesConfigureInvalidRefModulePath: '$ref' at module path '{child_module_path}' references type path '{}' which does not exist in module '{}'.",
+                            parsed.module_path, definition.module
                         ));
                     };
                     if node.reference.is_some() {
                         return Err(format!(
-                            "ModulesConfigureInvalidRefTargetThroughRef: '$ref' at protocol path '{child_protocol_path}' references type path '{}' in protocol '{}', but node '{}' is itself a '$ref'.",
-                            parsed.protocol_path,
-                            definition.protocol,
+                            "ModulesConfigureInvalidRefTargetThroughRef: '$ref' at module path '{child_module_path}' references type path '{}' in module '{}', but node '{}' is itself a '$ref'.",
+                            parsed.module_path,
+                            definition.module,
                             traversed.join("/")
                         ));
                     }
@@ -233,57 +233,57 @@ pub(crate) fn validate_refs_and_roles_recursively(
 
         for action in &child_rule_set.actions {
             match action {
-                protocol_types::Action::Role(action) => {
-                    if let Some(parsed) = protocol_types::parse_cross_protocol_ref(&action.role) {
+                module_types::Action::Role(action) => {
+                    if let Some(parsed) = module_types::parse_cross_module_ref(&action.role) {
                         let definition = referenced.get(parsed.alias).ok_or_else(|| {
                             format!(
-                                "ModulesConfigureInvalidCrossModuleRole: alias '{}' at protocol path '{}' was not found.",
-                                parsed.alias, child_protocol_path
+                                "ModulesConfigureInvalidCrossModuleRole: alias '{}' at module path '{}' was not found.",
+                                parsed.alias, child_module_path
                             )
                         })?;
-                        let Some(role_rule_set) = definition.rule_at(parsed.protocol_path) else {
+                        let Some(role_rule_set) = definition.rule_at(parsed.module_path) else {
                             return Err(format!(
-                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at protocol path '{}' does not exist in protocol '{}'.",
-                                action.role, child_protocol_path, definition.protocol
+                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at module path '{}' does not exist in module '{}'.",
+                                action.role, child_module_path, definition.module
                             ));
                         };
                         if role_rule_set.role != Some(true) {
                             return Err(format!(
-                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at protocol path '{}' does not point to a valid role in protocol '{}'.",
-                                action.role, child_protocol_path, definition.protocol
+                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at module path '{}' does not point to a valid role in module '{}'.",
+                                action.role, child_module_path, definition.module
                             ));
                         }
                         let role_type = parsed
-                            .protocol_path
+                            .module_path
                             .split('/')
                             .next_back()
                             .unwrap_or_default();
                         let role_type_encrypted = definition
                             .types
                             .get(role_type)
-                            .and_then(|protocol_type| protocol_type.encryption_required)
+                            .and_then(|module_type| module_type.encryption_required)
                             == Some(true);
                         if role_type_encrypted {
                             return Err(format!(
-                                "ModulesConfigureInvalidEncryptedRoleType: cross-protocol role '{}' at protocol path '{}' resolves to encrypted type '{role_type}' in protocol '{}'; role records cannot be encrypted.",
-                                action.role, child_protocol_path, definition.protocol
+                                "ModulesConfigureInvalidEncryptedRoleType: cross-module role '{}' at module path '{}' resolves to encrypted type '{role_type}' in module '{}'; role records cannot be encrypted.",
+                                action.role, child_module_path, definition.module
                             ));
                         }
                     }
                 }
-                protocol_types::Action::Who(action) => {
+                module_types::Action::Who(action) => {
                     if let Some(of) = &action.of {
-                        if let Some(parsed) = protocol_types::parse_cross_protocol_ref(of) {
+                        if let Some(parsed) = module_types::parse_cross_module_ref(of) {
                             let definition = referenced.get(parsed.alias).ok_or_else(|| {
                                 format!(
-                                    "ModulesConfigureInvalidCrossModuleOf: alias '{}' at protocol path '{}' was not found.",
-                                    parsed.alias, child_protocol_path
+                                    "ModulesConfigureInvalidCrossModuleOf: alias '{}' at module path '{}' was not found.",
+                                    parsed.alias, child_module_path
                                 )
                             })?;
-                            if definition.rule_at(parsed.protocol_path).is_none() {
+                            if definition.rule_at(parsed.module_path).is_none() {
                                 return Err(format!(
-                                    "ModulesConfigureInvalidCrossModuleOf: reference '{}' at protocol path '{}' does not point to a valid type path in protocol '{}'.",
-                                    of, child_protocol_path, definition.protocol
+                                    "ModulesConfigureInvalidCrossModuleOf: reference '{}' at module path '{}' does not point to a valid type path in module '{}'.",
+                                    of, child_module_path, definition.module
                                 ));
                             }
                         }
@@ -292,11 +292,7 @@ pub(crate) fn validate_refs_and_roles_recursively(
             }
         }
 
-        validate_refs_and_roles_recursively(
-            &child_rule_set.rules,
-            &child_protocol_path,
-            referenced,
-        )?;
+        validate_refs_and_roles_recursively(&child_rule_set.rules, &child_module_path, referenced)?;
     }
 
     Ok(())

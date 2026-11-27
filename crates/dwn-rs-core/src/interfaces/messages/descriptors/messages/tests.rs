@@ -93,7 +93,7 @@ fn test_sync_descriptor() {
     let descriptor = SyncDescriptor {
         message_timestamp,
         action: SyncAction::Diff,
-        protocol: Some("http://example.com/protocol".to_string()),
+        module: Some("http://example.com/module".to_string()),
         prefix: None,
         permission_grant_ids: Some(vec!["grant-1".to_string()]),
         hashes: Some(BTreeMap::from([(
@@ -107,7 +107,7 @@ fn test_sync_descriptor() {
         "interface": MESSAGES,
         "method": SYNC,
         "action": "diff",
-        "protocol": "http://example.com/protocol",
+        "module": "http://example.com/module",
         "permissionGrantIds": ["grant-1"],
         "hashes": {
             "0101": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",

@@ -1,8 +1,8 @@
 //! Encryption-control record types.
 //!
-//! Control records live at reserved virtual protocol paths inside the source
-//! protocol ([`ENCRYPTION_CONTROL_ROOT_PATH`]). They carry no application rule
-//! set, so their shape is fixed here rather than by a protocol definition:
+//! Control records live at reserved virtual module paths inside the source
+//! module ([`ENCRYPTION_CONTROL_ROOT_PATH`]). They carry no application rule
+//! set, so their shape is fixed here rather than by a module definition:
 //! an *audience* publishes a role's public key plus the owner seal over its
 //! private key; a *delivery* hands that private key to one recipient.
 //!
@@ -39,8 +39,8 @@ pub enum ControlKind {
 }
 
 impl ControlKind {
-    pub fn from_protocol_path(protocol_path: &str) -> Option<Self> {
-        match protocol_path {
+    pub fn from_module_path(module_path: &str) -> Option<Self> {
+        match module_path {
             ENCRYPTION_CONTROL_AUDIENCE_PATH => Some(Self::Audience),
             ENCRYPTION_CONTROL_DELIVERY_PATH => Some(Self::Delivery),
             _ => None,
@@ -48,10 +48,10 @@ impl ControlKind {
     }
 
     pub fn of(message: &Message<Descriptor>) -> Option<Self> {
-        Self::from_protocol_path(&records_write_descriptor(message).ok()?.protocol_path)
+        Self::from_module_path(&records_write_descriptor(message).ok()?.module_path)
     }
 
-    pub const fn protocol_path(self) -> &'static str {
+    pub const fn module_path(self) -> &'static str {
         match self {
             Self::Audience => ENCRYPTION_CONTROL_AUDIENCE_PATH,
             Self::Delivery => ENCRYPTION_CONTROL_DELIVERY_PATH,
@@ -76,11 +76,11 @@ impl ControlKind {
 }
 
 /// The group within which exactly one audience is current: a role in one
-/// context of one protocol. Deliberately excludes `keyId` — grouping by key
+/// context of one module. Deliberately excludes `keyId` — grouping by key
 /// would make every key its own group and defeat the projection.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AudienceScope {
-    pub protocol: String,
+    pub module: String,
     pub role_path: String,
     /// Empty for a root role; non-empty names the ancestor context.
     pub context_id: String,
@@ -129,8 +129,8 @@ impl AudienceId {
     /// Reads the identity tuple from a control record's tags.
     ///
     /// Tags are the only carrier: control records have no rule set to derive
-    /// these from, and the descriptor's `protocol` must agree with the tag so a
-    /// record cannot claim membership in a protocol it was not written under.
+    /// these from, and the descriptor's `module` must agree with the tag so a
+    /// record cannot claim membership in a module it was not written under.
     pub fn from_message(
         message: &Message<Descriptor>,
         kind: ControlKind,
@@ -139,18 +139,18 @@ impl AudienceId {
             .map_err(|error| DwnError::new(kind.missing_tag_code(), error))?;
         let id = Self {
             scope: AudienceScope {
-                protocol: required_string_tag(message, "protocol", kind)?,
+                module: required_string_tag(message, "module", kind)?,
                 role_path: required_string_tag(message, "rolePath", kind)?,
                 context_id: required_string_tag(message, "contextId", kind)?,
             },
             key_id: required_string_tag(message, "keyId", kind)?,
         };
-        if id.scope.protocol != descriptor.protocol {
+        if id.scope.module != descriptor.module {
             return Err(DwnError::new(
                 kind.tags_mismatch_code(),
                 format!(
-                    "control record protocol tag '{}' must match descriptor protocol '{}'",
-                    id.scope.protocol, descriptor.protocol
+                    "control record module tag '{}' must match descriptor module '{}'",
+                    id.scope.module, descriptor.module
                 ),
             ));
         }
@@ -192,7 +192,7 @@ pub fn required_string_tag(
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct AudiencePayload {
-    pub protocol: String,
+    pub module: String,
     #[serde(rename = "rolePath")]
     pub role_path: String,
     #[serde(rename = "contextId")]
@@ -266,7 +266,7 @@ impl AudiencePayload {
     pub fn claimed_id(&self) -> AudienceId {
         AudienceId {
             scope: AudienceScope {
-                protocol: self.protocol.clone(),
+                module: self.module.clone(),
                 role_path: self.role_path.clone(),
                 context_id: self.context_id.clone(),
             },
@@ -275,17 +275,17 @@ impl AudiencePayload {
     }
 }
 
-/// Whether a protocol path is a reserved encryption-control path whose records
+/// Whether a module path is a reserved encryption-control path whose records
 /// never participate in representation-policy checks.
-pub fn is_encryption_control_path(protocol_path: &str) -> bool {
-    ControlKind::from_protocol_path(protocol_path).is_some()
+pub fn is_encryption_control_path(module_path: &str) -> bool {
+    ControlKind::from_module_path(module_path).is_some()
 }
 
-/// Whether a protocol path sits anywhere under the reserved namespace, whether
+/// Whether a module path sits anywhere under the reserved namespace, whether
 /// or not it is one of the two real control paths.
-pub fn is_reserved_control_namespace(protocol_path: &str) -> bool {
-    protocol_path == ENCRYPTION_CONTROL_ROOT_PATH
-        || protocol_path.starts_with(&format!("{ENCRYPTION_CONTROL_ROOT_PATH}/"))
+pub fn is_reserved_control_namespace(module_path: &str) -> bool {
+    module_path == ENCRYPTION_CONTROL_ROOT_PATH
+        || module_path.starts_with(&format!("{ENCRYPTION_CONTROL_ROOT_PATH}/"))
 }
 
 #[cfg(test)]
@@ -293,7 +293,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const PROTOCOL: &str = "https://example.com/protocol/threads";
+    const MODULE: &str = "https://example.com/module/threads";
     const PUBLIC_JWK: &str =
         r#"{"kty":"OKP","crv":"X25519","x":"Xf7dO2vUf2-ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI"}"#;
 
@@ -301,13 +301,13 @@ mod tests {
         serde_json::from_str(PUBLIC_JWK).expect("fixture key")
     }
 
-    fn control_message(protocol_path: &str, tags: serde_json::Value) -> Message<Descriptor> {
+    fn control_message(module_path: &str, tags: serde_json::Value) -> Message<Descriptor> {
         serde_json::from_value(json!({
             "descriptor": {
                 "interface": "Records",
                 "method": "Write",
-                "protocol": PROTOCOL,
-                "protocolPath": protocol_path,
+                "module": MODULE,
+                "modulePath": module_path,
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 0,
                 "dataFormat": "application/json",
@@ -322,7 +322,7 @@ mod tests {
 
     fn audience_tags(role_path: &str, context_id: &str, key_id: &str) -> serde_json::Value {
         json!({
-            "protocol": PROTOCOL,
+            "module": MODULE,
             "rolePath": role_path,
             "contextId": context_id,
             "keyId": key_id,
@@ -331,7 +331,7 @@ mod tests {
 
     fn audience_payload_json(key_id: &str, seal_key_id: &str) -> serde_json::Value {
         json!({
-            "protocol": PROTOCOL,
+            "module": MODULE,
             "rolePath": "member",
             "contextId": "",
             "keyId": key_id,
@@ -350,18 +350,18 @@ mod tests {
     #[test]
     fn control_kind_is_exactly_the_two_reserved_paths() {
         assert_eq!(
-            ControlKind::from_protocol_path("$encryption/audience"),
+            ControlKind::from_module_path("$encryption/audience"),
             Some(ControlKind::Audience)
         );
         assert_eq!(
-            ControlKind::from_protocol_path("$encryption/delivery"),
+            ControlKind::from_module_path("$encryption/delivery"),
             Some(ControlKind::Delivery)
         );
         // The namespace root and invented siblings are reserved but are not
         // themselves control record paths.
         for reserved_but_not_a_control_path in ["$encryption", "$encryption/other", "thread"] {
             assert_eq!(
-                ControlKind::from_protocol_path(reserved_but_not_a_control_path),
+                ControlKind::from_module_path(reserved_but_not_a_control_path),
                 None,
                 "{reserved_but_not_a_control_path} is not a control path"
             );
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn identity_comes_from_tags_and_must_agree_with_the_descriptor() {
         let message = control_message(
-            ControlKind::Audience.protocol_path(),
+            ControlKind::Audience.module_path(),
             audience_tags("thread/member", "thread-1", "key-1"),
         );
         let id = AudienceId::from_message(&message, ControlKind::Audience).expect("valid tags");
@@ -383,17 +383,17 @@ mod tests {
         assert_eq!(id.scope.context_id, "thread-1");
         assert_eq!(id.key_id, "key-1");
 
-        // A record may not claim a protocol it was not written under.
+        // A record may not claim a module it was not written under.
         let mismatched = control_message(
-            ControlKind::Audience.protocol_path(),
+            ControlKind::Audience.module_path(),
             json!({
-                "protocol": "https://example.com/other",
+                "module": "https://example.com/other",
                 "rolePath": "member", "contextId": "", "keyId": "key-1"
             }),
         );
         assert_eq!(
             AudienceId::from_message(&mismatched, ControlKind::Audience)
-                .expect_err("protocol tag must match descriptor")
+                .expect_err("module tag must match descriptor")
                 .code,
             DwnErrorCode::EncryptionControlValidateAudienceTagsMismatch
         );
@@ -413,10 +413,10 @@ mod tests {
             ),
         ] {
             // Every required tag, dropped one at a time.
-            for dropped in ["protocol", "rolePath", "contextId", "keyId"] {
+            for dropped in ["module", "rolePath", "contextId", "keyId"] {
                 let mut tags = audience_tags("member", "", "key-1");
                 tags.as_object_mut().unwrap().remove(dropped);
-                let message = control_message(kind.protocol_path(), tags);
+                let message = control_message(kind.module_path(), tags);
                 assert_eq!(
                     AudienceId::from_message(&message, kind)
                         .expect_err("missing tag must be rejected")
@@ -427,8 +427,8 @@ mod tests {
             }
             // A tag of the wrong type is malformed, not absent-with-a-default.
             let message = control_message(
-                kind.protocol_path(),
-                json!({"protocol": PROTOCOL, "rolePath": 7, "contextId": "", "keyId": "key-1"}),
+                kind.module_path(),
+                json!({"module": MODULE, "rolePath": 7, "contextId": "", "keyId": "key-1"}),
             );
             assert_eq!(
                 AudienceId::from_message(&message, kind)
@@ -451,7 +451,7 @@ mod tests {
         ];
         for (role_path, context_id, expected_ok) in cases {
             let scope = AudienceScope {
-                protocol: PROTOCOL.to_string(),
+                module: MODULE.to_string(),
                 role_path: role_path.to_string(),
                 context_id: context_id.to_string(),
             };

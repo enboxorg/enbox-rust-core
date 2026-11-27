@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::descriptors::{DeleteDescriptor, Protocols, Records};
+use crate::descriptors::{DeleteDescriptor, Modules, Records};
 use crate::errors::EventLogError;
 use crate::fields::WriteFields;
 use crate::filters::{Filter, FilterKey};
@@ -59,10 +59,10 @@ pub fn write_message(encoded_data: Option<&str>) -> Message<Descriptor> {
     }
 }
 
-/// `ProtocolsConfigure` fixture, the third message type carried by the feed.
+/// `ModulesConfigure` fixture, the third message type carried by the feed.
 pub fn configure_message() -> Message<Descriptor> {
     Message {
-        descriptor: Descriptor::Protocols(Box::new(Protocols::Configure(Default::default()))),
+        descriptor: Descriptor::Modules(Box::new(Modules::Configure(Default::default()))),
         fields: Fields::Authorization(Default::default()),
     }
 }
@@ -100,7 +100,7 @@ pub struct DeliveredEvent {
     pub seq: Option<String>,
     pub message_cid: Option<String>,
     pub is_latest_base_state: Option<bool>,
-    pub protocol: Option<String>,
+    pub module: Option<String>,
     pub encoded_data: Option<String>,
 }
 
@@ -155,7 +155,7 @@ impl Recorder {
                 seq,
                 message_cid,
                 is_latest_base_state,
-                protocol,
+                module,
                 encoded_data,
             } => DeliveredEvent {
                 cursor,
@@ -163,7 +163,7 @@ impl Recorder {
                 seq,
                 message_cid,
                 is_latest_base_state,
-                protocol,
+                module,
                 encoded_data,
             },
             other => panic!("expected an event, got {other:?}"),

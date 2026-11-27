@@ -13,15 +13,15 @@ use crate::descriptors::{
     records::{records_write_descriptor, write_fields, write_fields_mut},
     DeleteDescriptor, Descriptor, Records, RecordsWriteDescriptor, SubscribeDescriptor,
 };
-use crate::dwn::core_protocol::CoreProtocolRegistry;
+use crate::dwn::core_module::CoreModuleRegistry;
 use crate::errors::{DwnError, DwnErrorCode, EventLogError};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::handlers::configure::fetch_protocol_definition;
-use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
+use crate::handlers::configure::fetch_module_definition;
+use crate::handlers::modules::configure::ModuleDefinitionLookupError;
 use crate::handlers::records::subscribe::RecordsSubscribeReply;
-use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, Can, Definition, RuleSet, Who,
+use crate::interfaces::messages::modules::{
+    self as module_types, Action, Can, Definition, RuleSet, Who,
 };
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
@@ -36,7 +36,7 @@ use super::{RecordsAuthorizationKind, MAX_ENCODED_DATA_SIZE, RECORDS_INTERFACE, 
 
 #[derive(Debug)]
 pub(crate) enum QueryAuthorizationResult {
-    Unauthorized(ProtocolAuthorizationError),
+    Unauthorized(ModuleAuthorizationError),
 }
 
 pub(crate) fn records_delete_descriptor(
@@ -108,9 +108,9 @@ pub(crate) fn validate_records_write_integrity(
         })?;
     }
 
-    // `contextId` is a protocol-only surface: per DWN spec.md:1028 a record NOT
-    // attached to a protocol MUST NOT have a contextId, and upstream implementations
-    // including enbox's own dwn-sdk-js do not require a contextId for non-protocol records.
+    // `contextId` is a module-only surface: per DWN spec.md:1028 a record NOT
+    // attached to a module MUST NOT have a contextId, and upstream implementations
+    // including enbox's own dwn-sdk-js do not require a contextId for non-module records.
     // `We therefore treat it as optional and only require the value to agree with the
     // signature payload (both-absent is valid), matching upstream `validateIntegrity`.
     let context_id = context_id(message);
@@ -128,9 +128,9 @@ pub(crate) fn validate_records_write_integrity(
                 canonical_rfc3339(descriptor.date_created),
             ));
         }
-        // Only a protocol-scoped root record carries the deterministic
+        // Only a module-scoped root record carries the deterministic
         // `contextId == recordId`. Upstream gates this check on
-        // `descriptor.protocol !== undefined`; a protocol-less record has no
+        // `descriptor.module !== undefined`; a module-less record has no
         // contextId to validate.
         if descriptor.parent_id.is_none() && context_id.as_deref() != Some(record_id.as_str()) {
             return Err("RecordsWriteValidateIntegrityContextIdMismatch: root contextId must match recordId".to_string());
@@ -188,14 +188,14 @@ pub(crate) fn verify_immutable_properties(
     .or_else(|| {
         [
             (
-                "protocol",
-                &Some(initial.protocol.clone()),
-                &Some(new.protocol.clone()),
+                "module",
+                &Some(initial.module.clone()),
+                &Some(new.module.clone()),
             ),
             (
-                "protocolPath",
-                &Some(initial.protocol_path.clone()),
-                &Some(new.protocol_path.clone()),
+                "modulePath",
+                &Some(initial.module_path.clone()),
+                &Some(new.module_path.clone()),
             ),
             ("recipient", &initial.recipient, &new.recipient),
             ("schema", &initial.schema, &new.schema),
@@ -318,13 +318,10 @@ pub(crate) fn records_delete_indexes(
     let mut indexes = descriptor_indexes(descriptor)?;
     indexes.insert("isLatestBaseState".to_string(), Value::Bool(true));
     indexes.insert("author".to_string(), Value::String(author.to_string()));
+    indexes.insert("module".to_string(), Value::String(initial.module.clone()));
     indexes.insert(
-        "protocol".to_string(),
-        Value::String(initial.protocol.clone()),
-    );
-    indexes.insert(
-        "protocolPath".to_string(),
-        Value::String(initial.protocol_path.clone()),
+        "modulePath".to_string(),
+        Value::String(initial.module_path.clone()),
     );
     if let Some(recipient) = &initial.recipient {
         indexes.insert("recipient".to_string(), Value::String(recipient.clone()));
@@ -388,8 +385,8 @@ pub(crate) fn records_filter_to_filter_map(
     insert_string_vec_filter(&mut map, "author", filter.author.as_ref());
     insert_string_filter(&mut map, "attester", filter.attester.as_ref());
     insert_string_vec_filter(&mut map, "recipient", filter.recipient.as_ref());
-    insert_string_filter(&mut map, "protocol", filter.protocol.as_ref());
-    insert_string_filter(&mut map, "protocolPath", filter.protocol_path.as_ref());
+    insert_string_filter(&mut map, "module", filter.module.as_ref());
+    insert_string_filter(&mut map, "modulePath", filter.module_path.as_ref());
     insert_bool_filter(&mut map, "published", filter.published);
     insert_string_filter(&mut map, "schema", filter.schema.as_ref());
     insert_string_filter(&mut map, "recordId", filter.record_id.as_ref());
@@ -587,7 +584,7 @@ pub(crate) fn non_owner_records_filters(
     filter: &RecordsFilter,
     date_sort: Option<&crate::descriptors::records::DateSort>,
     author: &str,
-    protocol_authorized: bool,
+    module_authorized: bool,
     exact_audience: bool,
 ) -> Vec<BTreeMap<FilterKey, Filter<Value>>> {
     let mut filters = Vec::new();
@@ -619,7 +616,7 @@ pub(crate) fn non_owner_records_filters(
             );
             filters.push(map);
         }
-        if protocol_authorized {
+        if module_authorized {
             let mut map = owner_records_filter(filter, date_sort);
             map.insert(
                 FilterKey::Index("published".to_string()),
@@ -646,7 +643,7 @@ pub(crate) fn non_owner_records_filters(
 pub(crate) fn non_owner_records_event_filters(
     filter: &RecordsFilter,
     author: &str,
-    protocol_authorized: bool,
+    module_authorized: bool,
     exact_audience: bool,
 ) -> Vec<BTreeMap<FilterKey, Filter<Value>>> {
     let mut filters = Vec::new();
@@ -674,7 +671,7 @@ pub(crate) fn non_owner_records_event_filters(
             );
             filters.push(map);
         }
-        if protocol_authorized {
+        if module_authorized {
             let mut map = owner_records_event_filter(filter);
             map.insert(
                 FilterKey::Index("published".to_string()),
@@ -722,8 +719,8 @@ pub(crate) fn should_build_recipient_filter(filter: &RecordsFilter, recipient: &
     })
 }
 
-pub(crate) fn should_protocol_authorize(ctx: &AuthorizationContext) -> bool {
-    ctx.payload.protocol_role().is_some()
+pub(crate) fn should_module_authorize(ctx: &AuthorizationContext) -> bool {
+    ctx.payload.module_role().is_some()
 }
 
 /// Names the published sort when one is requested, for the parse-time rule
@@ -743,13 +740,13 @@ pub(crate) fn published_sort_name(
     }
 }
 
-/// Reads the `$recordLimit` max governing a protocol path at the request
-/// timestamp. A missing protocol or absent rule means no restriction; any
+/// Reads the `$recordLimit` max governing a module path at the request
+/// timestamp. A missing module or absent rule means no restriction; any
 /// other failure is an error, never unrestricted visibility.
 async fn record_limit_max<MessageStore>(
     tenant: &str,
-    protocol: &str,
-    protocol_path: &str,
+    module: &str,
+    module_path: &str,
     message_store: &MessageStore,
     request_timestamp: &str,
 ) -> Result<Option<u64>, String>
@@ -757,14 +754,13 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let definition =
-        match fetch_protocol_definition(tenant, protocol, message_store, Some(request_timestamp))
-            .await
+        match fetch_module_definition(tenant, module, message_store, Some(request_timestamp)).await
         {
             Ok(definition) => definition,
-            Err(ProtocolDefinitionLookupError::NotFound(_)) => return Ok(None),
+            Err(ModuleDefinitionLookupError::NotFound(_)) => return Ok(None),
             Err(error) => return Err(error.to_string()),
         };
-    let rule_set = match definition.rule_at(protocol_path) {
+    let rule_set = match definition.rule_at(module_path) {
         Some(rule_set) => rule_set,
         None => return Ok(None),
     };
@@ -784,15 +780,15 @@ pub(crate) async fn resolve_record_limit_policy<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let (Some(protocol), Some(protocol_path)) =
-        (filter.protocol.as_deref(), filter.protocol_path.as_deref())
+    let (Some(module), Some(module_path)) =
+        (filter.module.as_deref(), filter.module_path.as_deref())
     else {
         return Ok(None);
     };
     let Some(max) = record_limit_max(
         tenant,
-        protocol,
-        protocol_path,
+        module,
+        module_path,
         message_store,
         request_timestamp,
     )
@@ -801,13 +797,13 @@ where
         return Ok(None);
     };
     let mut policy = RecordLimitOccupancy {
-        protocol: protocol.to_string(),
-        protocol_path: protocol_path.to_string(),
+        module: module.to_string(),
+        module_path: module_path.to_string(),
         context_id: None,
         parent_id: None,
         max,
     };
-    if !protocol_path.contains('/') {
+    if !module_path.contains('/') {
         return Ok(Some(policy));
     }
     if let Some(parent_id) = filter.parent_id.as_deref() {
@@ -820,7 +816,7 @@ where
     // least one segment on a nested path); deeper selections scope the
     // subtree itself.
     let context_depth = context_id.split('/').count();
-    let path_depth = protocol_path.split('/').count();
+    let path_depth = module_path.split('/').count();
     policy.context_id = Some(if context_depth == path_depth {
         parent_context_id(context_id).unwrap_or_default()
     } else {
@@ -844,8 +840,8 @@ where
     let descriptor = records_write_descriptor(message).map_err(|detail| detail.to_string())?;
     let Some(max) = record_limit_max(
         tenant,
-        &descriptor.protocol,
-        &descriptor.protocol_path,
+        &descriptor.module,
+        &descriptor.module_path,
         message_store,
         request_timestamp,
     )
@@ -854,8 +850,8 @@ where
         return Ok(None);
     };
     let mut policy = RecordLimitOccupancy {
-        protocol: descriptor.protocol.clone(),
-        protocol_path: descriptor.protocol_path.clone(),
+        module: descriptor.module.clone(),
+        module_path: descriptor.module_path.clone(),
         context_id: None,
         parent_id: None,
         max,
@@ -903,7 +899,7 @@ pub(crate) async fn authorize_records_read<MessageStore>(
     signature: Option<&AuthorizationContext>,
     matched_records_write: &Message<Descriptor>,
     message_store: &MessageStore,
-) -> Result<(), ProtocolAuthorizationError>
+) -> Result<(), ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -933,7 +929,7 @@ where
             return Ok(());
         }
         let evaluation_timestamp = canonical_rfc3339(read_message.message_timestamp());
-        return authorize_against_protocol(
+        return authorize_against_module(
             tenant,
             matched_records_write,
             signature,
@@ -944,7 +940,7 @@ where
         .await;
     }
     Err(
-        "ProtocolAuthorizationActionNotAllowed: anonymous read is not authorized"
+        "ModuleAuthorizationActionNotAllowed: anonymous read is not authorized"
             .to_string()
             .into(),
     )
@@ -956,7 +952,7 @@ pub(crate) async fn authorize_records_delete<MessageStore>(
     initial_write: &Message<Descriptor>,
     signature: &AuthorizationContext,
     message_store: &MessageStore,
-) -> Result<(), ProtocolAuthorizationError>
+) -> Result<(), ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -977,7 +973,7 @@ where
     }
     let prune = records_delete_descriptor(delete_message)?.prune;
     let evaluation_timestamp = canonical_rfc3339(delete_message.message_timestamp());
-    authorize_against_protocol(
+    authorize_against_module(
         tenant,
         initial_write,
         signature,
@@ -989,34 +985,34 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedProtocolRole {
-    pub protocol: String,
-    pub protocol_path: String,
+pub(crate) struct ResolvedModuleRole {
+    pub module: String,
+    pub module_path: String,
     pub context_id_prefix: Option<String>,
     pub role_record_id: String,
 }
 
-/// A protocol-authorization failure. Role failures carry a stable
+/// A module-authorization failure. Role failures carry a stable
 /// [`DwnErrorCode`]; action-rule failures are plain unauthorized details.
 #[derive(Debug)]
-pub(crate) enum ProtocolAuthorizationError {
+pub(crate) enum ModuleAuthorizationError {
     Code(DwnError),
     Detail(String),
 }
 
-impl From<DwnError> for ProtocolAuthorizationError {
+impl From<DwnError> for ModuleAuthorizationError {
     fn from(error: DwnError) -> Self {
         Self::Code(error)
     }
 }
 
-impl From<String> for ProtocolAuthorizationError {
+impl From<String> for ModuleAuthorizationError {
     fn from(detail: String) -> Self {
         Self::Detail(detail)
     }
 }
 
-impl std::fmt::Display for ProtocolAuthorizationError {
+impl std::fmt::Display for ModuleAuthorizationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Code(error) => error.fmt(formatter),
@@ -1025,7 +1021,7 @@ impl std::fmt::Display for ProtocolAuthorizationError {
     }
 }
 
-impl ProtocolAuthorizationError {
+impl ModuleAuthorizationError {
     /// The HTTP 401 status carrying the stable code when one is present.
     pub(crate) fn into_status(self) -> Status {
         match self {
@@ -1035,11 +1031,11 @@ impl ProtocolAuthorizationError {
     }
 }
 
-/// Verifies the role named by `protocolRole` and returns its resolved address.
+/// Verifies the role named by `moduleRole` and returns its resolved address.
 ///
 /// Mirrors the parity target's `verifyInvokedRole`: a local invoked role must
 /// be a `$role` node in the composing definition, and an `alias:path` role
-/// resolves through `uses` to the referenced protocol. Either way the role's
+/// resolves through `uses` to the referenced module. Either way the role's
 /// context source must carry its ancestor depth, and `author` must hold an
 /// active role record. A role that fails any check is rejected before action
 /// rules are matched, so a `who` rule cannot mask a bad role invocation.
@@ -1048,12 +1044,12 @@ pub(crate) async fn verify_invoked_role<MessageStore>(
     tenant: &str,
     author: &str,
     invoked_role: Option<&str>,
-    protocol: &str,
+    module: &str,
     context_id: Option<&str>,
     definition: &Definition,
     evaluation_timestamp: &str,
     message_store: &MessageStore,
-) -> Result<Option<ResolvedProtocolRole>, DwnError>
+) -> Result<Option<ResolvedModuleRole>, DwnError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1061,10 +1057,10 @@ where
         return Ok(None);
     };
 
-    let parsed = protocol_types::parse_cross_protocol_ref(invoked_role);
-    let (role_protocol, role_path) = match &parsed {
+    let parsed = module_types::parse_cross_module_ref(invoked_role);
+    let (role_module, role_path) = match &parsed {
         Some(parsed) => {
-            let role_protocol = definition
+            let role_module = definition
                 .uses
                 .as_ref()
                 .and_then(|uses| uses.get(parsed.alias))
@@ -1072,14 +1068,14 @@ where
                     DwnError::new(
                         DwnErrorCode::ModuleAuthorizationNotARole,
                         format!(
-                            "cross-protocol role alias '{}' in '{invoked_role}' does not exist in the protocol's uses map",
+                            "cross-module role alias '{}' in '{invoked_role}' does not exist in the module's uses map",
                             parsed.alias
                         ),
                     )
                 })?;
-            (role_protocol.clone(), parsed.protocol_path.to_string())
+            (role_module.clone(), parsed.module_path.to_string())
         }
-        None => (protocol.to_string(), invoked_role.to_string()),
+        None => (module.to_string(), invoked_role.to_string()),
     };
 
     // The role path must be a `$role` node in the definition that governs it:
@@ -1087,24 +1083,23 @@ where
     // the same evaluation timestamp for an `alias:path` role.
     let is_role = match &parsed {
         Some(_) => {
-            let referenced = fetch_protocol_definition(
+            let referenced = fetch_module_definition(
                 tenant,
-                &role_protocol,
+                &role_module,
                 message_store,
                 Some(evaluation_timestamp),
             )
             .await
             .map_err(|error| match error {
-                ProtocolDefinitionLookupError::NotFound(_) => DwnError::new(
+                ModuleDefinitionLookupError::NotFound(_) => DwnError::new(
                     DwnErrorCode::ModuleAuthorizationModuleNotFound,
                     format!(
-                        "referenced protocol '{role_protocol}' is not defined at {evaluation_timestamp}"
+                        "referenced module '{role_module}' is not defined at {evaluation_timestamp}"
                     ),
                 ),
-                other => DwnError::new(
-                    DwnErrorCode::ModuleAuthorizationNotARole,
-                    other.to_string(),
-                ),
+                other => {
+                    DwnError::new(DwnErrorCode::ModuleAuthorizationNotARole, other.to_string())
+                }
             })?;
             referenced
                 .rule_at(&role_path)
@@ -1117,7 +1112,7 @@ where
     if !is_role {
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationNotARole,
-            format!("protocol path '{invoked_role}' does not match a role record type"),
+            format!("module path '{invoked_role}' does not match a role record type"),
         ));
     }
 
@@ -1133,7 +1128,7 @@ where
     let role_record = query_role_records(
         tenant,
         author,
-        &role_protocol,
+        &role_module,
         &role_path,
         context_id,
         message_store,
@@ -1148,56 +1143,56 @@ where
     let Some(role_record) = role_record else {
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationMatchingRoleRecordNotFound,
-            format!("no matching role record found for protocol path '{role_path}'"),
+            format!("no matching role record found for module path '{role_path}'"),
         ));
     };
 
-    Ok(Some(ResolvedProtocolRole {
-        protocol: role_protocol,
-        protocol_path: role_path,
+    Ok(Some(ResolvedModuleRole {
+        module: role_module,
+        module_path: role_path,
         context_id_prefix: context_id.map(str::to_string),
         role_record_id: record_id(&role_record).unwrap_or_default(),
     }))
 }
 
-/// Authorizes a role-invoking collection filter against the protocol
+/// Authorizes a role-invoking collection filter against the module
 /// definition governing `request_timestamp` (`DWN-PROTO-004`), never blindly
 /// the newest configuration. Every lookup failure denies: a missing
 /// definition cannot prove role authority.
-pub(crate) async fn authorize_protocol_query_or_subscribe<MessageStore>(
+pub(crate) async fn authorize_module_query_or_subscribe<MessageStore>(
     tenant: &str,
     filter: &RecordsFilter,
     auth_ctx: &AuthorizationContext,
     message_store: &MessageStore,
     request_timestamp: &str,
     kind: RecordsAuthorizationKind,
-) -> Result<ResolvedProtocolRole, ProtocolAuthorizationError>
+) -> Result<ResolvedModuleRole, ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let protocol = filter.protocol.as_deref().ok_or_else(|| {
-        "ProtocolAuthorizationMissingProtocol: role-authorized query must include protocol"
+    let module = filter.module.as_deref().ok_or_else(|| {
+        "ModuleAuthorizationMissingModule: role-authorized query must include module".to_string()
+    })?;
+    let module_path = filter.module_path.as_deref().ok_or_else(|| {
+        "ModuleAuthorizationMissingModulePath: role-authorized query must include modulePath"
             .to_string()
     })?;
-    let protocol_path = filter.protocol_path.as_deref().ok_or_else(|| {
-        "ProtocolAuthorizationMissingProtocolPath: role-authorized query must include protocolPath".to_string()
-    })?;
-    let definition = crate::handlers::protocols::configure::fetch_protocol_definition(
+    let definition = crate::handlers::modules::configure::fetch_module_definition(
         tenant,
-        protocol,
+        module,
         message_store,
         Some(request_timestamp),
     )
     .await
     .map_err(|err| err.to_string())?;
 
-    let rule_set = definition.rule_at(protocol_path).ok_or_else(|| {
-        format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
+    let rule_set = definition.rule_at(module_path).ok_or_else(|| {
+        format!("ModuleAuthorizationInvalidModulePath: {module_path} is not defined")
     })?;
 
     let invoked_role = auth_ctx
-        .protocol_role()
-        .ok_or_else(|| "protocolRole is required".to_string())?;
+        .module_role()
+        .ok_or_else(|| "moduleRole is required".to_string())?;
 
     let can = match kind {
         RecordsAuthorizationKind::Subscribe => Can::Read,
@@ -1209,7 +1204,7 @@ where
         tenant,
         &auth_ctx.author,
         invoked_role,
-        protocol,
+        module,
         filter.context_id.as_deref(),
         can,
         rule_set,
@@ -1225,14 +1220,14 @@ async fn resolve_query_or_subscribe_role<MessageStore>(
     tenant: &str,
     author: &str,
     invoked_role: &str,
-    protocol: &str,
+    module: &str,
     context_id_prefix: Option<&str>,
     can: Can,
     rule_set: &RuleSet,
     definition: &Definition,
     evaluation_timestamp: &str,
     message_store: &MessageStore,
-) -> Result<ResolvedProtocolRole, ProtocolAuthorizationError>
+) -> Result<ResolvedModuleRole, ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1242,7 +1237,7 @@ where
         tenant,
         author,
         Some(invoked_role),
-        protocol,
+        module,
         context_id_prefix,
         definition,
         evaluation_timestamp,
@@ -1259,7 +1254,7 @@ where
     });
     if !rule_allows {
         return Err(
-            "ProtocolAuthorizationActionNotAllowed: no action rule allows the invoked role"
+            "ModuleAuthorizationActionNotAllowed: no action rule allows the invoked role"
                 .to_string()
                 .into(),
         );
@@ -1268,21 +1263,21 @@ where
     Ok(resolved)
 }
 
-pub(crate) async fn authorize_against_protocol<MessageStore>(
+pub(crate) async fn authorize_against_module<MessageStore>(
     tenant: &str,
     message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     kind: RecordsAuthorizationKind,
     evaluation_timestamp: Option<&str>,
     message_store: &MessageStore,
-) -> Result<(), ProtocolAuthorizationError>
+) -> Result<(), ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let author = auth.author.as_str();
     let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
-    let protocol = descriptor.protocol.clone();
-    let protocol_path = descriptor.protocol_path.clone();
+    let module = descriptor.module.clone();
+    let module_path = descriptor.module_path.clone();
     // Read and Delete evaluate at the operation's own timestamp; Write resolves
     // the governing timestamp from the record (initial write time for updates).
     let evaluation_timestamp = match evaluation_timestamp {
@@ -1291,25 +1286,25 @@ where
             .await
             .map_err(|error| error.to_string())?,
     };
-    let definition = fetch_protocol_definition(
+    let definition = fetch_module_definition(
         tenant,
-        protocol.as_str(),
+        module.as_str(),
         message_store,
         Some(&evaluation_timestamp),
     )
     .await
     .map_err(|err| err.to_string())?;
-    let rule_set = definition.rule_at(protocol_path.as_str()).ok_or_else(|| {
-        format!("ProtocolAuthorizationInvalidProtocolPath: {protocol_path} is not defined")
+    let rule_set = definition.rule_at(module_path.as_str()).ok_or_else(|| {
+        format!("ModuleAuthorizationInvalidModulePath: {module_path} is not defined")
     })?;
-    let invoked_role = auth.protocol_role();
+    let invoked_role = auth.module_role();
     if invoked_role.is_some() {
         let context = context_id(message);
         verify_invoked_role(
             tenant,
             author,
             invoked_role,
-            &protocol,
+            &module,
             context.as_deref(),
             &definition,
             &evaluation_timestamp,
@@ -1384,7 +1379,7 @@ pub(crate) fn authorize_actions(
             }
         }
     }
-    Err("ProtocolAuthorizationActionNotAllowed: inbound message action is not allowed".to_string())
+    Err("ModuleAuthorizationActionNotAllowed: inbound message action is not allowed".to_string())
 }
 
 pub(crate) fn check_actor(
@@ -1397,7 +1392,7 @@ pub(crate) fn check_actor(
     let Some(of) = of else {
         return false;
     };
-    let parsed_cross_ref = protocol_types::parse_cross_protocol_ref(of);
+    let parsed_cross_ref = module_types::parse_cross_module_ref(of);
     record_chain.iter().any(|message| {
         let Ok(descriptor) = records_write_descriptor(message) else {
             return false;
@@ -1406,12 +1401,11 @@ pub(crate) fn check_actor(
             definition
                 .and_then(|definition| definition.uses.as_ref())
                 .and_then(|uses| uses.get(parsed.alias))
-                .is_some_and(|protocol| {
-                    descriptor.protocol == *protocol
-                        && descriptor.protocol_path == parsed.protocol_path
+                .is_some_and(|module| {
+                    descriptor.module == *module && descriptor.module_path == parsed.module_path
                 })
         } else {
-            descriptor.protocol_path == of
+            descriptor.module_path == of
         };
         if !path_matches {
             return false;
@@ -1425,7 +1419,7 @@ pub(crate) fn check_actor(
 }
 
 /// The retained, latest-state role record that gives `recipient` the role
-/// `role_path` in `protocol`, scoped by the context source `context_id`.
+/// `role_path` in `module`, scoped by the context source `context_id`.
 ///
 /// The context dimension follows role depth: a root role has none, and a
 /// nested role is scoped by the ancestor context at its parent's depth. A
@@ -1435,7 +1429,7 @@ pub(crate) fn check_actor(
 pub(crate) async fn query_role_records<MessageStore>(
     tenant: &str,
     recipient: &str,
-    protocol: &str,
+    module: &str,
     role_path: &str,
     context_id: Option<&str>,
     message_store: &MessageStore,
@@ -1446,8 +1440,8 @@ where
     let mut filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
         ("method", string_filter(WRITE_METHOD)),
-        ("protocol", string_filter(protocol)),
-        ("protocolPath", string_filter(role_path)),
+        ("module", string_filter(module)),
+        ("modulePath", string_filter(role_path)),
         ("recipient", string_filter(recipient)),
         ("isLatestBaseState", bool_filter(true)),
     ]);
@@ -1493,12 +1487,12 @@ pub(crate) fn role_audience_context_id(
     Some(segments[..ancestor_count].join("/"))
 }
 
-/// Whether `recipient` holds `role_path` in `protocol`, within the context
+/// Whether `recipient` holds `role_path` in `module`, within the context
 /// named by `context_id`. See [`query_role_records`] for the context rules.
 pub(crate) async fn role_record_exists<MessageStore>(
     tenant: &str,
     recipient: &str,
-    protocol: &str,
+    module: &str,
     role_path: &str,
     context_id: Option<&str>,
     message_store: &MessageStore,
@@ -1509,7 +1503,7 @@ where
     query_role_records(
         tenant,
         recipient,
-        protocol,
+        module,
         role_path,
         context_id,
         message_store,
@@ -1715,7 +1709,7 @@ where
 }
 
 /// The retained initial write that proves `record_id` is an addressable parent
-/// in `protocol`, unless that Record has been pruned.
+/// in `module`, unless that Record has been pruned.
 ///
 /// Structural ancestry is the retained initial write, not current liveness. A
 /// soft delete leaves the parent usable as an ancestor; an arbitrary later
@@ -1724,7 +1718,7 @@ where
 pub(crate) async fn fetch_parent_record<MessageStore>(
     tenant: &str,
     record_id: &str,
-    protocol: &str,
+    module: &str,
     message_store: &MessageStore,
 ) -> Result<Option<Message<Descriptor>>, String>
 where
@@ -1737,7 +1731,7 @@ where
         return Ok(None);
     };
     let descriptor = records_write_descriptor(&initial).map_err(|error| error.to_string())?;
-    if descriptor.protocol != protocol {
+    if descriptor.module != module {
         return Ok(None);
     }
     Ok(Some(initial))
@@ -1746,7 +1740,7 @@ where
 /// Whether `record_id` has a retained `prune: true` delete. Prune is the
 /// explicit subtree-removal operation, so it removes the Record as structural
 /// ancestry even though the initial write is retained. Prune evidence is
-/// protocol-agnostic and tenant-scoped: a delete in another tenant supplies
+/// module-agnostic and tenant-scoped: a delete in another tenant supplies
 /// none. Callers use this to classify a missing parent as terminal without
 /// putting that distinction on the client-facing reply.
 pub(crate) async fn record_has_prune<MessageStore>(
@@ -1955,8 +1949,8 @@ pub(crate) fn filter_map<const N: usize>(
         .collect()
 }
 
-pub(crate) fn core_protocol_error_reply<R: Default>(
-    registry: &CoreProtocolRegistry,
+pub(crate) fn core_module_error_reply<R: Default>(
+    registry: &CoreModuleRegistry,
     detail: String,
 ) -> Response<R> {
     if registry.map_error_to_status_code(&detail) == Some(401) {
@@ -2014,13 +2008,13 @@ impl DescriptorMethod for RecordsWriteDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interfaces::messages::protocols::ActionRole;
+    use crate::interfaces::messages::modules::ActionRole;
     use crate::stores::{memory::MemoryMessageStore, MessageQueryResult, MessageStore};
     use serde_json::json;
 
     const ROLE_TEST_TENANT: &str = "did:example:tenant";
     const ROLE_TEST_AUTHOR: &str = "did:example:alice";
-    const ROLE_TEST_PROTOCOL: &str = "https://example.com/protocol/chat";
+    const ROLE_TEST_MODULE: &str = "https://example.com/module/chat";
     const ROLE_TEST_TIME: &str = "2025-01-01T00:00:00.000000Z";
 
     fn role_rule(role: &str, can: Vec<Can>) -> RuleSet {
@@ -2035,7 +2029,7 @@ mod tests {
 
     fn role_definition(uses: Option<BTreeMap<String, String>>) -> Definition {
         Definition {
-            protocol: ROLE_TEST_PROTOCOL.to_string(),
+            module: ROLE_TEST_MODULE.to_string(),
             published: false,
             uses,
             key_agreement: None,
@@ -2058,8 +2052,8 @@ mod tests {
 
     async fn put_role_record(
         store: &MemoryMessageStore,
-        protocol: &str,
-        protocol_path: &str,
+        module: &str,
+        module_path: &str,
         context_id: &str,
         record_id: &str,
     ) -> String {
@@ -2072,8 +2066,8 @@ mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 0,
                 "dataFormat": "application/json",
-                "protocol": protocol,
-                "protocolPath": protocol_path,
+                "module": module,
+                "modulePath": module_path,
                 "recipient": ROLE_TEST_AUTHOR
             },
             "recordId": record_id,
@@ -2090,10 +2084,10 @@ mod tests {
                 "method".to_string(),
                 Value::String(WRITE_METHOD.to_string()),
             ),
-            ("protocol".to_string(), Value::String(protocol.to_string())),
+            ("module".to_string(), Value::String(module.to_string())),
             (
-                "protocolPath".to_string(),
-                Value::String(protocol_path.to_string()),
+                "modulePath".to_string(),
+                Value::String(module_path.to_string()),
             ),
             (
                 "recipient".to_string(),
@@ -2122,7 +2116,7 @@ mod tests {
         let store = MemoryMessageStore::default();
         put_role_record(
             &store,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             "thread/participant",
             "thread-1",
             "role-record-1",
@@ -2133,7 +2127,7 @@ mod tests {
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
             "thread/participant",
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             Some("thread-1/message-1"),
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
@@ -2144,8 +2138,8 @@ mod tests {
         .await
         .expect("active role must authorize");
 
-        assert_eq!(resolved.protocol, ROLE_TEST_PROTOCOL);
-        assert_eq!(resolved.protocol_path, "thread/participant");
+        assert_eq!(resolved.module, ROLE_TEST_MODULE);
+        assert_eq!(resolved.module_path, "thread/participant");
         assert_eq!(
             resolved.context_id_prefix.as_deref(),
             Some("thread-1/message-1")
@@ -2162,7 +2156,7 @@ mod tests {
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
             "thread/participant",
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             Some("thread-1/message-1"),
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
@@ -2175,7 +2169,7 @@ mod tests {
 
         put_role_record(
             &store,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             "thread/participant",
             "thread-1",
             "role-record-1",
@@ -2186,7 +2180,7 @@ mod tests {
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
             "thread/moderator",
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             Some("thread-1/message-1"),
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
@@ -2201,7 +2195,7 @@ mod tests {
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
             "thread/participant",
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             Some("thread-1/message-1"),
             Can::Read,
             &role_rule("thread/participant", vec![Can::Create]),
@@ -2214,13 +2208,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_role_resolution_resolves_cross_protocol_role() {
-        const ROLES_PROTOCOL: &str = "https://example.com/protocol/roles";
+    async fn query_role_resolution_resolves_cross_module_role() {
+        const ROLES_MODULE: &str = "https://example.com/module/roles";
 
         let store = MemoryMessageStore::default();
         put_role_record(
             &store,
-            ROLES_PROTOCOL,
+            ROLES_MODULE,
             "team/member",
             "team-1",
             "cross-role-record",
@@ -2228,7 +2222,7 @@ mod tests {
         .await;
 
         let roles_definition = Definition {
-            protocol: ROLES_PROTOCOL.to_string(),
+            module: ROLES_MODULE.to_string(),
             published: false,
             uses: None,
             key_agreement: None,
@@ -2247,7 +2241,7 @@ mod tests {
                 },
             )]),
         };
-        crate::testing::put_protocol_definition(
+        crate::testing::put_module_definition(
             ROLE_TEST_TENANT,
             &store,
             roles_definition,
@@ -2257,13 +2251,13 @@ mod tests {
 
         let definition = role_definition(Some(BTreeMap::from([(
             "roles".to_string(),
-            ROLES_PROTOCOL.to_string(),
+            ROLES_MODULE.to_string(),
         )])));
         let resolved = resolve_query_or_subscribe_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
             "roles:team/member",
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             Some("team-1/thread-1"),
             Can::Read,
             &role_rule("roles:team/member", vec![Can::Read]),
@@ -2272,19 +2266,19 @@ mod tests {
             &store,
         )
         .await
-        .expect("cross-protocol role must resolve");
+        .expect("cross-module role must resolve");
 
-        assert_eq!(resolved.protocol, ROLES_PROTOCOL);
-        assert_eq!(resolved.protocol_path, "team/member");
+        assert_eq!(resolved.module, ROLES_MODULE);
+        assert_eq!(resolved.module_path, "team/member");
         assert_eq!(resolved.role_record_id, "cross-role-record");
     }
 
     #[tokio::test]
-    async fn query_role_resolution_rejects_unknown_cross_protocol_alias_and_sibling_context() {
+    async fn query_role_resolution_rejects_unknown_cross_module_alias_and_sibling_context() {
         let store = MemoryMessageStore::default();
         put_role_record(
             &store,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             "thread/participant",
             "thread-1",
             "role-record-1",
@@ -2295,7 +2289,7 @@ mod tests {
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
             "roles:team/member",
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             Some("team-1/thread-1"),
             Can::Read,
             &role_rule("roles:team/member", vec![Can::Read]),
@@ -2307,13 +2301,13 @@ mod tests {
         assert!(unknown_alias
             .expect_err("unknown alias must fail")
             .to_string()
-            .contains("does not exist in the protocol's uses map"));
+            .contains("does not exist in the module's uses map"));
 
         let sibling_context = resolve_query_or_subscribe_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
             "thread/participant",
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             Some("thread-2/message-1"),
             Can::Read,
             &role_rule("thread/participant", vec![Can::Read]),
@@ -2337,8 +2331,8 @@ mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 38,
                 "dataFormat": "text/plain",
-                "protocol": "https://example.com/protocol/jwe",
-                "protocolPath": "thread/message"
+                "module": "https://example.com/module/jwe",
+                "modulePath": "thread/message"
             },
             "recordId": "some-non-initial-record-id",
             "contextId": "some-context-id",
@@ -2348,7 +2342,7 @@ mod tests {
                 "keyEncryption": [{
                     "algorithm": "X25519-HKDF-SHA256+A256KW",
                     "keyId": "Qae4_6ZxDDA_vn260RVhSSBbdzwqIE0b2eWfSC7o50Q",
-                    "derivationScheme": "protocolPath",
+                    "derivationScheme": "modulePath",
                     "ephemeralPublicKey": {
                         "kty": "OKP",
                         "crv": "X25519",
@@ -2389,7 +2383,7 @@ mod tests {
                     encryption_cid: None,
                     permission_grant_id: None,
                     delegated_grant_id: None,
-                    protocol_role: None,
+                    module_role: None,
                 },
             ),
             permission_grant_invocation: crate::auth::jws::PermissionGrantInvocation::None,
@@ -2442,11 +2436,11 @@ mod tests {
         };
         serde_json::from_value(json!({
             "descriptor": {
-                "interface": "Protocols",
+                "interface": "Modules",
                 "method": "Configure",
                 "messageTimestamp": timestamp,
                 "definition": {
-                    "protocol": ROLE_TEST_PROTOCOL,
+                    "module": ROLE_TEST_MODULE,
                     "published": participant_read,
                     "types": {},
                     "structure": { "thread": { "participant": participant } }
@@ -2464,14 +2458,14 @@ mod tests {
         let message = history_configure_message(timestamp, participant_read);
         let is_configure = matches!(
             &message.descriptor,
-            Descriptor::Protocols(protocols)
-                if matches!(protocols.as_ref(), crate::descriptors::Protocols::Configure(_))
+            Descriptor::Modules(modules)
+                if matches!(modules.as_ref(), crate::descriptors::Modules::Configure(_))
         );
         assert!(is_configure, "seeded message must be a ModulesConfigure");
         let indexes = BTreeMap::from([
             (
                 "interface".to_string(),
-                Value::String("Protocols".to_string()),
+                Value::String("Modules".to_string()),
             ),
             ("method".to_string(), Value::String("Configure".to_string())),
             (
@@ -2479,8 +2473,8 @@ mod tests {
                 Value::String(timestamp.to_string()),
             ),
             (
-                "protocol".to_string(),
-                Value::String(ROLE_TEST_PROTOCOL.to_string()),
+                "module".to_string(),
+                Value::String(ROLE_TEST_MODULE.to_string()),
             ),
             ("published".to_string(), Value::Bool(participant_read)),
             ("isLatestBaseState".to_string(), Value::Bool(true)),
@@ -2503,7 +2497,7 @@ mod tests {
                 delegated_grant_id: None,
                 permission_grant_id: None,
                 permission_grant_ids: None,
-                protocol_role: Some("thread/participant".to_string()),
+                module_role: Some("thread/participant".to_string()),
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: None,
@@ -2579,14 +2573,14 @@ mod tests {
 
     // Covers: DWN-PROTO-004
     #[tokio::test]
-    async fn protocol_definition_selects_governing_version() {
+    async fn module_definition_selects_governing_version() {
         let store = MemoryMessageStore::default();
         put_history_configure(&store, HISTORY_T1, true).await;
         put_history_configure(&store, HISTORY_T2, false).await;
 
-        let mid = fetch_protocol_definition(
+        let mid = fetch_module_definition(
             ROLE_TEST_TENANT,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             &store,
             Some(HISTORY_MID),
         )
@@ -2594,9 +2588,9 @@ mod tests {
         .expect("definition at MID must resolve");
         assert!(mid.published, "request between configures sees v1");
 
-        let late = fetch_protocol_definition(
+        let late = fetch_module_definition(
             ROLE_TEST_TENANT,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             &store,
             Some(HISTORY_LATE),
         )
@@ -2604,9 +2598,9 @@ mod tests {
         .expect("definition after reconfigure sees v2");
         assert!(!late.published, "request after reconfigure sees v2");
 
-        let early = fetch_protocol_definition(
+        let early = fetch_module_definition(
             ROLE_TEST_TENANT,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             &store,
             Some(HISTORY_EARLY),
         )
@@ -2637,35 +2631,35 @@ mod tests {
 
     // Covers: DWN-PROTO-001
     #[tokio::test]
-    async fn protocol_definition_preserves_fail_closed_classification() {
-        use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
+    async fn module_definition_preserves_fail_closed_classification() {
+        use crate::handlers::modules::configure::ModuleDefinitionLookupError;
 
         let empty = MemoryMessageStore::default();
         assert!(
             matches!(
-                fetch_protocol_definition(
+                fetch_module_definition(
                     ROLE_TEST_TENANT,
-                    ROLE_TEST_PROTOCOL,
+                    ROLE_TEST_MODULE,
                     &empty,
                     Some(HISTORY_MID),
                 )
                 .await,
-                Err(ProtocolDefinitionLookupError::NotFound(_))
+                Err(ModuleDefinitionLookupError::NotFound(_))
             ),
-            "absent protocol is the only non-error case"
+            "absent module is the only non-error case"
         );
 
         let failing = FailingMessageStore;
         assert!(
             matches!(
-                fetch_protocol_definition(
+                fetch_module_definition(
                     ROLE_TEST_TENANT,
-                    ROLE_TEST_PROTOCOL,
+                    ROLE_TEST_MODULE,
                     &failing,
                     Some(HISTORY_MID),
                 )
                 .await,
-                Err(ProtocolDefinitionLookupError::Store(_))
+                Err(ModuleDefinitionLookupError::Store(_))
             ),
             "I/O failure must surface as store error, never as absent"
         );
@@ -2680,8 +2674,8 @@ mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 0,
                 "dataFormat": "application/json",
-                "protocol": ROLE_TEST_PROTOCOL,
-                "protocolPath": "thread/participant",
+                "module": ROLE_TEST_MODULE,
+                "modulePath": "thread/participant",
                 "recipient": ROLE_TEST_AUTHOR
             },
             "recordId": "forged-record",
@@ -2695,12 +2689,12 @@ mod tests {
                 BTreeMap::from([
                     (
                         "interface".to_string(),
-                        Value::String("Protocols".to_string()),
+                        Value::String("Modules".to_string()),
                     ),
                     ("method".to_string(), Value::String("Configure".to_string())),
                     (
-                        "protocol".to_string(),
-                        Value::String(ROLE_TEST_PROTOCOL.to_string()),
+                        "module".to_string(),
+                        Value::String(ROLE_TEST_MODULE.to_string()),
                     ),
                     (
                         "messageTimestamp".to_string(),
@@ -2713,14 +2707,14 @@ mod tests {
             .expect("forged row must store");
         assert!(
             matches!(
-                fetch_protocol_definition(
+                fetch_module_definition(
                     ROLE_TEST_TENANT,
-                    ROLE_TEST_PROTOCOL,
+                    ROLE_TEST_MODULE,
                     &forged,
                     Some(HISTORY_MID),
                 )
                 .await,
-                Err(ProtocolDefinitionLookupError::InvalidMessage(_))
+                Err(ModuleDefinitionLookupError::InvalidMessage(_))
             ),
             "corrupt definition must surface as invalid, never as absent"
         );
@@ -2734,7 +2728,7 @@ mod tests {
         put_history_configure(&store, HISTORY_T2, false).await;
         put_role_record(
             &store,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             "thread/participant",
             "thread-1",
             "role-record-1",
@@ -2742,13 +2736,13 @@ mod tests {
         .await;
         let auth_ctx = role_query_auth_ctx();
         let filter = RecordsFilter {
-            protocol: Some(ROLE_TEST_PROTOCOL.to_string()),
-            protocol_path: Some("thread/participant".to_string()),
+            module: Some(ROLE_TEST_MODULE.to_string()),
+            module_path: Some("thread/participant".to_string()),
             context_id: Some("thread-1/message-1".to_string()),
             ..Default::default()
         };
 
-        let resolved = authorize_protocol_query_or_subscribe(
+        let resolved = authorize_module_query_or_subscribe(
             ROLE_TEST_TENANT,
             &filter,
             &auth_ctx,
@@ -2761,7 +2755,7 @@ mod tests {
         assert_eq!(resolved.role_record_id, "role-record-1");
 
         assert!(
-            authorize_protocol_query_or_subscribe(
+            authorize_module_query_or_subscribe(
                 ROLE_TEST_TENANT,
                 &filter,
                 &auth_ctx,
@@ -2775,24 +2769,24 @@ mod tests {
         );
     }
 
-    const LIMITED_PROTOCOL: &str = "http://example.com/limited";
+    const LIMITED_MODULE: &str = "http://example.com/limited";
     const POLICY_T1: &str = "2025-01-01T00:00:00.000000Z";
 
     fn limit_filter(
-        protocol_path: Option<&str>,
+        module_path: Option<&str>,
         parent_id: Option<&str>,
         context_id: Option<&str>,
     ) -> RecordsFilter {
         RecordsFilter {
-            protocol: Some(LIMITED_PROTOCOL.to_string()),
-            protocol_path: protocol_path.map(str::to_string),
+            module: Some(LIMITED_MODULE.to_string()),
+            module_path: module_path.map(str::to_string),
             parent_id: parent_id.map(str::to_string),
             context_id: context_id.map(str::to_string),
             ..Default::default()
         }
     }
 
-    fn limit_write_message(protocol_path: &str, context_id: Option<&str>) -> Message<Descriptor> {
+    fn limit_write_message(module_path: &str, context_id: Option<&str>) -> Message<Descriptor> {
         serde_json::from_value(json!({
             "descriptor": {
                 "interface": "Records",
@@ -2802,8 +2796,8 @@ mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 0,
                 "dataFormat": "application/json",
-                "protocol": LIMITED_PROTOCOL,
-                "protocolPath": protocol_path,
+                "module": LIMITED_MODULE,
+                "modulePath": module_path,
                 "recipient": ROLE_TEST_AUTHOR
             },
             "recordId": "limit-record-1",
@@ -2816,7 +2810,7 @@ mod tests {
     #[tokio::test]
     async fn record_limit_policy_root_path_has_no_scope() {
         let store = MemoryMessageStore::default();
-        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+        crate::testing::put_limited_threads_module(ROLE_TEST_TENANT, &store).await;
         let policy = resolve_record_limit_policy(
             ROLE_TEST_TENANT,
             &limit_filter(Some("post"), None, None),
@@ -2827,8 +2821,8 @@ mod tests {
         .expect("root policy must resolve")
         .expect("root path has a limit");
         assert_eq!(policy.max, 2);
-        assert_eq!(policy.protocol, LIMITED_PROTOCOL);
-        assert_eq!(policy.protocol_path, "post");
+        assert_eq!(policy.module, LIMITED_MODULE);
+        assert_eq!(policy.module_path, "post");
         assert_eq!(policy.context_id, None);
         assert_eq!(policy.parent_id, None);
     }
@@ -2837,7 +2831,7 @@ mod tests {
     #[tokio::test]
     async fn record_limit_policy_nested_scope_selection() {
         let store = MemoryMessageStore::default();
-        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+        crate::testing::put_limited_threads_module(ROLE_TEST_TENANT, &store).await;
 
         let parent = resolve_record_limit_policy(
             ROLE_TEST_TENANT,
@@ -2892,7 +2886,7 @@ mod tests {
     #[tokio::test]
     async fn record_limit_policy_absent_means_unlimited() {
         let store = MemoryMessageStore::default();
-        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+        crate::testing::put_limited_threads_module(ROLE_TEST_TENANT, &store).await;
 
         assert_eq!(
             resolve_record_limit_policy(
@@ -2902,9 +2896,9 @@ mod tests {
                 POLICY_T1,
             )
             .await
-            .expect("missing protocol must not fail"),
+            .expect("missing module must not fail"),
             None,
-            "filter without protocol selects no policy"
+            "filter without module selects no policy"
         );
         assert_eq!(
             resolve_record_limit_policy(
@@ -2953,7 +2947,7 @@ mod tests {
     #[tokio::test]
     async fn message_record_limit_policy_uses_direct_parent() {
         let store = MemoryMessageStore::default();
-        crate::testing::put_limited_threads_protocol(ROLE_TEST_TENANT, &store).await;
+        crate::testing::put_limited_threads_module(ROLE_TEST_TENANT, &store).await;
 
         let nested = message_record_limit_policy(
             ROLE_TEST_TENANT,
@@ -2982,11 +2976,11 @@ mod tests {
     async fn put_limit_history_configure(store: &MemoryMessageStore, timestamp: &str, max: u64) {
         let message: Message<Descriptor> = serde_json::from_value(json!({
             "descriptor": {
-                "interface": "Protocols",
+                "interface": "Modules",
                 "method": "Configure",
                 "messageTimestamp": timestamp,
                 "definition": {
-                    "protocol": LIMITED_PROTOCOL,
+                    "module": LIMITED_MODULE,
                     "published": false,
                     "types": {},
                     "structure": {
@@ -2999,7 +2993,7 @@ mod tests {
         let indexes = BTreeMap::from([
             (
                 "interface".to_string(),
-                Value::String("Protocols".to_string()),
+                Value::String("Modules".to_string()),
             ),
             ("method".to_string(), Value::String("Configure".to_string())),
             (
@@ -3007,8 +3001,8 @@ mod tests {
                 Value::String(timestamp.to_string()),
             ),
             (
-                "protocol".to_string(),
-                Value::String(LIMITED_PROTOCOL.to_string()),
+                "module".to_string(),
+                Value::String(LIMITED_MODULE.to_string()),
             ),
             ("published".to_string(), Value::Bool(false)),
             ("isLatestBaseState".to_string(), Value::Bool(true)),
@@ -3021,7 +3015,7 @@ mod tests {
 
     // Covers: DWN-PROTO-004
     #[tokio::test]
-    async fn record_limit_policy_follows_protocol_history() {
+    async fn record_limit_policy_follows_module_history() {
         let store = MemoryMessageStore::default();
         put_limit_history_configure(&store, HISTORY_T1, 2).await;
         put_limit_history_configure(&store, HISTORY_T2, 5).await;
@@ -3059,7 +3053,7 @@ mod tests {
         put_history_configure(&store, HISTORY_T1, true).await;
         let role_cid = put_role_record(
             &store,
-            ROLE_TEST_PROTOCOL,
+            ROLE_TEST_MODULE,
             "thread/participant",
             "thread-1",
             "role-record-1",
@@ -3068,8 +3062,8 @@ mod tests {
 
         let request = crate::testing::signed_records_subscribe_message(
             RecordsFilter {
-                protocol: Some(ROLE_TEST_PROTOCOL.to_string()),
-                protocol_path: Some("thread/participant".to_string()),
+                module: Some(ROLE_TEST_MODULE.to_string()),
+                module_path: Some("thread/participant".to_string()),
                 context_id: Some("thread-1/message-1".to_string()),
                 ..Default::default()
             },
@@ -3082,8 +3076,8 @@ mod tests {
         let auth = DeliveryAuthorization {
             message,
             filter: RecordsFilter {
-                protocol: Some(ROLE_TEST_PROTOCOL.to_string()),
-                protocol_path: Some("thread/participant".to_string()),
+                module: Some(ROLE_TEST_MODULE.to_string()),
+                module_path: Some("thread/participant".to_string()),
                 context_id: Some("thread-1/message-1".to_string()),
                 ..Default::default()
             },
@@ -3116,13 +3110,13 @@ mod tests {
         serde_json::from_value(message).expect("actor message must deserialize")
     }
 
-    fn cross_of_definition(alias_protocol: &str) -> Definition {
+    fn cross_of_definition(alias_module: &str) -> Definition {
         Definition {
-            protocol: "https://example.com/composing".to_string(),
+            module: "https://example.com/composing".to_string(),
             published: false,
             uses: Some(BTreeMap::from([(
                 "threads".to_string(),
-                alias_protocol.to_string(),
+                alias_module.to_string(),
             )])),
             key_agreement: None,
             types: BTreeMap::new(),
@@ -3132,7 +3126,7 @@ mod tests {
 
     // Covers: DWN-PROTO-005, DWN-PROTO-003
     #[tokio::test]
-    async fn check_actor_cross_of_matches_protocol_and_path() {
+    async fn check_actor_cross_of_matches_module_and_path() {
         use crate::testing::{signed_write_message, WriteSpec};
 
         const THREADS_A: &str = "https://a.example/threads";
@@ -3140,23 +3134,23 @@ mod tests {
 
         let chain_a = vec![actor_chain_entry(
             signed_write_message(WriteSpec {
-                protocol: THREADS_A.to_string(),
-                protocol_path: "thread".to_string(),
+                module: THREADS_A.to_string(),
+                module_path: "thread".to_string(),
                 ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
             })
             .await,
         )];
         let chain_b = vec![actor_chain_entry(
             signed_write_message(WriteSpec {
-                protocol: THREADS_B.to_string(),
-                protocol_path: "thread".to_string(),
+                module: THREADS_B.to_string(),
+                module_path: "thread".to_string(),
                 ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
             })
             .await,
         )];
 
         let definition = cross_of_definition(THREADS_A);
-        // A cross-protocol `of` matches both protocol URI and path.
+        // A cross-module `of` matches both module URI and path.
         assert!(check_actor(
             ROLE_TEST_AUTHOR,
             &Who::Author,
@@ -3164,7 +3158,7 @@ mod tests {
             &chain_a,
             Some(&definition)
         ));
-        // The same path in another protocol does not match.
+        // The same path in another module does not match.
         assert!(!check_actor(
             ROLE_TEST_AUTHOR,
             &Who::Author,
@@ -3172,7 +3166,7 @@ mod tests {
             &chain_b,
             Some(&definition)
         ));
-        // A local `of` matches by path alone, even in a referenced protocol.
+        // A local `of` matches by path alone, even in a referenced module.
         assert!(check_actor(
             ROLE_TEST_AUTHOR,
             &Who::Author,

@@ -26,7 +26,7 @@ fn internal(detail: impl ToString) -> ResumableTaskStoreError {
 pub enum ResumableTaskName {
     RecordsDelete,
     RecordsSquash,
-    /// Re-examine one protocol's control records. Names the protocol, not its
+    /// Re-examine one module's control records. Names the module, not its
     /// victims, so a resumed scan re-asks the question rather than replaying a
     /// list it may no longer be able to reproduce.
     ControlRepair,
@@ -166,7 +166,7 @@ where
         self.task_store.delete(&managed.id).await
     }
 
-    /// Runs one protocol's repair: judge, then remove each condemned record
+    /// Runs one module's repair: judge, then remove each condemned record
     /// under its own durable intent.
     ///
     /// The child intent is what makes an interrupted removal recoverable. The

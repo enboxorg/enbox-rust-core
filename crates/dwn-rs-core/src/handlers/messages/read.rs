@@ -161,7 +161,7 @@ where
             .await
             .map_err(|error| error.to_string());
         }
-        Err("MessagesReadAuthorizationFailed: protocol message failed authorization".to_string())
+        Err("MessagesReadAuthorizationFailed: module message failed authorization".to_string())
     }
 
     async fn external_read_data(

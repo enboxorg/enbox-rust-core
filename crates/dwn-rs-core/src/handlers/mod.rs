@@ -1,6 +1,6 @@
 pub(crate) mod guarded_subscription;
 pub mod messages;
-pub mod protocols;
+pub mod modules;
 pub mod records;
 
-pub use protocols::*;
+pub use modules::*;

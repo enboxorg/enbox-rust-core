@@ -1,4 +1,4 @@
-//! Referential integrity for records writes: the protocol rules governing
+//! Referential integrity for records writes: the module rules governing
 //! one write, enforced against its descriptor.
 //!
 //! Resolution (which definition, rule set, type, and key agreement govern the
@@ -9,15 +9,15 @@ use crate::descriptors::{
     records::{is_initial_write, records_write_descriptor, write_fields},
     Descriptor,
 };
-use crate::dwn::core_protocol::CoreProtocolRegistry;
+use crate::dwn::core_module::CoreModuleRegistry;
 use crate::encryption::control::{AudienceId, AudienceScope, ControlKind};
 use crate::encryption::{
-    EncryptionEnvelope, KeyEncryption, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
+    EncryptionEnvelope, KeyEncryption, ENCRYPTION_MODULE_GRANT_KEY_PATH, ENCRYPTION_MODULE_URI,
 };
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::handlers::records::common::{context_id, fetch_parent_record, message_record_id};
-use crate::interfaces::messages::protocols::{
-    parse_cross_protocol_ref, Action, Can, Definition, RuleSet,
+use crate::interfaces::messages::modules::{
+    parse_cross_module_ref, Action, Can, Definition, RuleSet,
 };
 use crate::stores::MessageStore;
 use crate::Message;
@@ -29,21 +29,21 @@ pub(crate) async fn validate_referential_integrity<M>(
     tenant: &str,
     message: &Message<Descriptor>,
     author: &str,
-    registry: &CoreProtocolRegistry,
+    registry: &CoreModuleRegistry,
     message_store: &M,
 ) -> Result<(), RecordsWriteValidationError>
 where
     M: MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
-    let protocol_path = descriptor.protocol_path.clone();
+    let module_path = descriptor.module_path.clone();
 
-    // Control records live at virtual paths the protocol never declares, so
+    // Control records live at virtual paths the module never declares, so
     // there is no type or rule set to validate them against. They are
     // admitted on their own fixed contract instead, and the application
     // encryption-policy checks below deliberately do not apply: a control
-    // record's representation is fixed by its kind, not by the protocol.
-    if let Some(kind) = ControlKind::from_protocol_path(&protocol_path) {
+    // record's representation is fixed by its kind, not by the module.
+    if let Some(kind) = ControlKind::from_module_path(&module_path) {
         return super::control::validate_referential_integrity(
             tenant,
             message,
@@ -93,14 +93,14 @@ where
                     )
                     .into());
                 };
-                let has_protocol_path_entry = envelope.key_encryption.iter().any(|entry| {
-                    matches!(entry, KeyEncryption::ProtocolPath { key_id: id, .. } if id == &key_id)
+                let has_module_path_entry = envelope.key_encryption.iter().any(|entry| {
+                    matches!(entry, KeyEncryption::ModulePath { key_id: id, .. } if id == &key_id)
                 });
-                if !has_protocol_path_entry {
+                if !has_module_path_entry {
                     return Err(DwnError::new(
                         DwnErrorCode::ModuleAuthorizationEncryptionModulePathEntryMissing,
                         format!(
-                            "encrypted record is missing a protocolPath keyEncryption entry for '{protocol_path}'"
+                            "encrypted record is missing a modulePath keyEncryption entry for '{module_path}'"
                         ),
                     )
                     .into());
@@ -116,12 +116,12 @@ where
                 .await?;
             }
             None => {
-                let dynamic_recipient = definition.protocol == ENCRYPTION_PROTOCOL_URI
-                    && descriptor.protocol_path == ENCRYPTION_PROTOCOL_GRANT_KEY_PATH;
+                let dynamic_recipient = definition.module == ENCRYPTION_MODULE_URI
+                    && descriptor.module_path == ENCRYPTION_MODULE_GRANT_KEY_PATH;
                 if !dynamic_recipient {
                     return Err(DwnError::new(
                         DwnErrorCode::ModuleAuthorizationEncryptionKeyAgreementMissing,
-                        format!("encrypted protocol path '{protocol_path}' has no $keyAgreement"),
+                        format!("encrypted module path '{module_path}' has no $keyAgreement"),
                     )
                     .into());
                 }
@@ -132,9 +132,7 @@ where
     if rule_set.immutable == Some(true) && !is_initial_write(message, author)? {
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationImmutableRecord,
-            format!(
-                "record at protocol path '{protocol_path}' is immutable: updates are not allowed."
-            ),
+            format!("record at module path '{module_path}' is immutable: updates are not allowed."),
         )
         .into());
     }
@@ -143,7 +141,7 @@ where
         if let Some(min) = size.min {
             if descriptor.data_size < min {
                 return Err(format!(
-                    "ProtocolAuthorizationInvalidDataSize: dataSize {} is smaller than minimum {}",
+                    "ModuleAuthorizationInvalidDataSize: dataSize {} is smaller than minimum {}",
                     descriptor.data_size, min
                 )
                 .into());
@@ -152,7 +150,7 @@ where
         if let Some(max) = size.max {
             if descriptor.data_size > max {
                 return Err(format!(
-                    "ProtocolAuthorizationInvalidDataSize: dataSize {} exceeds maximum {}",
+                    "ModuleAuthorizationInvalidDataSize: dataSize {} exceeds maximum {}",
                     descriptor.data_size, max
                 )
                 .into());
@@ -163,20 +161,20 @@ where
     if descriptor.squash == Some(true)
         && (rule_set.squash != Some(true) || !is_initial_write(message, author)?)
     {
-        return Err("ProtocolAuthorizationInvalidSquash: squash writes must be initial writes at a $squash path".to_string().into());
+        return Err("ModuleAuthorizationInvalidSquash: squash writes must be initial writes at a $squash path".to_string().into());
     }
 
     if let Some(parent_id) = &descriptor.parent_id {
-        let parent_protocol = policy
+        let parent_module = policy
             .definition
-            .parent_protocol(descriptor.protocol_path.as_str());
-        let parent = fetch_parent_record(tenant, parent_id, &parent_protocol, message_store)
+            .parent_module(descriptor.module_path.as_str());
+        let parent = fetch_parent_record(tenant, parent_id, &parent_module, message_store)
             .await?
             .ok_or_else(|| {
                 // A missing parent and a pruned parent are indistinguishable on the
                 // client-facing reply; the replication apply layer classifies a prune
                 // as terminal locally. See `record_has_prune`.
-                let code = if parent_protocol != descriptor.protocol {
+                let code = if parent_module != descriptor.module {
                     DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound
                 } else {
                     DwnErrorCode::ModuleAuthorizationParentRecordNotFound
@@ -184,24 +182,24 @@ where
                 DwnError::new(
                     code,
                     format!(
-                        "could not find parent record '{parent_id}' in protocol '{parent_protocol}'"
+                        "could not find parent record '{parent_id}' in module '{parent_module}'"
                     ),
                 )
             })?;
         let parent_descriptor =
             records_write_descriptor(&parent).map_err(|error| error.to_string())?;
         let type_name = descriptor
-            .protocol_path
+            .module_path
             .rsplit('/')
             .next()
             .unwrap_or_default();
-        let expected_path = format!("{}/{type_name}", parent_descriptor.protocol_path);
-        if expected_path != descriptor.protocol_path {
+        let expected_path = format!("{}/{type_name}", parent_descriptor.module_path);
+        if expected_path != descriptor.module_path {
             return Err(DwnError::new(
                 DwnErrorCode::ModuleAuthorizationIncorrectModulePath,
                 format!(
-                    "declared protocol path '{}' does not extend parent path '{}'",
-                    descriptor.protocol_path, parent_descriptor.protocol_path
+                    "declared module path '{}' does not extend parent path '{}'",
+                    descriptor.module_path, parent_descriptor.module_path
                 ),
             )
             .into());
@@ -238,12 +236,12 @@ where
             )
             .into());
         }
-    } else if descriptor.protocol_path.contains('/') {
+    } else if descriptor.module_path.contains('/') {
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationParentlessIncorrectModulePath,
             format!(
-                "declared protocol path '{}' is not valid for records with no parent",
-                descriptor.protocol_path
+                "declared module path '{}' is not valid for records with no parent",
+                descriptor.module_path
             ),
         )
         .into());
@@ -272,18 +270,18 @@ where
             continue;
         }
 
-        let (protocol, role_path) = match parse_cross_protocol_ref(&action.role) {
+        let (module, role_path) = match parse_cross_module_ref(&action.role) {
             Some(parsed) => {
-                let Some(protocol) = definition
+                let Some(module) = definition
                     .uses
                     .as_ref()
                     .and_then(|uses| uses.get(parsed.alias))
                 else {
                     continue;
                 };
-                (protocol.as_str(), parsed.protocol_path)
+                (module.as_str(), parsed.module_path)
             }
-            None => (definition.protocol.as_str(), action.role.as_str()),
+            None => (definition.module.as_str(), action.role.as_str()),
         };
         let Some(audience_context) =
             super::common::role_audience_context_id(role_path, record_context.as_deref())
@@ -298,10 +296,10 @@ where
                 matches!(
                     entry,
                     KeyEncryption::RoleAudience {
-                        protocol: entry_protocol,
+                        module: entry_module,
                         role_path: entry_role_path,
                         ..
-                    } if entry_protocol == protocol && entry_role_path == role_path
+                    } if entry_module == module && entry_role_path == role_path
                 )
             })
             .collect();
@@ -322,7 +320,7 @@ where
             };
             let id = AudienceId {
                 scope: AudienceScope {
-                    protocol: protocol.to_string(),
+                    module: module.to_string(),
                     role_path: role_path.to_string(),
                     context_id: audience_context.clone(),
                 },
@@ -338,7 +336,7 @@ where
             return Err(DwnError::new(
                 DwnErrorCode::ModuleAuthorizationEncryptionRoleAudienceMissing,
                 format!(
-                    "encrypted record references no retained audience for protocol '{protocol}', role '{role_path}', context '{audience_context}', and key IDs [{}]",
+                    "encrypted record references no retained audience for module '{module}', role '{role_path}', context '{audience_context}', and key IDs [{}]",
                     missing_key_ids.join(", ")
                 ),
             )

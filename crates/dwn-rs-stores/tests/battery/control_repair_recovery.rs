@@ -9,7 +9,7 @@
 //! `ResumableTaskManager` — the same entry point a node uses at open, not a
 //! private helper standing in for it.
 //!
-//! The obligation names the protocol, not its victims. A resumed repair re-asks
+//! The obligation names the module, not its victims. A resumed repair re-asks
 //! which records the configuration contradicts rather than replaying a list,
 //! which is what makes repeated repair safe and a partial pass finishable.
 //!
@@ -19,13 +19,13 @@ use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
-use dwn_rs_core::protocols::Definition;
+use dwn_rs_core::modules::Definition;
 use dwn_rs_core::stores::{DataStore, MessageStore, ResumableTaskStore};
 use dwn_rs_core::tasks::controller::{
     ResumableControlPurgeData, ResumableControlRepairData, StorageController,
 };
 use dwn_rs_core::tasks::manager::{ResumableTask, ResumableTaskManager, ResumableTaskName};
-use dwn_rs_core::testing::{put_protocol_definition, signed_write_message, WriteSpec};
+use dwn_rs_core::testing::{put_module_definition, signed_write_message, WriteSpec};
 use dwn_rs_core::{Descriptor, Filter, FilterKey, Filters, MapValue, Message, Value};
 use futures_util::{stream, TryStreamExt};
 use serde_json::json;
@@ -34,7 +34,7 @@ use crate::common::TempDb;
 use dwn_rs_stores::{SqliteResumableTaskStore, SqliteStore};
 
 const TENANT: &str = "did:example:alice";
-const PROTOCOL: &str = "https://example.com/protocol/threads";
+const MODULE: &str = "https://example.com/module/threads";
 /// Two audiences under the role the configuration demotes, and one under a
 /// role it keeps, so the scan has something it must leave alone.
 const SEEDED: [(&str, &str); 3] = [("first", "member"), ("second", "member"), ("kept", "keyed")];
@@ -50,7 +50,7 @@ fn repair_task() -> ResumableTask {
         name: ResumableTaskName::ControlRepair,
         data: serde_json::to_value(ResumableControlRepairData {
             tenant: TENANT.to_string(),
-            protocol: PROTOCOL.to_string(),
+            module: MODULE.to_string(),
         })
         .expect("repair task must serialize"),
     }
@@ -74,7 +74,7 @@ fn manager(
 /// not.
 fn configuration() -> Definition {
     serde_json::from_value(json!({
-        "protocol": PROTOCOL,
+        "module": MODULE,
         "published": true,
         "types": { "member": {}, "keyed": {} },
         "structure": {
@@ -105,10 +105,10 @@ async fn audience_write(label: &str, role_path: &str, payload: &Bytes) -> serde_
     let data_cid = generate_dag_pb_cid_from_bytes(payload).to_string();
     signed_write_message(WriteSpec {
         author: TENANT.to_string(),
-        protocol: PROTOCOL.to_string(),
-        protocol_path: "$encryption/audience".to_string(),
+        module: MODULE.to_string(),
+        module_path: "$encryption/audience".to_string(),
         tags: Some(MapValue::from([
-            ("protocol".to_string(), Value::String(PROTOCOL.to_string())),
+            ("module".to_string(), Value::String(MODULE.to_string())),
             ("rolePath".to_string(), Value::String(role_path.to_string())),
             ("contextId".to_string(), Value::String(String::new())),
             ("keyId".to_string(), Value::String(format!("key-{label}"))),
@@ -129,9 +129,9 @@ fn audience_indexes(record_id: &str, role_path: &str, data_cid: &str) -> BTreeMa
         ),
         ("method".to_string(), Value::String("Write".to_string())),
         ("recordId".to_string(), Value::String(record_id.to_string())),
-        ("protocol".to_string(), Value::String(PROTOCOL.to_string())),
+        ("module".to_string(), Value::String(MODULE.to_string())),
         (
-            "protocolPath".to_string(),
+            "modulePath".to_string(),
             Value::String("$encryption/audience".to_string()),
         ),
         ("dataCid".to_string(), Value::String(data_cid.to_string())),
@@ -160,7 +160,7 @@ struct Seeded {
 
 /// Seeds the configuration plus two contradicted audiences and one sound one.
 async fn seed(store: &SqliteStore, payload: &Bytes) -> BTreeMap<&'static str, Seeded> {
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         store,
         configuration(),

@@ -23,7 +23,7 @@ use dwn_rs_agent::auth::setup::{
 };
 use dwn_rs_agent::SqliteSecretStore;
 use dwn_rs_core::auth::{PrivateJwkSigner, StaticPublicKeyResolver, JWK};
-use dwn_rs_core::protocols::Definition;
+use dwn_rs_core::modules::Definition;
 use dwn_rs_core::runtime::mobile::MobileInitializeRequest;
 use dwn_rs_core::stores::MessageStore;
 use dwn_rs_core::sync::endpoint::JwsSyncAuthorizer;
@@ -1865,7 +1865,7 @@ mod tests {
                     "method": "Query",
                     "messageTimestamp": "2025-01-01T00:00:00.000000Z",
                     "filter": {
-                        "protocol": "https://example.com/test"
+                        "module": "https://example.com/test"
                     }
                 }
             }),
@@ -1919,7 +1919,7 @@ mod tests {
                         "interface": "Records",
                         "method": "Query",
                         "messageTimestamp": "2025-01-01T00:00:00.000000Z",
-                        "filter": { "protocol": "https://example.com/test" }
+                        "filter": { "module": "https://example.com/test" }
                     }
                 }),
             };
@@ -2887,8 +2887,8 @@ mod tests {
                     "scope": {
                         "interface": "Records",
                         "method": "Read",
-                        "protocol": "https://protocol.example/notes",
-                        "protocolPath": "note"
+                        "module": "https://protocol.example/notes",
+                        "modulePath": "note"
                     },
                     "delegated": false
                 })
@@ -3860,7 +3860,7 @@ mod tests {
 
     fn plain_protocol_definition() -> serde_json::Value {
         serde_json::json!({
-            "protocol": "https://protocol.example/notes",
+            "module": "https://protocol.example/notes",
             "published": true,
             "types": {
                 "note": {
@@ -3878,7 +3878,7 @@ mod tests {
 
     fn encrypted_protocol_definition() -> serde_json::Value {
         serde_json::json!({
-            "protocol": "https://protocol.example/private-notes",
+            "module": "https://protocol.example/private-notes",
             "published": true,
             "types": {
                 "note": {
@@ -3972,8 +3972,8 @@ mod tests {
         serde_json::json!({
             "interface": "Records",
             "method": "Read",
-            "protocol": "https://protocol.example/notes",
-            "protocolPath": "note"
+            "module": "https://protocol.example/notes",
+            "modulePath": "note"
         })
     }
 
@@ -4055,7 +4055,7 @@ mod tests {
 
     fn encrypted_connect_protocol_definition() -> serde_json::Value {
         serde_json::json!({
-            "protocol": "https://protocol.example/private-notes",
+            "module": "https://protocol.example/private-notes",
             "published": true,
             "types": {
                 "note": {
@@ -4081,8 +4081,8 @@ mod tests {
                 "permissionScopes": [{
                     "interface": "Records",
                     "method": "Read",
-                    "protocol": "https://protocol.example/private-notes",
-                    "protocolPath": "note"
+                    "module": "https://protocol.example/private-notes",
+                    "modulePath": "note"
                 }]
             }]
         });
@@ -4117,8 +4117,8 @@ mod tests {
                 "permissionScopes": [{
                     "interface": "Records",
                     "method": "Read",
-                    "protocol": "https://protocol.example/notes",
-                    "protocolPath": "note"
+                    "module": "https://protocol.example/notes",
+                    "modulePath": "note"
                 }]
             }]
         });
@@ -4164,8 +4164,8 @@ mod tests {
                         "permissionScopes": [{
                             "interface": "Records",
                             "method": "Read",
-                            "protocol": "https://protocol.example/private-notes",
-                            "protocolPath": "note"
+                            "module": "https://protocol.example/private-notes",
+                            "modulePath": "note"
                         }]
                     }]
                 })

@@ -42,7 +42,7 @@ fn projection_candidate(record_id: &str, date_created: &str) -> serde_json::Valu
     json!({
         "descriptor": {
             "interface": "Records", "method": "Write",
-            "protocol": CONTROL_PROTOCOL, "protocolPath": AUDIENCE_PATH,
+            "module": CONTROL_MODULE, "modulePath": AUDIENCE_PATH,
             "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
             "dataSize": 0, "dataFormat": "application/json",
             "dateCreated": date_created,
@@ -284,10 +284,10 @@ async fn a_query_page_refills_past_records_projection_removed() {
 // Covers: DWN-REC-005, ENBOX-ENC-003
 // A broad Count must report the population Query would return. Counting through
 // the store would include superseded audiences and deliveries the requester
-// cannot read, so a protocol-wide count needs the same passes a control-only
+// cannot read, so a module-wide count needs the same passes a control-only
 // one gets.
 #[tokio::test]
-async fn a_protocol_wide_count_agrees_with_query() {
+async fn a_module_wide_count_agrees_with_query() {
     const RECIPIENT: &str = "did:example:bob";
     let fixture = control_fixture().await;
 
@@ -341,8 +341,8 @@ async fn a_protocol_wide_count_agrees_with_query() {
     let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
     let count_handler = RecordsCountHandler::new(fixture.message_store.clone(), None);
 
-    // A protocol-wide request, pinning no path at all.
-    let broad = json!({ "protocol": CONTROL_PROTOCOL });
+    // A module-wide request, pinning no path at all.
+    let broad = json!({ "module": CONTROL_MODULE });
     for (label, signer) in [
         ("an unrelated requester", signer_for("did:example:mallory")),
         ("the tenant", test_signer()),
@@ -505,8 +505,8 @@ async fn query_pages_refill_past_deliveries_the_requester_cannot_see() {
     // page refilling past the three it may not see.
     for round in 0..4 {
         let mut request = unsigned_query_message(json!({
-            "protocol": CONTROL_PROTOCOL,
-            "protocolPath": DELIVERY_PATH,
+            "module": CONTROL_MODULE,
+            "modulePath": DELIVERY_PATH,
         }));
         request["descriptor"]["pagination"] = match &cursor {
             Some(cursor) => json!({ "limit": 1, "cursor": cursor }),
@@ -589,12 +589,12 @@ async fn a_live_audience_is_disclosed_only_while_it_is_the_current_one() {
     // the key id instead would bypass projection and prove nothing.
     let request = signed_records_subscribe_message(
         RecordsFilter {
-            protocol: Some(CONTROL_PROTOCOL.to_string()),
-            protocol_path: Some(AUDIENCE_PATH.to_string()),
+            module: Some(CONTROL_MODULE.to_string()),
+            module_path: Some(AUDIENCE_PATH.to_string()),
             tags: Some(BTreeMap::from([
                 (
-                    "protocol".to_string(),
-                    Filter::Equal(Value::String(CONTROL_PROTOCOL.to_string())),
+                    "module".to_string(),
+                    Filter::Equal(Value::String(CONTROL_MODULE.to_string())),
                 ),
                 (
                     "rolePath".to_string(),
@@ -734,8 +734,8 @@ async fn paging_never_drops_a_visible_record_behind_its_own_cursor() {
     let mut seen = 0;
     for _ in 0..4 {
         let mut request = unsigned_query_message(json!({
-            "protocol": CONTROL_PROTOCOL,
-            "protocolPath": DELIVERY_PATH,
+            "module": CONTROL_MODULE,
+            "modulePath": DELIVERY_PATH,
         }));
         request["descriptor"]["pagination"] = match &cursor {
             Some(cursor) => json!({ "limit": 2, "cursor": cursor }),
@@ -807,8 +807,8 @@ async fn the_event_log_snapshot_refills_like_every_other_collection_page() {
     );
     let request = signed_records_subscribe_with_pagination(
         RecordsFilter {
-            protocol: Some(CONTROL_PROTOCOL.to_string()),
-            protocol_path: Some(AUDIENCE_PATH.to_string()),
+            module: Some(CONTROL_MODULE.to_string()),
+            module_path: Some(AUDIENCE_PATH.to_string()),
             ..Default::default()
         },
         None,

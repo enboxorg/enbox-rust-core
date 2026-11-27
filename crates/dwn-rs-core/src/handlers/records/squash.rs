@@ -10,7 +10,7 @@ use crate::descriptors::{
     Descriptor,
 };
 use crate::filters::{Filter, FilterKey, Filters};
-use crate::handlers::protocols::configure::fetch_protocol_definition;
+use crate::handlers::modules::configure::fetch_module_definition;
 use crate::handlers::records::common::{
     bool_filter, context_id, filter_map, message_cid, message_record_id, newest_message,
     parent_context_id, purge_record_messages, records_write_indexes, set_encoded_data,
@@ -36,11 +36,11 @@ where
 {
     let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
     let definition =
-        match fetch_protocol_definition(tenant, &descriptor.protocol, message_store, None).await {
+        match fetch_module_definition(tenant, &descriptor.module, message_store, None).await {
             Ok(definition) => definition,
             Err(_) => return Ok(()),
         };
-    let Some(rule_set) = definition.rule_at(&descriptor.protocol_path) else {
+    let Some(rule_set) = definition.rule_at(&descriptor.module_path) else {
         return Ok(());
     };
     if rule_set.squash != Some(true) {
@@ -51,8 +51,8 @@ where
         ("interface", string_filter(RECORDS_INTERFACE)),
         ("method", string_filter(WRITE_METHOD)),
         ("isLatestBaseState", bool_filter(true)),
-        ("protocol", string_filter(&descriptor.protocol)),
-        ("protocolPath", string_filter(&descriptor.protocol_path)),
+        ("module", string_filter(&descriptor.module)),
+        ("modulePath", string_filter(&descriptor.module_path)),
         ("squash", bool_filter(true)),
     ]);
     if let Some(parent_context) =
@@ -87,10 +87,10 @@ where
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationSquashBackstop,
             format!(
-                "incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at protocol path '{}'.",
+                "incoming message timestamp '{}' is not newer than the most recent squash record timestamp '{}' at module path '{}'.",
                 canonical_rfc3339(descriptor.message_timestamp),
                 squash_floor_timestamp,
-                descriptor.protocol_path
+                descriptor.module_path
             ),
         )
         .with_info(BTreeMap::from([(
@@ -165,8 +165,8 @@ where
         .ok_or_else(|| "RecordsWriteMissingRecordId: recordId is required".to_string())?;
     let mut filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
-        ("protocol", string_filter(&descriptor.protocol)),
-        ("protocolPath", string_filter(&descriptor.protocol_path)),
+        ("module", string_filter(&descriptor.module)),
+        ("modulePath", string_filter(&descriptor.module_path)),
     ]);
     if let Some(parent_context) =
         context_id(message).and_then(|context| parent_context_id(&context))

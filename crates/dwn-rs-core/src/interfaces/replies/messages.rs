@@ -36,7 +36,7 @@ pub struct QueryEntry {
     #[serde(rename = "messageCid")]
     pub cid: Cid,
     pub is_latest_base_state: bool,
-    pub protocol: Option<String>,
+    pub module: Option<String>,
     pub message: Option<Message<Descriptor>>,
     pub encoded_data: Option<String>,
     pub initial_write: Option<Message<Descriptor>>,

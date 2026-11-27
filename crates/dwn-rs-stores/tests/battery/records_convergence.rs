@@ -14,7 +14,7 @@ use bytes::Bytes;
 use dwn_rs_core::cid::generate_dag_pb_cid_from_bytes;
 use dwn_rs_core::stores::ReplicationFeedReader;
 use dwn_rs_core::testing::{
-    put_limited_threads_protocol, put_notes_protocol_without_actions, signed_delete_message,
+    put_limited_threads_module, put_notes_module_without_actions, signed_delete_message,
     signed_write_message, test_resolver, unsigned_query_message, unsigned_read_message, WriteSpec,
 };
 use dwn_rs_core::Reply;
@@ -98,7 +98,7 @@ async fn fresh_nodes() -> Nodes {
         .await
         .expect("open disk node");
     for node in [&mem, &disk] {
-        put_notes_protocol_without_actions(TENANT, node.store()).await;
+        put_notes_module_without_actions(TENANT, node.store()).await;
     }
     Nodes { mem, disk, _db: db }
 }
@@ -331,17 +331,17 @@ async fn restart_mid_sequence_converges_with_uninterrupted_run() {
     assert_eq!(mem_state.read_status, 404);
 }
 
-const ANCESTRY_PROTOCOL: &str = "http://example.com/limited";
+const ANCESTRY_MODULE: &str = "http://example.com/limited";
 
 fn ancestry_write(
-    protocol_path: &str,
+    module_path: &str,
     parent: Option<(&str, &str)>,
     timestamp: &str,
     data: &'static [u8],
 ) -> WriteSpec {
     WriteSpec {
-        protocol: ANCESTRY_PROTOCOL.to_string(),
-        protocol_path: protocol_path.to_string(),
+        module: ANCESTRY_MODULE.to_string(),
+        module_path: module_path.to_string(),
         parent_id: parent.map(|(record_id, _)| record_id.to_string()),
         parent_context_id: parent.map(|(_, context_id)| context_id.to_string()),
         data_cid: generate_dag_pb_cid_from_bytes(data).to_string(),
@@ -361,7 +361,7 @@ async fn ancestry_after_reopen(prune: bool) -> (i32, Option<String>) {
     let mut disk = SqliteNativeDwn::open_at(db.path(), test_resolver())
         .await
         .expect("open disk node");
-    put_limited_threads_protocol(TENANT, disk.store()).await;
+    put_limited_threads_module(TENANT, disk.store()).await;
 
     let thread = signed_write_message(ancestry_write("thread", None, T1, b"thread")).await;
     let thread_id = thread["recordId"].as_str().expect("recordId").to_string();

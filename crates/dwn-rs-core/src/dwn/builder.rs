@@ -16,7 +16,7 @@ use crate::handlers::{
     messages::{
         read::MessagesReadHandler, subscribe::MessagesSubscribeHandler, sync::MessagesSyncHandler,
     },
-    protocols::{configure::ProtocolsConfigureHandler, query::ProtocolsQueryHandler},
+    modules::{configure::ModulesConfigureHandler, query::ModulesQueryHandler},
     records::{
         count::RecordsCountHandler, delete::RecordsDeleteHandler, query::RecordsQueryHandler,
         read::RecordsReadHandler, subscribe::RecordsSubscribeHandler, write::RecordsWriteHandler,
@@ -232,14 +232,14 @@ fn register_native_handlers<MS, DS, SI, EL, RTS, RFR, Gate>(
     // re-examine stored control records rather than leaving them to contradict
     // the configuration silently.
     dwn.register(
-        ProtocolsConfigureHandler::new(message_store.clone(), resolver.clone()).with_repairer(
+        ModulesConfigureHandler::new(message_store.clone(), resolver.clone()).with_repairer(
             std::sync::Arc::new(ResumableTaskManager::new(
                 resumable_task_store.clone(),
                 StorageController::new(message_store.clone(), data_store.clone()),
             )),
         ),
     );
-    dwn.register(ProtocolsQueryHandler::new(
+    dwn.register(ModulesQueryHandler::new(
         message_store.clone(),
         resolver.clone(),
     ));

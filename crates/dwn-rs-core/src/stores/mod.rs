@@ -251,7 +251,7 @@ pub enum SubscriptionMessage {
         #[serde(rename = "isLatestBaseState", skip_serializing_if = "Option::is_none")]
         is_latest_base_state: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        protocol: Option<String>,
+        module: Option<String>,
         #[serde(rename = "encodedData", skip_serializing_if = "Option::is_none")]
         encoded_data: Option<String>,
     },
@@ -393,7 +393,7 @@ pub trait DataStore {
     fn clear(&self) -> impl Future<Output = Result<(), DataStoreError>> + Send;
 }
 
-/// Native StateIndex contract for global and protocol-scoped SMT sync.
+/// Native StateIndex contract for global and module-scoped SMT sync.
 pub trait StateIndex {
     fn open(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
 
@@ -416,10 +416,10 @@ pub trait StateIndex {
 
     fn get_root(&self, tenant: &str) -> impl Future<Output = Result<StateHash, StoreError>> + Send;
 
-    fn get_protocol_root(
+    fn get_module_root(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send;
 
     fn get_subtree_hash(
@@ -428,10 +428,10 @@ pub trait StateIndex {
         prefix: &[bool],
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send;
 
-    fn get_protocol_subtree_hash(
+    fn get_module_subtree_hash(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send;
 
@@ -441,10 +441,10 @@ pub trait StateIndex {
         prefix: &[bool],
     ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
 
-    fn get_protocol_leaves(
+    fn get_module_leaves(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
 }
@@ -617,7 +617,7 @@ mod enbox_store_contract_tests {
             seq: (metadata).then(|| "7".to_string()),
             message_cid: (metadata).then(|| "cid-7".to_string()),
             is_latest_base_state: (metadata).then_some(true),
-            protocol: (metadata).then(|| "https://example.com/chat".to_string()),
+            module: (metadata).then(|| "https://example.com/chat".to_string()),
             encoded_data: (metadata).then(|| "aGk=".to_string()),
         }
     }
@@ -630,7 +630,7 @@ mod enbox_store_contract_tests {
         assert_eq!(value["seq"], "7");
         assert_eq!(value["messageCid"], "cid-7");
         assert_eq!(value["isLatestBaseState"], true);
-        assert_eq!(value["protocol"], "https://example.com/chat");
+        assert_eq!(value["module"], "https://example.com/chat");
         assert_eq!(value["encodedData"], "aGk=");
     }
 
@@ -650,7 +650,7 @@ mod enbox_store_contract_tests {
             seq: Some("7".to_string()),
             message_cid: Some("cid-7".to_string()),
             is_latest_base_state: Some(false),
-            protocol: Some("https://example.com/chat".to_string()),
+            module: Some("https://example.com/chat".to_string()),
             encoded_data: Some("aGk=".to_string()),
         };
 
@@ -666,7 +666,7 @@ mod enbox_store_contract_tests {
             "seq",
             "messageCid",
             "isLatestBaseState",
-            "protocol",
+            "module",
             "encodedData",
         ] {
             assert!(value.get(key).is_none(), "{key} must be omitted");
@@ -683,18 +683,12 @@ mod enbox_store_contract_tests {
                 seq,
                 message_cid,
                 is_latest_base_state,
-                protocol,
+                module,
                 encoded_data,
                 ..
             } => {
                 assert_eq!(
-                    (
-                        seq,
-                        message_cid,
-                        is_latest_base_state,
-                        protocol,
-                        encoded_data
-                    ),
+                    (seq, message_cid, is_latest_base_state, module, encoded_data),
                     (None, None, None, None, None)
                 );
             }

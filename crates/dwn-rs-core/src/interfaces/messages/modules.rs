@@ -25,11 +25,11 @@ pub struct Type {
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone)]
 pub struct Definition {
-    pub protocol: String,
+    pub module: String,
     pub published: bool,
     pub uses: Option<BTreeMap<String, String>>,
     #[serde(rename = "$keyAgreement")]
-    pub key_agreement: Option<ProtocolKeyAgreement>,
+    pub key_agreement: Option<ModuleKeyAgreement>,
     pub types: BTreeMap<String, Type>,
     pub structure: BTreeMap<String, RuleSet>,
 }
@@ -96,7 +96,7 @@ pub enum Action {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[skip_serializing_none]
-pub struct ProtocolKeyAgreement {
+pub struct ModuleKeyAgreement {
     #[serde(rename = "publicKeyJwk")]
     pub public_key_jwk: JWK,
 }
@@ -112,7 +112,7 @@ pub struct Size {
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq, Clone)]
 pub struct RuleSet {
     #[serde(rename = "$keyAgreement")]
-    pub key_agreement: Option<ProtocolKeyAgreement>,
+    pub key_agreement: Option<ModuleKeyAgreement>,
     #[serde(rename = "$actions", default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<Action>,
     #[serde(rename = "$role")]
@@ -258,24 +258,24 @@ pub struct TagContains {
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 #[error("{code}: {message}")]
-pub struct ProtocolDefinitionError {
+pub struct ModuleDefinitionError {
     pub code: &'static str,
     pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CrossProtocolRef<'a> {
+pub struct CrossModuleRef<'a> {
     pub alias: &'a str,
-    pub protocol_path: &'a str,
+    pub module_path: &'a str,
 }
 
-pub fn validate_definition(definition: &Definition) -> Result<(), ProtocolDefinitionError> {
-    validate_normalized_protocol_url(&definition.protocol)?;
+pub fn validate_definition(definition: &Definition) -> Result<(), ModuleDefinitionError> {
+    validate_normalized_module_url(&definition.module)?;
 
-    for (type_name, protocol_type) in &definition.types {
-        if let Some(schema) = &protocol_type.schema {
+    for (type_name, module_type) in &definition.types {
+        if let Some(schema) = &module_type.schema {
             validate_normalized_schema_url(schema).map_err(|_| {
-                protocol_error(
+                module_error(
                     "UrlSchemaNotNormalized",
                     format!("Schema URI {schema} for type {type_name} must be normalized."),
                 )
@@ -284,24 +284,24 @@ pub fn validate_definition(definition: &Definition) -> Result<(), ProtocolDefini
     }
 
     if let Some(uses) = &definition.uses {
-        validate_uses(uses, &definition.protocol)?;
+        validate_uses(uses, &definition.module)?;
     }
 
     validate_structure(definition)
 }
 
 impl Definition {
-    /// The rule set governing a slash-joined protocol path. `structure` is
+    /// The rule set governing a slash-joined module path. `structure` is
     /// keyed by root segment; nesting lives under each rule set's `rules`.
-    pub fn rule_at(&self, protocol_path: &str) -> Option<&RuleSet> {
-        rule_set_at_path(protocol_path, &self.structure)
+    pub fn rule_at(&self, module_path: &str) -> Option<&RuleSet> {
+        rule_set_at_path(module_path, &self.structure)
     }
 
     /// Whether any declared type requires encryption.
     pub fn requires_encryption(&self) -> bool {
         self.types
             .values()
-            .any(|protocol_type| protocol_type.encryption_required == Some(true))
+            .any(|module_type| module_type.encryption_required == Some(true))
     }
 
     /// Whether any rule set carries injected key agreement.
@@ -318,10 +318,10 @@ impl Definition {
     }
 
     /// The referenced position for a record written exactly at a `$ref`
-    /// attachment root. Deeper paths belong to the composing protocol and
+    /// attachment root. Deeper paths belong to the composing module and
     /// yield `None`.
-    pub fn ref_position(&self, protocol_path: &str) -> Option<CrossProtocolRef<'_>> {
-        let mut segments = protocol_path.split('/');
+    pub fn ref_position(&self, module_path: &str) -> Option<CrossModuleRef<'_>> {
+        let mut segments = module_path.split('/');
         let root_segment = segments.next().unwrap_or_default();
         if segments.next().is_some() {
             return None;
@@ -330,41 +330,41 @@ impl Definition {
             .structure
             .get(root_segment)
             .and_then(|rule_set| rule_set.reference.as_deref())?;
-        parse_cross_protocol_ref(reference)
+        parse_cross_module_ref(reference)
     }
 
-    /// The protocol URI that governs the parent of a record at `protocol_path`.
-    /// The parent lives in the referenced protocol exactly when the path has
+    /// The module URI that governs the parent of a record at `module_path`.
+    /// The parent lives in the referenced module exactly when the path has
     /// two segments and its root segment is a `$ref` whose alias resolves in
-    /// `uses`; every other parent lives in this composing protocol.
-    pub fn parent_protocol(&self, protocol_path: &str) -> String {
-        let segments: Vec<&str> = protocol_path.split('/').collect();
+    /// `uses`; every other parent lives in this composing module.
+    pub fn parent_module(&self, module_path: &str) -> String {
+        let segments: Vec<&str> = module_path.split('/').collect();
         if segments.len() != 2 {
-            return self.protocol.clone();
+            return self.module.clone();
         }
         let Some(reference) = self
             .structure
             .get(segments[0])
             .and_then(|rule_set| rule_set.reference.as_deref())
         else {
-            return self.protocol.clone();
+            return self.module.clone();
         };
-        let Some(parsed) = parse_cross_protocol_ref(reference) else {
-            return self.protocol.clone();
+        let Some(parsed) = parse_cross_module_ref(reference) else {
+            return self.module.clone();
         };
         self.uses
             .as_ref()
             .and_then(|uses| uses.get(parsed.alias))
             .cloned()
-            .unwrap_or_else(|| self.protocol.clone())
+            .unwrap_or_else(|| self.module.clone())
     }
 }
 
 pub fn get_rule_set_at_path<'a>(
-    protocol_path: &str,
+    module_path: &str,
     structure: &'a BTreeMap<String, RuleSet>,
 ) -> Option<&'a RuleSet> {
-    rule_set_at_path(protocol_path, structure)
+    rule_set_at_path(module_path, structure)
 }
 
 fn rule_set_has_encryption(rule_set: &RuleSet) -> bool {
@@ -392,15 +392,12 @@ fn rule_set_allows_multi_party(rule_set: &RuleSet, current_path: Option<&str>) -
 }
 
 fn rule_set_at_path<'a>(
-    protocol_path: &str,
+    module_path: &str,
     structure: &'a BTreeMap<String, RuleSet>,
 ) -> Option<&'a RuleSet> {
     let mut current = structure;
     let mut rule_set = None;
-    for segment in protocol_path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-    {
+    for segment in module_path.split('/').filter(|segment| !segment.is_empty()) {
         let next = current.get(segment)?;
         rule_set = Some(next);
         current = &next.rules;
@@ -408,7 +405,7 @@ fn rule_set_at_path<'a>(
     rule_set
 }
 
-/// Whether two protocol definitions carry the same authored policy, ignoring
+/// Whether two module definitions carry the same authored policy, ignoring
 /// runtime-injected `$keyAgreement` metadata. Comparison only; schema
 /// validation stays strict and independent. Legacy `$encryption` needs no
 /// handling here: typed parsing and the strict schemas already reject it.
@@ -430,43 +427,40 @@ fn strip_rule_sets(rules: &mut BTreeMap<String, RuleSet>) {
     }
 }
 
-pub fn parse_cross_protocol_ref(value: &str) -> Option<CrossProtocolRef<'_>> {
-    let (alias, protocol_path) = value.split_once(':')?;
-    if alias.is_empty() || protocol_path.is_empty() || protocol_path.contains(':') {
+pub fn parse_cross_module_ref(value: &str) -> Option<CrossModuleRef<'_>> {
+    let (alias, module_path) = value.split_once(':')?;
+    if alias.is_empty() || module_path.is_empty() || module_path.contains(':') {
         return None;
     }
-    Some(CrossProtocolRef {
-        alias,
-        protocol_path,
-    })
+    Some(CrossModuleRef { alias, module_path })
 }
 
 fn validate_uses(
     uses: &BTreeMap<String, String>,
-    own_protocol_uri: &str,
-) -> Result<(), ProtocolDefinitionError> {
-    for (alias, protocol_uri) in uses {
+    own_module_uri: &str,
+) -> Result<(), ModuleDefinitionError> {
+    for (alias, module_uri) in uses {
         if !is_valid_uses_alias(alias) {
-            return Err(protocol_error(
+            return Err(module_error(
                 "ModulesConfigureInvalidUsesAlias",
                 format!("invalid 'uses' alias '{alias}'"),
             ));
         }
 
-        validate_normalized_protocol_url(protocol_uri).map_err(|_| {
-            protocol_error(
+        validate_normalized_module_url(module_uri).map_err(|_| {
+            module_error(
                 "ModulesConfigureInvalidUsesModuleUrl",
                 format!(
-                    "invalid 'uses' protocol URL for alias '{alias}': '{protocol_uri}' is not a valid normalized protocol URL."
+                    "invalid 'uses' module URL for alias '{alias}': '{module_uri}' is not a valid normalized module URL."
                 ),
             )
         })?;
 
-        if protocol_uri == own_protocol_uri {
-            return Err(protocol_error(
+        if module_uri == own_module_uri {
+            return Err(module_error(
                 "ModulesConfigureInvalidUsesSelfReference",
                 format!(
-                    "'uses' alias '{alias}' references the protocol's own URI '{own_protocol_uri}'."
+                    "'uses' alias '{alias}' references the module's own URI '{own_module_uri}'."
                 ),
             ));
         }
@@ -474,13 +468,13 @@ fn validate_uses(
     Ok(())
 }
 
-fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionError> {
+fn validate_structure(definition: &Definition) -> Result<(), ModuleDefinitionError> {
     if definition.requires_encryption() && definition.key_agreement.is_none() {
-        return Err(protocol_error(
+        return Err(module_error(
             "ModulesConfigureMissingTopLevelKeyAgreement",
             format!(
-                "Protocol '{}' declares encrypted types but has no top-level $keyAgreement.",
-                definition.protocol
+                "Module '{}' declares encrypted types but has no top-level $keyAgreement.",
+                definition.module
             ),
         ));
     }
@@ -501,19 +495,19 @@ fn validate_structure(definition: &Definition) -> Result<(), ProtocolDefinitionE
 }
 
 fn fetch_role_paths(
-    protocol_path: &str,
+    module_path: &str,
     rules: &BTreeMap<String, RuleSet>,
     roles: &mut Vec<String>,
-) -> Result<(), ProtocolDefinitionError> {
-    if !protocol_path.is_empty() && protocol_path.split('/').count() > 10 {
-        return Err(protocol_error(
+) -> Result<(), ModuleDefinitionError> {
+    if !module_path.is_empty() && module_path.split('/').count() > 10 {
+        return Err(module_error(
             "ModulesConfigureRecordNestingDepthExceeded",
             "Record nesting depth exceeded 10 levels.",
         ));
     }
 
     for (record_type, rule_set) in rules {
-        let child_path = child_protocol_path(protocol_path, record_type);
+        let child_path = child_module_path(module_path, record_type);
         if rule_set.role == Some(true) {
             roles.push(child_path);
         } else {
@@ -525,29 +519,29 @@ fn fetch_role_paths(
 }
 
 fn validate_rule_map(
-    protocol_path: &str,
+    module_path: &str,
     rules: &BTreeMap<String, RuleSet>,
     record_types: &[String],
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
     types: &BTreeMap<String, Type>,
     root_structure: &BTreeMap<String, RuleSet>,
-) -> Result<(), ProtocolDefinitionError> {
+) -> Result<(), ModuleDefinitionError> {
     for (record_type, rule_set) in rules {
         if rule_set.reference.is_none()
             && !record_types
                 .iter()
                 .any(|candidate| candidate == record_type)
         {
-            return Err(protocol_error(
+            return Err(module_error(
                 "ModulesConfigureInvalidRuleSetRecordType",
                 format!(
-                    "Rule set {record_type} is not declared as an allowed type in the protocol definition."
+                    "Rule set {record_type} is not declared as an allowed type in the module definition."
                 ),
             ));
         }
 
-        let child_path = child_protocol_path(protocol_path, record_type);
+        let child_path = child_module_path(module_path, record_type);
         validate_rule_set(&child_path, rule_set, roles, uses, types, root_structure)?;
         validate_rule_map(
             &child_path,
@@ -564,33 +558,33 @@ fn validate_rule_map(
 }
 
 fn validate_rule_set(
-    protocol_path: &str,
+    module_path: &str,
     rule_set: &RuleSet,
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
     types: &BTreeMap<String, Type>,
     root_structure: &BTreeMap<String, RuleSet>,
-) -> Result<(), ProtocolDefinitionError> {
+) -> Result<(), ModuleDefinitionError> {
     if rule_set.reference.is_some() {
-        if protocol_path.contains('/') {
-            return Err(protocol_error(
+        if module_path.contains('/') {
+            return Err(module_error(
                 "ModulesConfigureInvalidRefNotAtRoot",
                 format!(
-                    "'$ref' at protocol path '{protocol_path}' is not allowed: '$ref' nodes are only supported at the root level of the structure."
+                    "'$ref' at module path '{module_path}' is not allowed: '$ref' nodes are only supported at the root level of the structure."
                 ),
             ));
         }
-        validate_ref_node(protocol_path, rule_set, uses)?;
+        validate_ref_node(module_path, rule_set, uses)?;
     }
 
     if let Some(size) = &rule_set.size {
         let min = size.min.unwrap_or(0);
         if let Some(max) = size.max {
             if max < min {
-                return Err(protocol_error(
+                return Err(module_error(
                     "ModulesConfigureInvalidSize",
                     format!(
-                        "Invalid size range found: max limit {max} less than min limit {min} at protocol path '{protocol_path}'"
+                        "Invalid size range found: max limit {max} less than min limit {min} at module path '{module_path}'"
                     ),
                 ));
             }
@@ -599,18 +593,16 @@ fn validate_rule_set(
 
     if let Some(record_limit) = &rule_set.record_limit {
         if record_limit.max < 1 {
-            return Err(protocol_error(
+            return Err(module_error(
                 "ModulesConfigureInvalidRecordLimit",
-                format!(
-                    "Invalid $recordLimit at protocol path '{protocol_path}': max must be >= 1."
-                ),
+                format!("Invalid $recordLimit at module path '{module_path}': max must be >= 1."),
             ));
         }
     }
 
-    validate_actions(protocol_path, &rule_set.actions, roles, uses)?;
-    validate_role_record_issuance(protocol_path, rule_set)?;
-    validate_encrypted_path(protocol_path, rule_set, types, root_structure)?;
+    validate_actions(module_path, &rule_set.actions, roles, uses)?;
+    validate_role_record_issuance(module_path, rule_set)?;
+    validate_encrypted_path(module_path, rule_set, types, root_structure)?;
 
     Ok(())
 }
@@ -618,24 +610,24 @@ fn validate_rule_set(
 /// Rejects invalid encrypted-reader configurations for a path whose type
 /// requires encryption, and rejects role-record paths that resolve to an
 /// encrypted type. Role references were already resolved against the local
-/// role list by [`validate_actions`]; cross-protocol aliases by `uses`.
+/// role list by [`validate_actions`]; cross-module aliases by `uses`.
 fn validate_encrypted_path(
-    protocol_path: &str,
+    module_path: &str,
     rule_set: &RuleSet,
     types: &BTreeMap<String, Type>,
     root_structure: &BTreeMap<String, RuleSet>,
-) -> Result<(), ProtocolDefinitionError> {
-    let type_name = protocol_path.split('/').next_back().unwrap_or_default();
+) -> Result<(), ModuleDefinitionError> {
+    let type_name = module_path.split('/').next_back().unwrap_or_default();
     let path_encrypted = types
         .get(type_name)
-        .and_then(|protocol_type| protocol_type.encryption_required)
+        .and_then(|module_type| module_type.encryption_required)
         == Some(true);
 
     if rule_set.role == Some(true) && path_encrypted {
-        return Err(protocol_error(
+        return Err(module_error(
             "ModulesConfigureInvalidEncryptedRoleType",
             format!(
-                "Role path '{protocol_path}' resolves to encrypted type '{type_name}'; role records cannot be encrypted."
+                "Role path '{module_path}' resolves to encrypted type '{type_name}'; role records cannot be encrypted."
             ),
         ));
     }
@@ -645,9 +637,9 @@ fn validate_encrypted_path(
     }
 
     if rule_set.key_agreement.is_none() {
-        return Err(protocol_error(
+        return Err(module_error(
             "ModulesConfigureMissingEncryptedPathKeyAgreement",
-            format!("Encrypted protocol path '{protocol_path}' has no $keyAgreement."),
+            format!("Encrypted module path '{module_path}' has no $keyAgreement."),
         ));
     }
 
@@ -655,10 +647,10 @@ fn validate_encrypted_path(
         matches!(action, Action::Who(who) if who.who == Who::Anyone && who.can.contains(&Can::Read))
     });
     if anyone_can_read {
-        return Err(protocol_error(
+        return Err(module_error(
             "ModulesConfigureInvalidEncryptedAnyoneRead",
             format!(
-                "Encrypted protocol path '{protocol_path}' allows {{ who: 'anyone', can: ['read'] }}."
+                "Encrypted module path '{module_path}' allows {{ who: 'anyone', can: ['read'] }}."
             ),
         ));
     }
@@ -670,11 +662,11 @@ fn validate_encrypted_path(
         if !role.can.contains(&Can::Read) {
             continue;
         }
-        if parse_cross_protocol_ref(&role.role).is_some() {
-            return Err(protocol_error(
+        if parse_cross_module_ref(&role.role).is_some() {
+            return Err(module_error(
                 "ModulesConfigureInvalidEncryptedCrossModuleRole",
                 format!(
-                    "Encrypted protocol path '{protocol_path}' references cross-protocol read role '{}'.",
+                    "Encrypted module path '{module_path}' references cross-module read role '{}'.",
                     role.role
                 ),
             ));
@@ -683,10 +675,10 @@ fn validate_encrypted_path(
             .and_then(|role_rule_set| role_rule_set.key_agreement.as_ref())
             .is_some();
         if !role_keyed {
-            return Err(protocol_error(
+            return Err(module_error(
                 "ModulesConfigureInvalidEncryptedRoleMissingKeyAgreement",
                 format!(
-                    "Encrypted protocol path '{protocol_path}' references role '{}' with no $keyAgreement.",
+                    "Encrypted module path '{module_path}' references role '{}' with no $keyAgreement.",
                     role.role
                 ),
             ));
@@ -697,26 +689,26 @@ fn validate_encrypted_path(
 }
 
 fn validate_ref_node(
-    protocol_path: &str,
+    module_path: &str,
     rule_set: &RuleSet,
     uses: Option<&BTreeMap<String, String>>,
-) -> Result<(), ProtocolDefinitionError> {
+) -> Result<(), ModuleDefinitionError> {
     let reference = rule_set.reference.as_deref().unwrap_or_default();
-    let parsed = parse_cross_protocol_ref(reference).ok_or_else(|| {
-        protocol_error(
+    let parsed = parse_cross_module_ref(reference).ok_or_else(|| {
+        module_error(
             "ModulesConfigureInvalidRefAlias",
             format!(
-                "'$ref' value '{reference}' at protocol path '{protocol_path}' must be in 'alias:typePath' format."
+                "'$ref' value '{reference}' at module path '{module_path}' must be in 'alias:typePath' format."
             ),
         )
     })?;
 
     if uses.and_then(|uses| uses.get(parsed.alias)).is_none() {
-        return Err(protocol_error(
+        return Err(module_error(
             "ModulesConfigureInvalidRefAlias",
             format!(
-                "'$ref' alias '{}' at protocol path '{}' does not exist in the 'uses' map.",
-                parsed.alias, protocol_path
+                "'$ref' alias '{}' at module path '{}' does not exist in the 'uses' map.",
+                parsed.alias, module_path
             ),
         ));
     }
@@ -731,9 +723,9 @@ fn validate_ref_node(
         || rule_set.delivery.is_some()
         || rule_set.squash.is_some()
     {
-        return Err(protocol_error(
+        return Err(module_error(
             "ModulesConfigureInvalidRefNodeHasDirectives",
-            format!("'$ref' node at protocol path '{protocol_path}' must not have directives."),
+            format!("'$ref' node at module path '{module_path}' must not have directives."),
         ));
     }
 
@@ -741,37 +733,37 @@ fn validate_ref_node(
 }
 
 fn validate_actions(
-    protocol_path: &str,
+    module_path: &str,
     actions: &[Action],
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
-) -> Result<(), ProtocolDefinitionError> {
+) -> Result<(), ModuleDefinitionError> {
     let mut seen_roles = Vec::<String>::new();
     let mut seen_actors = Vec::<(Who, Option<String>)>::new();
 
     for action in actions {
         match action {
             Action::Role(action) => {
-                if parse_cross_protocol_ref(&action.role).is_some() {
-                    validate_cross_protocol_alias(
+                if parse_cross_module_ref(&action.role).is_some() {
+                    validate_cross_module_alias(
                         &action.role,
                         uses,
-                        protocol_path,
+                        module_path,
                         "role",
                         "ModulesConfigureInvalidCrossModuleRole",
                     )?;
                 } else if !roles.iter().any(|role| role == &action.role) {
-                    return Err(protocol_error(
+                    return Err(module_error(
                         "ModulesConfigureRoleDoesNotExistAtGivenPath",
                         format!(
                             "Role '{}' for rule set {} does not exist.",
-                            action.role, protocol_path
+                            action.role, module_path
                         ),
                     ));
                 }
 
                 if seen_roles.iter().any(|role| role == &action.role) {
-                    return Err(protocol_error(
+                    return Err(module_error(
                         "ModulesConfigureDuplicateRoleInRuleSet",
                         format!(
                             "More than one action rule per role {} not allowed within a rule set.",
@@ -780,20 +772,20 @@ fn validate_actions(
                     ));
                 }
                 seen_roles.push(action.role.clone());
-                validate_action_can(protocol_path, &action.can)?;
+                validate_action_can(module_path, &action.can)?;
             }
             Action::Who(action) => {
                 if action.who == Who::Anyone && action.of.is_some() {
-                    return Err(protocol_error(
+                    return Err(module_error(
                         "ModulesConfigureInvalidActionOfNotAllowed",
-                        format!("'of' is not allowed at rule set protocol path ({protocol_path})"),
+                        format!("'of' is not allowed at rule set module path ({module_path})"),
                     ));
                 }
 
                 if action.who == Who::Recipient && action.of.is_none() {
                     let allowed = [Can::CoUpdate, Can::CoDelete, Can::CoPrune];
                     if action.can.iter().any(|can| !allowed.contains(can)) {
-                        return Err(protocol_error(
+                        return Err(module_error(
                             "ModulesConfigureInvalidRecipientOfAction",
                             "Rules for `recipient` without `of` property must have can containing only co-update, co-delete, and co-prune.",
                         ));
@@ -801,29 +793,29 @@ fn validate_actions(
                 }
 
                 if action.who == Who::Author && action.of.is_none() {
-                    return Err(protocol_error(
+                    return Err(module_error(
                         "ModulesConfigureInvalidActionMissingOf",
                         "'of' is required when 'author' is specified as 'who'",
                     ));
                 }
 
                 if let Some(of) = &action.of {
-                    if parse_cross_protocol_ref(of).is_some() {
-                        validate_cross_protocol_alias(
+                    if parse_cross_module_ref(of).is_some() {
+                        validate_cross_module_alias(
                             of,
                             uses,
-                            protocol_path,
+                            module_path,
                             "of",
                             "ModulesConfigureInvalidCrossModuleOf",
                         )?;
-                    } else if !protocol_path.is_empty()
-                        && protocol_path != of
-                        && !protocol_path.starts_with(&format!("{of}/"))
+                    } else if !module_path.is_empty()
+                        && module_path != of
+                        && !module_path.starts_with(&format!("{of}/"))
                     {
-                        return Err(protocol_error(
+                        return Err(module_error(
                             "ModulesConfigureInvalidActionOfNotAnAncestor",
                             format!(
-                                "'of' value '{of}' is not an ancestor of protocol path '{protocol_path}'."
+                                "'of' value '{of}' is not an ancestor of module path '{module_path}'."
                             ),
                         ));
                     }
@@ -833,7 +825,7 @@ fn validate_actions(
                     .iter()
                     .any(|(who, of)| who == &action.who && of == &action.of)
                 {
-                    return Err(protocol_error(
+                    return Err(module_error(
                         "ModulesConfigureDuplicateActorInRuleSet",
                         format!(
                             "More than one action rule per actor {:?} of {:?} not allowed within a rule set.",
@@ -842,7 +834,7 @@ fn validate_actions(
                     ));
                 }
                 seen_actors.push((action.who.clone(), action.of.clone()));
-                validate_action_can(protocol_path, &action.can)?;
+                validate_action_can(module_path, &action.can)?;
             }
         }
     }
@@ -851,12 +843,12 @@ fn validate_actions(
 }
 
 /// Rejects role paths that let any unrestricted caller issue a role, matching
-/// upstream `ProtocolsConfigure.validateRoleRecordIssuance`: a `$role: true`
+/// upstream `ModulesConfigure.validateRoleRecordIssuance`: a `$role: true`
 /// rule set must not let `anyone` create or squash the initial role record.
 fn validate_role_record_issuance(
-    protocol_path: &str,
+    module_path: &str,
     rule_set: &RuleSet,
-) -> Result<(), ProtocolDefinitionError> {
+) -> Result<(), ModuleDefinitionError> {
     if rule_set.role != Some(true) {
         return Ok(());
     }
@@ -872,15 +864,15 @@ fn validate_role_record_issuance(
         return Ok(());
     }
 
-    Err(protocol_error(
+    Err(module_error(
         "ModulesConfigureInvalidRoleIssuance",
         format!(
-            "role assignments at protocol path '{protocol_path}' require an authorized issuer; 'anyone' cannot create or squash an initial role record."
+            "role assignments at module path '{module_path}' require an authorized issuer; 'anyone' cannot create or squash an initial role record."
         ),
     ))
 }
 
-fn validate_action_can(protocol_path: &str, can: &[Can]) -> Result<(), ProtocolDefinitionError> {
+fn validate_action_can(module_path: &str, can: &[Can]) -> Result<(), ModuleDefinitionError> {
     let has_create = can.contains(&Can::Create);
     for (action, code) in [
         (
@@ -897,68 +889,68 @@ fn validate_action_can(protocol_path: &str, can: &[Can]) -> Result<(), ProtocolD
         ),
     ] {
         if can.contains(&action) && !has_create {
-            return Err(protocol_error(
+            return Err(module_error(
                 code,
-                format!("Action rule at protocol path '{protocol_path}' contains {action:?} but missing create."),
+                format!("Action rule at module path '{module_path}' contains {action:?} but missing create."),
             ));
         }
     }
     Ok(())
 }
 
-fn validate_cross_protocol_alias(
+fn validate_cross_module_alias(
     value: &str,
     uses: Option<&BTreeMap<String, String>>,
-    protocol_path: &str,
+    module_path: &str,
     field_name: &str,
     code: &'static str,
-) -> Result<(), ProtocolDefinitionError> {
-    let parsed = parse_cross_protocol_ref(value).ok_or_else(|| {
-        protocol_error(
+) -> Result<(), ModuleDefinitionError> {
+    let parsed = parse_cross_module_ref(value).ok_or_else(|| {
+        module_error(
             code,
             format!(
-                "cross-protocol '{field_name}' reference '{value}' at protocol path '{protocol_path}' could not be parsed."
+                "cross-module '{field_name}' reference '{value}' at module path '{module_path}' could not be parsed."
             ),
         )
     })?;
 
     if uses.and_then(|uses| uses.get(parsed.alias)).is_none() {
-        return Err(protocol_error(
+        return Err(module_error(
             code,
             format!(
-                "cross-protocol '{field_name}' alias '{}' in '{}' at protocol path '{}' does not exist in the 'uses' map.",
-                parsed.alias, value, protocol_path
+                "cross-module '{field_name}' alias '{}' in '{}' at module path '{}' does not exist in the 'uses' map.",
+                parsed.alias, value, module_path
             ),
         ));
     }
     Ok(())
 }
 
-fn validate_normalized_protocol_url(value: &str) -> Result<(), ProtocolDefinitionError> {
-    let normalized = normalize_protocol_url(value).map_err(|_| {
-        protocol_error(
+fn validate_normalized_module_url(value: &str) -> Result<(), ModuleDefinitionError> {
+    let normalized = normalize_module_url(value).map_err(|_| {
+        module_error(
             "UrlModuleNotNormalized",
-            format!("Protocol URI {value} must be normalized."),
+            format!("Module URI {value} must be normalized."),
         )
     })?;
     if value != normalized {
-        return Err(protocol_error(
+        return Err(module_error(
             "UrlModuleNotNormalized",
-            format!("Protocol URI {value} must be normalized."),
+            format!("Module URI {value} must be normalized."),
         ));
     }
     Ok(())
 }
 
-fn validate_normalized_schema_url(value: &str) -> Result<(), ProtocolDefinitionError> {
-    let normalized = normalize_protocol_url(value).map_err(|_| {
-        protocol_error(
+fn validate_normalized_schema_url(value: &str) -> Result<(), ModuleDefinitionError> {
+    let normalized = normalize_module_url(value).map_err(|_| {
+        module_error(
             "UrlSchemaNotNormalized",
             format!("Schema URI {value} must be normalized."),
         )
     })?;
     if value != normalized {
-        return Err(protocol_error(
+        return Err(module_error(
             "UrlSchemaNotNormalized",
             format!("Schema URI {value} must be normalized."),
         ));
@@ -966,7 +958,7 @@ fn validate_normalized_schema_url(value: &str) -> Result<(), ProtocolDefinitionE
     Ok(())
 }
 
-fn normalize_protocol_url(value: &str) -> Result<String, url::ParseError> {
+fn normalize_module_url(value: &str) -> Result<String, url::ParseError> {
     let full_url = if has_url_scheme(value) {
         value.to_string()
     } else {
@@ -1001,7 +993,7 @@ fn is_valid_uses_alias(value: &str) -> bool {
     first.is_ascii_alphabetic() && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-fn child_protocol_path(parent: &str, child: &str) -> String {
+fn child_module_path(parent: &str, child: &str) -> String {
     if parent.is_empty() {
         child.to_string()
     } else {
@@ -1027,7 +1019,7 @@ impl Definition {
     }
 }
 
-/// Rejects the reserved `$encryption` namespace in a *raw* protocol definition.
+/// Rejects the reserved `$encryption` namespace in a *raw* module definition.
 ///
 /// Takes unvalidated JSON and runs before JSON Schema validation, which is the
 /// whole point: `types`, `structure` and nested rule sets already exclude every
@@ -1048,7 +1040,7 @@ pub fn validate_reserved_control_namespace(definition: &JsonValue) -> Result<(),
     if let Some(types) = definition.get("types").and_then(JsonValue::as_object) {
         if types.contains_key(ENCRYPTION_CONTROL_ROOT_PATH) {
             return Err(reserved_namespace_error(format!(
-                "protocol type '{ENCRYPTION_CONTROL_ROOT_PATH}' is reserved for DWN encryption control records."
+                "module type '{ENCRYPTION_CONTROL_ROOT_PATH}' is reserved for DWN encryption control records."
             )));
         }
     }
@@ -1058,20 +1050,20 @@ pub fn validate_reserved_control_namespace(definition: &JsonValue) -> Result<(),
 /// Walks every record type in `structure`, naming a reserved entry wherever it
 /// appears. Recursion is bounded by the depth of the already-parsed JSON, so
 /// this carries no nesting limit of its own — `validate_definition` owns the
-/// protocol's actual depth rule, and duplicating the constant here would just
+/// module's actual depth rule, and duplicating the constant here would just
 /// create two places to disagree.
 fn scan_reserved_namespace(
     rule_set: Option<&JsonValue>,
-    protocol_path: &str,
+    module_path: &str,
 ) -> Result<(), DwnError> {
     let Some(rule_set) = rule_set.and_then(JsonValue::as_object) else {
         return Ok(());
     };
     for (record_type, child) in rule_set {
         if record_type == ENCRYPTION_CONTROL_ROOT_PATH {
-            let child_path = child_protocol_path(protocol_path, record_type);
+            let child_path = child_module_path(module_path, record_type);
             return Err(reserved_namespace_error(format!(
-                "protocol structure path '{child_path}' is reserved for DWN encryption control records."
+                "module structure path '{child_path}' is reserved for DWN encryption control records."
             )));
         }
         // Every other `$` key is a rule-set keyword (`$actions`, `$role`, …),
@@ -1079,10 +1071,7 @@ fn scan_reserved_namespace(
         if record_type.starts_with('$') {
             continue;
         }
-        scan_reserved_namespace(
-            Some(child),
-            &child_protocol_path(protocol_path, record_type),
-        )?;
+        scan_reserved_namespace(Some(child), &child_module_path(module_path, record_type))?;
     }
     Ok(())
 }
@@ -1094,8 +1083,8 @@ fn reserved_namespace_error(detail: String) -> DwnError {
     )
 }
 
-fn protocol_error(code: &'static str, message: impl Into<String>) -> ProtocolDefinitionError {
-    ProtocolDefinitionError {
+fn module_error(code: &'static str, message: impl Into<String>) -> ModuleDefinitionError {
+    ModuleDefinitionError {
         code,
         message: message.into(),
     }
@@ -1106,8 +1095,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn key_agreement() -> ProtocolKeyAgreement {
-        ProtocolKeyAgreement {
+    fn key_agreement() -> ModuleKeyAgreement {
+        ModuleKeyAgreement {
             public_key_jwk: serde_json::from_value(json!({
                 "kty": "OKP",
                 "crv": "X25519",
@@ -1119,7 +1108,7 @@ mod tests {
 
     fn note_definition(keyed: bool, encrypted: bool) -> Definition {
         Definition {
-            protocol: "https://protocol.example/notes".to_string(),
+            module: "https://module.example/notes".to_string(),
             published: true,
             uses: None,
             key_agreement: keyed.then(key_agreement),
@@ -1145,7 +1134,7 @@ mod tests {
     #[test]
     fn rule_at_walks_nested_segments() {
         let definition = Definition {
-            protocol: "https://protocol.example/composed".to_string(),
+            module: "https://module.example/composed".to_string(),
             published: true,
             uses: None,
             key_agreement: None,
@@ -1168,11 +1157,11 @@ mod tests {
     #[test]
     fn ref_position_only_matches_ref_attachment_roots() {
         let definition = Definition {
-            protocol: "https://protocol.example/composed".to_string(),
+            module: "https://module.example/composed".to_string(),
             published: true,
             uses: Some(BTreeMap::from([(
                 "blog".to_string(),
-                "https://protocol.example/blog".to_string(),
+                "https://module.example/blog".to_string(),
             )])),
             key_agreement: None,
             types: BTreeMap::new(),
@@ -1189,20 +1178,20 @@ mod tests {
             .ref_position("post")
             .expect("ref root must resolve");
         assert_eq!(position.alias, "blog");
-        assert_eq!(position.protocol_path, "post");
+        assert_eq!(position.module_path, "post");
         assert!(definition.ref_position("post/comment").is_none());
         assert!(definition.ref_position("missing").is_none());
     }
 
     // Covers: DWN-PROTO-005
     #[test]
-    fn parent_protocol_resolves_only_two_segment_ref_roots() {
+    fn parent_module_resolves_only_two_segment_ref_roots() {
         let definition = Definition {
-            protocol: "https://protocol.example/composed".to_string(),
+            module: "https://module.example/composed".to_string(),
             published: true,
             uses: Some(BTreeMap::from([(
                 "blog".to_string(),
-                "https://protocol.example/blog".to_string(),
+                "https://module.example/blog".to_string(),
             )])),
             key_agreement: None,
             types: BTreeMap::new(),
@@ -1240,33 +1229,33 @@ mod tests {
             ]),
         };
 
-        // A two-segment child of a `$ref` root is parented in the referenced protocol.
+        // A two-segment child of a `$ref` root is parented in the referenced module.
         assert_eq!(
-            definition.parent_protocol("post/comment"),
-            "https://protocol.example/blog"
+            definition.parent_module("post/comment"),
+            "https://module.example/blog"
         );
-        // A `$ref` root whose alias is absent from `uses` falls back to the composing protocol.
+        // A `$ref` root whose alias is absent from `uses` falls back to the composing module.
         assert_eq!(
-            definition.parent_protocol("ghost/comment"),
-            "https://protocol.example/composed"
+            definition.parent_module("ghost/comment"),
+            "https://module.example/composed"
         );
-        // Renamed and multi-segment `$ref` targets still name the referenced protocol.
+        // Renamed and multi-segment `$ref` targets still name the referenced module.
         assert_eq!(
-            definition.parent_protocol("discussion/comment"),
-            "https://protocol.example/blog"
-        );
-        assert_eq!(
-            definition.parent_protocol("multi/comment"),
-            "https://protocol.example/blog"
-        );
-        // Local roots and deeper paths are parented in the composing protocol.
-        assert_eq!(
-            definition.parent_protocol("local/child"),
-            "https://protocol.example/composed"
+            definition.parent_module("discussion/comment"),
+            "https://module.example/blog"
         );
         assert_eq!(
-            definition.parent_protocol("post/comment/reaction"),
-            "https://protocol.example/composed"
+            definition.parent_module("multi/comment"),
+            "https://module.example/blog"
+        );
+        // Local roots and deeper paths are parented in the composing module.
+        assert_eq!(
+            definition.parent_module("local/child"),
+            "https://module.example/composed"
+        );
+        assert_eq!(
+            definition.parent_module("post/comment/reaction"),
+            "https://module.example/composed"
         );
     }
 

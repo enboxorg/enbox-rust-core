@@ -36,14 +36,14 @@ where
     fn enlist<'a>(
         &'a self,
         tenant: &'a str,
-        protocol: &'a str,
+        module: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<EnlistedRepair, String>> + Send + 'a>> {
         Box::pin(async move {
             let task = ResumableTask {
                 name: ResumableTaskName::ControlRepair,
                 data: serde_json::to_value(ResumableControlRepairData {
                     tenant: tenant.to_string(),
-                    protocol: protocol.to_string(),
+                    module: module.to_string(),
                 })
                 .map_err(|error| error.to_string())?,
             };

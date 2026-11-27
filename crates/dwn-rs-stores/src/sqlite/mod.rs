@@ -196,7 +196,7 @@ mod tests {
         MessageStore::open(&mut store).await.unwrap();
         let message = message(
             "2025-01-01T00:00:00.000000Z",
-            "https://example.com/protocol/notes",
+            "https://example.com/module/notes",
             Some("aGVsbG8"),
         );
         let cid = message.cid().unwrap().to_string();
@@ -226,7 +226,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let message = message(
             "2025-01-01T00:00:00.000000Z",
-            "https://example.com/protocols/notes",
+            "https://example.com/modules/notes",
             None,
         );
         let cid = message.cid().unwrap().to_string();
@@ -266,17 +266,17 @@ mod tests {
         MessageStore::open(&mut store).await.unwrap();
         let first = message(
             "2025-01-01T00:00:00.000000Z",
-            "https://example.com/protocol/notes",
+            "https://example.com/module/notes",
             None,
         );
         let second = message(
             "2025-01-01T00:00:01.000000Z",
-            "https://example.com/protocol/notes",
+            "https://example.com/module/notes",
             None,
         );
         let third = message(
             "2025-01-01T00:00:02.000000Z",
-            "https://example.com/protocol/tasks",
+            "https://example.com/module/tasks",
             None,
         );
 
@@ -303,7 +303,7 @@ mod tests {
             .unwrap();
         let published = message(
             "2025-01-01T00:00:03.000000Z",
-            "https://example.com/protocol/published",
+            "https://example.com/module/published",
             None,
         );
         let mut published_indexes = indexes(&published);
@@ -321,9 +321,9 @@ mod tests {
         .unwrap();
 
         let filters = Filters::from([[(
-            FilterKey::Index("protocol".to_string()),
+            FilterKey::Index("module".to_string()),
             Filter::Equal(Value::String(
-                "https://example.com/protocol/notes".to_string(),
+                "https://example.com/module/notes".to_string(),
             )),
         )]]);
         assert_eq!(
@@ -929,14 +929,14 @@ mod tests {
         );
     }
 
-    fn message(timestamp: &str, protocol: &str, encoded_data: Option<&str>) -> Message<Descriptor> {
+    fn message(timestamp: &str, module: &str, encoded_data: Option<&str>) -> Message<Descriptor> {
         let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
             .unwrap()
             .with_timezone(&chrono::Utc);
         let descriptor =
             Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-                protocol: protocol.to_string(),
-                protocol_path: "note".to_string(),
+                module: module.to_string(),
+                module_path: "note".to_string(),
                 recipient: None,
                 schema: None,
                 tags: None,
@@ -976,10 +976,9 @@ mod tests {
             Value::String("Records".to_string()),
         );
         indexes.insert("method".to_string(), Value::String("Write".to_string()));
-        if let Some(protocol) =
-            serde_json::to_value(&message.descriptor).unwrap()["protocol"].as_str()
+        if let Some(module) = serde_json::to_value(&message.descriptor).unwrap()["module"].as_str()
         {
-            indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
+            indexes.insert("module".to_string(), Value::String(module.to_string()));
         }
         indexes
     }

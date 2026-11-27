@@ -11,7 +11,7 @@ use crate::filters::message_filters::Messages as MessagesFilter;
 use crate::filters::{Filter, FilterKey, Filters};
 use crate::handlers::messages::subscribe::SubscribeReply;
 use crate::interfaces::messages::descriptors::messages::SyncAction;
-use crate::permissions::PERMISSIONS_PROTOCOL_URI;
+use crate::permissions::PERMISSIONS_MODULE_URI;
 use crate::replies::{messages, HasProgressGapInfo};
 use crate::stores::{EventSubscription, StateHash};
 use crate::{Fields, Message, RangeFilter, Response, SubtreeFilter, Value};
@@ -56,12 +56,12 @@ pub(crate) fn messages_filter_to_filter_maps(
     let mut map = BTreeMap::new();
     insert_messages_string_filter(&mut map, "interface", filter.interface.as_ref());
     insert_messages_string_filter(&mut map, "method", filter.method.as_ref());
-    insert_messages_string_filter(&mut map, "protocolPath", filter.protocol_path.as_ref());
-    insert_messages_string_filter(&mut map, "protocol", filter.protocol.as_ref());
+    insert_messages_string_filter(&mut map, "modulePath", filter.module_path.as_ref());
+    insert_messages_string_filter(&mut map, "module", filter.module.as_ref());
 
-    if let Some(prefix) = &filter.protocol_path_prefix {
+    if let Some(prefix) = &filter.module_path_prefix {
         map.insert(
-            FilterKey::Index("protocolPath".to_string()),
+            FilterKey::Index("modulePath".to_string()),
             Filter::Subtree(SubtreeFilter {
                 subtree: prefix.clone(),
             }),
@@ -86,16 +86,16 @@ pub(crate) fn messages_filter_to_filter_maps(
     let mut result = vec![map];
 
     if include_shadow_filters {
-        if let Some(protocol) = &filter.protocol {
+        if let Some(module) = &filter.module {
             let mut perm_shadow = BTreeMap::new();
             insert_messages_string_filter(
                 &mut perm_shadow,
-                "protocol",
-                Some(&PERMISSIONS_PROTOCOL_URI.to_string()),
+                "module",
+                Some(&PERMISSIONS_MODULE_URI.to_string()),
             );
             perm_shadow.insert(
-                FilterKey::Tag("protocol".to_string()),
-                Filter::Equal(Value::String(protocol.clone())),
+                FilterKey::Tag("module".to_string()),
+                Filter::Equal(Value::String(module.clone())),
             );
             insert_message_range_filter(
                 &mut perm_shadow,
@@ -104,10 +104,10 @@ pub(crate) fn messages_filter_to_filter_maps(
             );
             result.push(perm_shadow);
 
-            // TODO(#241): add encryption-control record shadow filter for this protocol.
+            // TODO(#241): add encryption-control record shadow filter for this module.
 
-            let has_path_scope = filter.protocol_path.is_some()
-                || filter.protocol_path_prefix.is_some()
+            let has_path_scope = filter.module_path.is_some()
+                || filter.module_path_prefix.is_some()
                 || filter.context_id_prefix.is_some();
 
             if has_path_scope {
@@ -115,14 +115,14 @@ pub(crate) fn messages_filter_to_filter_maps(
                 insert_messages_string_filter(
                     &mut proto_shadow,
                     "interface",
-                    Some(&"Protocols".to_string()),
+                    Some(&"Modules".to_string()),
                 );
                 insert_messages_string_filter(
                     &mut proto_shadow,
                     "method",
                     Some(&"Configure".to_string()),
                 );
-                insert_messages_string_filter(&mut proto_shadow, "protocol", Some(protocol));
+                insert_messages_string_filter(&mut proto_shadow, "module", Some(module));
                 insert_message_range_filter(
                     &mut proto_shadow,
                     "messageTimestamp",

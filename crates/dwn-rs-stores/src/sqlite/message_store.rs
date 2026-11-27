@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use dwn_rs_core::descriptors::records::write_tag_protocol;
+use dwn_rs_core::descriptors::records::write_tag_module;
 use dwn_rs_core::descriptors::MessageDescriptor;
 use dwn_rs_core::stores::occupancy::{occupancy_candidate_filters, select_occupants};
 use dwn_rs_core::stores::replication_feed_reader::{
@@ -521,9 +521,9 @@ impl SqliteStore {
 
 /// Fingerprint scopes derived from replacement indexes without a message.
 ///
-/// `fingerprint_scopes` needs the descriptor tag protocol, which replacement
+/// `fingerprint_scopes` needs the descriptor tag module, which replacement
 /// indexes may not carry; scope membership for the mutation check comes from
-/// the `protocol` / `tag.protocol` indexes, matching how puts compute it for
+/// the `module` / `tag.module` indexes, matching how puts compute it for
 /// index-only updates.
 fn fingerprint_scopes_from_indexes(indexes: &KeyValues) -> Vec<String> {
     fingerprint_scopes(None, indexes)
@@ -565,7 +565,7 @@ fn put_message_tx(
         });
     }
 
-    let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
+    let msg_scopes = fingerprint_scopes(write_tag_module(&message), &indexes);
     match select_feed_entry(tx, tenant, &message_cid)? {
         Some(entry) => {
             if !scopes_unchanged(&entry.fingerprint_scopes, &msg_scopes) {

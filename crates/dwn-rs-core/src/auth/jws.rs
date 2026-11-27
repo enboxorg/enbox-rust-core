@@ -114,7 +114,7 @@ pub(crate) struct RecordsWriteAuthorizationPayloadData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) delegated_grant_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) protocol_role: Option<String>,
+    pub(crate) module_role: Option<String>,
 }
 
 pub(crate) fn permission_grant_invocation(
@@ -150,7 +150,7 @@ impl RecordsWriteAuthorizationPayload {
         encryption_cid: Option<Cid>,
         permission_grant_id: Option<String>,
         delegated_grant_id: Option<Cid>,
-        protocol_role: Option<String>,
+        module_role: Option<String>,
     ) -> Result<Self, JwsError> {
         #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -167,7 +167,7 @@ impl RecordsWriteAuthorizationPayload {
             #[serde(skip_serializing_if = "Option::is_none")]
             pub(crate) delegated_grant_id: Option<Cid>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            pub(crate) protocol_role: Option<String>,
+            pub(crate) module_role: Option<String>,
         }
 
         let repr = Repr {
@@ -178,7 +178,7 @@ impl RecordsWriteAuthorizationPayload {
             encryption_cid,
             permission_grant_id,
             delegated_grant_id,
-            protocol_role,
+            module_role,
         };
         let bytes = serde_json::to_vec(&repr)?;
 
@@ -215,11 +215,11 @@ pub(crate) struct AuthorizationPayloadData {
     pub(crate) permission_grant_id: Option<String>,
     #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
     pub(crate) permission_grant_ids: Option<Vec<String>>,
-    #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
-    pub(crate) protocol_role: Option<String>,
+    #[serde(rename = "moduleRole", skip_serializing_if = "Option::is_none")]
+    pub(crate) module_role: Option<String>,
 }
 
-/// Pre-serialized JWS payload for a `ProtocolsConfigure`-style authorization
+/// Pre-serialized JWS payload for a `ModulesConfigure`-style authorization
 /// signature. Serialization happens once in [`AuthorizationPayload::new`], which is fallible, so
 /// [`JwsPayload::payload_bytes`] (an infallible trait method defined upstream) never needs to
 /// panic on a serialization failure.
@@ -233,7 +233,7 @@ impl AuthorizationPayload {
         descriptor_cid: Cid,
         delegated_grant_id: Option<Cid>,
         permission_grant: PermissionGrantInvocation,
-        protocol_role: Option<String>,
+        module_role: Option<String>,
     ) -> Result<Self, JwsError> {
         #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
         pub(crate) struct Repr {
@@ -249,8 +249,8 @@ impl AuthorizationPayload {
             pub(crate) permission_grant_id: Option<String>,
             #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]
             pub(crate) permission_grant_ids: Option<Vec<String>>,
-            #[serde(rename = "protocolRole", skip_serializing_if = "Option::is_none")]
-            pub(crate) protocol_role: Option<String>,
+            #[serde(rename = "moduleRole", skip_serializing_if = "Option::is_none")]
+            pub(crate) module_role: Option<String>,
         }
 
         let (permission_grant_id, permission_grant_ids) = match permission_grant {
@@ -261,7 +261,7 @@ impl AuthorizationPayload {
         let repr = Repr {
             descriptor_cid,
             delegated_grant_id,
-            protocol_role,
+            module_role,
             permission_grant_id,
             permission_grant_ids,
         };
@@ -1170,7 +1170,7 @@ mod tests {
                 "descriptorCid": descriptor_cid.to_string(),
                 "delegatedGrantId": delegated_grant_id.to_string(),
                 "permissionGrantId": "grant-123",
-                "protocolRole": "adminRole",
+                "moduleRole": "adminRole",
             })
         );
 

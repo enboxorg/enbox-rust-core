@@ -1,6 +1,6 @@
 pub mod descriptors;
 pub mod fields;
-pub mod protocols;
+pub mod modules;
 
 use std::collections::TryReserveError;
 
@@ -120,7 +120,7 @@ where
                 signer,
                 parameters.delegated_grant().clone(),
                 parameters.permission_grant_invocation()?,
-                parameters.protocol_rule().clone(),
+                parameters.module_rule().clone(),
             )
             .await?
         } else {
@@ -140,7 +140,7 @@ where
         signer: S,
         delegated_grant: Option<Message<RecordsWriteDescriptor>>,
         permission_grant: jws::PermissionGrantInvocation,
-        protocol_role: Option<String>,
+        module_role: Option<String>,
     ) -> Result<Authorization, ValidationError> {
         let delegated_grant_id: Option<Cid> = if let Some(delegated_grant) = delegated_grant.clone()
         {
@@ -158,7 +158,7 @@ where
             signer,
             delegated_grant_id,
             permission_grant,
-            protocol_role,
+            module_role,
         )
         .await?;
 
@@ -181,7 +181,7 @@ where
         signer: S,
         delegated_grant_id: Option<Cid>,
         permission_grant: jws::PermissionGrantInvocation,
-        protocol_role: Option<String>,
+        module_role: Option<String>,
     ) -> Result<Jws, ValidationError> {
         let descriptor_cid = descriptor.cid();
 
@@ -191,7 +191,7 @@ where
                 fields,
                 delegated_grant_id,
                 permission_grant,
-                protocol_role,
+                module_role,
             )
             .map_err(|e| ValidationError {
                 message: e.to_string(),
@@ -232,7 +232,7 @@ where
 }
 
 // Custom deserializer for the untyped `Message<Descriptor>`. The `Descriptor` union dispatches
-// on the `interface`/`method` fields (via the generated `Records`/`Protocols`/`Messages` enums)
+// on the `interface`/`method` fields (via the generated `Records`/`Modules`/`Messages` enums)
 // to pick the concrete descriptor when the type is not known at compile time. Concrete
 // `Message<D>` deserializers are generated instead by the `#[descriptor]` macro (and, for the
 // interface unions, by `#[interface]`), each validating `interface`/`method` against the
@@ -358,6 +358,7 @@ mod test {
             filter: crate::filters::Records::default(),
             permission_grant_id: None,
             date_sort: None,
+            include_replication_support: None,
         }))));
         let fields = Fields::Authorization(Authorization {
             ..Default::default()
@@ -468,6 +469,7 @@ mod test {
                 filter: crate::filters::Records::default(),
                 permission_grant_id: None,
                 date_sort: None,
+                include_replication_support: None,
             })))),
             Fields::Authorization(Authorization::default()),
         )
@@ -486,6 +488,7 @@ mod test {
                 filter: crate::filters::Records::default(),
                 permission_grant_id: None,
                 date_sort: None,
+                include_replication_support: None,
             },
             fields: Authorization::default(),
         };

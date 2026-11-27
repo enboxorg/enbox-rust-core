@@ -11,7 +11,7 @@ pub type DwnErrorInfo = BTreeMap<String, serde_json::Value>;
 pub enum DwnErrorCode {
     GeneralJwsVerifierGetPublicKeyNotFound,
     ModuleAuthorizationModuleNotFound,
-    ModulesConfigureComposedProtocolNotInstalled,
+    ModulesConfigureComposedModuleNotInstalled,
     ModulesConfigureReservedEncryptionControlPath,
     ModuleAuthorizationParentRecordNotFound,
     ModuleAuthorizationCrossModuleParentNotFound,
@@ -81,8 +81,8 @@ impl DwnErrorCode {
                 "GeneralJwsVerifierGetPublicKeyNotFound"
             }
             Self::ModuleAuthorizationModuleNotFound => "ModuleAuthorizationModuleNotFound",
-            Self::ModulesConfigureComposedProtocolNotInstalled => {
-                "ModulesConfigureComposedProtocolNotInstalled"
+            Self::ModulesConfigureComposedModuleNotInstalled => {
+                "ModulesConfigureComposedModuleNotInstalled"
             }
             Self::ModulesConfigureReservedEncryptionControlPath => {
                 "ModulesConfigureReservedEncryptionControlPath"
@@ -217,7 +217,7 @@ impl DwnErrorCode {
     }
 
     /// Whether this code proves a *stored* control record invalid under a newly
-    /// accepted protocol configuration, and so may be purged.
+    /// accepted module configuration, and so may be purged.
     ///
     /// Deliberately an allowlist, not a catch-all: parse, lookup and I/O
     /// failures mean "unknown", and destroying custody material on an unknown
@@ -247,7 +247,7 @@ impl DwnErrorCode {
         matches!(
             self,
             Self::ModuleAuthorizationModuleNotFound
-                | Self::ModulesConfigureComposedProtocolNotInstalled
+                | Self::ModulesConfigureComposedModuleNotInstalled
                 | Self::ModuleAuthorizationParentRecordNotFound
                 | Self::ModuleAuthorizationCrossModuleParentNotFound
                 | Self::ModuleAuthorizationParentNotFoundConstructingRecordChain
@@ -278,8 +278,8 @@ impl TryFrom<&str> for DwnErrorCode {
                 Ok(Self::GeneralJwsVerifierGetPublicKeyNotFound)
             }
             "ModuleAuthorizationModuleNotFound" => Ok(Self::ModuleAuthorizationModuleNotFound),
-            "ModulesConfigureComposedProtocolNotInstalled" => {
-                Ok(Self::ModulesConfigureComposedProtocolNotInstalled)
+            "ModulesConfigureComposedModuleNotInstalled" => {
+                Ok(Self::ModulesConfigureComposedModuleNotInstalled)
             }
             "ModulesConfigureReservedEncryptionControlPath" => {
                 Ok(Self::ModulesConfigureReservedEncryptionControlPath)

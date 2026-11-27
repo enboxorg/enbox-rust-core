@@ -148,7 +148,7 @@ mod tests {
     const TENANT: &str = "did:example:alice";
     const AUTHOR: &str = "did:example:bob";
     const DELEGATE: &str = "did:example:carol";
-    const PROTOCOL: &str = "https://example.com/protocol/threads";
+    const MODULE: &str = "https://example.com/module/threads";
 
     fn parse_time(value: &str) -> chrono::DateTime<chrono::Utc> {
         value.parse().expect("valid timestamp")
@@ -163,7 +163,7 @@ mod tests {
             date_expires: parse_time("2025-02-01T00:00:00.000000Z"),
             delegated: Some(true),
             scope: PermissionScope::Records(RecordsScope {
-                protocol: PROTOCOL.to_string(),
+                module: MODULE.to_string(),
                 method: RecordsMethod::Write,
                 selector: None,
             }),
@@ -177,8 +177,8 @@ mod tests {
             "descriptor": {
                 "interface": "Records",
                 "method": "Write",
-                "protocol": PROTOCOL,
-                "protocolPath": "$encryption/audience",
+                "module": MODULE,
+                "modulePath": "$encryption/audience",
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 0,
                 "dataFormat": "application/json",
@@ -199,7 +199,7 @@ mod tests {
                 delegated_grant_id: None,
                 permission_grant_id: None,
                 permission_grant_ids: None,
-                protocol_role: None,
+                module_role: None,
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: None,

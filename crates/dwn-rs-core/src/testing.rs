@@ -1,6 +1,6 @@
 //! Signed-message fixtures for tests (behind `test-utils`).
 //!
-//! Builders for signed RecordsWrite/Delete, protocol installs, and unsigned
+//! Builders for signed RecordsWrite/Delete, module installs, and unsigned
 //! RecordsQuery/Count/Read envelopes at the pinned Enbox baseline. These are
 //! fixture helpers, not normative vectors: they exist so handler,
 //! conformance, and store-battery tests across crates sign identical inputs.
@@ -17,7 +17,7 @@ use crate::cid::{
     generate_cid_from_json, generate_cid_from_serialized, generate_dag_pb_cid_from_bytes,
 };
 use crate::descriptors::{
-    records::entry_id, ConfigureDescriptor, DeleteDescriptor, Protocols as ProtocolsDescriptor,
+    records::entry_id, DeleteDescriptor, Modules as ModulesDescriptor, ModulesConfigureDescriptor,
     RecordsWriteDescriptor, SubscribeDescriptor,
 };
 use crate::dwn::{Dwn, MessageKind, MethodHandler, MethodHandlerRequest, TenantGate};
@@ -25,8 +25,8 @@ use crate::encryption::EncryptionEnvelope;
 use crate::fields::WriteFields;
 use crate::filters::Records as RecordsFilter;
 use crate::handlers::records::common::message_cid;
-use crate::interfaces::messages::protocols::{ActionWho, RecordLimit, Type};
-use crate::protocols::{Action, Can, Definition, RuleSet, Who};
+use crate::interfaces::messages::modules::{ActionWho, RecordLimit, Type};
+use crate::modules::{Action, Can, Definition, RuleSet, Who};
 use crate::stores::MessageStore;
 use crate::{Descriptor, Fields, MapValue, Message, Pagination, ProgressToken, Value};
 use crate::{Reply, Response};
@@ -41,8 +41,8 @@ pub struct WriteSpec {
     pub context_id: Option<String>,
     pub parent_id: Option<String>,
     pub parent_context_id: Option<String>,
-    pub protocol: String,
-    pub protocol_path: String,
+    pub module: String,
+    pub module_path: String,
     pub recipient: Option<String>,
     pub tags: Option<MapValue>,
     pub data_cid: String,
@@ -50,7 +50,7 @@ pub struct WriteSpec {
     pub data_format: String,
     pub published: Option<bool>,
     pub permission_grant_id: Option<String>,
-    pub protocol_role: Option<String>,
+    pub module_role: Option<String>,
     pub squash: Option<bool>,
     pub encryption: Option<EncryptionEnvelope>,
 }
@@ -66,8 +66,8 @@ impl WriteSpec {
             context_id: None,
             parent_id: None,
             parent_context_id: None,
-            protocol: "http://example.com/notes".to_string(),
-            protocol_path: "note".to_string(),
+            module: "http://example.com/notes".to_string(),
+            module_path: "note".to_string(),
             recipient: None,
             tags: None,
             data_cid: generate_dag_pb_cid_from_bytes([]).to_string(),
@@ -75,7 +75,7 @@ impl WriteSpec {
             data_format: "text/plain".to_string(),
             published: None,
             permission_grant_id: None,
-            protocol_role: None,
+            module_role: None,
             squash: None,
             encryption: None,
         }
@@ -84,8 +84,8 @@ impl WriteSpec {
 
 pub async fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
     let descriptor = RecordsWriteDescriptor {
-        protocol: spec.protocol,
-        protocol_path: spec.protocol_path,
+        module: spec.module,
+        module_path: spec.module_path,
         recipient: spec.recipient,
         schema: None,
         tags: spec.tags,
@@ -115,7 +115,7 @@ pub async fn signed_write_message(spec: WriteSpec) -> serde_json::Value {
         &record_id,
         &context_id,
         spec.permission_grant_id.as_deref(),
-        spec.protocol_role.as_deref(),
+        spec.module_role.as_deref(),
     );
     if let Some(envelope) = &spec.encryption {
         let encryption_cid = generate_cid_from_serialized(envelope.clone()).unwrap();
@@ -191,8 +191,8 @@ pub async fn signed_delete_message(
 pub async fn stored_note_message(timestamp: &str) -> Message<Descriptor> {
     serde_json::from_value(
         signed_write_message(WriteSpec {
-            protocol: "http://example.com/notes".to_string(),
-            protocol_path: "note".to_string(),
+            module: "http://example.com/notes".to_string(),
+            module_path: "note".to_string(),
             ..WriteSpec::new(timestamp)
         })
         .await,
@@ -265,12 +265,12 @@ pub fn unsigned_read_message(filter: serde_json::Value) -> serde_json::Value {
     })
 }
 
-pub async fn put_squash_protocol<M>(tenant: &str, message_store: &M)
+pub async fn put_squash_module<M>(tenant: &str, message_store: &M)
 where
     M: MessageStore,
 {
     let definition = Definition {
-        protocol: "http://example.com/notes".to_string(),
+        module: "http://example.com/notes".to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -295,23 +295,23 @@ where
             },
         )]),
     };
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: parse_time("2024-12-31T00:00:00.000000Z"),
         definition,
         permission_grant_id: None,
     };
     let message = Message {
-        descriptor: Descriptor::Protocols(Box::new(ProtocolsDescriptor::Configure(descriptor))),
+        descriptor: Descriptor::Modules(Box::new(ModulesDescriptor::Configure(descriptor))),
         fields: Fields::Write(WriteFields::default()),
     };
     let indexes = BTreeMap::from([
         (
             "interface".to_string(),
-            Value::String("Protocols".to_string()),
+            Value::String("Modules".to_string()),
         ),
         ("method".to_string(), Value::String("Configure".to_string())),
         (
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         ),
         ("published".to_string(), Value::Bool(true)),
@@ -324,12 +324,12 @@ where
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
-pub async fn put_notes_protocol_without_actions<M>(tenant: &str, message_store: &M)
+pub async fn put_notes_module_without_actions<M>(tenant: &str, message_store: &M)
 where
     M: MessageStore,
 {
     let definition = Definition {
-        protocol: "http://example.com/notes".to_string(),
+        module: "http://example.com/notes".to_string(),
         published: false,
         uses: None,
         key_agreement: None,
@@ -343,23 +343,23 @@ where
         )]),
         structure: BTreeMap::from([("note".to_string(), RuleSet::default())]),
     };
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: parse_time("2024-12-31T00:00:00.000000Z"),
         definition,
         permission_grant_id: None,
     };
     let message = Message {
-        descriptor: Descriptor::Protocols(Box::new(ProtocolsDescriptor::Configure(descriptor))),
+        descriptor: Descriptor::Modules(Box::new(ModulesDescriptor::Configure(descriptor))),
         fields: Fields::Write(WriteFields::default()),
     };
     let indexes = BTreeMap::from([
         (
             "interface".to_string(),
-            Value::String("Protocols".to_string()),
+            Value::String("Modules".to_string()),
         ),
         ("method".to_string(), Value::String("Configure".to_string())),
         (
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         ),
         ("published".to_string(), Value::Bool(false)),
@@ -372,10 +372,10 @@ where
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
-/// Stores an arbitrary protocol definition as a configure message at the
+/// Stores an arbitrary module definition as a configure message at the
 /// given timestamp, for tests that need keyed, composed, or historical
-/// protocol versions the fixed protocol helpers do not cover.
-pub async fn put_protocol_definition<M>(
+/// module versions the fixed module helpers do not cover.
+pub async fn put_module_definition<M>(
     tenant: &str,
     message_store: &M,
     definition: Definition,
@@ -383,10 +383,10 @@ pub async fn put_protocol_definition<M>(
 ) where
     M: MessageStore,
 {
-    let protocol = definition.protocol.clone();
+    let module = definition.module.clone();
     let message = Message {
-        descriptor: Descriptor::Protocols(Box::new(ProtocolsDescriptor::Configure(
-            ConfigureDescriptor {
+        descriptor: Descriptor::Modules(Box::new(ModulesDescriptor::Configure(
+            ModulesConfigureDescriptor {
                 message_timestamp: parse_time(timestamp),
                 definition,
                 permission_grant_id: None,
@@ -397,10 +397,10 @@ pub async fn put_protocol_definition<M>(
     let indexes = BTreeMap::from([
         (
             "interface".to_string(),
-            Value::String("Protocols".to_string()),
+            Value::String("Modules".to_string()),
         ),
         ("method".to_string(), Value::String("Configure".to_string())),
-        ("protocol".to_string(), Value::String(protocol)),
+        ("module".to_string(), Value::String(module)),
         ("published".to_string(), Value::Bool(true)),
         ("isLatestBaseState".to_string(), Value::Bool(true)),
         (
@@ -411,17 +411,17 @@ pub async fn put_protocol_definition<M>(
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
-/// Installs a protocol with `$recordLimit` rules for record-limit parity
+/// Installs a module with `$recordLimit` rules for record-limit parity
 /// scenarios: at most 2 records at the root `post` path and at most 1 record
 /// per direct parent at the nested `thread/message` path. Actions are empty
-/// exactly like the notes protocol, so owner writes and published reads
+/// exactly like the notes module, so owner writes and published reads
 /// behave identically; only occupancy differs. The root path additionally
 /// allows squash writes so squash/occupancy interaction stays testable.
-pub async fn put_limited_threads_protocol<M>(tenant: &str, message_store: &M)
+pub async fn put_limited_threads_module<M>(tenant: &str, message_store: &M)
 where
     M: MessageStore,
 {
-    const PROTOCOL: &str = "http://example.com/limited";
+    const MODULE: &str = "http://example.com/limited";
     let limited = |max: u64| RuleSet {
         record_limit: Some(RecordLimit { max }),
         ..Default::default()
@@ -432,7 +432,7 @@ where
         encryption_required: None,
     };
     let definition = Definition {
-        protocol: PROTOCOL.to_string(),
+        module: MODULE.to_string(),
         published: false,
         uses: None,
         key_agreement: None,
@@ -458,22 +458,22 @@ where
             ),
         ]),
     };
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: parse_time("2024-12-31T00:00:00.000000Z"),
         definition,
         permission_grant_id: None,
     };
     let message = Message {
-        descriptor: Descriptor::Protocols(Box::new(ProtocolsDescriptor::Configure(descriptor))),
+        descriptor: Descriptor::Modules(Box::new(ModulesDescriptor::Configure(descriptor))),
         fields: Fields::Write(WriteFields::default()),
     };
     let indexes = BTreeMap::from([
         (
             "interface".to_string(),
-            Value::String("Protocols".to_string()),
+            Value::String("Modules".to_string()),
         ),
         ("method".to_string(), Value::String("Configure".to_string())),
-        ("protocol".to_string(), Value::String(PROTOCOL.to_string())),
+        ("module".to_string(), Value::String(MODULE.to_string())),
         ("published".to_string(), Value::Bool(false)),
         ("isLatestBaseState".to_string(), Value::Bool(true)),
         (
@@ -508,7 +508,7 @@ pub fn payload_with_permission_grant(
     record_id: &str,
     context_id: &str,
     permission_grant_id: Option<&str>,
-    protocol_role: Option<&str>,
+    module_role: Option<&str>,
 ) -> serde_json::Value {
     let mut payload = serde_json::Map::from_iter([
         (
@@ -526,10 +526,10 @@ pub fn payload_with_permission_grant(
             serde_json::Value::String(permission_grant_id.to_string()),
         );
     }
-    if let Some(protocol_role) = protocol_role {
+    if let Some(module_role) = module_role {
         payload.insert(
-            "protocolRole".to_string(),
-            serde_json::Value::String(protocol_role.to_string()),
+            "moduleRole".to_string(),
+            serde_json::Value::String(module_role.to_string()),
         );
     }
     serde_json::Value::Object(payload)

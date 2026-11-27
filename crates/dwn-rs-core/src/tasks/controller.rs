@@ -61,18 +61,18 @@ pub struct ResumableControlPurgeData {
     pub data_cids: Vec<String>,
 }
 
-/// The obligation to re-examine one protocol's control records against the
+/// The obligation to re-examine one module's control records against the
 /// configuration history as it now stands.
 ///
 /// The obligation is the whole scan rather than one record's removal. A scan
 /// that names its victims up front would have to survive the crash that
-/// interrupts it; naming only the protocol means resuming re-asks the question
+/// interrupts it; naming only the module means resuming re-asks the question
 /// and finds whatever is still contradicted, which is also what makes repeated
 /// repair safe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResumableControlRepairData {
     pub tenant: String,
-    pub protocol: String,
+    pub module: String,
 }
 
 #[derive(Clone)]
@@ -195,7 +195,7 @@ where
         Ok(())
     }
 
-    /// Which of this protocol's control records the configuration contradicts,
+    /// Which of this module's control records the configuration contradicts,
     /// with everything their removal will need.
     ///
     /// Judging and removing are separate steps because the removal has to be
@@ -215,7 +215,7 @@ where
         let tenant = data.tenant.as_str();
         let mut condemned = Vec::new();
         for control in self
-            .stored_control_initial_writes(tenant, &data.protocol)
+            .stored_control_initial_writes(tenant, &data.module)
             .await?
         {
             if control_config_validity(tenant, &control, &self.message_store).await?
@@ -238,7 +238,7 @@ where
         Ok(condemned)
     }
 
-    /// The control records this protocol holds, one entry per record.
+    /// The control records this module holds, one entry per record.
     ///
     /// Only initial writes are examined. A control record is immutable, so its
     /// initial write is the whole record, and judging each retained message
@@ -246,18 +246,18 @@ where
     async fn stored_control_initial_writes(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
     ) -> Result<Vec<Message<Descriptor>>, String> {
         let mut found = Vec::new();
         for path in [
-            ControlKind::Audience.protocol_path(),
-            ControlKind::Delivery.protocol_path(),
+            ControlKind::Audience.module_path(),
+            ControlKind::Delivery.module_path(),
         ] {
             let filter = filter_map([
                 ("interface", string_filter(RECORDS_INTERFACE)),
                 ("method", string_filter(WRITE_METHOD)),
-                ("protocol", string_filter(protocol)),
-                ("protocolPath", string_filter(path)),
+                ("module", string_filter(module)),
+                ("modulePath", string_filter(path)),
             ]);
             let result = self
                 .message_store

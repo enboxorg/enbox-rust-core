@@ -52,10 +52,10 @@ where
     }
 
     let delivered = DeliveredScope {
-        protocol: &id.scope.protocol,
-        protocol_path: Some(&id.scope.role_path),
+        module: &id.scope.module,
+        module_path: Some(&id.scope.role_path),
     };
-    // Whole-protocol and direct-subtree coverage are decidable without a
+    // Whole-module and direct-subtree coverage are decidable without a
     // definition, so they are answered before paying for a lookup.
     if read_grant_covers_delivered_scope(&scope, &delivered, None) {
         return Ok(true);
@@ -64,22 +64,18 @@ where
     // What remains is the keyed-role exception, which needs the configuration
     // governing this request.
     let timestamp = request_timestamp(read_message)?;
-    let definition = match fetch_protocol_definition(
-        tenant,
-        &id.scope.protocol,
-        message_store,
-        Some(&timestamp),
-    )
-    .await
-    {
-        Ok(definition) => definition,
-        Err(ProtocolDefinitionLookupError::Store(detail)) => {
-            return Err(ControlValidationError::Internal(detail))
-        }
-        // Without a definition the exception is undecidable, and undecidable
-        // is not reachable.
-        Err(_) => return Ok(false),
-    };
+    let definition =
+        match fetch_module_definition(tenant, &id.scope.module, message_store, Some(&timestamp))
+            .await
+        {
+            Ok(definition) => definition,
+            Err(ModuleDefinitionLookupError::Store(detail)) => {
+                return Err(ControlValidationError::Internal(detail))
+            }
+            // Without a definition the exception is undecidable, and undecidable
+            // is not reachable.
+            Err(_) => return Ok(false),
+        };
     Ok(read_grant_covers_delivered_scope(
         &scope,
         &delivered,

@@ -388,7 +388,7 @@ async fn delivered_events_carry_the_upstream_envelope() {
         .indexes
         .insert("isLatestBaseState".to_string(), Value::Bool(true));
     boolean.indexes.insert(
-        "protocol".to_string(),
+        "module".to_string(),
         Value::String("http://example.com/notes".to_string()),
     );
     boolean.encoded_data = Some("aGVsbG8".to_string());
@@ -417,7 +417,7 @@ async fn delivered_events_carry_the_upstream_envelope() {
     assert_eq!(delivered[0].message_cid.as_deref(), Some("cid-1"));
     assert_eq!(delivered[0].is_latest_base_state, Some(true));
     assert_eq!(
-        delivered[0].protocol.as_deref(),
+        delivered[0].module.as_deref(),
         Some("http://example.com/notes")
     );
     assert_eq!(delivered[0].encoded_data.as_deref(), Some("aGVsbG8"));
@@ -426,6 +426,6 @@ async fn delivered_events_carry_the_upstream_envelope() {
 
     // Indexes stored as strings carry the same meaning as boolean indexes.
     assert_eq!(delivered[1].is_latest_base_state, Some(true));
-    assert_eq!(delivered[1].protocol, None);
+    assert_eq!(delivered[1].module, None);
     assert_eq!(delivered[1].encoded_data, None);
 }

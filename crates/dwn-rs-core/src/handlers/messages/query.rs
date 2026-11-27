@@ -10,10 +10,10 @@ use crate::handlers::messages::authorization::{
 };
 use crate::handlers::messages::common::{event_log_error_reply, messages_filters_to_filters};
 use crate::handlers::records::common::fetch_initial_write_message;
-use crate::permissions::{AuthorizationValidationError, PERMISSIONS_PROTOCOL_URI};
+use crate::permissions::{AuthorizationValidationError, PERMISSIONS_MODULE_URI};
 use crate::replies::messages::{Query, QueryEntry};
 use crate::stores::replication_feed_reader::{
-    permission_fingerprint_scope, protocol_fingerprint_scope, GLOBAL_DOMAIN,
+    module_fingerprint_scope, permission_fingerprint_scope, GLOBAL_DOMAIN,
 };
 use crate::stores::{EventLogEntry, EventLogReadOptions, MessageStore, ReplicationFeedReader};
 use crate::{
@@ -195,7 +195,7 @@ where
             None => event.event.message.cid().map_err(|err| err.to_string())?,
         };
 
-        let protocol = match event.indexes.get("protocol") {
+        let module = match event.indexes.get("module") {
             Some(Value::String(proto)) => Some(proto.clone()),
             _ => None,
         };
@@ -210,7 +210,7 @@ where
             seq: event.seq.to_string(),
             cid,
             is_latest_base_state,
-            protocol,
+            module,
             message: None,
             encoded_data: None,
             initial_write: None,
@@ -291,39 +291,39 @@ pub(crate) fn query_fingerprint_scopes(
         return Some(vec![GLOBAL_DOMAIN.to_string()]);
     }
 
-    let mut protocols = BTreeSet::new();
+    let mut modules = BTreeSet::new();
     for filter in filters {
-        if !is_protocol_only_filter(filter) {
+        if !is_module_only_filter(filter) {
             return None;
         }
 
-        let protocol = filter.protocol.as_deref()?;
+        let module = filter.module.as_deref()?;
 
-        if protocol.is_empty() || protocol == PERMISSIONS_PROTOCOL_URI {
+        if module.is_empty() || module == PERMISSIONS_MODULE_URI {
             return None;
         }
 
-        protocols.insert(protocol.to_string());
+        modules.insert(module.to_string());
     }
 
-    let mut scopes = Vec::with_capacity(protocols.len() * 2);
-    for protocol in protocols {
-        scopes.push(protocol_fingerprint_scope(&protocol));
-        scopes.push(permission_fingerprint_scope(&protocol));
+    let mut scopes = Vec::with_capacity(modules.len() * 2);
+    for module in modules {
+        scopes.push(module_fingerprint_scope(&module));
+        scopes.push(permission_fingerprint_scope(&module));
     }
 
     Some(scopes)
 }
 
-fn is_protocol_only_filter(filter: &message_filters::Messages) -> bool {
+fn is_module_only_filter(filter: &message_filters::Messages) -> bool {
     filter
-        .protocol
+        .module
         .as_ref()
-        .is_some_and(|protocol| !protocol.is_empty())
+        .is_some_and(|module| !module.is_empty())
         && filter.interface.is_none()
         && filter.method.is_none()
-        && filter.protocol_path.is_none()
-        && filter.protocol_path_prefix.is_none()
+        && filter.module_path.is_none()
+        && filter.module_path_prefix.is_none()
         && filter.context_id_prefix.is_none()
         && filter.message_timestamp.is_none()
 }
@@ -353,7 +353,7 @@ mod tests {
     use crate::handlers::messages::authorization::{
         MessagesAuthorization, MessagesRoleAuthorization, QueryAuthorization,
     };
-    use crate::handlers::records::common::ResolvedProtocolRole;
+    use crate::handlers::records::common::ResolvedModuleRole;
     use crate::stores::replication_feed_reader::{Fingerprint, ReplicationBounds};
     use crate::stores::{EventLogEntry, EventLogReadOptions, EventLogReadResult, MessageStore};
     use crate::{Fields, MapValue, ProgressToken, RangeFilter};
@@ -364,9 +364,9 @@ mod tests {
 
     const TENANT: &str = "did:example:alice";
 
-    fn protocol_filter(protocol: &str) -> message_filters::Messages {
+    fn module_filter(module: &str) -> message_filters::Messages {
         message_filters::Messages {
-            protocol: Some(protocol.to_string()),
+            module: Some(module.to_string()),
             ..Default::default()
         }
     }
@@ -697,8 +697,8 @@ mod tests {
     fn records_write_message_with_inline(encoded_data: Option<&str>) -> Message<Descriptor> {
         let data = Bytes::from_static(b"hello");
         let descriptor = RecordsWriteDescriptor {
-            protocol: "http://example.com/notes".to_string(),
-            protocol_path: "note".to_string(),
+            module: "http://example.com/notes".to_string(),
+            module_path: "note".to_string(),
             recipient: None,
             schema: None,
             tags: None,
@@ -745,14 +745,14 @@ mod tests {
         }
     }
 
-    fn protocols_configure_message() -> Message<Descriptor> {
+    fn modules_configure_message() -> Message<Descriptor> {
         serde_json::from_value(json!({
             "descriptor": {
-                "interface": "Protocols",
+                "interface": "Modules",
                 "method": "Configure",
                 "messageTimestamp": "2025-01-01T00:00:00.000000Z",
                 "definition": {
-                    "protocol": "http://example.com/notes",
+                    "module": "http://example.com/notes",
                     "published": true,
                     "types": { "note": {} },
                     "structure": { "note": {} }
@@ -814,9 +814,9 @@ mod tests {
         QueryAuthorization::from(MessagesAuthorization::Role(MessagesRoleAuthorization {
             author: "did:example:bob".to_string(),
             metadata_only,
-            resolved_role: ResolvedProtocolRole {
-                protocol: "http://example.com/notes".to_string(),
-                protocol_path: "thread/participant".to_string(),
+            resolved_role: ResolvedModuleRole {
+                module: "http://example.com/notes".to_string(),
+                module_path: "thread/participant".to_string(),
                 context_id_prefix: Some("thread-1".to_string()),
                 role_record_id: "role-record-1".to_string(),
             },
@@ -836,28 +836,28 @@ mod tests {
     }
 
     #[test]
-    fn protocol_only_filters_include_protocol_and_permission_domains() {
+    fn module_only_filters_include_module_and_permission_domains() {
         assert_eq!(
             query_fingerprint_scopes(&[
-                protocol_filter("https://example.com/zeta"),
-                protocol_filter("https://example.com/alpha"),
-                protocol_filter("https://example.com/alpha"),
+                module_filter("https://example.com/zeta"),
+                module_filter("https://example.com/alpha"),
+                module_filter("https://example.com/alpha"),
             ]),
             Some(vec![
-                "protocol:https://example.com/alpha".to_string(),
+                "module:https://example.com/alpha".to_string(),
                 "perm:https://example.com/alpha".to_string(),
-                "protocol:https://example.com/zeta".to_string(),
+                "module:https://example.com/zeta".to_string(),
                 "perm:https://example.com/zeta".to_string(),
             ])
         );
     }
 
     #[test]
-    fn explicit_core_protocol_has_no_fingerprint() {
+    fn explicit_core_module_has_no_fingerprint() {
         assert_eq!(
             query_fingerprint_scopes(&[
-                protocol_filter("https://example.com/notes"),
-                protocol_filter(PERMISSIONS_PROTOCOL_URI),
+                module_filter("https://example.com/notes"),
+                module_filter(PERMISSIONS_MODULE_URI),
             ]),
             None
         );
@@ -868,36 +868,36 @@ mod tests {
         let cases = [
             message_filters::Messages::default(),
             message_filters::Messages {
-                protocol: Some(String::new()),
+                module: Some(String::new()),
                 ..Default::default()
             },
             message_filters::Messages {
-                protocol: Some("https://example.com/notes".to_string()),
+                module: Some("https://example.com/notes".to_string()),
                 interface: Some("Records".to_string()),
                 ..Default::default()
             },
             message_filters::Messages {
-                protocol: Some("https://example.com/notes".to_string()),
+                module: Some("https://example.com/notes".to_string()),
                 method: Some("Write".to_string()),
                 ..Default::default()
             },
             message_filters::Messages {
-                protocol: Some("https://example.com/notes".to_string()),
-                protocol_path: Some("note".to_string()),
+                module: Some("https://example.com/notes".to_string()),
+                module_path: Some("note".to_string()),
                 ..Default::default()
             },
             message_filters::Messages {
-                protocol: Some("https://example.com/notes".to_string()),
-                protocol_path_prefix: Some("note".to_string()),
+                module: Some("https://example.com/notes".to_string()),
+                module_path_prefix: Some("note".to_string()),
                 ..Default::default()
             },
             message_filters::Messages {
-                protocol: Some("https://example.com/notes".to_string()),
+                module: Some("https://example.com/notes".to_string()),
                 context_id_prefix: Some("context".to_string()),
                 ..Default::default()
             },
             message_filters::Messages {
-                protocol: Some("https://example.com/notes".to_string()),
+                module: Some("https://example.com/notes".to_string()),
                 message_timestamp: Some(RangeFilter::Criterion(
                     Bound::Included("2025-01-01T00:00:00Z".to_string()),
                     Bound::Unbounded,
@@ -917,7 +917,7 @@ mod tests {
 
     #[tokio::test]
     async fn owner_gets_ordered_entries() {
-        let msg = protocols_configure_message();
+        let msg = modules_configure_message();
         let handler = handler_with_reader(MockReader::with_read(Ok(page(
             vec![entry(1, msg.clone()), entry(2, msg.clone()), entry(3, msg)],
             Some(token(3, None)),
@@ -937,7 +937,7 @@ mod tests {
         let msg = records_write_message();
         let mut e = entry(7, msg);
         e.indexes.insert(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         );
         e.indexes
@@ -953,7 +953,7 @@ mod tests {
         let e = &reply.reply.entries.unwrap()[0];
         assert_eq!(e.seq, "7");
         assert!(e.message.is_some());
-        assert_eq!(e.protocol.as_deref(), Some("http://example.com/notes"));
+        assert_eq!(e.module.as_deref(), Some("http://example.com/notes"));
         assert!(e.is_latest_base_state);
     }
 
@@ -973,7 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn pagination_resumes_without_duplication() {
-        let msg = protocols_configure_message();
+        let msg = modules_configure_message();
         let cursor_after_first = token(1, None);
 
         let reader = MockReader {
@@ -1011,7 +1011,7 @@ mod tests {
         let mut e = entry(5, msg);
         e.encoded_data = Some("c2hvdWxkLW5vdC1hcHBlYXI".to_string());
         e.indexes.insert(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/notes".to_string()),
         );
 
@@ -1024,7 +1024,7 @@ mod tests {
         assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
         let e = &reply.reply.entries.unwrap()[0];
         assert_eq!(e.seq, "5");
-        assert_eq!(e.protocol.as_deref(), Some("http://example.com/notes"));
+        assert_eq!(e.module.as_deref(), Some("http://example.com/notes"));
         assert!(e.message.is_none(), "cidsOnly must omit message");
         assert!(e.encoded_data.is_none(), "cidsOnly must omit encodedData");
         assert!(e.initial_write.is_none(), "cidsOnly must omit initialWrite");
@@ -1229,7 +1229,7 @@ mod tests {
         ));
         let reply = run_query(
             &handler,
-            vec![protocol_filter("https://example.com/notes")],
+            vec![module_filter("https://example.com/notes")],
             None,
             None,
         )
@@ -1244,7 +1244,7 @@ mod tests {
         let reply = run_query(
             &handler,
             vec![message_filters::Messages {
-                protocol: Some("https://example.com/notes".to_string()),
+                module: Some("https://example.com/notes".to_string()),
                 interface: Some("Records".to_string()),
                 ..Default::default()
             }],
@@ -1276,9 +1276,9 @@ mod tests {
     async fn seq_is_serialized_as_a_decimal_string() {
         let handler = handler_with_reader(MockReader::with_read(Ok(page(
             vec![
-                entry(0, protocols_configure_message()),
-                entry(42, protocols_configure_message()),
-                entry(99999, protocols_configure_message()),
+                entry(0, modules_configure_message()),
+                entry(42, modules_configure_message()),
+                entry(99999, modules_configure_message()),
             ],
             Some(token(99999, None)),
             true,

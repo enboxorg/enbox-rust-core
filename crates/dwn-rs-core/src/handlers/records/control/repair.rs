@@ -78,19 +78,17 @@ where
     }
 
     // The role must still be a role. Its key agreement need not survive.
-    let newest = fetch_protocol_definition(tenant, &id.scope.protocol, message_store, None)
+    let newest = fetch_module_definition(tenant, &id.scope.module, message_store, None)
         .await
         .map_err(|error| match error {
-            ProtocolDefinitionLookupError::NotFound(uri) => {
+            ModuleDefinitionLookupError::NotFound(uri) => {
                 ControlValidationError::Dwn(DwnError::new(
                     DwnErrorCode::ModuleAuthorizationModuleNotFound,
-                    format!("unable to find protocol definition for {uri}"),
+                    format!("unable to find module definition for {uri}"),
                 ))
             }
-            ProtocolDefinitionLookupError::Store(detail) => {
-                ControlValidationError::Internal(detail)
-            }
-            ProtocolDefinitionLookupError::InvalidMessage(detail) => {
+            ModuleDefinitionLookupError::Store(detail) => ControlValidationError::Internal(detail),
+            ModuleDefinitionLookupError::InvalidMessage(detail) => {
                 ControlValidationError::Detail(detail)
             }
         })?;
@@ -101,8 +99,8 @@ where
         return Err(control_error(
             DwnErrorCode::EncryptionControlValidateAudienceRolePathInvalid,
             format!(
-                "role audience path '{}' no longer exists as a role in protocol '{}'",
-                id.scope.role_path, id.scope.protocol
+                "role audience path '{}' no longer exists as a role in module '{}'",
+                id.scope.role_path, id.scope.module
             ),
         ));
     }
@@ -140,7 +138,7 @@ pub(crate) fn verify_stored_create_action(
     }
 
     let sought = actions_sought_by_stored_write(control, rule_set);
-    let invoked_role = stored_signature_payload(control).and_then(|payload| payload.protocol_role);
+    let invoked_role = stored_signature_payload(control).and_then(|payload| payload.module_role);
 
     for action in &rule_set.actions {
         match action {
@@ -174,12 +172,12 @@ pub(crate) fn verify_stored_create_action(
 
     Err(control_error(
         DwnErrorCode::ModuleAuthorizationStoredInitialWriteActionNotAllowed,
-        "the stored control record is not allowed by the resolved protocol configuration",
+        "the stored control record is not allowed by the resolved module configuration",
     ))
 }
 
 /// Whether the record's authority came from who wrote it rather than from a
-/// protocol rule, in which case the configuration has nothing to say about it.
+/// module rule, in which case the configuration has nothing to say about it.
 fn stored_write_is_directly_authorized(tenant: &str, control: &Message<Descriptor>) -> bool {
     let authorization = control.fields.authorization();
     authorization.owner_signature.is_some()
@@ -193,7 +191,7 @@ fn stored_write_is_directly_authorized(tenant: &str, control: &Message<Descripto
 /// Which actions a stored write's rule match may be sought under.
 ///
 /// An ordinary write seeks `create`. A squash seeks `squash` where the path
-/// declares one, and otherwise either — a protocol that never mentions squash
+/// declares one, and otherwise either — a module that never mentions squash
 /// treats it as an ordinary create rather than forbidding it.
 fn actions_sought_by_stored_write(control: &Message<Descriptor>, rule_set: &RuleSet) -> Vec<Can> {
     let is_squash = records_write_descriptor(control)

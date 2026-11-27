@@ -3,8 +3,8 @@
 use crate::auth::PrivateJwkSigner;
 use crate::descriptors::records::records_write_descriptor;
 use crate::handlers::records::subscribe::RecordsEventLogSubscribeHandler;
+use crate::modules::{Action, ActionRole, Can};
 use crate::permissions::grant_key_coverage::read_roles_under;
-use crate::protocols::{Action, ActionRole, Can};
 use crate::stores::durable_event_log::DurableEventLog;
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::wake::InProcessWakeBus;
@@ -88,8 +88,8 @@ async fn an_audience_is_readable_by_exact_reference_but_not_by_sweeping() {
     // Authenticated, but sweeping the whole control path with no authority.
     let sweep = signed_request(
         unsigned_read_message(json!({
-            "protocol": CONTROL_PROTOCOL,
-            "protocolPath": AUDIENCE_PATH,
+            "module": CONTROL_MODULE,
+            "modulePath": AUDIENCE_PATH,
         })),
         bob_signer(),
         None,
@@ -294,8 +294,8 @@ async fn an_exact_audience_tuple_query_reaches_the_record() {
     // sweeping the control path without naming a tuple still sees nothing.
     let sweep = signed_request(
         unsigned_query_message(json!({
-            "protocol": CONTROL_PROTOCOL,
-            "protocolPath": AUDIENCE_PATH,
+            "module": CONTROL_MODULE,
+            "modulePath": AUDIENCE_PATH,
         })),
         bob_signer(),
         None,
@@ -312,8 +312,8 @@ async fn an_exact_audience_tuple_query_reaches_the_record() {
     // And the tenant sees its own record either way.
     let as_tenant = signed_request(
         unsigned_query_message(json!({
-            "protocol": CONTROL_PROTOCOL,
-            "protocolPath": AUDIENCE_PATH,
+            "module": CONTROL_MODULE,
+            "modulePath": AUDIENCE_PATH,
         })),
         test_signer(),
         None,
@@ -568,8 +568,8 @@ async fn a_record_id_reaches_an_audience_only_through_direct_read() {
     let query_handler = RecordsQueryHandler::new(fixture.message_store.clone(), None);
     let by_id = signed_request(
         unsigned_query_message(json!({
-            "protocol": CONTROL_PROTOCOL,
-            "protocolPath": AUDIENCE_PATH,
+            "module": CONTROL_MODULE,
+            "modulePath": AUDIENCE_PATH,
             "recordId": record_id,
         })),
         bob_signer(),
@@ -621,7 +621,7 @@ async fn a_record_id_reaches_an_audience_only_through_direct_read() {
 // Covers: ENBOX-ENC-003, DWN-AUTH-005
 // A control subscription is opened through the control gate, so it has to be
 // rechecked through it. Asking the ordinary ladder whether the invoked grant
-// covers `$encryption/audience` asks whether a grant names a path no protocol
+// covers `$encryption/audience` asks whether a grant names a path no module
 // declares — the answer is always no, so a perfectly valid grant over the keyed
 // role would close the subscription at its first event.
 //
@@ -642,8 +642,8 @@ async fn a_valid_control_grant_is_not_terminated_at_delivery() {
     .await;
 
     let filter = RecordsFilter {
-        protocol: Some(CONTROL_PROTOCOL.to_string()),
-        protocol_path: Some(AUDIENCE_PATH.to_string()),
+        module: Some(CONTROL_MODULE.to_string()),
+        module_path: Some(AUDIENCE_PATH.to_string()),
         ..Default::default()
     };
     // The invocation travels the wire in both the descriptor and the signed
@@ -740,8 +740,8 @@ async fn live_control_subscription_terminates_when_grant_revoked() {
     .await;
 
     let filter = RecordsFilter {
-        protocol: Some(CONTROL_PROTOCOL.to_string()),
-        protocol_path: Some(DELIVERY_PATH.to_string()),
+        module: Some(CONTROL_MODULE.to_string()),
+        module_path: Some(DELIVERY_PATH.to_string()),
         ..Default::default()
     };
     let request = signed_request(
@@ -830,13 +830,13 @@ async fn live_control_subscription_terminates_when_grant_revoked() {
 
     let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
         parent_id: Some(grant_id.clone()),
         parent_context_id: Some(grant_id.clone()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
-            Value::String(CONTROL_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(CONTROL_MODULE.to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
         data_size: revoke_data.len() as u64,

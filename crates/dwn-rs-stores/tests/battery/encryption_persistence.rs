@@ -34,7 +34,7 @@ const TENANT: &str = "did:example:alice";
 const RECORD_ID: &str = "encrypted-record";
 const SEAL_RECORD_ID: &str = "sealed-key-record";
 const PLAINTEXT: &[u8] = b"current envelope plaintext";
-const PROTOCOL: &str = "https://example.com/protocol/threads";
+const MODULE: &str = "https://example.com/module/threads";
 const ROLE_PATH: &str = "thread/member";
 const CONTEXT_ID: &str = "thread-1";
 
@@ -48,7 +48,7 @@ const RECIPIENT_PRIVATE_BYTES: [u8; 32] = [3u8; 32];
 /// Obsolete pre-A256CTR flattened JWE (`protected`/`iv`/`tag`/`recipients`),
 /// verbatim from the removed upgrade test: the exact shape that used to be
 /// accepted must now fail to parse.
-const OBSOLETE_JWE: &str = r#"{"protected":"eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00ifQ","iv":"CQkJCQkJCQkJCQkJ","tag":"pr5lZdaYTajVA0gqMvwlQw","recipients":[{"header":{"kid":"legacy-key","epk":{"kty":"OKP","crv":"X25519","x":"B6r_Pp_BZydVRPTDpqF82Dfy7G54zYpXsePfs8wDWnY"},"derivationScheme":"protocolPath"},"encrypted_key":"T42gGabDj__6KG89Wz97VBmlDEmkJj3HjLh-dPX-KzEbTi6z6DMLoA"}]}"#;
+const OBSOLETE_JWE: &str = r#"{"protected":"eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImVuYyI6IkEyNTZHQ00ifQ","iv":"CQkJCQkJCQkJCQkJ","tag":"pr5lZdaYTajVA0gqMvwlQw","recipients":[{"header":{"kid":"legacy-key","epk":{"kty":"OKP","crv":"X25519","x":"B6r_Pp_BZydVRPTDpqF82Dfy7G54zYpXsePfs8wDWnY"},"derivationScheme":"modulePath"},"encrypted_key":"T42gGabDj__6KG89Wz97VBmlDEmkJj3HjLh-dPX-KzEbTi6z6DMLoA"}]}"#;
 
 // Covers: ENBOX-ENC-001
 #[test]
@@ -75,8 +75,8 @@ fn obsolete_jwe_shape_is_rejected_with_no_fallback() {
             "descriptor": {
                 "interface": "Records",
                 "method": "Write",
-                "protocol": PROTOCOL,
-                "protocolPath": "thread/message",
+                "module": MODULE,
+                "modulePath": "thread/message",
                 "dataCid": generate_dag_pb_cid_from_bytes(PLAINTEXT).to_string(),
                 "dataSize": PLAINTEXT.len(),
                 "dataFormat": "application/octet-stream",
@@ -105,7 +105,7 @@ async fn current_envelope_and_seal_survive_fresh_file_backed_reopen() {
         algorithm: Some(ContentEncryptionAlgorithm::A256Ctr),
         key: cek.to_vec(),
         initialization_vector: iv.to_vec(),
-        key_encryption_inputs: vec![KeyEncryptionInput::ProtocolPath {
+        key_encryption_inputs: vec![KeyEncryptionInput::ModulePath {
             algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
             key_id: key_id.clone(),
             public_key: public_jwk.clone(),
@@ -113,14 +113,14 @@ async fn current_envelope_and_seal_survive_fresh_file_backed_reopen() {
     })
     .unwrap();
 
-    // A seal wrap over an audience private key, bound to protocol/role/context.
+    // A seal wrap over an audience private key, bound to module/role/context.
     let sealed_private_key = [11u8; 32];
     let seal = seal_wrap(
         &SealKeyWrapInput {
             algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
             key_id: key_id.clone(),
             public_key: public_jwk.clone(),
-            protocol: PROTOCOL,
+            module: MODULE,
             role_path: ROLE_PATH,
             context_id: CONTEXT_ID,
             audience_key_id: &key_id,
@@ -209,7 +209,7 @@ async fn current_envelope_and_seal_survive_fresh_file_backed_reopen() {
         seal_unwrap(
             &RECIPIENT_PRIVATE_BYTES,
             &stored_seal,
-            PROTOCOL,
+            MODULE,
             ROLE_PATH,
             CONTEXT_ID,
             &key_id,
@@ -222,7 +222,7 @@ async fn current_envelope_and_seal_survive_fresh_file_backed_reopen() {
         seal_unwrap(
             &RECIPIENT_PRIVATE_BYTES,
             &stored_seal,
-            PROTOCOL,
+            MODULE,
             ROLE_PATH,
             "other-context",
             &key_id,
@@ -245,8 +245,8 @@ fn write_message(
         "descriptor": {
             "interface": "Records",
             "method": "Write",
-            "protocol": PROTOCOL,
-            "protocolPath": "thread/message",
+            "module": MODULE,
+            "modulePath": "thread/message",
             "dataCid": data_cid,
             "dataSize": data_size,
             "dataFormat": "application/octet-stream",

@@ -7,7 +7,7 @@ use crate::agent::{
     key_agreement_root_key_id, now_utc, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
     CredentialStore, PortableDid,
 };
-use dwn_rs_core::interfaces::messages::protocols::{Definition, ProtocolKeyAgreement, RuleSet};
+use dwn_rs_core::interfaces::messages::modules::{Definition, ModuleKeyAgreement, RuleSet};
 use serde::{Deserialize, Serialize};
 use ssi_jwk::JWK;
 
@@ -15,7 +15,7 @@ pub type SetupFuture<'a, T> = Pin<Box<dyn Future<Output = AgentIdentityResult<T>
 
 pub const REGISTRATION_TOKENS_KEY: &str = "enbox:auth:registrationTokens";
 const PROVIDER_AUTH_V0: &str = "provider-auth-v0";
-const PROTOCOL_PATH_DERIVATION_SCHEME: &str = "protocolPath";
+const PROTOCOL_PATH_DERIVATION_SCHEME: &str = "modulePath";
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -373,12 +373,12 @@ where
     K: AgentKeyManager,
 {
     let installed = endpoint
-        .query_protocol(&tenant_did.uri, &definition.protocol)
+        .query_protocol(&tenant_did.uri, &definition.module)
         .await?;
     let requires_encryption = definition.requires_encryption();
     if let Some(installed) = installed {
         return Ok(ProtocolInstallResult {
-            protocol: definition.protocol,
+            protocol: definition.module,
             installed: false,
             encryption_active: requires_encryption && installed.has_encryption(),
         });
@@ -390,7 +390,7 @@ where
     } else {
         definition
     };
-    let protocol = definition.protocol.clone();
+    let protocol = definition.module.clone();
     endpoint
         .configure_protocol(&tenant_did.uri, definition)
         .await?;
@@ -469,11 +469,11 @@ where
             &root_key_id,
             vec![
                 PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-                clone.protocol.clone(),
+                clone.module.clone(),
             ],
         )
         .await?;
-    clone.key_agreement = Some(ProtocolKeyAgreement {
+    clone.key_agreement = Some(ModuleKeyAgreement {
         public_key_jwk: root_key_jwk,
     });
     let mut paths = Vec::new();
@@ -483,7 +483,7 @@ where
     for relative_path in paths {
         let mut derivation_path = vec![
             PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-            clone.protocol.clone(),
+            clone.module.clone(),
         ];
         derivation_path.extend(relative_path.clone());
         let public_key_jwk = key_manager
@@ -533,7 +533,7 @@ fn set_path_encryption(
             ))
         })?;
     }
-    rule_set.key_agreement = Some(ProtocolKeyAgreement {
+    rule_set.key_agreement = Some(ModuleKeyAgreement {
         public_key_jwk: public_key_jwk.to_public(),
     });
     Ok(())
@@ -588,10 +588,7 @@ impl ProtocolEndpoint for MemoryProtocolEndpoint {
             self.protocols
                 .write()
                 .map_err(AgentIdentityError::lock_poisoned)?
-                .insert(
-                    (tenant.to_string(), definition.protocol.clone()),
-                    definition,
-                );
+                .insert((tenant.to_string(), definition.module.clone()), definition);
             Ok(())
         })
     }
@@ -605,7 +602,7 @@ mod tests {
         DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore, MemorySecretStore,
     };
     use chrono::Utc;
-    use dwn_rs_core::interfaces::messages::protocols::{Type, Who};
+    use dwn_rs_core::interfaces::messages::modules::{Type, Who};
     use serde_json::Value as JsonValue;
 
     #[tokio::test]
@@ -734,7 +731,7 @@ mod tests {
         assert!(result.local_installs[0].installed);
         assert!(result.remote_pushes[0].installed);
         let installed = local
-            .protocol(&agent_did.uri, &definition.protocol)
+            .protocol(&agent_did.uri, &definition.module)
             .unwrap()
             .expect("installed protocol");
         assert!(installed.key_agreement.is_some());
@@ -745,7 +742,7 @@ mod tests {
             JsonValue::String("X25519".to_string())
         );
         assert!(remote
-            .protocol(&agent_did.uri, &definition.protocol)
+            .protocol(&agent_did.uri, &definition.module)
             .unwrap()
             .is_some());
     }
@@ -773,7 +770,7 @@ mod tests {
                 &root_key_id,
                 vec![
                     PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-                    definition.protocol.clone(),
+                    definition.module.clone(),
                 ],
             )
             .await
@@ -790,7 +787,7 @@ mod tests {
                 &root_key_id,
                 vec![
                     PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-                    definition.protocol.clone(),
+                    definition.module.clone(),
                     "post".to_string(),
                     "comment".to_string(),
                 ],
@@ -945,7 +942,7 @@ mod tests {
 
     fn composed_notes_definition() -> Definition {
         Definition {
-            protocol: "https://protocol.example/composed-notes".to_string(),
+            module: "https://protocol.example/composed-notes".to_string(),
             published: true,
             uses: Some(BTreeMap::from([(
                 "blog".to_string(),
@@ -973,7 +970,7 @@ mod tests {
 
     fn encrypted_protocol() -> Definition {
         Definition {
-            protocol: "https://protocol.example/notes".to_string(),
+            module: "https://protocol.example/notes".to_string(),
             published: true,
             uses: None,
             key_agreement: None,
@@ -988,11 +985,11 @@ mod tests {
             structure: BTreeMap::from([(
                 "note".to_string(),
                 RuleSet {
-                    actions: vec![dwn_rs_core::interfaces::messages::protocols::Action::Who(
-                        dwn_rs_core::interfaces::messages::protocols::ActionWho {
+                    actions: vec![dwn_rs_core::interfaces::messages::modules::Action::Who(
+                        dwn_rs_core::interfaces::messages::modules::ActionWho {
                             who: Who::Anyone,
                             of: None,
-                            can: vec![dwn_rs_core::interfaces::messages::protocols::Can::Create],
+                            can: vec![dwn_rs_core::interfaces::messages::modules::Can::Create],
                         },
                     )],
                     ..Default::default()

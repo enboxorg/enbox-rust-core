@@ -32,8 +32,8 @@ pub enum GrantError {
     #[error("Invalid Read descriptor type for grant")]
     InvalidRecordsDescriptorType,
 
-    #[error("Invalid Protocol descriptor type for grant")]
-    InvalidProtocolDescriptorType,
+    #[error("Invalid Module descriptor type for grant")]
+    InvalidModuleDescriptorType,
 
     #[error("Invalid Descriptor type for grant")]
     InvalidDescriptorType,
@@ -50,8 +50,8 @@ pub enum GrantError {
     #[error("recordId is required")]
     RecordIdRequired,
 
-    #[error("Unexpected protocol for permission record: {0}")]
-    UnexpectedProtocol(String),
+    #[error("Unexpected module for permission record: {0}")]
+    UnexpectedModule(String),
 
     #[error("revocation parentID required")]
     RevocationParentIdRequired,
@@ -62,8 +62,8 @@ pub enum GrantError {
     #[error("invalid grant: {0}")]
     InvalidGrant(#[from] AuthorizationValidationError),
 
-    #[error("protocol validation error: {0}")]
-    ProtocolValidationError(#[from] ProtocolValidationError),
+    #[error("module validation error: {0}")]
+    ModuleValidationError(#[from] ModuleValidationError),
 
     #[error("invalid scope for target: {0} {1}")]
     InvalidScopeForTarget(String, String),
@@ -99,10 +99,10 @@ pub enum GrantMessageTypeError {
     InvalidRecordsWriteMessageType,
 
     #[error("invalid message type: must be PermissionsModule grant ModulesQuery")]
-    InvalidProtocolsQueryMessageType,
+    InvalidModulesQueryMessageType,
 
     #[error("invalid message type: must be PermissionsModule grant ModulesConfigure")]
-    InvalidProtocolsConfigureMessageType,
+    InvalidModulesConfigureMessageType,
 }
 
 impl From<RecordsWriteDescriptorError> for GrantMessageTypeError {
@@ -139,7 +139,7 @@ pub enum PermissionError {
 }
 
 #[derive(Error, Debug)]
-pub enum ProtocolValidationError {
+pub enum ModuleValidationError {
     #[error("encodedData is required")]
     MissingEncodedData,
 
@@ -152,8 +152,8 @@ pub enum ProtocolValidationError {
     #[error("revocation parentId is required")]
     MissingRevocationParentId,
 
-    #[error("revocation protocol mismatch")]
-    RevocationProtocolMismatch,
+    #[error("revocation module mismatch")]
+    RevocationModuleMismatch,
 }
 
 #[derive(Error, Debug)]
@@ -173,10 +173,8 @@ pub enum AuthorizationValidationError {
     #[error("grant is not authorized for tenant: given {0}, expected {1}")]
     UnexpectedGrantor(String, String),
 
-    #[error(
-        "permission grants must have a scope with a protocol that matches the tagged protocol"
-    )]
-    ProtocolInvalidTags,
+    #[error("permission grants must have a scope with a module that matches the tagged module")]
+    ModuleInvalidTags,
 
     #[error("unexpected permission record for: {0}")]
     UnexpectedPermissionRecord(String),

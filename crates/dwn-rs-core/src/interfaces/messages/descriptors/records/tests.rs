@@ -27,6 +27,7 @@ async fn test_read_descriptor() {
         filter: RecordsFilter::default(),
         permission_grant_id: None,
         date_sort: None,
+        include_replication_support: None,
     };
 
     let ser = serde_json::to_string(&rd).unwrap();
@@ -95,8 +96,8 @@ async fn test_write_descriptor() {
     let message_timestamp = DateTime::from_str(canonical_rfc3339(Utc::now()).as_str()).unwrap();
 
     let wd = WriteDescriptor {
-        protocol: "https://example.com/test".to_string(),
-        protocol_path: "test".to_string(),
+        module: "https://example.com/test".to_string(),
+        module_path: "test".to_string(),
         recipient: None,
         schema: None,
         tags: None,
@@ -113,8 +114,8 @@ async fn test_write_descriptor() {
     };
 
     let (build_wd, _) = WriteParameters {
-        protocol: Some("https://example.com/test".to_string()),
-        protocol_path: Some("test".to_string()),
+        module: Some("https://example.com/test".to_string()),
+        module_path: Some("test".to_string()),
         data_cid: Some("test".to_string()),
         data_size: Some(0),
         date_created: Some(message_timestamp),
@@ -143,8 +144,8 @@ async fn test_write_builds_jwe_encryption_fields() {
     }))
     .unwrap();
     let (_, fields) = WriteParameters {
-        protocol: Some("https://example.com/protocol/jwe".to_string()),
-        protocol_path: Some("thread/message".to_string()),
+        module: Some("https://example.com/module/jwe".to_string()),
+        module_path: Some("thread/message".to_string()),
         data_cid: Some("bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e".to_string()),
         data_size: Some(32),
         data_format: "text/plain".to_string(),
@@ -152,7 +153,7 @@ async fn test_write_builds_jwe_encryption_fields() {
             algorithm: Some(crate::encryption::ContentEncryptionAlgorithm::A256Ctr),
             key: (0u8..32).collect(),
             initialization_vector: (0xa0u8..0xb0).collect(),
-            key_encryption_inputs: vec![KeyEncryptionInput::ProtocolPath {
+            key_encryption_inputs: vec![KeyEncryptionInput::ModulePath {
                 algorithm: crate::encryption::KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
                 key_id: "5_RYhfysTyU1BDBnv9LSpAGNHJ_A1_UesBCKoRG370E".to_string(),
                 public_key,
@@ -177,7 +178,7 @@ async fn test_write_builds_jwe_encryption_fields() {
     assert_eq!(encryption.key_encryption.len(), 1);
     assert_eq!(
         encryption.key_encryption[0].derivation_scheme(),
-        DerivationScheme::ProtocolPath
+        DerivationScheme::ModulePath
     );
     let encryption_json = serde_json::to_value(encryption).unwrap();
     assert!(encryption_json.get("algorithm").is_some());
@@ -185,7 +186,7 @@ async fn test_write_builds_jwe_encryption_fields() {
     assert!(encryption_json.get("keyEncryption").is_some());
     assert_eq!(
         encryption_json["keyEncryption"][0]["derivationScheme"],
-        "protocolPath"
+        "modulePath"
     );
     assert!(!encryption_json["keyEncryption"][0]["encryptedKey"]
         .as_str()

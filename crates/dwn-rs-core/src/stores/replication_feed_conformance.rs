@@ -13,11 +13,11 @@ use super::{
     ProgressGapReason, ReplicationFeedReader,
 };
 use crate::{
-    descriptors::{DeleteDescriptor, Protocols, Records},
+    descriptors::{DeleteDescriptor, Modules, Records},
     errors::{EventLogError, MessageReplicationError, MessageStoreError, StoreError},
     fields::WriteFields,
     filters::{Filter, FilterKey, Filters},
-    permissions::PERMISSIONS_PROTOCOL_URI,
+    permissions::PERMISSIONS_MODULE_URI,
     Descriptor, Fields, Message, ProgressToken, Value,
 };
 
@@ -143,7 +143,7 @@ where
         .put(
             TENANT,
             existing.clone(),
-            indexes(Some("protocol-a"), None, "existing"),
+            indexes(Some("module-a"), None, "existing"),
         )
         .await
         .expect("seed rollback store");
@@ -159,7 +159,7 @@ where
                 },
                 retains: vec![LatestStateMutation {
                     message: existing.clone(),
-                    indexes: indexes(Some("protocol-b"), None, "invalid-reindex"),
+                    indexes: indexes(Some("module-b"), None, "invalid-reindex"),
                 }],
                 deletes: vec![],
             },
@@ -289,11 +289,11 @@ fn cid(message: &Message<Descriptor>) -> String {
     message.cid().expect("fixture must have a CID").to_string()
 }
 
-fn indexes(protocol: Option<&str>, schema: Option<&str>, marker: &str) -> KeyValues {
+fn indexes(module: Option<&str>, schema: Option<&str>, marker: &str) -> KeyValues {
     let mut indexes = KeyValues::new();
     indexes.insert("marker".to_string(), Value::String(marker.to_string()));
-    if let Some(protocol) = protocol {
-        indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
+    if let Some(module) = module {
+        indexes.insert("module".to_string(), Value::String(module.to_string()));
     }
     if let Some(schema) = schema {
         indexes.insert("schema".to_string(), Value::String(schema.to_string()));
@@ -353,7 +353,7 @@ where
     Fut: Future<Output = S>,
 {
     let store = new_store(factory).await;
-    for (position, (protocol, schema)) in [("p1", "s1"), ("p1", "s2"), ("p2", "s2")]
+    for (position, (module, schema)) in [("p1", "s1"), ("p1", "s2"), ("p2", "s2")]
         .into_iter()
         .enumerate()
     {
@@ -362,7 +362,7 @@ where
             .put(
                 TENANT,
                 delete_message(&marker, &format!("2025-01-01T00:00:0{position}Z")),
-                indexes(Some(protocol), Some(schema), &marker),
+                indexes(Some(module), Some(schema), &marker),
             )
             .await
             .expect("feed put");
@@ -413,8 +413,8 @@ where
     assert!(!zero.drained);
 
     let filters = Filters::from(vec![
-        BTreeMap::from([equal("protocol", "p1"), equal("schema", "s1")]),
-        BTreeMap::from([equal("protocol", "p2"), equal("schema", "s2")]),
+        BTreeMap::from([equal("module", "p1"), equal("schema", "s1")]),
+        BTreeMap::from([equal("module", "p2"), equal("schema", "s2")]),
     ]);
     let filtered = store
         .log_read(
@@ -686,7 +686,7 @@ where
         write_message(None),
         delete_message("eligible-delete", "2025-01-01T00:00:00Z"),
         Message {
-            descriptor: Descriptor::Protocols(Box::new(Protocols::Configure(Default::default()))),
+            descriptor: Descriptor::Modules(Box::new(Modules::Configure(Default::default()))),
             fields: Fields::Authorization(Default::default()),
         },
     ];
@@ -752,7 +752,7 @@ where
     );
     assert_eq!(
         store
-            .fingerprint(TENANT, &["protocol:a".to_string()])
+            .fingerprint(TENANT, &["module:a".to_string()])
             .await
             .expect("scoped fingerprint"),
         cid_contribution(&first_cid)
@@ -762,15 +762,15 @@ where
         .fingerprint(
             TENANT,
             &[
-                "protocol:a".to_string(),
+                "module:a".to_string(),
                 "".to_string(),
-                "protocol:a".to_string(),
+                "module:a".to_string(),
             ],
         )
         .await
         .expect("normalized fingerprint");
     let reordered = store
-        .fingerprint(TENANT, &["".to_string(), "protocol:a".to_string()])
+        .fingerprint(TENANT, &["".to_string(), "module:a".to_string()])
         .await
         .expect("reordered fingerprint");
     assert_eq!(normalized, reordered);
@@ -783,7 +783,7 @@ where
     store.delete(TENANT, &first_cid).await.expect("delete");
     assert_eq!(
         store
-            .fingerprint(TENANT, &["protocol:a".to_string()])
+            .fingerprint(TENANT, &["module:a".to_string()])
             .await
             .expect("fingerprint after delete"),
         Fingerprint::default()
@@ -802,14 +802,11 @@ where
     Fut: Future<Output = S>,
 {
     let store = new_store(factory).await;
-    let target = "https://example.com/protocol/notes";
+    let target = "https://example.com/module/notes";
     let message = delete_message("perm-grant", "2025-01-01T00:00:00Z");
     let message_cid = cid(&message);
-    let mut permission_indexes = indexes(Some(PERMISSIONS_PROTOCOL_URI), None, "perm");
-    permission_indexes.insert(
-        "tag.protocol".to_string(),
-        Value::String(target.to_string()),
-    );
+    let mut permission_indexes = indexes(Some(PERMISSIONS_MODULE_URI), None, "perm");
+    permission_indexes.insert("tag.module".to_string(), Value::String(target.to_string()));
     store
         .put(TENANT, message, permission_indexes)
         .await
@@ -818,7 +815,7 @@ where
     let expected = cid_contribution(&message_cid);
     for scope in [
         "".to_string(),
-        format!("protocol:{PERMISSIONS_PROTOCOL_URI}"),
+        format!("module:{PERMISSIONS_MODULE_URI}"),
         format!("perm:{target}"),
     ] {
         assert_eq!(

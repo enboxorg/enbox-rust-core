@@ -27,7 +27,7 @@ pub fn delete_message(record_id: &str, timestamp: &str) -> Message<Descriptor> {
 /// RecordsWrite fixture (feed-eligible) with a deterministic record id.
 pub fn write_message(
     timestamp: &str,
-    protocol: &str,
+    module: &str,
     encoded_data: Option<&str>,
 ) -> Message<Descriptor> {
     let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
@@ -35,8 +35,8 @@ pub fn write_message(
         .with_timezone(&chrono::Utc);
     let descriptor =
         Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-            protocol: protocol.to_string(),
-            protocol_path: "note".to_string(),
+            module: module.to_string(),
+            module_path: "note".to_string(),
             recipient: None,
             schema: None,
             tags: None,
@@ -84,25 +84,21 @@ pub fn indexes_for_message(message: &Message<Descriptor>) -> KeyValues {
         Value::String("Records".to_string()),
     );
     indexes.insert("method".to_string(), Value::String("Write".to_string()));
-    if let Some(protocol) = serde_json::to_value(&message.descriptor).unwrap()["protocol"].as_str()
-    {
-        indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
+    if let Some(module) = serde_json::to_value(&message.descriptor).unwrap()["module"].as_str() {
+        indexes.insert("module".to_string(), Value::String(module.to_string()));
     }
     indexes
 }
 
-/// Feed indexes with explicit protocol / tag.protocol / marker values.
-pub fn feed_indexes(protocol: Option<&str>, tag_protocol: Option<&str>, marker: &str) -> KeyValues {
+/// Feed indexes with explicit module / tag.module / marker values.
+pub fn feed_indexes(module: Option<&str>, tag_module: Option<&str>, marker: &str) -> KeyValues {
     let mut out = KeyValues::new();
     out.insert("marker".to_string(), Value::String(marker.to_string()));
-    if let Some(protocol) = protocol {
-        out.insert("protocol".to_string(), Value::String(protocol.to_string()));
+    if let Some(module) = module {
+        out.insert("module".to_string(), Value::String(module.to_string()));
     }
-    if let Some(tagged) = tag_protocol {
-        out.insert(
-            "tag.protocol".to_string(),
-            Value::String(tagged.to_string()),
-        );
+    if let Some(tagged) = tag_module {
+        out.insert("tag.module".to_string(), Value::String(tagged.to_string()));
     }
     out
 }
