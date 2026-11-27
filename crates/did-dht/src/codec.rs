@@ -185,17 +185,16 @@ fn verification_method(
     jwk.key_id = Some(thumbprint.clone());
     let mut jwk = serde_json::to_value(jwk)
         .map_err(|error| invalid_document(format!("could not encode public JWK: {error}")))?;
+    // Records published by older clients serialized an absent algorithm as the
+    // literal `a=undefined`; treat it as absent so the key type's default wins.
+    let algorithm = values
+        .get("a")
+        .map(String::as_str)
+        .filter(|algorithm| !algorithm.is_empty() && *algorithm != "undefined")
+        .unwrap_or(default_algorithm);
     jwk.as_object_mut()
         .expect("SSI JWK serializes as an object")
-        .insert(
-            "alg".to_string(),
-            Value::String(
-                values
-                    .get("a")
-                    .cloned()
-                    .unwrap_or_else(|| default_algorithm.to_string()),
-            ),
-        );
+        .insert("alg".to_string(), Value::String(algorithm.to_string()));
 
     let fragment = if record_id == "k0" {
         "0"
@@ -385,6 +384,45 @@ mod tests {
         }
         assert!(document.get("keyAgreement").is_none());
         assert_eq!(types, None);
+    }
+
+    #[test]
+    // Covers: DID-DHT-006, DID-DHT-007
+    fn legacy_undefined_algorithm_decodes_as_the_key_type_default() {
+        let secp256k1 = encoded(&[
+            0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce,
+            0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81,
+            0x5b, 0x16, 0xf8, 0x17, 0x98,
+        ]);
+        let p256 = encoded(&[
+            0x03, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
+            0x45, 0xd8, 0x98, 0xc2, 0x96,
+        ]);
+        let x25519 = encoded(&[
+            9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ]);
+        let cases = [
+            ("0", ED25519_KEY.to_string(), "EdDSA"),
+            ("1", secp256k1, "ES256K"),
+            ("2", p256, "ES256"),
+            ("3", x25519, "ECDH-ES+A256KW"),
+        ];
+        let root_name = format!("_did.{IDENTIFIER}.");
+
+        for (key_type, key, default_algorithm) in cases {
+            for algorithm in ["a=undefined", "a=", ""] {
+                let record = format!("t={key_type};k={key};{algorithm}");
+                let bytes = packet(&[(&root_name, "v=0"), ("_k0._did.", &record)]);
+                let (document, _) = decode_document(&did(), &bytes).unwrap();
+                let document = serde_json::to_value(document).unwrap();
+                assert_eq!(
+                    document["verificationMethod"][0]["publicKeyJwk"]["alg"], default_algorithm,
+                    "{record}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -401,6 +401,7 @@ mod test {
     }
 
     #[test]
+    // Covers: DWN-REC-001
     fn cid_is_stable_across_inline_data_transport_representations() {
         let without_data = Message {
             descriptor: Descriptor::Records(Box::new(Records::Write(Default::default()))),
@@ -413,8 +414,18 @@ mod test {
                 ..Default::default()
             }),
         };
+        // An empty inline payload is still transport-only and must not change
+        // the message identity.
+        let with_empty_data = Message {
+            descriptor: without_data.descriptor.clone(),
+            fields: Fields::Write(WriteFields {
+                encoded_data: Some(String::new()),
+                ..Default::default()
+            }),
+        };
 
         assert_eq!(without_data.cid().unwrap(), with_data.cid().unwrap());
+        assert_eq!(without_data.cid().unwrap(), with_empty_data.cid().unwrap());
     }
 
     #[test]
