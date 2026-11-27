@@ -151,6 +151,9 @@ where
                             if point_read {
                                 return Response::new(error.into_status(), Read::default());
                             }
+                            if !error.is_denial() {
+                                return store_error_reply(error.to_string());
+                            }
                             continue;
                         }
                         return Response::new(
@@ -239,6 +242,9 @@ where
                     if let Err(error) = authorized {
                         if point_read {
                             return Response::new(error.into_status(), Read::default());
+                        }
+                        if !error.is_denial() {
+                            return store_error_reply(error.to_string());
                         }
                         continue;
                     }

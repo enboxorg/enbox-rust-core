@@ -1884,6 +1884,215 @@ fn stored_squash_definition(module: &str, explicit_squash: bool) -> crate::modul
     definition
 }
 
+async fn signed_broad_read(timestamp: &str, module_role: Option<&str>) -> serde_json::Value {
+    let descriptor = ReadDescriptor {
+        message_timestamp: parse_time(timestamp),
+        filter: RecordsFilter::default(),
+        permission_grant_id: None,
+        date_sort: None,
+        include_replication_support: None,
+    };
+    let descriptor_json = serde_json::to_value(&descriptor).unwrap();
+    let payload = match module_role {
+        Some(module_role) => json!({ "moduleRole": module_role }),
+        None => json!({}),
+    };
+    let signature = signature_for_descriptor(&descriptor_json, payload, bob_signer()).await;
+    json!({
+        "descriptor": descriptor_json,
+        "authorization": { "signature": signature }
+    })
+}
+
+// Covers: DWN-REC-008
+// A broad read hides a candidate only when authorization classifies it as a
+// denial; the first readable candidate in the requested order wins.
+#[tokio::test]
+async fn broad_read_skips_only_classified_authorization_denials() {
+    let (_message_store, _data_store, write_handler, read_handler) = read_fixture().await;
+
+    let hidden_data = Bytes::from_static(b"hidden");
+    let hidden = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&hidden_data).to_string(),
+        data_size: hidden_data.len() as u64,
+        ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        write_handler
+            .run(TENANT, &hidden, Some(hidden_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let visible_data = Bytes::from_static(b"visible");
+    let visible = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&visible_data).to_string(),
+        data_size: visible_data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    let visible_id = visible["recordId"].as_str().unwrap().to_string();
+    assert_eq!(
+        write_handler
+            .run(TENANT, &visible, Some(visible_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let read = signed_broad_read("2025-01-01T00:10:00.000000Z", None).await;
+    let reply = read_handler.run(TENANT, &read, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(
+        reply
+            .reply
+            .entry
+            .as_ref()
+            .and_then(|entry| entry.records_write.as_ref())
+            .and_then(crate::descriptors::messages::record_id),
+        Some(visible_id)
+    );
+}
+
+// Covers: DWN-REC-008
+// A store failure while authorizing the highest-ranked candidate propagates
+// instead of being treated as invisibility and silently yielding the next one.
+#[tokio::test]
+async fn broad_read_fails_closed_on_non_denial_authorization_errors() {
+    let (message_store, _data_store, write_handler, read_handler) = read_fixture().await;
+
+    let initial_data = Bytes::from_static(b"initial");
+    let initial = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&initial_data).to_string(),
+        data_size: initial_data.len() as u64,
+        ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+    })
+    .await;
+    let record_id = initial["recordId"].as_str().unwrap().to_string();
+    let context_id = initial["contextId"].as_str().unwrap().to_string();
+    assert_eq!(
+        write_handler
+            .run(TENANT, &initial, Some(initial_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    // The update ranks first. Authorizing it resolves the governing timestamp
+    // from the retained initial write, which is where the store now fails.
+    let update_data = Bytes::from_static(b"update");
+    let update = signed_write_message(WriteSpec {
+        record_id: Some(record_id),
+        context_id: Some(context_id),
+        date_created: "2025-01-01T00:00:00.000000Z".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&update_data).to_string(),
+        data_size: update_data.len() as u64,
+        ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        write_handler
+            .run(TENANT, &update, Some(update_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    let visible_data = Bytes::from_static(b"visible");
+    let visible = signed_write_message(WriteSpec {
+        data_cid: generate_dag_pb_cid_from_bytes(&visible_data).to_string(),
+        data_size: visible_data.len() as u64,
+        published: Some(true),
+        ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+    })
+    .await;
+    assert_eq!(
+        write_handler
+            .run(TENANT, &visible, Some(visible_data))
+            .await
+            .status
+            .code,
+        202
+    );
+
+    message_store
+        .fail_recipient_query
+        .store(true, Ordering::SeqCst);
+    let read = signed_broad_read("2025-01-01T00:10:00.000000Z", Some("member")).await;
+    let reply = read_handler.run(TENANT, &read, None).await;
+    assert_eq!(
+        reply.status.code, 500,
+        "a non-denial authorization failure must not become invisibility: {}",
+        reply.status.detail
+    );
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("injected recipient query failure"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+async fn read_fixture() -> (
+    TestMessageStore,
+    TestDataStore,
+    RecordsWriteHandler<TestMessageStore, TestDataStore>,
+    RecordsReadHandler<TestMessageStore, TestDataStore>,
+) {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(
+        TENANT,
+        &message_store,
+        read_role_definition(),
+        "2024-12-31T00:00:00.000000Z",
+    )
+    .await;
+    let write_handler = RecordsWriteHandler::<_, _>::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    let read_handler = RecordsReadHandler::new(
+        message_store.clone(),
+        data_store.clone(),
+        Some(Arc::new(test_resolver())),
+    );
+    (message_store, data_store, write_handler, read_handler)
+}
+
+/// A module whose note path grants only create, plus a role node. A broad read
+/// therefore reaches the role lookup, where a store failure can be injected.
+fn read_role_definition() -> crate::modules::Definition {
+    let mut definition = squash_definition("http://example.com/notes", false);
+    definition.published = false;
+    definition.structure.get_mut("note").unwrap().actions =
+        vec![crate::modules::Action::Who(crate::modules::ActionWho {
+            who: crate::modules::Who::Anyone,
+            of: None,
+            can: vec![crate::modules::Can::Create],
+        })];
+    definition.structure.insert(
+        "member".to_string(),
+        crate::modules::RuleSet {
+            role: Some(true),
+            ..Default::default()
+        },
+    );
+    definition
+}
+
 #[tokio::test]
 async fn records_write_accepts_permission_grant_id_and_enforces_publication_condition() {
     let mut message_store = TestMessageStore::default();
@@ -2670,6 +2879,7 @@ struct TestMessageStore {
     rows: Arc<RwLock<Vec<TestMessageRow>>>,
     fail_prune_query: Arc<AtomicBool>,
     fail_audience_query: Arc<AtomicBool>,
+    fail_recipient_query: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -2775,6 +2985,7 @@ impl MessageStore for TestMessageStore {
         let tenant = tenant.to_string();
         let fail_prune = self.fail_prune_query.clone();
         let fail_audience = self.fail_audience_query.clone();
+        let fail_recipient = self.fail_recipient_query.clone();
         async move {
             if fail_prune.load(Ordering::SeqCst)
                 && filters.set.iter().any(|filter| {
@@ -2794,6 +3005,17 @@ impl MessageStore for TestMessageStore {
             {
                 return Err(test_store_error(
                     "injected audience query failure".to_string(),
+                ));
+            }
+            if fail_recipient.load(Ordering::SeqCst)
+                && filters.set.iter().any(|filter| {
+                    filter
+                        .keys()
+                        .any(|key| matches!(key, FilterKey::Index(name) if name == "recipient"))
+                })
+            {
+                return Err(test_store_error(
+                    "injected recipient query failure".to_string(),
                 ));
             }
             let occupants = match record_limit {
