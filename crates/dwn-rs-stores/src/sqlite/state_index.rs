@@ -69,8 +69,8 @@ impl SqliteStateIndex {
         let tenant = tenant.to_string();
         let message_cid = message_cid.to_string();
 
-        let protocol = match indexes.get("protocol") {
-            Some(Value::String(protocol)) => Some(protocol.clone()),
+        let module = match indexes.get("module") {
+            Some(Value::String(module)) => Some(module.clone()),
             _ => None,
         };
         let indexes_json = serde_json::to_string(indexes).map_err(json_store_error)?;
@@ -82,9 +82,9 @@ impl SqliteStateIndex {
                 connection
                     .execute(
                         "INSERT OR REPLACE INTO state_index_entries \
-                     (tenant, message_cid, protocol, indexes_json) \
+                     (tenant, message_cid, module, indexes_json) \
                      VALUES (?1, ?2, ?3, ?4)",
-                        params![tenant, message_cid, protocol, indexes_json],
+                        params![tenant, message_cid, module, indexes_json],
                     )
                     .map_err(sqlite_store_error)?;
                 Ok(())
@@ -178,9 +178,9 @@ impl StateIndex for SqliteStateIndex {
     fn get_module_root(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send {
-        self.inner.get_module_root(tenant, protocol)
+        self.inner.get_module_root(tenant, module)
     }
 
     fn get_subtree_hash(
@@ -194,10 +194,10 @@ impl StateIndex for SqliteStateIndex {
     fn get_module_subtree_hash(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send {
-        self.inner.get_module_subtree_hash(tenant, protocol, prefix)
+        self.inner.get_module_subtree_hash(tenant, module, prefix)
     }
 
     fn get_leaves(
@@ -211,9 +211,9 @@ impl StateIndex for SqliteStateIndex {
     fn get_module_leaves(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send {
-        self.inner.get_module_leaves(tenant, protocol, prefix)
+        self.inner.get_module_leaves(tenant, module, prefix)
     }
 }

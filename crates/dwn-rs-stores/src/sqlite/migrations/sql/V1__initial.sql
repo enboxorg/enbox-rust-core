@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS data_refs (
 CREATE TABLE IF NOT EXISTS state_index_entries (
     tenant TEXT NOT NULL,
     message_cid TEXT NOT NULL,
-    protocol TEXT,
+    module TEXT,
     indexes_json TEXT NOT NULL,
     PRIMARY KEY (tenant, message_cid)
 );
