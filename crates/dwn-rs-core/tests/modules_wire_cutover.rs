@@ -10,8 +10,13 @@ use dwn_rs_core::encryption::{DerivationScheme, KeyEncryption, ENCRYPTION_MODULE
 use dwn_rs_core::errors::DwnErrorCode;
 use dwn_rs_core::interfaces::messages::modules::{Definition, RuleSet, Type};
 use dwn_rs_core::permissions::PERMISSIONS_MODULE_URI;
-use dwn_rs_core::testing::parse_time;
 use serde_json::{json, Value};
+
+fn parse_time(value: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .expect("timestamp must be RFC 3339")
+        .with_timezone(&chrono::Utc)
+}
 
 fn definition() -> Definition {
     Definition {

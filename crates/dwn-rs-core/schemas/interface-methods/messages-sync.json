@@ -36,7 +36,7 @@
           "enum": ["root", "subtree", "leaves", "diff"],
           "type": "string"
         },
-        "protocol": {
+        "module": {
           "type": "string"
         },
         "prefix": {

@@ -76,14 +76,23 @@ async fn loopback_server_exposes_info_and_processes_json_rpc() {
                     "interface": "Records",
                     "method": "Query",
                     "messageTimestamp": "2025-01-01T00:00:00.000000Z",
-                    "filter": { "protocol": "https://example.com/test" }
+                    "filter": { "module": "https://example.com/test" }
                 }
             }
         }
     });
+    let body = dwn_rs_core::utils::http_rpc_framing::encode_request_body(
+        &serde_json::to_vec(&rpc).expect("rpc json"),
+        None,
+    )
+    .expect("frame rpc");
     let response = client
         .post(format!("{endpoint}/"))
-        .header("dwn-request", rpc.to_string())
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            dwn_rs_core::utils::http_rpc_framing::HTTP_DWN_RPC_MEDIA_TYPE,
+        )
+        .body(body)
         .send()
         .await
         .expect("rpc request");
