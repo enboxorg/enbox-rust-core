@@ -14,9 +14,9 @@ pub struct Records {
     pub author: Option<Vec<String>>,
     pub attester: Option<String>,
     pub recipient: Option<Vec<String>>,
-    pub protocol: Option<String>,
-    #[serde(rename = "protocolPath")]
-    pub protocol_path: Option<String>,
+    pub module: Option<String>,
+    #[serde(rename = "modulePath")]
+    pub module_path: Option<String>,
     pub published: Option<bool>,
 
     #[serde(rename = "contextId")]
@@ -47,9 +47,9 @@ pub struct Records {
 pub struct Messages {
     pub interface: Option<String>,
     pub method: Option<String>,
-    pub protocol: Option<String>,
-    pub protocol_path: Option<String>,
-    pub protocol_path_prefix: Option<String>,
+    pub module: Option<String>,
+    pub module_path: Option<String>,
+    pub module_path_prefix: Option<String>,
     pub context_id_prefix: Option<String>,
     pub message_timestamp: Option<RangeFilter<String>>,
 }

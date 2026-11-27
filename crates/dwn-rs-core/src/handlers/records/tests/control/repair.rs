@@ -8,11 +8,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::descriptors::messages::record_id;
-use crate::descriptors::{ConfigureDescriptor, MessageDescriptor};
+use crate::descriptors::{MessageDescriptor, ModulesConfigureDescriptor};
 use crate::errors::{ResumableTaskStoreError, StoreError};
 use crate::handlers::records::control::ControlValidationError;
+use crate::modules::{Action, ActionWho, Can, Who};
 use crate::permissions::message_author;
-use crate::protocols::{Action, ActionWho, Can, Who};
 use crate::stores::memory::MemoryResumableTaskStore;
 use crate::stores::{ManagedResumableTask, ResumableTaskStore};
 use crate::tasks::controller::{
@@ -25,7 +25,7 @@ use super::*;
 async fn stored_audience(fixture: &ControlFixture) -> Message<Descriptor> {
     let filter = filter_map([
         ("interface", string_filter("Records")),
-        ("protocolPath", string_filter(AUDIENCE_PATH)),
+        ("modulePath", string_filter(AUDIENCE_PATH)),
     ]);
     fixture
         .message_store
@@ -76,7 +76,7 @@ async fn repair_removes_only_records_the_configuration_contradicts() {
     );
 
     // The role stops being a role at all: the record now names something the
-    // protocol does not have.
+    // module does not have.
     let mut demoted = control_definition();
     demoted.structure.get_mut("member").unwrap().role = None;
     reconfigure(&fixture, demoted, "2025-01-03T00:00:00.000000Z").await;
@@ -88,7 +88,7 @@ async fn repair_removes_only_records_the_configuration_contradicts() {
 }
 
 // Covers: DWN-PROTO-004
-// Anything undetermined is kept. A record whose protocol cannot be found is not
+// Anything undetermined is kept. A record whose module cannot be found is not
 // a record proven wrong — the configuration may simply not have arrived — and
 // repair must not treat the two alike.
 #[tokio::test]
@@ -105,7 +105,7 @@ async fn repair_retains_records_it_cannot_judge() {
     .await;
     let audience = stored_audience(&fixture).await;
 
-    // A record whose protocol is absent entirely.
+    // A record whose module is absent entirely.
     let empty_store = MemoryMessageStore::default();
     assert_eq!(
         control_config_validity(CONTROL_TENANT, &audience, &empty_store).await,
@@ -119,7 +119,7 @@ async fn repair_retains_records_it_cannot_judge() {
 // already say. A record whose authority came from the writer's own standing is
 // preserved without re-fetching grants or re-resolving DIDs, because their
 // absence today says nothing about what was authorized then. A record that
-// leaned on a protocol rule is judged by whether that rule still permits it.
+// leaned on a module rule is judged by whether that rule still permits it.
 #[tokio::test]
 async fn stored_create_replay_uses_only_the_record_and_the_configuration() {
     let fixture = control_fixture().await;
@@ -163,8 +163,8 @@ async fn stored_create_replay_uses_only_the_record_and_the_configuration() {
     let bob_signed = signed_write_message(WriteSpec {
         author: "did:example:bob".to_string(),
         signer: bob_signer(),
-        protocol: CONTROL_PROTOCOL.to_string(),
-        protocol_path: AUDIENCE_PATH.to_string(),
+        module: CONTROL_MODULE.to_string(),
+        module_path: AUDIENCE_PATH.to_string(),
         tags: Some(audience_tags("member", "", &fixture.audience_key_id)),
         ..WriteSpec::new("2025-01-01T00:02:00.000000Z")
     })
@@ -211,7 +211,7 @@ fn control_definition_keyed_with(role_key: &JWK) -> Definition {
         .structure
         .get_mut("member")
         .unwrap()
-        .key_agreement = Some(ProtocolKeyAgreement {
+        .key_agreement = Some(ModuleKeyAgreement {
         public_key_jwk: role_key.clone(),
     });
     definition
@@ -269,7 +269,7 @@ async fn a_late_historical_configuration_invalidates_a_record_it_governs() {
 // The scan and the hook are each covered; this is their composition, which is
 // the path that actually destroys anything.
 #[tokio::test]
-async fn configuring_a_protocol_purges_the_controls_it_invalidates() {
+async fn configuring_a_module_purges_the_controls_it_invalidates() {
     let fixture = control_fixture().await;
     admit_audience_signed(
         &fixture,
@@ -297,7 +297,7 @@ async fn configuring_a_protocol_purges_the_controls_it_invalidates() {
     // A configuration in which `member` is no longer a role at all.
     let mut demoted = control_definition();
     demoted.structure.get_mut("member").unwrap().role = None;
-    let configure_handler = ProtocolsConfigureHandler::new(
+    let configure_handler = ModulesConfigureHandler::new(
         fixture.message_store.clone(),
         Some(Arc::new(test_resolver())),
     )
@@ -318,7 +318,7 @@ async fn configuring_a_protocol_purges_the_controls_it_invalidates() {
 async fn stored_control_records(fixture: &ControlFixture) -> Vec<Message<Descriptor>> {
     let filter = filter_map([
         ("interface", string_filter("Records")),
-        ("protocolPath", string_filter(AUDIENCE_PATH)),
+        ("modulePath", string_filter(AUDIENCE_PATH)),
     ]);
     fixture
         .message_store
@@ -332,7 +332,7 @@ async fn signed_configure_with_definition(
     definition: Definition,
     timestamp: &str,
 ) -> serde_json::Value {
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: timestamp.parse().unwrap(),
         definition,
         permission_grant_id: None,
@@ -458,7 +458,7 @@ async fn a_transient_store_failure_never_reads_as_proof_the_record_is_invalid() 
     // The same record, judged through a store that has gone away.
     let mut flaky = FlakyMessageStore::default();
     flaky.open().await.unwrap();
-    put_protocol_definition(
+    put_module_definition(
         CONTROL_TENANT,
         &flaky,
         control_definition(),
@@ -581,7 +581,7 @@ async fn a_configuration_is_refused_when_its_repair_cannot_be_enlisted() {
 
     let mut demoted = control_definition();
     demoted.structure.get_mut("member").unwrap().role = None;
-    let configure_handler = ProtocolsConfigureHandler::new(
+    let configure_handler = ModulesConfigureHandler::new(
         fixture.message_store.clone(),
         Some(Arc::new(test_resolver())),
     )
@@ -606,7 +606,7 @@ async fn a_configuration_is_refused_when_its_repair_cannot_be_enlisted() {
             .query(
                 CONTROL_TENANT,
                 Filters::from(filter_map([
-                    ("interface", string_filter("Protocols")),
+                    ("interface", string_filter("Modules")),
                     ("method", string_filter("Configure")),
                     (
                         "messageTimestamp",
@@ -639,7 +639,7 @@ async fn a_configuration_is_refused_when_its_repair_cannot_be_enlisted() {
 #[tokio::test]
 async fn a_repair_that_could_not_judge_a_record_keeps_its_obligation() {
     let flaky = FlakyMessageStore::default();
-    put_protocol_definition(
+    put_module_definition(
         CONTROL_TENANT,
         &flaky,
         control_definition(),
@@ -689,7 +689,7 @@ async fn a_repair_that_could_not_judge_a_record_keeps_its_obligation() {
                 name: ResumableTaskName::ControlRepair,
                 data: serde_json::to_value(ResumableControlRepairData {
                     tenant: CONTROL_TENANT.to_string(),
-                    protocol: CONTROL_PROTOCOL.to_string(),
+                    module: CONTROL_MODULE.to_string(),
                 })
                 .unwrap(),
             },
@@ -764,7 +764,7 @@ async fn each_removal_is_enlisted_before_the_messages_that_describe_it_are_gone(
                 name: ResumableTaskName::ControlRepair,
                 data: serde_json::to_value(ResumableControlRepairData {
                     tenant: CONTROL_TENANT.to_string(),
-                    protocol: CONTROL_PROTOCOL.to_string(),
+                    module: CONTROL_MODULE.to_string(),
                 })
                 .unwrap(),
             },

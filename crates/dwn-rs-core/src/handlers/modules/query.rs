@@ -3,23 +3,23 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
-use crate::descriptors::ProtocolQueryDescriptor;
+use crate::descriptors::ModulesQueryDescriptor;
 use crate::dwn::HandlerContext;
 use crate::filters::{Filter, FilterKey, Filters};
-use crate::replies::protocols::Query;
+use crate::replies::modules::Query;
 use crate::{permissions, Handler, Response};
 use crate::{MessageSort, SortDirection, Value};
 
-const PROTOCOLS_INTERFACE: &str = "Protocols";
+const MODULES_INTERFACE: &str = "Modules";
 const CONFIGURE_METHOD: &str = "Configure";
 
 #[derive(Clone)]
-pub struct ProtocolsQueryHandler<MessageStore> {
+pub struct ModulesQueryHandler<MessageStore> {
     message_store: MessageStore,
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
-impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
+impl<MessageStore> ModulesQueryHandler<MessageStore> {
     pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
         Self {
             message_store,
@@ -28,12 +28,12 @@ impl<MessageStore> ProtocolsQueryHandler<MessageStore> {
     }
 }
 
-impl<MessageStore> Handler for ProtocolsQueryHandler<MessageStore>
+impl<MessageStore> Handler for ModulesQueryHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     type Reply = Query;
-    type Descriptor = ProtocolQueryDescriptor;
+    type Descriptor = ModulesQueryDescriptor;
 
     fn handle(
         &self,
@@ -47,7 +47,7 @@ where
                 ..
             } = ctx;
 
-            // An unsigned query sees published protocols only. An empty `authorization`
+            // An unsigned query sees published modules only. An empty `authorization`
             // object reaches the same place: `validate_authorization_signature` returns
             // `Ok(None)` for it when a signature is not required.
             let include_private = if !message.fields.authorization().is_empty() {
@@ -59,7 +59,7 @@ where
                 .await
                 {
                     Ok(Some(authorization)) => {
-                        match permissions::authorize_protocols_query(
+                        match permissions::authorize_modules_query(
                             tenant,
                             &message,
                             &authorization,
@@ -87,7 +87,7 @@ where
             let mut filters = BTreeMap::new();
             filters.insert(
                 FilterKey::Index("interface".to_string()),
-                Filter::Equal(Value::String(PROTOCOLS_INTERFACE.to_string())),
+                Filter::Equal(Value::String(MODULES_INTERFACE.to_string())),
             );
             filters.insert(
                 FilterKey::Index("method".to_string()),
@@ -104,10 +104,10 @@ where
                 );
             }
             if let Some(filter) = &descriptor.filter {
-                if let Some(protocol) = &filter.protocol {
+                if let Some(module) = &filter.module {
                     filters.insert(
-                        FilterKey::Index("protocol".to_string()),
-                        Filter::Equal(Value::String(protocol.clone())),
+                        FilterKey::Index("module".to_string()),
+                        Filter::Equal(Value::String(module.clone())),
                     );
                 }
             }

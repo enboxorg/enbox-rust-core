@@ -125,7 +125,7 @@ async fn eose_uses_the_frozen_head_when_filters_match_nothing() {
             listener,
             Some(EventLogSubscribeOptions {
                 cursor: Some(requested.clone()),
-                filters: Some(index_filters("protocol", "http://example.com/notes")),
+                filters: Some(index_filters("module", "http://example.com/notes")),
             }),
         )
         .await

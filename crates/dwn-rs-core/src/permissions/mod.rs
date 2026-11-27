@@ -11,14 +11,14 @@ use crate::descriptors::RECORDS;
 pub use crate::permissions::errors::AuthorizationValidationError;
 pub use crate::permissions::errors::DelegationSide;
 use crate::permissions::errors::{
-    AuthorizationRequestError, GrantError, GrantMessageTypeError, PermissionError,
-    ProtocolValidationError,
+    AuthorizationRequestError, GrantError, GrantMessageTypeError, ModuleValidationError,
+    PermissionError,
 };
 pub use crate::permissions::scopes::{
-    ContextId, MessagesScope, MessagesSelector, PermissionScope, ProtocolPath, ProtocolsMethod,
-    ProtocolsScope, RecordsMethod, RecordsScope, RecordsSelector,
+    ContextId, MessagesScope, MessagesSelector, ModulePath, ModulesMethod, ModulesScope,
+    PermissionScope, RecordsMethod, RecordsScope, RecordsSelector,
 };
-use crate::permissions::scopes::{OwnedProtocolScopeTarget, ProtocolScopeTarget};
+use crate::permissions::scopes::{ModuleScopeTarget, OwnedModuleScopeTarget};
 use crate::stores::MessageStore;
 use crate::MessageKind;
 
@@ -36,20 +36,20 @@ use crate::cid::generate_cid_from_serialized;
 use crate::descriptors::{
     messages::record_id,
     records::{records_write_descriptor, write_fields},
-    ConfigureDescriptor, Descriptor, MessageDescriptor, ProtocolQueryDescriptor, Protocols,
+    Descriptor, MessageDescriptor, Modules, ModulesConfigureDescriptor, ModulesQueryDescriptor,
     Records, RecordsWriteDescriptor,
 };
 use crate::filters::{
     message_filters::Messages as MessagesFilter, message_filters::Records as RecordsFilter,
 };
 use crate::filters::{Filter, FilterKey, Filters};
-use crate::interfaces::messages::protocols::{
+use crate::interfaces::messages::modules::{
     Action, ActionWho, Can, Definition, RuleSet, Size, Type, Who,
 };
 use crate::ser::serialize_datetime;
 use crate::{Message, MessageSort, Pagination, SortDirection, Value};
 
-pub const PERMISSIONS_PROTOCOL_URI: &str = "https://identity.foundation/dwn/permissions";
+pub const PERMISSIONS_MODULE_URI: &str = "https://identity.foundation/dwn/permissions";
 pub const PERMISSIONS_REQUEST_PATH: &str = "request";
 pub const PERMISSIONS_GRANT_PATH: &str = "grant";
 pub const PERMISSIONS_REVOCATION_PATH: &str = "grant/revocation";
@@ -95,10 +95,10 @@ impl VerifiedAuthorizationPayload {
         }
     }
 
-    pub(crate) fn protocol_role(&self) -> Option<&str> {
+    pub(crate) fn module_role(&self) -> Option<&str> {
         match self {
-            VerifiedAuthorizationPayload::Generic(payload) => payload.protocol_role.as_deref(),
-            VerifiedAuthorizationPayload::RecordsWrite(payload) => payload.protocol_role.as_deref(),
+            VerifiedAuthorizationPayload::Generic(payload) => payload.module_role.as_deref(),
+            VerifiedAuthorizationPayload::RecordsWrite(payload) => payload.module_role.as_deref(),
         }
     }
 
@@ -153,8 +153,8 @@ impl AuthorizationContext {
         }
     }
 
-    pub fn protocol_role(&self) -> Option<&str> {
-        self.payload.protocol_role()
+    pub fn module_role(&self) -> Option<&str> {
+        self.payload.module_role()
     }
 }
 
@@ -204,6 +204,8 @@ pub enum ConnectSessionTransport {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectSessionMetadata {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -270,7 +272,7 @@ impl ValidatedMessagesGrantSet {
         Ok(self
             .grants
             .iter()
-            .any(|grant| grant.scope.matches_protocol_target(&target.as_ref())))
+            .any(|grant| grant.scope.matches_module_target(&target.as_ref())))
     }
 
     async fn covers_filter(&self, filter: &MessagesFilter) -> bool {
@@ -278,7 +280,7 @@ impl ValidatedMessagesGrantSet {
 
         self.grants
             .iter()
-            .any(|grant| grant.scope.matches_protocol_target(&target))
+            .any(|grant| grant.scope.matches_module_target(&target))
     }
 }
 
@@ -286,29 +288,26 @@ async fn resolve_messages_scope_target<MS: MessageStore + Sync>(
     tenant: &str,
     message: &Message<Descriptor>,
     message_store: &MS,
-) -> Result<OwnedProtocolScopeTarget, PermissionError> {
+) -> Result<OwnedModuleScopeTarget, PermissionError> {
     match &message.descriptor {
         Descriptor::Records(records) => match records.as_ref() {
             Records::Write(write) => {
                 let context_id = context_id(message);
 
-                let (protocol, protocol_path) = if write.protocol == PERMISSIONS_PROTOCOL_URI {
+                let (module, module_path) = if write.module == PERMISSIONS_MODULE_URI {
                     let embedded_scope =
                         get_scope_from_permission_record(tenant, message_store, message).await?;
                     (
-                        embedded_scope.protocol().map(str::to_owned),
-                        embedded_scope.protocol_path().map(str::to_owned),
+                        embedded_scope.module().map(str::to_owned),
+                        embedded_scope.module_path().map(str::to_owned),
                     )
                 } else {
-                    (
-                        Some(write.protocol.clone()),
-                        Some(write.protocol_path.clone()),
-                    )
+                    (Some(write.module.clone()), Some(write.module_path.clone()))
                 };
 
-                Ok(OwnedProtocolScopeTarget {
-                    protocol,
-                    protocol_path,
+                Ok(OwnedModuleScopeTarget {
+                    module,
+                    module_path,
                     context_id,
                 })
             }
@@ -324,13 +323,13 @@ async fn resolve_messages_scope_target<MS: MessageStore + Sync>(
             }
             _ => Err(GrantError::InvalidRecordsDescriptorType.into()),
         },
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            Protocols::Configure(configure) => Ok(OwnedProtocolScopeTarget {
-                protocol: Some(configure.definition.protocol.clone()),
-                protocol_path: None,
+        Descriptor::Modules(modules) => match modules.as_ref() {
+            Modules::Configure(configure) => Ok(OwnedModuleScopeTarget {
+                module: Some(configure.definition.module.clone()),
+                module_path: None,
                 context_id: None,
             }),
-            _ => Err(GrantError::InvalidProtocolDescriptorType.into()),
+            _ => Err(GrantError::InvalidModuleDescriptorType.into()),
         },
         _ => Err(GrantError::InvalidDescriptorType.into()),
     }
@@ -358,9 +357,9 @@ pub enum MessagesReadGrantAccess {
     MetadataOnly,
 }
 
-pub fn permissions_protocol_definition() -> Definition {
+pub fn permissions_module_definition() -> Definition {
     Definition {
-        protocol: PERMISSIONS_PROTOCOL_URI.to_string(),
+        module: PERMISSIONS_MODULE_URI.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -456,8 +455,8 @@ fn authorization_payload_kind(message: &Message<Descriptor>) -> AuthorizationPay
             Records::Write(_) => AuthorizationPayloadKind::RecordsWrite,
             _ => AuthorizationPayloadKind::Direct,
         },
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            Protocols::Configure(_) | Protocols::Query(_) => AuthorizationPayloadKind::Direct,
+        Descriptor::Modules(modules) => match modules.as_ref() {
+            Modules::Configure(_) | Modules::Query(_) => AuthorizationPayloadKind::Direct,
         },
         Descriptor::Messages(messages) => match messages.as_ref() {
             crate::descriptors::Messages::Read(_)
@@ -551,7 +550,7 @@ fn validate_records_write_payload(
     }
 
     let attestation_cid = write_fields(message)
-        .map_err(ProtocolValidationError::from)?
+        .map_err(ModuleValidationError::from)?
         .attestation
         .as_ref()
         .map(|attestation| {
@@ -564,7 +563,7 @@ fn validate_records_write_payload(
         .transpose()?;
 
     let encryption_cid = write_fields(message)
-        .map_err(ProtocolValidationError::from)?
+        .map_err(ModuleValidationError::from)?
         .encryption
         .as_ref()
         .map(|encryption| {
@@ -617,7 +616,7 @@ fn validate_records_write_payload(
 
     // compute delegated grant Cid
     let delegated_grant_cid = write_fields(message)
-        .map_err(ProtocolValidationError::from)?
+        .map_err(ModuleValidationError::from)?
         .authorization
         .author_delegated_grant
         .as_ref()
@@ -972,11 +971,11 @@ fn authorization_from_message(message: &Message<Descriptor>) -> Option<JsonValue
 
 pub fn validate_permissions_record_schema(message: &Message<Descriptor>) -> Result<(), GrantError> {
     let descriptor = records_write_descriptor(message)?;
-    if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI {
+    if descriptor.module.as_str() != PERMISSIONS_MODULE_URI {
         return Ok(());
     }
     let data = permission_record_data_bytes(message)?;
-    match descriptor.protocol_path.as_str() {
+    match descriptor.module_path.as_str() {
         PERMISSIONS_REQUEST_PATH => {
             let data: PermissionRequestData = serde_json::from_slice(&data)
                 .map_err(|err| GrantError::InvalidGrant(err.into()))?;
@@ -993,8 +992,8 @@ pub fn validate_permissions_record_schema(message: &Message<Descriptor>) -> Resu
                 .map_err(|err| GrantError::InvalidGrant(err.into()))?;
             Ok(())
         }
-        protocol_path => Err(AuthorizationValidationError::UnexpectedPermissionRecord(
-            protocol_path.to_string(),
+        module_path => Err(AuthorizationValidationError::UnexpectedPermissionRecord(
+            module_path.to_string(),
         )
         .into()),
     }
@@ -1010,26 +1009,26 @@ where
 {
     let descriptor =
         records_write_descriptor(message).map_err(|e| PermissionError::InvalidGrant(e.into()))?;
-    if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
-        || descriptor.protocol_path != PERMISSIONS_REVOCATION_PATH
+    if descriptor.module.as_str() != PERMISSIONS_MODULE_URI
+        || descriptor.module_path != PERMISSIONS_REVOCATION_PATH
     {
         return Ok(());
     }
     let parent_id = descriptor
         .parent_id
         .as_deref()
-        .ok_or(GrantError::ProtocolValidationError(
-            ProtocolValidationError::MissingRevocationParentId,
+        .ok_or(GrantError::ModuleValidationError(
+            ModuleValidationError::MissingRevocationParentId,
         ))?;
     let grant = fetch_grant(tenant, message_store, parent_id).await?;
-    let revocation_protocol_tag = descriptor
+    let revocation_module_tag = descriptor
         .tags
         .as_ref()
-        .and_then(|tags| tags.get("protocol"))
+        .and_then(|tags| tags.get("module"))
         .and_then(index_value_as_str);
-    if grant.scope.protocol() != revocation_protocol_tag {
-        return Err(GrantError::ProtocolValidationError(
-            ProtocolValidationError::MissingRevocationParentId,
+    if grant.scope.module() != revocation_module_tag {
+        return Err(GrantError::ModuleValidationError(
+            ModuleValidationError::MissingRevocationParentId,
         )
         .into());
     }
@@ -1048,8 +1047,8 @@ where
 {
     let descriptor =
         records_write_descriptor(message).map_err(|e| PermissionError::InvalidGrant(e.into()))?;
-    if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
-        || descriptor.protocol_path != PERMISSIONS_REVOCATION_PATH
+    if descriptor.module.as_str() != PERMISSIONS_MODULE_URI
+        || descriptor.module_path != PERMISSIONS_REVOCATION_PATH
     {
         return Ok(());
     }
@@ -1231,13 +1230,13 @@ where
     )
     .await?;
 
-    let target = ProtocolScopeTarget {
-        protocol: filter.protocol.as_deref(),
-        protocol_path: filter.protocol_path.as_deref(),
+    let target = ModuleScopeTarget {
+        module: filter.module.as_deref(),
+        module_path: filter.module_path.as_deref(),
         context_id: filter.context_id.as_deref(),
     };
 
-    if !permission_grant.scope.matches_protocol_target(&target) {
+    if !permission_grant.scope.matches_module_target(&target) {
         return Err(GrantError::OutsideScope.into());
     }
 
@@ -1282,9 +1281,9 @@ where
     Ok(true)
 }
 
-pub async fn authorize_protocols_configure<MessageStore>(
+pub async fn authorize_modules_configure<MessageStore>(
     tenant: &str,
-    protocols_configure_message: &Message<Descriptor>,
+    modules_configure_message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
 ) -> Result<(), PermissionError>
@@ -1292,8 +1291,8 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     if let Some(permission_grant) = auth.author_delegated_grant.as_ref() {
-        authorize_protocols_configure_with_grant(
-            protocols_configure_message,
+        authorize_modules_configure_with_grant(
+            modules_configure_message,
             &auth.author,
             &auth.signer,
             permission_grant,
@@ -1307,8 +1306,8 @@ where
     }
     if let Some(permission_grant_id) = auth.permission_grant_id() {
         let permission_grant = fetch_grant(tenant, message_store, permission_grant_id).await?;
-        authorize_protocols_configure_with_grant(
-            protocols_configure_message,
+        authorize_modules_configure_with_grant(
+            modules_configure_message,
             tenant,
             &auth.author,
             &permission_grant,
@@ -1321,9 +1320,9 @@ where
     Err(GrantError::Unauthorized.into())
 }
 
-pub async fn authorize_protocols_query<MessageStore>(
+pub async fn authorize_modules_query<MessageStore>(
     tenant: &str,
-    protocols_query_message: &Message<Descriptor>,
+    modules_query_message: &Message<Descriptor>,
     auth: &AuthorizationContext,
     message_store: &MessageStore,
 ) -> Result<bool, PermissionError>
@@ -1338,20 +1337,20 @@ where
     };
     let permission_grant = fetch_grant(tenant, message_store, permission_grant_id).await?;
     perform_base_validation(
-        protocols_query_message,
+        modules_query_message,
         tenant,
         &auth.author,
         &permission_grant,
         message_store,
     )
     .await?;
-    let protocol_in_grant = permission_grant.scope.protocol();
-    let protocol_in_message = protocols_query_descriptor(protocols_query_message)
+    let module_in_grant = permission_grant.scope.module();
+    let module_in_message = modules_query_descriptor(modules_query_message)
         .map_err(GrantError::InvalidMessageType)?
         .filter
         .as_ref()
-        .and_then(|filter| filter.protocol.as_deref());
-    if protocol_in_grant.is_some() && protocol_in_message != protocol_in_grant {
+        .and_then(|filter| filter.module.as_deref());
+    if module_in_grant.is_some() && module_in_message != module_in_grant {
         return Err(GrantError::OutsideScope.into());
     }
     Ok(true)
@@ -1521,8 +1520,8 @@ where
     )?)
 }
 
-async fn authorize_protocols_configure_with_grant<MessageStore>(
-    protocols_configure_message: &Message<Descriptor>,
+async fn authorize_modules_configure_with_grant<MessageStore>(
+    modules_configure_message: &Message<Descriptor>,
     expected_grantor: &str,
     expected_grantee: &str,
     permission_grant: &PermissionGrant,
@@ -1532,21 +1531,21 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     perform_base_validation(
-        protocols_configure_message,
+        modules_configure_message,
         expected_grantor,
         expected_grantee,
         permission_grant,
         message_store,
     )
     .await?;
-    let grant_protocol = permission_grant.scope.protocol();
-    if let Some(grant_protocol) = grant_protocol {
-        let configured_protocol = protocols_configure_descriptor(protocols_configure_message)
+    let grant_module = permission_grant.scope.module();
+    if let Some(grant_module) = grant_module {
+        let configured_module = modules_configure_descriptor(modules_configure_message)
             .map_err(GrantError::InvalidMessageType)?
             .definition
-            .protocol
+            .module
             .as_str();
-        if configured_protocol != grant_protocol {
+        if configured_module != grant_module {
             return Err(GrantError::OutsideScope.into());
         }
     }
@@ -1624,7 +1623,7 @@ where
             tenant,
             Filters::from(filter_map([
                 ("parentId", string_filter(&permission_grant.id)),
-                ("protocolPath", string_filter(PERMISSIONS_REVOCATION_PATH)),
+                ("modulePath", string_filter(PERMISSIONS_REVOCATION_PATH)),
                 ("isLatestBaseState", bool_filter(true)),
             ])),
             Some(MessageSort::Timestamp(SortDirection::Ascending)),
@@ -1648,13 +1647,13 @@ fn verify_records_scope(
 ) -> Result<(), GrantError> {
     let descriptor = records_write_descriptor(records_write_message)?;
     let context_id = context_id(records_write_message);
-    let target = ProtocolScopeTarget {
-        protocol: Some(descriptor.protocol.as_str()),
-        protocol_path: Some(descriptor.protocol_path.as_str()),
+    let target = ModuleScopeTarget {
+        module: Some(descriptor.module.as_str()),
+        module_path: Some(descriptor.module_path.as_str()),
         context_id: context_id.as_deref(),
     };
 
-    if !grant_scope.matches_protocol_target(&target) {
+    if !grant_scope.matches_module_target(&target) {
         return Err(GrantError::InvalidScopeForTarget(
             format!("{:?}", grant_scope),
             format!("{:?}", target),
@@ -1690,10 +1689,10 @@ where
 {
     let descriptor = records_write_descriptor(incoming_message)
         .map_err(|e| PermissionError::InvalidGrant(e.into()))?;
-    if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI {
-        return Err(GrantError::UnexpectedProtocol(descriptor.protocol.clone()).into());
+    if descriptor.module.as_str() != PERMISSIONS_MODULE_URI {
+        return Err(GrantError::UnexpectedModule(descriptor.module.clone()).into());
     }
-    match descriptor.protocol_path.as_str() {
+    match descriptor.module_path.as_str() {
         PERMISSIONS_REVOCATION_PATH => {
             let parent_id = descriptor
                 .parent_id
@@ -1712,7 +1711,7 @@ where
         _ => {
             let data: PermissionRequestData = serde_json::from_slice(
                 &permission_record_data_bytes(incoming_message)
-                    .map_err(GrantError::ProtocolValidationError)?,
+                    .map_err(GrantError::ModuleValidationError)?,
             )
             .map_err(AuthorizationValidationError::ParseFailed)?;
             Ok(data.scope)
@@ -1724,24 +1723,24 @@ fn validate_scope_and_tags(
     scope: &PermissionScope,
     descriptor: &RecordsWriteDescriptor,
 ) -> Result<(), AuthorizationValidationError> {
-    if let Some(protocol) = scope.protocol() {
-        validate_permission_protocol_tag(descriptor, protocol)?;
+    if let Some(module) = scope.module() {
+        validate_permission_module_tag(descriptor, module)?;
     }
     Ok(())
 }
 
-fn validate_permission_protocol_tag(
+fn validate_permission_module_tag(
     descriptor: &RecordsWriteDescriptor,
-    scoped_protocol: &str,
+    scoped_module: &str,
 ) -> Result<(), AuthorizationValidationError> {
-    let tagged_protocol = descriptor
+    let tagged_module = descriptor
         .tags
         .as_ref()
-        .and_then(|tags| tags.get("protocol"))
+        .and_then(|tags| tags.get("module"))
         .and_then(index_value_as_str)
-        .ok_or(AuthorizationValidationError::ProtocolInvalidTags)?;
-    if tagged_protocol != scoped_protocol {
-        return Err(AuthorizationValidationError::ProtocolInvalidTags);
+        .ok_or(AuthorizationValidationError::ModuleInvalidTags)?;
+    if tagged_module != scoped_module {
+        return Err(AuthorizationValidationError::ModuleInvalidTags);
     }
     Ok(())
 }
@@ -1751,8 +1750,8 @@ fn parse_permission_grant(
     grantor: &str,
 ) -> Result<PermissionGrant, GrantError> {
     let descriptor = records_write_descriptor(message)?;
-    if descriptor.protocol.as_str() != PERMISSIONS_PROTOCOL_URI
-        || descriptor.protocol_path != PERMISSIONS_GRANT_PATH
+    if descriptor.module.as_str() != PERMISSIONS_MODULE_URI
+        || descriptor.module_path != PERMISSIONS_GRANT_PATH
     {
         return Err(GrantMessageTypeError::InvalidMessageType.into());
     }
@@ -1779,36 +1778,36 @@ fn parse_permission_grant(
 
 fn permission_record_data_bytes(
     message: &Message<Descriptor>,
-) -> Result<Vec<u8>, ProtocolValidationError> {
+) -> Result<Vec<u8>, ModuleValidationError> {
     let fields = write_fields(message)?;
     let encoded_data = fields
         .encoded_data
         .as_deref()
-        .ok_or(ProtocolValidationError::MissingEncodedData)?;
+        .ok_or(ModuleValidationError::MissingEncodedData)?;
     Ok(URL_SAFE_NO_PAD.decode(encoded_data)?)
 }
 
-fn protocols_configure_descriptor(
+fn modules_configure_descriptor(
     message: &Message<Descriptor>,
-) -> Result<&ConfigureDescriptor, GrantMessageTypeError> {
+) -> Result<&ModulesConfigureDescriptor, GrantMessageTypeError> {
     match &message.descriptor {
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            crate::descriptors::Protocols::Configure(descriptor) => Ok(descriptor),
-            _ => Err(GrantMessageTypeError::InvalidProtocolsConfigureMessageType),
+        Descriptor::Modules(modules) => match modules.as_ref() {
+            crate::descriptors::Modules::Configure(descriptor) => Ok(descriptor),
+            _ => Err(GrantMessageTypeError::InvalidModulesConfigureMessageType),
         },
-        _ => Err(GrantMessageTypeError::InvalidProtocolsConfigureMessageType),
+        _ => Err(GrantMessageTypeError::InvalidModulesConfigureMessageType),
     }
 }
 
-fn protocols_query_descriptor(
+fn modules_query_descriptor(
     message: &Message<Descriptor>,
-) -> Result<&ProtocolQueryDescriptor, GrantMessageTypeError> {
+) -> Result<&ModulesQueryDescriptor, GrantMessageTypeError> {
     match &message.descriptor {
-        Descriptor::Protocols(protocols) => match protocols.as_ref() {
-            crate::descriptors::Protocols::Query(descriptor) => Ok(descriptor),
-            _ => Err(GrantMessageTypeError::InvalidProtocolsQueryMessageType),
+        Descriptor::Modules(modules) => match modules.as_ref() {
+            crate::descriptors::Modules::Query(descriptor) => Ok(descriptor),
+            _ => Err(GrantMessageTypeError::InvalidModulesQueryMessageType),
         },
-        _ => Err(GrantMessageTypeError::InvalidProtocolsQueryMessageType),
+        _ => Err(GrantMessageTypeError::InvalidModulesQueryMessageType),
     }
 }
 
@@ -1888,7 +1887,7 @@ mod tests {
 
     #[test]
     fn permissions_records_are_immutable() {
-        let definition = permissions_protocol_definition();
+        let definition = permissions_module_definition();
 
         assert_eq!(
             definition.structure[PERMISSIONS_REQUEST_PATH].immutable,
@@ -1922,7 +1921,7 @@ mod tests {
             delegated_grant_id: None,
             permission_grant_id: None,
             permission_grant_ids: Some(vec!["grant-a".to_string(), "grant-b".to_string()]),
-            protocol_role: None,
+            module_role: None,
         });
         assert_eq!(
             validate_permission_grant(&message, &valid_payload).unwrap(),
@@ -1940,7 +1939,7 @@ mod tests {
                 delegated_grant_id: None,
                 permission_grant_id: None,
                 permission_grant_ids,
-                protocol_role: None,
+                module_role: None,
             });
             assert!(validate_permission_grant(&message, &payload).is_err());
         }
@@ -1950,7 +1949,7 @@ mod tests {
             delegated_grant_id: None,
             permission_grant_id: Some("grant-a".to_string()),
             permission_grant_ids: Some(vec!["grant-a".to_string(), "grant-b".to_string()]),
-            protocol_role: None,
+            module_role: None,
         });
         assert!(validate_permission_grant(&message, &conflicting_payload).is_err());
     }
@@ -1965,7 +1964,7 @@ mod tests {
             date_expires: parse_time("2025-02-01T00:00:00.000000Z"),
             delegated: None,
             scope: PermissionScope::Messages(MessagesScope {
-                protocol: Some("http://example.com/notes".to_string()),
+                module: Some("http://example.com/notes".to_string()),
                 selector: None,
             }),
             conditions: None,
@@ -1976,7 +1975,7 @@ mod tests {
                 MessagesSubscribeDescriptor {
                     message_timestamp: parse_time("2025-01-01T00:10:00.000000Z"),
                     filters: vec![MessagesFilter {
-                        protocol: Some("http://example.com/notes".to_string()),
+                        module: Some("http://example.com/notes".to_string()),
                         ..Default::default()
                     }],
                     permission_grant_ids: Some(vec!["grant-1".to_string()]),
@@ -1999,7 +1998,7 @@ mod tests {
 
     fn messages_grant(
         id: &str,
-        protocol: Option<&str>,
+        module: Option<&str>,
         selector: Option<MessagesSelector>,
     ) -> PermissionGrant {
         PermissionGrant {
@@ -2010,7 +2009,7 @@ mod tests {
             date_expires: parse_time("2025-02-01T00:00:00.000000Z"),
             delegated: None,
             scope: PermissionScope::Messages(MessagesScope {
-                protocol: protocol.map(str::to_string),
+                module: module.map(str::to_string),
                 selector,
             }),
             conditions: None,
@@ -2018,9 +2017,25 @@ mod tests {
         }
     }
 
-    fn messages_filter(protocol: &str) -> MessagesFilter {
+    #[test]
+    fn connect_session_accepts_an_application_id() {
+        let metadata: ConnectSessionMetadata = serde_json::from_value(serde_json::json!({
+            "id": "session-1",
+            "applicationId": "app-1",
+            "createdAt": "2025-01-01T00:00:00.000000Z",
+            "expiresAt": "2025-01-01T01:00:00.000000Z"
+        }))
+        .expect("connectSession with applicationId must parse");
+        assert_eq!(metadata.application_id.as_deref(), Some("app-1"));
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap()["applicationId"],
+            "app-1"
+        );
+    }
+
+    fn messages_filter(module: &str) -> MessagesFilter {
         MessagesFilter {
-            protocol: Some(protocol.to_string()),
+            module: Some(module.to_string()),
             ..Default::default()
         }
     }
@@ -2120,24 +2135,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn messages_filter_scope_honors_exact_protocol_path() {
+    async fn messages_filter_scope_honors_exact_module_path() {
         let grants = ValidatedMessagesGrantSet {
             grants: vec![messages_grant(
                 "path-grant",
                 Some("https://example.com/a"),
-                Some(MessagesSelector::ProtocolPath(ProtocolPath(
+                Some(MessagesSelector::ModulePath(ModulePath(
                     "thread/message".to_string(),
                 ))),
             )],
         };
         let covered = MessagesFilter {
-            protocol: Some("https://example.com/a".to_string()),
-            protocol_path: Some("thread/message".to_string()),
+            module: Some("https://example.com/a".to_string()),
+            module_path: Some("thread/message".to_string()),
             ..Default::default()
         };
         let uncovered = MessagesFilter {
-            protocol: Some("https://example.com/a".to_string()),
-            protocol_path: Some("thread/image".to_string()),
+            module: Some("https://example.com/a".to_string()),
+            module_path: Some("thread/image".to_string()),
             ..Default::default()
         };
 
@@ -2172,7 +2187,7 @@ mod tests {
                 delegated_grant_id: grant.as_ref().map(|grant| grant.id.clone()),
                 permission_grant_id: None,
                 permission_grant_ids: None,
-                protocol_role: Some("thread/participant".to_string()),
+                module_role: Some("thread/participant".to_string()),
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: grant,

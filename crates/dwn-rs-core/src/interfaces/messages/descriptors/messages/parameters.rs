@@ -157,7 +157,7 @@ pub struct SyncParameters {
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: chrono::DateTime<chrono::Utc>,
     pub action: SyncAction,
-    pub protocol: Option<String>,
+    pub module: Option<String>,
     pub prefix: Option<String>,
     #[serde(rename = "permissionGrantIds")]
     pub permission_grant_ids: Option<Vec<String>>,
@@ -176,7 +176,7 @@ impl MessageParameters for SyncParameters {
         let descriptor = SyncDescriptor {
             message_timestamp: self.message_timestamp,
             action: self.action.clone(),
-            protocol: self.protocol.clone(),
+            module: self.module.clone(),
             prefix: self.prefix.clone(),
             permission_grant_ids,
             hashes: self.hashes.clone(),

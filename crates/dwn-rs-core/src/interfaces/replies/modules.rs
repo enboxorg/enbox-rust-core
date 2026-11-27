@@ -13,6 +13,6 @@ pub struct Query {
 
 impl From<Query> for Reply {
     fn from(query: Query) -> Self {
-        Reply::ProtocolsQuery(Box::new(query))
+        Reply::ModulesQuery(Box::new(query))
     }
 }

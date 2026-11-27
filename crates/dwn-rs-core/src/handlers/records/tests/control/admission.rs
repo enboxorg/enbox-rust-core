@@ -3,7 +3,7 @@
 use super::*;
 
 // Covers: ENBOX-ENC-001, DWN-PROTO-002, DWN-PROTO-004
-// A well-formed audience is admitted at a virtual path the protocol never
+// A well-formed audience is admitted at a virtual path the module never
 // declares, proving control records bypass application type and rule lookup
 // while still resolving their role against the governing definition.
 #[tokio::test]

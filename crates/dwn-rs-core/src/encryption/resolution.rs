@@ -17,10 +17,10 @@ use serde::Deserialize;
 use ssi_jwk::JWK;
 use thiserror::Error;
 
-use crate::encryption::protocol::GRANT_KEY_PAYLOAD_SCHEMA_URI;
+use crate::encryption::module::GRANT_KEY_PAYLOAD_SCHEMA_URI;
 use crate::encryption::x25519::{private_key_bytes, public_jwk};
 use crate::encryption::KEY_AGREEMENT_ALGORITHM;
-use crate::interfaces::messages::protocols::Definition;
+use crate::interfaces::messages::modules::Definition;
 use crate::permissions::grant_key_coverage::{
     eligible_grant_scope, grant_covers_delivered_scope, matches_subtree, DeliveredScope,
     GrantedScope,
@@ -28,7 +28,7 @@ use crate::permissions::grant_key_coverage::{
 use crate::permissions::PermissionGrant;
 
 /// A decrypted grant-key payload, structurally validated. Shape follows the
-/// agent `assertGrantKeyPayload` / `isProtocolPathKeyMaterial` /
+/// agent `assertGrantKeyPayload` / `isModulePathKeyMaterial` /
 /// `isX25519KeyMaterial` predicates; additional properties are accepted.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GrantKeyPayload {
@@ -42,9 +42,9 @@ pub struct GrantKeyPayload {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PayloadScope {
     pub scheme: String,
-    pub protocol: String,
-    #[serde(rename = "protocolPath", default)]
-    pub protocol_path: Option<String>,
+    pub module: String,
+    #[serde(rename = "modulePath", default)]
+    pub module_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,16 +66,16 @@ pub struct KeyMaterial {
 #[derive(Debug, Clone)]
 pub struct DeliveryTags {
     pub grant_id: String,
-    pub protocol: String,
-    pub protocol_path: Option<String>,
+    pub module: String,
+    pub module_path: Option<String>,
     pub key_id: String,
 }
 
 /// The record a resolved key must open.
 #[derive(Debug, Clone)]
 pub struct ResolutionTarget {
-    pub protocol: String,
-    pub protocol_path: Option<String>,
+    pub module: String,
+    pub module_path: Option<String>,
 }
 
 /// Everything resolution verifies, in one place. The definition is the
@@ -131,7 +131,7 @@ pub enum ResolutionError {
     DerivationMismatch,
     #[error("grant-key key id does not match delivered key material")]
     KeyMismatch,
-    #[error("grant-key coverage needs the current protocol definition")]
+    #[error("grant-key coverage needs the current module definition")]
     DefinitionMissing,
 }
 
@@ -167,9 +167,9 @@ pub fn verify_grant_key_resolution(
     }
 
     if payload.grant_id != input.tags.grant_id
-        || payload.scope.protocol != input.tags.protocol
+        || payload.scope.module != input.tags.module
         || payload.key_material.key_id != input.tags.key_id
-        || payload.scope.protocol_path != input.tags.protocol_path
+        || payload.scope.module_path != input.tags.module_path
     {
         return Err(ResolutionError::TagMismatch);
     }
@@ -191,18 +191,18 @@ pub fn verify_grant_key_resolution(
         return Err(ResolutionError::Revoked);
     }
 
-    if payload.scope.scheme != "protocolPath" {
+    if payload.scope.scheme != "modulePath" {
         return Err(ResolutionError::ScopeMismatch);
     }
     let Some(eligible) = eligible_grant_scope(&input.grant.scope) else {
         return Err(ResolutionError::ScopeMismatch);
     };
     let delivered = DeliveredScope {
-        protocol: &payload.scope.protocol,
-        protocol_path: payload.scope.protocol_path.as_deref(),
+        module: &payload.scope.module,
+        module_path: payload.scope.module_path.as_deref(),
     };
     if !grant_covers_delivered_scope(&eligible, &delivered, None) {
-        let Some(_) = delivered.protocol_path else {
+        let Some(_) = delivered.module_path else {
             return Err(ResolutionError::ScopeMismatch);
         };
         let Some(definition) = input.definition else {
@@ -213,14 +213,13 @@ pub fn verify_grant_key_resolution(
         }
     }
 
-    if payload.scope.protocol != input.target.protocol
-        || !covers_target(&payload.scope, &input.target)
+    if payload.scope.module != input.target.module || !covers_target(&payload.scope, &input.target)
     {
         return Err(ResolutionError::TargetNotCovered);
     }
 
-    let mut expected = vec!["protocolPath".to_string(), payload.scope.protocol.clone()];
-    if let Some(path) = &payload.scope.protocol_path {
+    let mut expected = vec!["modulePath".to_string(), payload.scope.module.clone()];
+    if let Some(path) = &payload.scope.module_path {
         expected.extend(path.split('/').map(str::to_string));
     }
     if payload.key_material.derivation_path != expected {
@@ -228,7 +227,7 @@ pub fn verify_grant_key_resolution(
     }
 
     if payload.key_material.algorithm != KEY_AGREEMENT_ALGORITHM
-        || payload.key_material.derivation_scheme != "protocolPath"
+        || payload.key_material.derivation_scheme != "modulePath"
     {
         return Err(ResolutionError::KeyMismatch);
     }
@@ -246,19 +245,19 @@ pub fn verify_grant_key_resolution(
         key_id: payload.key_material.key_id.clone(),
         private_key_jwk: payload.key_material.private_key_jwk.clone(),
         scope: GrantedScope {
-            protocol: payload.scope.protocol.clone(),
-            protocol_path: payload.scope.protocol_path.clone(),
+            module: payload.scope.module.clone(),
+            module_path: payload.scope.module_path.clone(),
         },
     })
 }
 
-/// Whether a payload scope opens the target record: the protocols must match,
+/// Whether a payload scope opens the target record: the modules must match,
 /// and a path scope must be the target path or an ancestor of it.
 fn covers_target(scope: &PayloadScope, target: &ResolutionTarget) -> bool {
-    let Some(scope_path) = &scope.protocol_path else {
+    let Some(scope_path) = &scope.module_path else {
         return true;
     };
-    let Some(target_path) = &target.protocol_path else {
+    let Some(target_path) = &target.module_path else {
         return false;
     };
     matches_subtree(scope_path, target_path)
@@ -276,10 +275,10 @@ fn derived_public_id(private_jwk: &JWK) -> Result<String, ResolutionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::{ProtocolPath, RecordsMethod, RecordsScope};
+    use crate::permissions::{ModulePath, RecordsMethod, RecordsScope};
     use chrono::TimeZone;
 
-    const PROTOCOL: &str = "http://example.com/threads";
+    const MODULE: &str = "http://example.com/threads";
 
     fn keypair() -> (JWK, JWK, String) {
         use ssi_jwk::{Base64urlUInt, OctetParams, Params};
@@ -300,17 +299,17 @@ mod tests {
         GrantKeyPayload {
             grant_id: "grant-1".to_string(),
             scope: PayloadScope {
-                scheme: "protocolPath".to_string(),
-                protocol: PROTOCOL.to_string(),
-                protocol_path: Some("team".to_string()),
+                scheme: "modulePath".to_string(),
+                module: MODULE.to_string(),
+                module_path: Some("team".to_string()),
             },
             key_material: KeyMaterial {
                 algorithm: KEY_AGREEMENT_ALGORITHM.to_string(),
-                derivation_scheme: "protocolPath".to_string(),
+                derivation_scheme: "modulePath".to_string(),
                 key_id: key_id.to_string(),
                 derivation_path: vec![
-                    "protocolPath".to_string(),
-                    PROTOCOL.to_string(),
+                    "modulePath".to_string(),
+                    MODULE.to_string(),
                     "team".to_string(),
                 ],
                 public_key_jwk,
@@ -330,11 +329,11 @@ mod tests {
             date_expires: Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap(),
             delegated: None,
             scope: crate::permissions::PermissionScope::Records(RecordsScope {
-                protocol: PROTOCOL.to_string(),
+                module: MODULE.to_string(),
                 method: RecordsMethod::Read,
-                selector: Some(crate::permissions::RecordsSelector::ProtocolPath(
-                    ProtocolPath("team".to_string()),
-                )),
+                selector: Some(crate::permissions::RecordsSelector::ModulePath(ModulePath(
+                    "team".to_string(),
+                ))),
             }),
             conditions: None,
             connect_session: None,
@@ -354,14 +353,14 @@ mod tests {
             has_envelope: true,
             tags: DeliveryTags {
                 grant_id: "grant-1".to_string(),
-                protocol: PROTOCOL.to_string(),
-                protocol_path: Some("team".to_string()),
+                module: MODULE.to_string(),
+                module_path: Some("team".to_string()),
                 key_id: key_id.to_string(),
             },
             payload,
             target: ResolutionTarget {
-                protocol: PROTOCOL.to_string(),
-                protocol_path: Some("team/doc".to_string()),
+                module: MODULE.to_string(),
+                module_path: Some("team/doc".to_string()),
             },
             definition: None,
             revoked: false,
@@ -463,9 +462,9 @@ mod tests {
         // definition the role exception is undecidable, which reads as
         // missing evidence rather than scope denial.
         let mut uncovered = payload.clone();
-        uncovered.scope.protocol_path = Some("other".to_string());
+        uncovered.scope.module_path = Some("other".to_string());
         let mut uncovered_input = input(&grant, &payload, &key_id);
-        uncovered_input.tags.protocol_path = Some("other".to_string());
+        uncovered_input.tags.module_path = Some("other".to_string());
         assert_eq!(
             verify_grant_key_resolution(ResolutionInput {
                 payload: &uncovered,
@@ -476,7 +475,7 @@ mod tests {
 
         // With evidence that still covers nothing, it is scope denial.
         let empty = Definition {
-            protocol: PROTOCOL.to_string(),
+            module: MODULE.to_string(),
             published: true,
             uses: None,
             key_agreement: None,
@@ -484,7 +483,7 @@ mod tests {
             structure: std::collections::BTreeMap::new(),
         };
         let mut evidenced_input = input(&grant, &payload, &key_id);
-        evidenced_input.tags.protocol_path = Some("other".to_string());
+        evidenced_input.tags.module_path = Some("other".to_string());
         evidenced_input.definition = Some(&empty);
         assert_eq!(
             verify_grant_key_resolution(ResolutionInput {
@@ -495,7 +494,7 @@ mod tests {
         );
 
         let mut off_target = input(&grant, &payload, &key_id);
-        off_target.target.protocol_path = Some("other/doc".to_string());
+        off_target.target.module_path = Some("other/doc".to_string());
         assert_eq!(
             verify_grant_key_resolution(off_target),
             Err(ResolutionError::TargetNotCovered)
@@ -552,12 +551,12 @@ mod tests {
     fn valid_payload_json(key_id: &str) -> serde_json::Value {
         serde_json::json!({
             "grantId": "grant-1",
-            "scope": {"scheme": "protocolPath", "protocol": PROTOCOL},
+            "scope": {"scheme": "modulePath", "module": MODULE},
             "keyMaterial": {
                 "algorithm": "X25519-HKDF-SHA256+A256KW",
-                "derivationScheme": "protocolPath",
+                "derivationScheme": "modulePath",
                 "keyId": key_id,
-                "derivationPath": ["protocolPath", PROTOCOL],
+                "derivationPath": ["modulePath", MODULE],
                 "publicKeyJwk": {"kty": "OKP", "crv": "X25519", "x": key_id},
                 "privateKeyJwk": {"kty": "OKP", "crv": "X25519", "x": key_id},
             },

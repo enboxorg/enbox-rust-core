@@ -1,5 +1,5 @@
 pub mod messages;
-pub mod protocols;
+pub mod modules;
 pub mod records;
 
 #[cfg(test)]
@@ -207,7 +207,7 @@ pub enum Reply {
     MessageQuery(Box<messages::Query>),
     MessageSync(Box<messages::Sync>),
     MessageSubscription(Box<messages::Subscription>),
-    ProtocolsQuery(Box<protocols::Query>),
+    ModulesQuery(Box<modules::Query>),
     RecordsSubscribe(Box<records::Subscribe>),
     #[cfg(test)]
     General(BTreeMap<String, String>),

@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use crate::cid::generate_cid_from_json;
-use crate::descriptors::records::write_tag_protocol;
+use crate::descriptors::records::write_tag_module;
 use crate::descriptors::MessageDescriptor;
 use crate::errors::{
     EventLogError, MessageReplicationError, MessageStoreError, ResumableTaskStoreError, StoreError,
@@ -133,7 +133,7 @@ fn put_message_state(
         return Ok(None);
     }
 
-    let msg_scopes = fingerprint_scopes(write_tag_protocol(&message), &indexes);
+    let msg_scopes = fingerprint_scopes(write_tag_module(&message), &indexes);
     match state.positions_by_cid.get(&msg_key).copied() {
         Some(position) => {
             let entry = state
@@ -901,7 +901,7 @@ impl EventLog for MemoryEventLog {
                     seq: Some(token.position.clone()),
                     message_cid: token.message_cid.clone(),
                     is_latest_base_state: None,
-                    protocol: None,
+                    module: None,
                     encoded_data: None,
                 });
             }
@@ -1022,7 +1022,7 @@ impl EventLog for MemoryEventLog {
                         seq: Some(entry.seq),
                         message_cid: entry.message_cid,
                         is_latest_base_state: None,
-                        protocol: None,
+                        module: None,
                         encoded_data: None,
                     });
                 }
@@ -1693,22 +1693,22 @@ mod tests {
         message.cid().unwrap().to_string()
     }
 
-    fn idx(timestamp: &str, protocol: Option<&str>) -> KeyValues {
+    fn idx(timestamp: &str, module: Option<&str>) -> KeyValues {
         let mut indexes = KeyValues::default();
         indexes.insert(
             "messageTimestamp".to_string(),
             Value::String(timestamp.to_string()),
         );
-        if let Some(protocol) = protocol {
-            indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
+        if let Some(module) = module {
+            indexes.insert("module".to_string(), Value::String(module.to_string()));
         }
         indexes
     }
 
-    fn protocol_filter(protocol: &str) -> Filters {
+    fn module_filter(module: &str) -> Filters {
         Filters::from([[(
-            FilterKey::Index("protocol".to_string()),
-            Filter::Equal(Value::String(protocol.to_string())),
+            FilterKey::Index("module".to_string()),
+            Filter::Equal(Value::String(module.to_string())),
         )]])
     }
 
@@ -2030,7 +2030,7 @@ mod tests {
         assert_eq!(
             state
                 .fingerprints
-                .get(&("did:alice".to_string(), "protocol:p".to_string())),
+                .get(&("did:alice".to_string(), "module:p".to_string())),
             Some(&second_contribution)
         );
         drop(state);
@@ -2260,7 +2260,7 @@ mod tests {
     async fn replication_feed_limit_counts_matches_and_drains_to_high_water() {
         let mut store = MemoryMessageStore::default();
         store.open().await.unwrap();
-        for (record, timestamp, protocol) in [
+        for (record, timestamp, module) in [
             ("record-1", "2025-01-01T00:00:00Z", "other"),
             ("record-2", "2025-01-01T00:00:01Z", "wanted"),
             ("record-3", "2025-01-01T00:00:02Z", "other"),
@@ -2269,7 +2269,7 @@ mod tests {
                 .put(
                     "did:alice",
                     feed_msg(record, timestamp),
-                    idx(timestamp, Some(protocol)),
+                    idx(timestamp, Some(module)),
                 )
                 .await
                 .unwrap();
@@ -2280,7 +2280,7 @@ mod tests {
                 "did:alice",
                 EventLogReadOptions {
                     limit: Some(1),
-                    filters: Some(protocol_filter("wanted")),
+                    filters: Some(module_filter("wanted")),
                     ..Default::default()
                 },
             )
@@ -2300,7 +2300,7 @@ mod tests {
             .log_read(
                 "did:alice",
                 EventLogReadOptions {
-                    filters: Some(protocol_filter("wanted")),
+                    filters: Some(module_filter("wanted")),
                     ..Default::default()
                 },
             )
@@ -2536,11 +2536,11 @@ mod tests {
             .unwrap();
 
         let ordered = store
-            .fingerprint("did:alice", &["".to_string(), "protocol:a".to_string()])
+            .fingerprint("did:alice", &["".to_string(), "module:a".to_string()])
             .await
             .unwrap();
         let reordered = store
-            .fingerprint("did:alice", &["protocol:a".to_string(), "".to_string()])
+            .fingerprint("did:alice", &["module:a".to_string(), "".to_string()])
             .await
             .unwrap();
         let duplicated = store
@@ -2548,8 +2548,8 @@ mod tests {
                 "did:alice",
                 &[
                     "".to_string(),
-                    "protocol:a".to_string(),
-                    "protocol:a".to_string(),
+                    "module:a".to_string(),
+                    "module:a".to_string(),
                 ],
             )
             .await
@@ -2674,7 +2674,7 @@ mod tests {
             .unwrap();
 
         let notes = Filters::from([[(
-            FilterKey::Index("protocol".to_string()),
+            FilterKey::Index("module".to_string()),
             Filter::Equal(Value::String("notes".to_string())),
         )]]);
 

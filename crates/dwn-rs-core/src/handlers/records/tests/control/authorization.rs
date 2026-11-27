@@ -46,7 +46,7 @@ async fn minting_an_audience_requires_authority_over_that_role() {
         .await;
     assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
 
-    // A grant over a different path in the same protocol does not reach the
+    // A grant over a different path in the same module does not reach the
     // role, and having *a* valid grant is not itself authority.
     let wrong_path = issue_write_grant(&fixture, "plain", "2025-01-01T00:00:30.000000Z").await;
     let reply = fixture
@@ -187,8 +187,8 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
 
     // A role holder genuinely under `x/y`.
     let role = signed_write_message(WriteSpec {
-        protocol: CONTROL_PROTOCOL.to_string(),
-        protocol_path: "a/b/member".to_string(),
+        module: CONTROL_MODULE.to_string(),
+        module_path: "a/b/member".to_string(),
         recipient: Some(HOLDER.to_string()),
         ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
     })
@@ -201,11 +201,11 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
         ),
         ("method".to_string(), Value::String("Write".to_string())),
         (
-            "protocol".to_string(),
-            Value::String(CONTROL_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(CONTROL_MODULE.to_string()),
         ),
         (
-            "protocolPath".to_string(),
+            "modulePath".to_string(),
             Value::String("a/b/member".to_string()),
         ),
         ("recipient".to_string(), Value::String(HOLDER.to_string())),
@@ -226,7 +226,7 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
         role_record_exists(
             CONTROL_TENANT,
             HOLDER,
-            CONTROL_PROTOCOL,
+            CONTROL_MODULE,
             "a/b/member",
             Some("x/y"),
             &message_store
@@ -239,7 +239,7 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
         !role_record_exists(
             CONTROL_TENANT,
             HOLDER,
-            CONTROL_PROTOCOL,
+            CONTROL_MODULE,
             "a/b/member",
             Some("x"),
             &message_store
@@ -252,7 +252,7 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
         !role_record_exists(
             CONTROL_TENANT,
             HOLDER,
-            CONTROL_PROTOCOL,
+            CONTROL_MODULE,
             "a/b/member",
             None,
             &message_store
@@ -266,15 +266,15 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
 // Covers: DWN-PROTO-004
 // `AudienceRolePathInvalid` licenses destroying a record during config repair,
 // so it must mean "the configuration resolved and contradicts this record" —
-// never "the configuration was missing". A missing protocol keeps its own
+// never "the configuration was missing". A missing module keeps its own
 // repairable-dependency classification instead.
 #[tokio::test]
-async fn a_missing_protocol_is_not_reported_as_an_invalid_role() {
+async fn a_missing_module_is_not_reported_as_an_invalid_role() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    // Deliberately no protocol installed.
+    // Deliberately no module installed.
     let handler =
         RecordsWriteHandler::new(message_store, data_store, Some(Arc::new(test_resolver())));
 
@@ -294,13 +294,13 @@ async fn a_missing_protocol_is_not_reported_as_an_invalid_role() {
     assert_eq!(
         reply.status.error_code.as_deref(),
         Some("ModuleAuthorizationModuleNotFound"),
-        "a missing protocol must stay a missing dependency: {}",
+        "a missing module must stay a missing dependency: {}",
         reply.status.detail
     );
     assert!(
         !DwnErrorCode::try_from(reply.status.error_code.as_deref().unwrap())
             .unwrap()
             .is_control_invalidity(),
-        "a missing protocol must never license destroying the record"
+        "a missing module must never license destroying the record"
     );
 }

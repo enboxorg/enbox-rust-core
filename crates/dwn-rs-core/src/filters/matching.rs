@@ -28,7 +28,7 @@ use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::stores::KeyValues;
 use crate::Value;
 
-const SUBFILTER_FILTER_PROPERTIES: [&str; 2] = ["contextId", "protocolPath"];
+const SUBFILTER_FILTER_PROPERTIES: [&str; 2] = ["contextId", "modulePath"];
 
 pub fn has_valid_subtree_filters(filters: &Filters) -> bool {
     filters.set.iter().all(|set| {
@@ -494,9 +494,9 @@ mod tests {
     }
 
     #[test]
-    fn has_valid_subtree_filters_allows_protocol_path() {
+    fn has_valid_subtree_filters_allows_module_path() {
         let filters: Filters = vec![filter_set(vec![(
-            "protocolPath",
+            "modulePath",
             Filter::Subtree(SubtreeFilter {
                 subtree: "root".into(),
             }),
@@ -526,7 +526,7 @@ mod tests {
                     subtree: "root".into(),
                 }),
             ),
-            ("protocol", Filter::Equal(Value::String("proto".into()))),
+            ("module", Filter::Equal(Value::String("proto".into()))),
         ])]
         .into();
         assert!(has_valid_subtree_filters(&filters));

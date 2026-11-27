@@ -97,7 +97,7 @@ where
             };
 
             // Covers: DWN-REC-003, DWN-AUTH-006
-            // An already-settled tombstone is classified before mutable grant, protocol,
+            // An already-settled tombstone is classified before mutable grant, module,
             // or role state can reinterpret its delivery.
             if matches!(
                 transition_plan,

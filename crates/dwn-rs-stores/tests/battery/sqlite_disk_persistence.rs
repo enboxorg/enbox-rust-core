@@ -31,8 +31,8 @@ use dwn_rs_stores::{
 
 const TENANT: &str = "did:example:alice";
 const OTHER_TENANT: &str = "did:example:bob";
-const PROTOCOL_NOTES: &str = "https://example.com/protocol/notes";
-const PROTOCOL_TASKS: &str = "https://example.com/protocol/tasks";
+const MODULE_NOTES: &str = "https://example.com/module/notes";
+const MODULE_TASKS: &str = "https://example.com/module/tasks";
 
 #[tokio::test]
 async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
@@ -52,16 +52,16 @@ async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
         let mut store = SqliteStore::new(db.path(), noop_waker());
         MessageStore::open(&mut store).await.unwrap();
         for (index, msg) in alice.iter().enumerate() {
-            let protocol = if index < 2 {
-                PROTOCOL_NOTES
+            let module = if index < 2 {
+                MODULE_NOTES
             } else {
-                PROTOCOL_TASKS
+                MODULE_TASKS
             };
             MessageStore::put(
                 &store,
                 TENANT,
                 msg.clone(),
-                indexes(Some(protocol), None, &format!("a{index}")),
+                indexes(Some(module), None, &format!("a{index}")),
             )
             .await
             .expect("alice put");
@@ -71,7 +71,7 @@ async fn message_feed_multi_tenant_state_survives_fresh_reopen() {
                 &store,
                 OTHER_TENANT,
                 msg.clone(),
-                indexes(Some(PROTOCOL_NOTES), None, &format!("b{index}")),
+                indexes(Some(MODULE_NOTES), None, &format!("b{index}")),
             )
             .await
             .expect("bob put");
@@ -269,7 +269,7 @@ async fn native_node_open_at_resumes_from_disk() {
             node.store(),
             TENANT,
             msg,
-            indexes(Some(PROTOCOL_NOTES), None, "n1"),
+            indexes(Some(MODULE_NOTES), None, "n1"),
         )
         .await
         .expect("node put");

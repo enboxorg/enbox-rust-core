@@ -10,7 +10,7 @@
 //!
 //! So it sits beside the rest of the encryption primitives rather than inside
 //! either feature that asks it, and it is a pure function of a grant scope, a
-//! delivered scope, and optionally a protocol definition. Nothing here reads a
+//! delivered scope, and optionally a module definition. Nothing here reads a
 //! store.
 //!
 //! # What is here and what is not
@@ -20,9 +20,9 @@
 //! delivery against a grant always agree: every emitted scope passes the
 //! predicate.
 
-use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet};
+use crate::interfaces::messages::modules::{Action, Can, Definition, RuleSet};
+use crate::modules::parse_cross_module_ref;
 use crate::permissions::{PermissionScope, RecordsMethod, RecordsSelector};
-use crate::protocols::parse_cross_protocol_ref;
 
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -30,24 +30,24 @@ use thiserror::Error;
 /// A grant scope that could deliver a grant key.
 ///
 /// Eligibility is deliberately narrow. The scope must name the Records
-/// interface and a Read or Write method, must carry a protocol as an exact
+/// interface and a Read or Write method, must carry a module as an exact
 /// string, and must not be scoped to a context: a delivered key is addressed by
-/// protocol path, so a context scope would be matching on a dimension the
+/// module path, so a context scope would be matching on a dimension the
 /// target does not have, and treating it as unscoped would silently widen it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EligibleGrantScope<'a> {
-    pub protocol: &'a str,
-    /// Absent means the whole protocol.
-    pub protocol_path: Option<&'a str>,
+    pub module: &'a str,
+    /// Absent means the whole module.
+    pub module_path: Option<&'a str>,
     pub method: RecordsMethod,
 }
 
 /// The scope a delivered grant key names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeliveredScope<'a> {
-    pub protocol: &'a str,
-    /// Absent means the key is protocol-scoped rather than path-scoped.
-    pub protocol_path: Option<&'a str>,
+    pub module: &'a str,
+    /// Absent means the key is module-scoped rather than path-scoped.
+    pub module_path: Option<&'a str>,
 }
 
 /// Reads a grant scope as an eligible one, or rejects it.
@@ -58,15 +58,15 @@ pub fn eligible_grant_scope(scope: &PermissionScope) -> Option<EligibleGrantScop
     if !matches!(records.method, RecordsMethod::Read | RecordsMethod::Write) {
         return None;
     }
-    let protocol_path = match &records.selector {
-        Some(RecordsSelector::ProtocolPath(path)) => Some(path.0.as_str()),
+    let module_path = match &records.selector {
+        Some(RecordsSelector::ModulePath(path)) => Some(path.0.as_str()),
         // A context-scoped grant delivers no key.
         Some(RecordsSelector::ContextId(_)) => return None,
         None => None,
     };
     Some(EligibleGrantScope {
-        protocol: records.protocol.as_str(),
-        protocol_path,
+        module: records.module.as_str(),
+        module_path,
         method: records.method.clone(),
     })
 }
@@ -75,35 +75,35 @@ pub fn eligible_grant_scope(scope: &PermissionScope) -> Option<EligibleGrantScop
 ///
 /// Three ways it can, in order of how much they need to know:
 ///
-/// 1. The grant names no path, so it covers the whole protocol — including a
-///    protocol-scoped delivered key, and any path within it.
+/// 1. The grant names no path, so it covers the whole module — including a
+///    module-scoped delivered key, and any path within it.
 /// 2. The grant names path `P`, and the delivered path is `P` or beneath it.
 ///    Boundary-aware, so `thread` does not cover `threading`.
 /// 3. The grant names path `P`, and the delivered path is a keyed role that
 ///    some `read` action within `P`'s subtree references. A reader given a
 ///    subtree implicitly reaches the roles that subtree reads *through*,
-///    wherever in the protocol those roles are declared — the delivered key is
+///    wherever in the module those roles are declared — the delivered key is
 ///    what makes the subtree usable at all.
 ///
 /// Only the third needs the definition. Passing `None` answers the first two
 /// and returns `false` for the third rather than guessing, which is what lets a
 /// caller decide the cheap cases before paying for a definition lookup.
 ///
-/// A path-scoped grant never covers a protocol-scoped delivered key: the
-/// protocol key opens every path, and a grant over one subtree is not authority
+/// A path-scoped grant never covers a module-scoped delivered key: the
+/// module key opens every path, and a grant over one subtree is not authority
 /// over all of them.
 pub fn read_grant_covers_delivered_scope(
     grant: &EligibleGrantScope<'_>,
     delivered: &DeliveredScope<'_>,
     definition: Option<&Definition>,
 ) -> bool {
-    if grant.method != RecordsMethod::Read || grant.protocol != delivered.protocol {
+    if grant.method != RecordsMethod::Read || grant.module != delivered.module {
         return false;
     }
-    let Some(grant_path) = grant.protocol_path else {
+    let Some(grant_path) = grant.module_path else {
         return true;
     };
-    let Some(delivered_path) = delivered.protocol_path else {
+    let Some(delivered_path) = delivered.module_path else {
         return false;
     };
     if matches_subtree(grant_path, delivered_path) {
@@ -117,7 +117,7 @@ pub fn read_grant_covers_delivered_scope(
 
 /// Whether a **Write** grant covers a delivered key's scope.
 ///
-/// Write grants never cover protocol-scoped keys or ordinary non-role paths:
+/// Write grants never cover module-scoped keys or ordinary non-role paths:
 /// only exact local keyed roles, additionally restricted to the grant subtree
 /// when the grant names a path. Role coverage needs the definition, so
 /// without one nothing is covered.
@@ -126,10 +126,10 @@ pub fn write_grant_covers_delivered_scope(
     delivered: &DeliveredScope<'_>,
     definition: Option<&Definition>,
 ) -> bool {
-    if grant.method != RecordsMethod::Write || grant.protocol != delivered.protocol {
+    if grant.method != RecordsMethod::Write || grant.module != delivered.module {
         return false;
     }
-    let Some(delivered_path) = delivered.protocol_path else {
+    let Some(delivered_path) = delivered.module_path else {
         return false;
     };
     let Some(definition) = definition else {
@@ -138,7 +138,7 @@ pub fn write_grant_covers_delivered_scope(
     if !is_keyed_role(definition, delivered_path) {
         return false;
     }
-    let Some(grant_path) = grant.protocol_path else {
+    let Some(grant_path) = grant.module_path else {
         return true;
     };
     matches_subtree(grant_path, delivered_path)
@@ -159,22 +159,22 @@ pub fn grant_covers_delivered_scope(
     }
 }
 
-/// A scope a grant delivers keys for: the protocol itself, or one path in it.
+/// A scope a grant delivers keys for: the module itself, or one path in it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GrantedScope {
-    pub protocol: String,
-    pub protocol_path: Option<String>,
+    pub module: String,
+    pub module_path: Option<String>,
 }
 
 /// Delivery scopes cannot be enumerated for a Write grant without the
 /// definition that names its roles; a Read grant degrades to its own path.
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum DeliveryScopesError {
-    #[error("grant-key delivery scopes for a Write grant require a protocol definition")]
+    #[error("grant-key delivery scopes for a Write grant require a module definition")]
     DefinitionRequired,
 }
 
-/// The scopes a grant delivers: the protocol for a protocol-wide Read grant,
+/// The scopes a grant delivers: the module for a module-wide Read grant,
 /// the path plus its read-referenced roles for a path Read grant, and the
 /// covered keyed roles for a Write grant. Deduplicated; every emitted scope
 /// passes [`grant_covers_delivered_scope`].
@@ -186,14 +186,14 @@ pub fn grant_key_delivery_scopes(
     match grant.method {
         RecordsMethod::Read => {
             scopes.insert(GrantedScope {
-                protocol: grant.protocol.to_string(),
-                protocol_path: grant.protocol_path.map(str::to_string),
+                module: grant.module.to_string(),
+                module_path: grant.module_path.map(str::to_string),
             });
-            if let (Some(path), Some(definition)) = (grant.protocol_path, definition) {
+            if let (Some(path), Some(definition)) = (grant.module_path, definition) {
                 for role in read_roles_under(definition, path) {
                     scopes.insert(GrantedScope {
-                        protocol: grant.protocol.to_string(),
-                        protocol_path: Some(role),
+                        module: grant.module.to_string(),
+                        module_path: Some(role),
                     });
                 }
             }
@@ -202,10 +202,10 @@ pub fn grant_key_delivery_scopes(
             let Some(definition) = definition else {
                 return Err(DeliveryScopesError::DefinitionRequired);
             };
-            for role in keyed_roles_under(definition, grant.protocol_path) {
+            for role in keyed_roles_under(definition, grant.module_path) {
                 scopes.insert(GrantedScope {
-                    protocol: grant.protocol.to_string(),
-                    protocol_path: Some(role),
+                    module: grant.module.to_string(),
+                    module_path: Some(role),
                 });
             }
         }
@@ -253,8 +253,8 @@ fn keyed_roles_under(definition: &Definition, scope_path: Option<&str>) -> Vec<S
 /// Local role paths that the rule set at `scope_path`, or anything beneath it,
 /// grants read through.
 ///
-/// Cross-protocol role references are excluded: they name membership this
-/// protocol does not define. The role must still be keyed, because a
+/// Cross-module role references are excluded: they name membership this
+/// module does not define. The role must still be keyed, because a
 /// configuration that keeps a role but drops its `$keyAgreement` stops it
 /// conveying key material, and a subtree delegate must lose that reach with
 /// it. Referencing role `R` reaches `R` alone and not its descendants — the
@@ -264,7 +264,7 @@ pub fn read_roles_under(definition: &Definition, scope_path: &str) -> BTreeSet<S
         for action in &rule_set.actions {
             if let Action::Role(role_action) = action {
                 if role_action.can.contains(&Can::Read)
-                    && parse_cross_protocol_ref(&role_action.role).is_none()
+                    && parse_cross_module_ref(&role_action.role).is_none()
                     && is_keyed_role(definition, &role_action.role)
                 {
                     found.insert(role_action.role.clone());
@@ -283,10 +283,10 @@ pub fn read_roles_under(definition: &Definition, scope_path: &str) -> BTreeSet<S
     found
 }
 
-/// Whether `protocol_path` is a role this protocol declares *and* keys.
-pub fn is_keyed_role(definition: &Definition, protocol_path: &str) -> bool {
+/// Whether `module_path` is a role this module declares *and* keys.
+pub fn is_keyed_role(definition: &Definition, module_path: &str) -> bool {
     definition
-        .rule_at(protocol_path)
+        .rule_at(module_path)
         .is_some_and(|rule_set| rule_set.role == Some(true) && rule_set.key_agreement.is_some())
 }
 
@@ -301,15 +301,15 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::permissions::{ProtocolPath, RecordsScope};
+    use crate::permissions::{ModulePath, RecordsScope};
 
     /// `thread` reads through `member`; `thread/notes` reads through
     /// `archivist`, which is declared at the root; `plain` reads through
     /// nothing; `unkeyed` is a role the configuration does not key; `foreign`
-    /// is read through a cross-protocol reference.
+    /// is read through a cross-module reference.
     fn definition() -> Definition {
         serde_json::from_value(json!({
-            "protocol": "http://example.com/threads",
+            "module": "http://example.com/threads",
             "published": true,
             "types": {
                 "member": {}, "archivist": {}, "unkeyed": {}, "curator": {},
@@ -346,12 +346,12 @@ mod tests {
         .expect("definition fixture must deserialize")
     }
 
-    fn scope(method: RecordsMethod, protocol_path: Option<&str>) -> PermissionScope {
+    fn scope(method: RecordsMethod, module_path: Option<&str>) -> PermissionScope {
         PermissionScope::Records(RecordsScope {
-            protocol: "http://example.com/threads".to_string(),
+            module: "http://example.com/threads".to_string(),
             method,
-            selector: protocol_path
-                .map(|path| RecordsSelector::ProtocolPath(ProtocolPath(path.to_string()))),
+            selector: module_path
+                .map(|path| RecordsSelector::ModulePath(ModulePath(path.to_string()))),
         })
     }
 
@@ -367,8 +367,8 @@ mod tests {
         read_grant_covers_delivered_scope(
             &eligible,
             &DeliveredScope {
-                protocol: "http://example.com/threads",
-                protocol_path: delivered_path,
+                module: "http://example.com/threads",
+                module_path: delivered_path,
             },
             definition.as_ref(),
         )
@@ -384,28 +384,28 @@ mod tests {
         use RecordsMethod::{Read, Write};
 
         for (grant_path, delivered_path, with_definition, expected, why) in [
-            // A grant over the whole protocol covers everything in it,
-            // including a protocol-scoped key, and needs no definition.
+            // A grant over the whole module covers everything in it,
+            // including a module-scoped key, and needs no definition.
             (
                 None,
                 None,
                 false,
                 true,
-                "protocol grant covers the protocol key",
+                "module grant covers the module key",
             ),
             (
                 None,
                 Some("member"),
                 false,
                 true,
-                "protocol grant covers any path",
+                "module grant covers any path",
             ),
             (
                 None,
                 Some("thread/notes"),
                 false,
                 true,
-                "protocol grant covers nested paths",
+                "module grant covers nested paths",
             ),
             // A path-scoped grant covers its own path and its descendants.
             (
@@ -429,14 +429,14 @@ mod tests {
                 true,
                 "however deep",
             ),
-            // But never a protocol-scoped key: that key opens every path, and
+            // But never a module-scoped key: that key opens every path, and
             // authority over one subtree is not authority over all of them.
             (
                 Some("thread"),
                 None,
                 false,
                 false,
-                "a path grant is not the protocol key",
+                "a path grant is not the module key",
             ),
             (
                 Some("thread"),
@@ -493,14 +493,14 @@ mod tests {
                 false,
                 "an unkeyed role is not reachable",
             ),
-            // Cross-protocol references name membership this protocol does not
+            // Cross-module references name membership this module does not
             // define.
             (
                 Some("thread"),
                 Some("other:reader"),
                 true,
                 false,
-                "cross-protocol refs are excluded",
+                "cross-module refs are excluded",
             ),
             // Referencing a role reaches the role, not its subtree.
             (
@@ -552,17 +552,17 @@ mod tests {
             paths
                 .iter()
                 .map(|path| GrantedScope {
-                    protocol: "http://example.com/threads".to_string(),
-                    protocol_path: path.map(str::to_string),
+                    module: "http://example.com/threads".to_string(),
+                    module_path: path.map(str::to_string),
                 })
                 .collect()
         }
 
-        // A protocol-wide Read grant delivers the protocol scope alone.
+        // A module-wide Read grant delivers the module scope alone.
         assert_eq!(scopes(Read, None, false), Ok(granted(&[None])));
         // A path Read grant delivers its path plus the keyed roles its
         // subtree reads through — `member` and `archivist`, but neither the
-        // unkeyed role, the cross-protocol reference, nor the unreferenced
+        // unkeyed role, the cross-module reference, nor the unreferenced
         // `thread/curator`. Sorted, not in TS insertion order: output order
         // is not a security authority.
         assert_eq!(
@@ -578,7 +578,7 @@ mod tests {
             scopes(Read, Some("thread"), false),
             Ok(granted(&[Some("thread")]))
         );
-        // A protocol-wide Write grant delivers every keyed role ...
+        // A module-wide Write grant delivers every keyed role ...
         assert_eq!(
             scopes(Write, None, true),
             Ok(granted(&[
@@ -622,8 +622,8 @@ mod tests {
                     grant_covers_delivered_scope(
                         &eligible,
                         &DeliveredScope {
-                            protocol: &scope.protocol,
-                            protocol_path: scope.protocol_path.as_deref(),
+                            module: &scope.module,
+                            module_path: scope.module_path.as_deref(),
                         },
                         with_definition.then_some(&definition),
                     ),
@@ -649,17 +649,17 @@ mod tests {
             write_grant_covers_delivered_scope(
                 &eligible,
                 &DeliveredScope {
-                    protocol: "http://example.com/threads",
-                    protocol_path: delivered_path,
+                    module: "http://example.com/threads",
+                    module_path: delivered_path,
                 },
                 definition.as_ref(),
             )
         }
 
         for (grant_path, delivered_path, with_definition, expected, why) in [
-            // Write grants never cover protocol-scoped keys, however the
+            // Write grants never cover module-scoped keys, however the
             // grant itself is scoped.
-            (None, None, true, false, "no protocol key through Write"),
+            (None, None, true, false, "no module key through Write"),
             (
                 Some("thread"),
                 None,
@@ -682,7 +682,7 @@ mod tests {
                 false,
                 "undecidable without a definition",
             ),
-            // A protocol-wide Write grant reaches every keyed role ...
+            // A module-wide Write grant reaches every keyed role ...
             (
                 None,
                 Some("member"),
@@ -760,7 +760,7 @@ mod tests {
     fn only_eligible_scopes_deliver_keys() {
         assert!(
             eligible_grant_scope(&scope(RecordsMethod::Read, None)).is_some(),
-            "a protocol-scoped Records Read grant is eligible"
+            "a module-scoped Records Read grant is eligible"
         );
         assert!(
             eligible_grant_scope(&scope(RecordsMethod::Write, Some("thread"))).is_some(),
@@ -768,7 +768,7 @@ mod tests {
         );
         assert_eq!(
             eligible_grant_scope(&PermissionScope::Records(RecordsScope {
-                protocol: "http://example.com/threads".to_string(),
+                module: "http://example.com/threads".to_string(),
                 method: RecordsMethod::Read,
                 selector: Some(RecordsSelector::ContextId(crate::permissions::ContextId(
                     "thread-1".to_string()
@@ -776,7 +776,7 @@ mod tests {
             })),
             None,
             "a context-scoped grant delivers no key: treating it as unscoped \
-             would silently widen it to the whole protocol"
+             would silently widen it to the whole module"
         );
         assert_eq!(
             eligible_grant_scope(&scope(RecordsMethod::Delete, None)),

@@ -11,9 +11,9 @@ use dwn_rs_agent::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
 use dwn_rs_agent::auth::setup::{ProtocolEndpoint, SetupFuture};
 use dwn_rs_core::auth::{Jws, PrivateJwkSigner, JWK};
 use dwn_rs_core::cid::generate_cid_from_json;
-use dwn_rs_core::descriptors::{ConfigureDescriptor, ProtocolQueryDescriptor};
-use dwn_rs_core::interfaces::messages::descriptors::protocols::QueryFilter;
-use dwn_rs_core::protocols::Definition;
+use dwn_rs_core::descriptors::{ModulesConfigureDescriptor, ModulesQueryDescriptor};
+use dwn_rs_core::interfaces::messages::descriptors::modules::QueryFilter;
+use dwn_rs_core::modules::Definition;
 use dwn_rs_stores::SqliteNativeDwn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -116,7 +116,7 @@ pub async fn build_signed_protocols_configure(
     definition: Definition,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: Utc::now(),
         definition,
         permission_grant_id: None,
@@ -129,10 +129,10 @@ pub async fn build_signed_protocols_query(
     protocol: &str,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
-    let descriptor = ProtocolQueryDescriptor {
+    let descriptor = ModulesQueryDescriptor {
         message_timestamp: Utc::now(),
         filter: Some(QueryFilter {
-            protocol: Some(protocol.to_string()),
+            module: Some(protocol.to_string()),
             recipient: None,
         }),
         permission_grant_id: None,

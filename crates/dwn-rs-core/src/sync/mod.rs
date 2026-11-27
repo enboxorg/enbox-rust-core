@@ -1843,7 +1843,7 @@ mod tests {
                     seq: None,
                     message_cid: Some("event-cid".to_string()),
                     is_latest_base_state: None,
-                    protocol: None,
+                    module: None,
                     encoded_data: None,
                 },
             )
@@ -1869,7 +1869,7 @@ mod tests {
             seq: None,
             message_cid: None,
             is_latest_base_state: None,
-            protocol: None,
+            module: None,
             encoded_data: None,
         };
 
@@ -1895,7 +1895,7 @@ mod tests {
                     seq: None,
                     message_cid: None,
                     is_latest_base_state: None,
-                    protocol: None,
+                    module: None,
                     encoded_data: None,
                 },
             )
@@ -1995,7 +1995,7 @@ mod tests {
                     seq: None,
                     message_cid: Some("parent-cid".to_string()),
                     is_latest_base_state: None,
-                    protocol: None,
+                    module: None,
                     encoded_data: None,
                 },
             )
@@ -2184,8 +2184,8 @@ mod tests {
             message_cid: "parent-cid".to_string(),
             message: Message::new(
                 Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-                    protocol: "https://example.com/sync".to_string(),
-                    protocol_path: "entry".to_string(),
+                    module: "https://example.com/sync".to_string(),
+                    module_path: "entry".to_string(),
                     ..Default::default()
                 })))),
                 Fields::Write(WriteFields {
@@ -2203,8 +2203,8 @@ mod tests {
             message_cid: "child-cid".to_string(),
             message: Message::new(
                 Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-                    protocol: "https://example.com/sync".to_string(),
-                    protocol_path: "entry".to_string(),
+                    module: "https://example.com/sync".to_string(),
+                    module_path: "entry".to_string(),
                     parent_id: Some("parent-record".to_string()),
                     ..Default::default()
                 })))),
@@ -2223,8 +2223,8 @@ mod tests {
             message_cid: "local-cid".to_string(),
             message: Message::new(
                 Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-                    protocol: "https://example.com/sync".to_string(),
-                    protocol_path: "entry".to_string(),
+                    module: "https://example.com/sync".to_string(),
+                    module_path: "entry".to_string(),
                     ..Default::default()
                 })))),
                 Fields::Write(WriteFields {
@@ -2251,8 +2251,8 @@ mod tests {
             descriptor: serde_json::from_value(json!({
                 "interface": "Records",
                 "method": "Write",
-                "protocol": "https://example.com/sync",
-                "protocolPath": "entry",
+                "module": "https://example.com/sync",
+                "modulePath": "entry",
                 "messageTimestamp": "2025-01-01T00:00:00.000000Z",
                 "dataCid": "bafybeigdyrzt5sfp7udm7hu76fin73tazj24zpxtenqecq7z2xdha2f7mm",
                 "dataSize": 0,

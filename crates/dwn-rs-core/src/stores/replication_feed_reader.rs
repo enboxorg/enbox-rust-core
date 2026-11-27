@@ -3,9 +3,9 @@ use std::{collections::BTreeMap, fmt::Display, future::Future};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    descriptors::{Protocols, Records},
+    descriptors::{Modules, Records},
     errors::EventLogError,
-    permissions::PERMISSIONS_PROTOCOL_URI,
+    permissions::PERMISSIONS_MODULE_URI,
     stores::{
         EventLogReadOptions, EventLogReadResult, KeyValues, ProgressGapCode, ProgressGapInfo,
         ProgressGapReason,
@@ -85,7 +85,7 @@ pub type ReplicationBounds = (ProgressToken, ProgressToken);
 /// Reads the durable, ordered message feed used by replication handlers.
 ///
 /// This is the storage contract behind `MessagesQuery` and `MessagesSubscribe`.
-/// The [DWN specification] defines the normative protocol messages, filters, and
+/// The [DWN specification] defines the normative module messages, filters, and
 /// replies; this trait defines the persistence and resume semantics that backend
 /// implementations must share.
 ///
@@ -165,7 +165,7 @@ pub fn derive_stream_id(tenant: &str) -> String {
 
 /// Returns whether a message belongs in the durable replication feed.
 ///
-/// The feed contains `RecordsWrite`, `RecordsDelete`, and `ProtocolsConfigure`
+/// The feed contains `RecordsWrite`, `RecordsDelete`, and `ModulesConfigure`
 /// messages. Other methods remain available through their own interfaces but do
 /// not consume a feed position or affect fingerprints.
 pub fn is_feed_message(msg: &Message<Descriptor>) -> bool {
@@ -173,8 +173,8 @@ pub fn is_feed_message(msg: &Message<Descriptor>) -> bool {
         Descriptor::Records(records) => {
             matches!(records.as_ref(), Records::Write(_) | Records::Delete(_))
         }
-        Descriptor::Protocols(protocols) => {
-            matches!(protocols.as_ref(), Protocols::Configure(_))
+        Descriptor::Modules(modules) => {
+            matches!(modules.as_ref(), Modules::Configure(_))
         }
         _ => false,
     }
@@ -188,34 +188,34 @@ fn string_index<'a>(indexes: &'a KeyValues, key: &str) -> Option<&'a str> {
     }
 }
 
-pub fn protocol_fingerprint_scope(protocol: &str) -> String {
-    format!("protocol:{protocol}")
+pub fn module_fingerprint_scope(module: &str) -> String {
+    format!("module:{module}")
 }
 
-pub fn permission_fingerprint_scope(protocol: &str) -> String {
-    format!("perm:{protocol}")
+pub fn permission_fingerprint_scope(module: &str) -> String {
+    format!("perm:{module}")
 }
 
 /// Derives the fingerprint scopes affected by a message.
 ///
 /// Every message contributes to the global scope (`""`). A string-valued
-/// `protocol` index adds `protocol:<uri>`. Permission-protocol messages can also
-/// add `perm:<uri>` for their target protocol; a string-valued `tag.protocol`
+/// `module` index adds `module:<uri>`. Permission-module messages can also
+/// add `perm:<uri>` for their target module; a string-valued `tag.module`
 /// index takes precedence over `descriptor_tag_proto` when both are available.
 pub fn fingerprint_scopes(descriptor_tag_proto: Option<&str>, indexes: &KeyValues) -> Vec<String> {
     let mut scopes = vec![GLOBAL_DOMAIN.to_owned()];
 
-    let Some(protocol) = string_index(indexes, "protocol") else {
+    let Some(module) = string_index(indexes, "module") else {
         return scopes;
     };
 
-    scopes.push(protocol_fingerprint_scope(protocol));
+    scopes.push(module_fingerprint_scope(module));
 
-    let tagged_protocol = string_index(indexes, "tag.protocol").or(descriptor_tag_proto);
+    let tagged_module = string_index(indexes, "tag.module").or(descriptor_tag_proto);
 
-    if protocol == PERMISSIONS_PROTOCOL_URI {
-        if let Some(tagged_protocol) = tagged_protocol {
-            scopes.push(permission_fingerprint_scope(tagged_protocol));
+    if module == PERMISSIONS_MODULE_URI {
+        if let Some(tagged_module) = tagged_module {
+            scopes.push(permission_fingerprint_scope(tagged_module));
         }
     }
 
@@ -422,9 +422,9 @@ mod tests {
         is_feed_message, parse_feed_position, scopes_unchanged, validate_feed_cursor, xor_in_place,
         FeedCursorState, Fingerprint,
     };
-    use crate::descriptors::{Messages, Protocols, Records};
+    use crate::descriptors::{Messages, Modules, Records};
     use crate::errors::EventLogError;
-    use crate::permissions::PERMISSIONS_PROTOCOL_URI;
+    use crate::permissions::PERMISSIONS_MODULE_URI;
     use crate::stores::{KeyValues, ProgressGapReason};
     use crate::{Descriptor, Fields, Message, ProgressToken, Value};
 
@@ -506,7 +506,7 @@ mod tests {
         let included = [
             Descriptor::Records(Box::new(Records::Write(Default::default()))),
             Descriptor::Records(Box::new(Records::Delete(Default::default()))),
-            Descriptor::Protocols(Box::new(Protocols::Configure(Default::default()))),
+            Descriptor::Modules(Box::new(Modules::Configure(Default::default()))),
         ];
         for descriptor in included {
             assert!(is_feed_message(&message(descriptor)));
@@ -517,7 +517,7 @@ mod tests {
             Descriptor::Records(Box::new(Records::Count(Default::default()))),
             Descriptor::Records(Box::new(Records::Query(Default::default()))),
             Descriptor::Records(Box::new(Records::Subscribe(Default::default()))),
-            Descriptor::Protocols(Box::new(Protocols::Query(Default::default()))),
+            Descriptor::Modules(Box::new(Modules::Query(Default::default()))),
             Descriptor::Messages(Box::new(Messages::Read(Default::default()))),
             Descriptor::Messages(Box::new(Messages::Query(Default::default()))),
             Descriptor::Messages(Box::new(Messages::Subscribe(Default::default()))),
@@ -529,26 +529,26 @@ mod tests {
     }
 
     #[test]
-    fn derives_global_protocol_and_permission_fingerprint_scopes() {
+    fn derives_global_module_and_permission_fingerprint_scopes() {
         assert_eq!(fingerprint_scopes(None, &KeyValues::new()), vec![""]);
 
-        let mut protocol_indexes = KeyValues::new();
-        protocol_indexes.insert(
-            "protocol".to_string(),
+        let mut module_indexes = KeyValues::new();
+        module_indexes.insert(
+            "module".to_string(),
             Value::String("https://example.com/chat".to_string()),
         );
         assert_eq!(
-            fingerprint_scopes(None, &protocol_indexes),
-            vec!["", "protocol:https://example.com/chat"]
+            fingerprint_scopes(None, &module_indexes),
+            vec!["", "module:https://example.com/chat"]
         );
 
         let mut permission_indexes = KeyValues::new();
         permission_indexes.insert(
-            "protocol".to_string(),
-            Value::String(PERMISSIONS_PROTOCOL_URI.to_string()),
+            "module".to_string(),
+            Value::String(PERMISSIONS_MODULE_URI.to_string()),
         );
         permission_indexes.insert(
-            "tag.protocol".to_string(),
+            "tag.module".to_string(),
             Value::String("https://example.com/from-index".to_string()),
         );
         assert_eq!(
@@ -558,12 +558,12 @@ mod tests {
             ),
             vec![
                 "".to_string(),
-                format!("protocol:{PERMISSIONS_PROTOCOL_URI}"),
+                format!("module:{PERMISSIONS_MODULE_URI}"),
                 "perm:https://example.com/from-index".to_string(),
             ]
         );
 
-        permission_indexes.remove("tag.protocol");
+        permission_indexes.remove("tag.module");
         assert_eq!(
             fingerprint_scopes(
                 Some("https://example.com/from-descriptor"),
@@ -577,11 +577,11 @@ mod tests {
 
     #[test]
     fn compares_fingerprint_scopes_as_sets() {
-        let left = vec!["".to_string(), "protocol:p".to_string()];
+        let left = vec!["".to_string(), "module:p".to_string()];
         let reordered_with_duplicate = vec![
-            "protocol:p".to_string(),
+            "module:p".to_string(),
             "".to_string(),
-            "protocol:p".to_string(),
+            "module:p".to_string(),
         ];
         assert!(scopes_unchanged(&left, &reordered_with_duplicate));
         assert!(!scopes_unchanged(&left, &["".to_string()]));
@@ -598,7 +598,7 @@ mod tests {
         xor_in_place(&mut folded, &contribution);
         assert_eq!(folded, [0_u8; 32].into());
 
-        let scopes = vec!["".to_string(), "protocol:p".to_string()];
+        let scopes = vec!["".to_string(), "module:p".to_string()];
         let mut fingerprints = BTreeMap::new();
         fold_cid_into_domain(&mut fingerprints, TENANT, "cid-1", &scopes);
         for scope in &scopes {

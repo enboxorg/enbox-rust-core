@@ -5,16 +5,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::auth::resolver::DidResolver;
-use crate::core_protocol::CoreProtocolRegistry;
+use crate::core_module::CoreModuleRegistry;
 use crate::descriptors::records::{records_write_descriptor, write_fields};
-use crate::descriptors::ConfigureDescriptor;
+use crate::descriptors::ModulesConfigureDescriptor;
 use crate::dwn::HandlerContext;
 use crate::encryption::is_encryption_control_path;
 use crate::filters::Filters;
 use crate::handlers::records::common::{filter_map, string_filter};
 use crate::handlers::records::{RECORDS_INTERFACE, WRITE_METHOD};
-use crate::interfaces::messages::protocols::{self as protocol_types, Definition};
-use crate::replies::protocols::Configure;
+use crate::interfaces::messages::modules::{self as module_types, Definition};
+use crate::replies::modules::Configure;
 use crate::stores::{LatestStateMutation, LatestStateTransition, ManagedResumableTask};
 use crate::tasks::manager::ResumableTask;
 use crate::Descriptor;
@@ -37,7 +37,7 @@ use super::common::*;
 pub struct EnlistedRepair(pub(crate) ManagedResumableTask<ResumableTask>);
 
 pub trait ControlRepairer: Send + Sync {
-    /// Records the obligation to re-examine this protocol's control records.
+    /// Records the obligation to re-examine this module's control records.
     ///
     /// Called *before* the configuration commits. The obligation has to outlive
     /// the crash that could happen immediately after the commit, and a task
@@ -50,7 +50,7 @@ pub trait ControlRepairer: Send + Sync {
     fn enlist<'a>(
         &'a self,
         tenant: &'a str,
-        protocol: &'a str,
+        module: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<EnlistedRepair, String>> + Send + 'a>>;
 
     /// Discharges an enlisted obligation, retiring it only once the scan
@@ -63,7 +63,7 @@ pub trait ControlRepairer: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct ProtocolsConfigureHandler<MessageStore> {
+pub struct ModulesConfigureHandler<MessageStore> {
     message_store: MessageStore,
     did_resolver: Option<Arc<dyn DidResolver>>,
     /// Absent on a node that cannot finish what repair would start. Such a node
@@ -72,7 +72,7 @@ pub struct ProtocolsConfigureHandler<MessageStore> {
     repairer: Option<Arc<dyn ControlRepairer>>,
 }
 
-impl<MessageStore> ProtocolsConfigureHandler<MessageStore> {
+impl<MessageStore> ModulesConfigureHandler<MessageStore> {
     pub fn new(message_store: MessageStore, did_resolver: Option<Arc<dyn DidResolver>>) -> Self {
         Self {
             message_store,
@@ -90,12 +90,12 @@ impl<MessageStore> ProtocolsConfigureHandler<MessageStore> {
     }
 }
 
-impl<MessageStore> Handler for ProtocolsConfigureHandler<MessageStore>
+impl<MessageStore> Handler for ModulesConfigureHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
     type Reply = Configure;
-    type Descriptor = ConfigureDescriptor;
+    type Descriptor = ModulesConfigureDescriptor;
 
     fn handle(
         &self,
@@ -141,7 +141,7 @@ where
                 .message_store
                 .query(
                     tenant,
-                    protocol_configure_filters(&descriptor.definition.protocol, false),
+                    module_configure_filters(&descriptor.definition.module, false),
                     Some(MessageSort::Timestamp(SortDirection::Ascending)),
                     None,
                     None,
@@ -162,7 +162,7 @@ where
             // Covers: DWN-REC-003, DWN-AUTH-006
             // Exact replay is classified before mutable grant and composition state can
             // reinterpret an operation that was already admitted.
-            if let Err(detail) = permissions::authorize_protocols_configure(
+            if let Err(detail) = permissions::authorize_modules_configure(
                 tenant,
                 &message,
                 &authorization,
@@ -172,7 +172,7 @@ where
             {
                 return Response::unauthorized(detail.to_string());
             }
-            if let Err(err) = protocol_types::validate_definition(&descriptor.definition) {
+            if let Err(err) = module_types::validate_definition(&descriptor.definition) {
                 return Response::bad_request(err.to_string());
             }
             if let Err(detail) = self
@@ -215,10 +215,7 @@ where
             // history this node could never repair against.
             let enlisted = match &self.repairer {
                 Some(repairer) => {
-                    match repairer
-                        .enlist(tenant, &descriptor.definition.protocol)
-                        .await
-                    {
+                    match repairer.enlist(tenant, &descriptor.definition.module).await {
                         Ok(enlisted) => Some((repairer, enlisted)),
                         Err(detail) => return store_error_reply(detail),
                     }
@@ -254,7 +251,7 @@ where
     }
 }
 
-impl<MessageStore> ProtocolsConfigureHandler<MessageStore>
+impl<MessageStore> ModulesConfigureHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
@@ -268,13 +265,13 @@ where
         };
 
         let mut referenced = BTreeMap::new();
-        for (alias, protocol_uri) in uses {
+        for (alias, module_uri) in uses {
             let Some(definition) = self
-                .fetch_installed_protocol_definition(tenant, protocol_uri)
+                .fetch_installed_module_definition(tenant, module_uri)
                 .await?
             else {
                 return Err(format!(
-                    "ModulesConfigureComposedProtocolNotInstalled: composed protocol '{protocol_uri}' (alias '{alias}') is not installed for tenant '{tenant}'."
+                    "ModulesConfigureComposedModuleNotInstalled: composed module '{module_uri}' (alias '{alias}') is not installed for tenant '{tenant}'."
                 ));
             };
             referenced.insert(alias.clone(), definition);
@@ -283,14 +280,14 @@ where
         validate_refs_and_roles_recursively(&definition.structure, "", &referenced)
     }
 
-    async fn fetch_installed_protocol_definition(
+    async fn fetch_installed_module_definition(
         &self,
         tenant: &str,
-        protocol_uri: &str,
+        module_uri: &str,
     ) -> Result<Option<Definition>, String> {
-        match fetch_protocol_definition(tenant, protocol_uri, &self.message_store, None).await {
+        match fetch_module_definition(tenant, module_uri, &self.message_store, None).await {
             Ok(definition) => Ok(Some(definition)),
-            Err(ProtocolDefinitionLookupError::NotFound(_)) => Ok(None),
+            Err(ModuleDefinitionLookupError::NotFound(_)) => Ok(None),
             Err(err) => Err(err.to_string()),
         }
     }
@@ -310,7 +307,7 @@ where
         let filter = filter_map([
             ("interface", string_filter(RECORDS_INTERFACE)),
             ("method", string_filter(WRITE_METHOD)),
-            ("protocol", string_filter(&incoming.protocol)),
+            ("module", string_filter(&incoming.module)),
         ]);
         let records = self
             .message_store
@@ -322,25 +319,25 @@ where
         for record in &records {
             let descriptor = records_write_descriptor(record)
                 .map_err(|err| store_error_reply(err.to_string()))?;
-            let protocol_path = descriptor.protocol_path.clone();
-            if is_encryption_control_path(&protocol_path) {
+            let module_path = descriptor.module_path.clone();
+            if is_encryption_control_path(&module_path) {
                 continue;
             }
-            if incoming.rule_at(&protocol_path).is_none() {
+            if incoming.rule_at(&module_path).is_none() {
                 continue;
             }
-            let required = match policy_by_path.get(&protocol_path) {
+            let required = match policy_by_path.get(&module_path) {
                 Some(required) => *required,
                 None => {
                     let required = self
                         .effective_incoming_policy(
                             tenant,
                             incoming,
-                            &protocol_path,
+                            &module_path,
                             incoming_timestamp,
                         )
                         .await?;
-                    policy_by_path.insert(protocol_path.clone(), required);
+                    policy_by_path.insert(module_path.clone(), required);
                     required
                 }
             };
@@ -351,7 +348,7 @@ where
                 continue;
             }
             return Err(Response::bad_request(format!(
-                "ModulesConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{protocol_path}' after records exist; install the changed definition under a new protocol URI."
+                "ModulesConfigureEncryptionPolicyImmutable: cannot change encryption policy for module path '{module_path}' after records exist; install the changed definition under a new module URI."
             )));
         }
 
@@ -364,50 +361,52 @@ where
         &self,
         tenant: &str,
         incoming: &Definition,
-        protocol_path: &str,
+        module_path: &str,
         incoming_timestamp: &str,
     ) -> Result<bool, Response<Configure>> {
-        if let Some(parsed) = incoming.ref_position(protocol_path) {
+        if let Some(parsed) = incoming.ref_position(module_path) {
             let ref_uri = incoming
                 .uses
                 .as_ref()
                 .and_then(|uses| uses.get(parsed.alias))
                 .ok_or_else(|| {
                     Response::bad_request(format!(
-                        "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at protocol path '{protocol_path}' does not exist in the 'uses' map.",
+                        "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at module path '{module_path}' does not exist in the 'uses' map.",
                         parsed.alias
                     ))
                 })?;
-            let referenced =
-                fetch_protocol_definition(tenant, ref_uri, &self.message_store, Some(incoming_timestamp))
-                    .await
-                    .map_err(|err| match err {
-                        ProtocolDefinitionLookupError::NotFound(uri) => Response::bad_request(
-                            format!("ModuleAuthorizationModuleNotFound: unable to find protocol definition for {uri}"),
-                        ),
-                        ProtocolDefinitionLookupError::Store(detail) => {
-                            store_error_reply(detail)
-                        }
-                        ProtocolDefinitionLookupError::InvalidMessage(detail) => {
-                            Response::bad_request(detail)
-                        }
-                    })?;
+            let referenced = fetch_module_definition(
+                tenant,
+                ref_uri,
+                &self.message_store,
+                Some(incoming_timestamp),
+            )
+            .await
+            .map_err(|err| match err {
+                ModuleDefinitionLookupError::NotFound(uri) => Response::bad_request(format!(
+                    "ModuleAuthorizationModuleNotFound: unable to find module definition for {uri}"
+                )),
+                ModuleDefinitionLookupError::Store(detail) => store_error_reply(detail),
+                ModuleDefinitionLookupError::InvalidMessage(detail) => {
+                    Response::bad_request(detail)
+                }
+            })?;
             let type_name = parsed
-                .protocol_path
+                .module_path
                 .split('/')
                 .next_back()
                 .unwrap_or_default();
             return Ok(referenced
                 .types
                 .get(type_name)
-                .and_then(|protocol_type| protocol_type.encryption_required)
+                .and_then(|module_type| module_type.encryption_required)
                 == Some(true));
         }
-        let type_name = protocol_path.split('/').next_back().unwrap_or_default();
+        let type_name = module_path.split('/').next_back().unwrap_or_default();
         Ok(incoming
             .types
             .get(type_name)
-            .and_then(|protocol_type| protocol_type.encryption_required)
+            .and_then(|module_type| module_type.encryption_required)
             == Some(true))
     }
 
@@ -425,7 +424,7 @@ where
             .map_err(|err| store_error_reply(err.to_string()))?;
         let mut policies: BTreeMap<String, BTreeMap<String, bool>> = BTreeMap::new();
         for configuration in &configurations {
-            let composing = protocols_configure_descriptor(configuration)
+            let composing = modules_configure_descriptor(configuration)
                 .map(|descriptor| descriptor.definition.clone())
                 .map_err(|err| store_error_reply(err.to_string()))?;
             let aliases: BTreeSet<&str> = composing
@@ -433,7 +432,7 @@ where
                 .as_ref()
                 .map(|uses| {
                     uses.iter()
-                        .filter(|(_, uri)| *uri == &incoming.protocol)
+                        .filter(|(_, uri)| *uri == &incoming.module)
                         .map(|(alias, _)| alias.as_str())
                         .collect()
                 })
@@ -445,24 +444,24 @@ where
                 let Some(reference) = rule_set.reference.as_deref() else {
                     continue;
                 };
-                let Some(parsed) = protocol_types::parse_cross_protocol_ref(reference) else {
+                let Some(parsed) = module_types::parse_cross_module_ref(reference) else {
                     continue;
                 };
                 if !aliases.contains(parsed.alias) {
                     continue;
                 }
                 let type_name = parsed
-                    .protocol_path
+                    .module_path
                     .split('/')
                     .next_back()
                     .unwrap_or_default();
                 let required = incoming
                     .types
                     .get(type_name)
-                    .and_then(|protocol_type| protocol_type.encryption_required)
+                    .and_then(|module_type| module_type.encryption_required)
                     == Some(true);
                 policies
-                    .entry(composing.protocol.clone())
+                    .entry(composing.module.clone())
                     .or_default()
                     .insert(root_path.clone(), required);
             }
@@ -471,11 +470,11 @@ where
             return Ok(());
         }
 
-        for (protocol, paths) in &policies {
+        for (module, paths) in &policies {
             let filter = filter_map([
                 ("interface", string_filter(RECORDS_INTERFACE)),
                 ("method", string_filter(WRITE_METHOD)),
-                ("protocol", string_filter(protocol)),
+                ("module", string_filter(module)),
             ]);
             let records = self
                 .message_store
@@ -486,7 +485,7 @@ where
             for record in &records {
                 let descriptor = records_write_descriptor(record)
                     .map_err(|err| store_error_reply(err.to_string()))?;
-                let Some(required) = paths.get(&descriptor.protocol_path) else {
+                let Some(required) = paths.get(&descriptor.module_path) else {
                     continue;
                 };
                 let encrypted = write_fields(record)
@@ -496,8 +495,8 @@ where
                     continue;
                 }
                 return Err(Response::bad_request(format!(
-                    "ModulesConfigureEncryptionPolicyImmutable: cannot change encryption policy for protocol path '{}' imported by protocol '{protocol}' after records exist; install the changed definition under a new protocol URI.",
-                    descriptor.protocol_path
+                    "ModulesConfigureEncryptionPolicyImmutable: cannot change encryption policy for module path '{}' imported by module '{module}' after records exist; install the changed definition under a new module URI.",
+                    descriptor.module_path
                 )));
             }
         }
@@ -531,7 +530,7 @@ fn plan_configure_transition(
         })
         .map(|(_, cid)| cid.clone());
 
-    let descriptor = protocols_configure_descriptor(&incoming)?;
+    let descriptor = modules_configure_descriptor(&incoming)?;
     let put = LatestStateMutation {
         indexes: configure_indexes(descriptor, Some(incoming_author), incoming_is_latest),
         message: incoming,
@@ -540,7 +539,7 @@ fn plan_configure_transition(
         .into_iter()
         .zip(comparable)
         .map(|(message, cid)| {
-            let descriptor = protocols_configure_descriptor(&message)?;
+            let descriptor = modules_configure_descriptor(&message)?;
             let author = extract_author(&message);
             Ok(LatestStateMutation {
                 indexes: configure_indexes(
@@ -561,8 +560,8 @@ fn plan_configure_transition(
 }
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
-pub enum ProtocolDefinitionLookupError {
-    #[error("ModuleAuthorizationModuleNotFound: unable to find protocol definition for {0}")]
+pub enum ModuleDefinitionLookupError {
+    #[error("ModuleAuthorizationModuleNotFound: unable to find module definition for {0}")]
     NotFound(String),
     #[error("{0}")]
     Store(String),
@@ -570,22 +569,20 @@ pub enum ProtocolDefinitionLookupError {
     InvalidMessage(String),
 }
 
-pub async fn fetch_protocol_definition<MessageStore>(
+pub async fn fetch_module_definition<MessageStore>(
     tenant: &str,
-    protocol_uri: &str,
+    module_uri: &str,
     message_store: &MessageStore,
     message_timestamp: Option<&str>,
-) -> Result<Definition, ProtocolDefinitionLookupError>
+) -> Result<Definition, ModuleDefinitionLookupError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    if let Some(definition) =
-        CoreProtocolRegistry::with_core_protocols().get_definition(protocol_uri)
-    {
+    if let Some(definition) = CoreModuleRegistry::with_core_modules().get_definition(module_uri) {
         return Ok(definition);
     }
 
-    let filters = protocol_definition_lookup_filters(protocol_uri, message_timestamp);
+    let filters = module_definition_lookup_filters(module_uri, message_timestamp);
     let mut result = message_store
         .query(
             tenant,
@@ -595,28 +592,28 @@ where
             None,
         )
         .await
-        .map_err(|err| ProtocolDefinitionLookupError::Store(err.to_string()))?;
+        .map_err(|err| ModuleDefinitionLookupError::Store(err.to_string()))?;
 
     if result.messages.is_empty() && message_timestamp.is_some() {
         result = message_store
             .query(
                 tenant,
-                protocol_definition_history_filters(protocol_uri),
+                module_definition_history_filters(module_uri),
                 Some(MessageSort::Timestamp(SortDirection::Ascending)),
                 Some(Pagination::with_limit(1)),
                 None,
             )
             .await
-            .map_err(|err| ProtocolDefinitionLookupError::Store(err.to_string()))?;
+            .map_err(|err| ModuleDefinitionLookupError::Store(err.to_string()))?;
     }
 
     let Some(message) = result.messages.first() else {
-        return Err(ProtocolDefinitionLookupError::NotFound(
-            protocol_uri.to_string(),
+        return Err(ModuleDefinitionLookupError::NotFound(
+            module_uri.to_string(),
         ));
     };
 
-    protocols_configure_descriptor(message)
+    modules_configure_descriptor(message)
         .map(|descriptor| descriptor.definition.clone())
-        .map_err(ProtocolDefinitionLookupError::InvalidMessage)
+        .map_err(ModuleDefinitionLookupError::InvalidMessage)
 }

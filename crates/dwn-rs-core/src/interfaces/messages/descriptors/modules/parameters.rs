@@ -6,26 +6,26 @@ use crate::auth::Authorization;
 use crate::descriptors::{
     MessageParameters, MessageValidator, RecordsWriteDescriptor, ValidationError,
 };
-use crate::protocols;
+use crate::modules;
 use crate::Message;
 
-use super::{ConfigureDescriptor, QueryDescriptor};
+use super::{ModulesConfigureDescriptor, ModulesQueryDescriptor};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct ConfigureParameters {
     #[serde(rename = "messageTimestamp")]
     pub message_timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    pub definition: protocols::Definition,
+    pub definition: modules::Definition,
     #[serde(rename = "permissionGrantId")]
     pub permission_grant_id: Option<String>,
     #[serde(rename = "delegatedGrant")]
     pub delegated_grant: Option<Message<RecordsWriteDescriptor>>,
 }
 
-impl MessageValidator for ConfigureDescriptor {}
+impl MessageValidator for ModulesConfigureDescriptor {}
 
 impl MessageParameters for ConfigureParameters {
-    type Descriptor = ConfigureDescriptor;
+    type Descriptor = ModulesConfigureDescriptor;
     type Fields = Authorization;
 
     async fn build(&self) -> Result<(Self::Descriptor, Option<Self::Fields>), ValidationError> {
@@ -43,7 +43,7 @@ impl MessageParameters for ConfigureParameters {
                 message: error.to_string(),
             })?;
 
-        let descriptor = ConfigureDescriptor {
+        let descriptor = ModulesConfigureDescriptor {
             message_timestamp,
             definition: self.definition.clone(),
             permission_grant_id: self.permission_grant_id.clone(),
@@ -73,14 +73,14 @@ pub struct QueryParameters {
 impl MessageValidator for QueryParameters {}
 
 impl MessageParameters for QueryParameters {
-    type Descriptor = QueryDescriptor;
+    type Descriptor = ModulesQueryDescriptor;
     type Fields = Authorization;
 
     async fn build(&self) -> Result<(Self::Descriptor, Option<Self::Fields>), ValidationError> {
-        let descriptor = QueryDescriptor {
+        let descriptor = ModulesQueryDescriptor {
             message_timestamp: self.message_timestamp,
             filter: self.filter.as_ref().map(|f| QueryFilter {
-                protocol: Some(f.protocol.clone()),
+                module: Some(f.module.clone()),
                 recipient: None,
             }),
             permission_grant_id: self.permission_grant_id.clone(),
@@ -96,12 +96,12 @@ impl MessageParameters for QueryParameters {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 pub struct QueryFilterParameters {
-    pub protocol: String,
+    pub module: String,
 }
 
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone)]
 pub struct QueryFilter {
-    pub protocol: Option<String>,
+    pub module: Option<String>,
     pub recipient: Option<DIDBuf>,
 }

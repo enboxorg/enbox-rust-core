@@ -1,13 +1,13 @@
-//! Local protocol-role invocation for Write, Read, Delete, and Query.
+//! Local module-role invocation for Write, Read, Delete, and Query.
 //!
-//! An invoked `protocolRole` must be a `$role` in the definition governing the
+//! An invoked `moduleRole` must be a `$role` in the definition governing the
 //! evaluation, its context source must carry the role's nesting, and the author
 //! must actually hold an active role record (`DWN-PROTO-002`, `DWN-PROTO-004`).
 
 use super::*;
 use crate::descriptors::ReadDescriptor as RecordsReadDescriptor;
 use crate::descriptors::{DeleteDescriptor as RecordsDeleteDescriptor, RecordsQueryDescriptor};
-use crate::protocols::{Action, ActionRole, ActionWho, Can, Who};
+use crate::modules::{Action, ActionRole, ActionWho, Can, Who};
 
 const TENANT: &str = "did:example:alice";
 const BOB: &str = "did:example:bob";
@@ -19,20 +19,20 @@ const T_MESSAGE: &str = "2025-01-01T00:02:00.000000Z";
 const T_V2: &str = "2025-01-01T00:02:30.000000Z";
 const T_LATE: &str = "2025-01-01T00:03:00.000000Z";
 
-fn text_type() -> crate::protocols::Type {
-    crate::protocols::Type {
+fn text_type() -> crate::modules::Type {
+    crate::modules::Type {
         schema: None,
         data_formats: None,
         encryption_required: None,
     }
 }
 
-/// A local `threads` protocol. `participant_role` controls whether
+/// A local `threads` module. `participant_role` controls whether
 /// `thread/participant` is a `$role`, and `thread/message` carries a role
 /// action for create, read, and co-delete.
 fn threads_definition(participant_role: bool) -> Definition {
     Definition {
-        protocol: THREADS.to_string(),
+        module: THREADS.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -116,7 +116,7 @@ async fn fixture(definition: Definition) -> LocalFixture {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_protocol_definition(TENANT, &message_store, definition, INSTALL).await;
+    put_module_definition(TENANT, &message_store, definition, INSTALL).await;
     let write = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
         data_store.clone(),
@@ -155,8 +155,8 @@ fn data(bytes: &'static [u8]) -> (String, u64, Bytes) {
 async fn seed_thread(fixture: &LocalFixture, timestamp: &str) -> (String, String) {
     let (data_cid, data_size, payload) = data(b"thread");
     let message = signed_write_message(WriteSpec {
-        protocol: THREADS.to_string(),
-        protocol_path: "thread".to_string(),
+        module: THREADS.to_string(),
+        module_path: "thread".to_string(),
         data_cid,
         data_size,
         ..WriteSpec::new(timestamp)
@@ -180,8 +180,8 @@ async fn grant_role(
 ) -> String {
     let (data_cid, data_size, payload) = data(b"role");
     let message = signed_write_message(WriteSpec {
-        protocol: THREADS.to_string(),
-        protocol_path: "thread/participant".to_string(),
+        module: THREADS.to_string(),
+        module_path: "thread/participant".to_string(),
         parent_id: Some(parent.0.to_string()),
         parent_context_id: Some(parent.1.to_string()),
         recipient: Some(recipient.to_string()),
@@ -206,11 +206,11 @@ async fn role_write(
     let message = signed_write_message(WriteSpec {
         author: BOB.to_string(),
         signer: bob_signer(),
-        protocol: THREADS.to_string(),
-        protocol_path: "thread/message".to_string(),
+        module: THREADS.to_string(),
+        module_path: "thread/message".to_string(),
         parent_id: Some(parent.0.to_string()),
         parent_context_id: Some(parent.1.to_string()),
-        protocol_role: Some(role.to_string()),
+        module_role: Some(role.to_string()),
         data_cid,
         data_size,
         ..WriteSpec::new(timestamp)
@@ -228,11 +228,12 @@ async fn signed_read(record_id: &str, role: &str, timestamp: &str) -> serde_json
         },
         permission_grant_id: None,
         date_sort: None,
+        include_replication_support: None,
     };
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let signature = signature_for_descriptor(
         &descriptor_json,
-        json!({ "protocolRole": role }),
+        json!({ "moduleRole": role }),
         bob_signer(),
     )
     .await;
@@ -252,7 +253,7 @@ async fn signed_delete(record_id: &str, role: &str, timestamp: &str) -> serde_js
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let signature = signature_for_descriptor(
         &descriptor_json,
-        json!({ "protocolRole": role }),
+        json!({ "moduleRole": role }),
         bob_signer(),
     )
     .await;
@@ -263,7 +264,7 @@ async fn signed_delete(record_id: &str, role: &str, timestamp: &str) -> serde_js
 }
 
 async fn signed_query(
-    protocol_path: Option<&str>,
+    module_path: Option<&str>,
     parent_id: Option<&str>,
     context_id: Option<&str>,
     role: &str,
@@ -272,8 +273,8 @@ async fn signed_query(
     let descriptor = RecordsQueryDescriptor {
         message_timestamp: parse_time(timestamp),
         filter: RecordsFilter {
-            protocol: Some(THREADS.to_string()),
-            protocol_path: protocol_path.map(str::to_string),
+            module: Some(THREADS.to_string()),
+            module_path: module_path.map(str::to_string),
             parent_id: parent_id.map(str::to_string),
             context_id: context_id.map(str::to_string),
             ..Default::default()
@@ -285,7 +286,7 @@ async fn signed_query(
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let signature = signature_for_descriptor(
         &descriptor_json,
-        json!({ "protocolRole": role }),
+        json!({ "moduleRole": role }),
         bob_signer(),
     )
     .await;
@@ -303,8 +304,8 @@ fn parsed(message: &serde_json::Value) -> Message<Descriptor> {
 async fn grant_root_role(fixture: &LocalFixture, recipient: &str, timestamp: &str) -> String {
     let (data_cid, data_size, payload) = data(b"role");
     let message = signed_write_message(WriteSpec {
-        protocol: THREADS.to_string(),
-        protocol_path: "moderator".to_string(),
+        module: THREADS.to_string(),
+        module_path: "moderator".to_string(),
         recipient: Some(recipient.to_string()),
         data_cid,
         data_size,
@@ -321,8 +322,8 @@ async fn grant_root_role(fixture: &LocalFixture, recipient: &str, timestamp: &st
 async fn seed_message(fixture: &LocalFixture, parent: (&str, &str), timestamp: &str) -> String {
     let (data_cid, data_size, payload) = data(b"message");
     let message = signed_write_message(WriteSpec {
-        protocol: THREADS.to_string(),
-        protocol_path: "thread/message".to_string(),
+        module: THREADS.to_string(),
+        module_path: "thread/message".to_string(),
         parent_id: Some(parent.0.to_string()),
         parent_context_id: Some(parent.1.to_string()),
         data_cid,
@@ -455,7 +456,7 @@ async fn role_removed_by_governing_definition_is_not_a_role() {
     let thread = seed_thread(&fixture, T_THREAD).await;
     grant_role(&fixture, (&thread.0, &thread.1), BOB, T_ROLE).await;
     // The next configuration removes the `$role` marker.
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &fixture.message_store,
         threads_definition(false),
@@ -558,7 +559,7 @@ async fn seed_message_then_remove_role() -> (LocalFixture, String) {
     grant_role(&fixture, (&thread.0, &thread.1), BOB, T_ROLE).await;
     let message_id = seed_message(&fixture, (&thread.0, &thread.1), T_MESSAGE).await;
 
-    put_protocol_definition(
+    put_module_definition(
         TENANT,
         &fixture.message_store,
         threads_definition(false),

@@ -22,16 +22,16 @@ use crate::filters::{Filter, FilterKey, Filters, SubtreeFilter};
 use crate::stores::KeyValues;
 use crate::Value;
 
-/// Read-time `$recordLimit` occupancy policy for one concrete protocol path.
+/// Read-time `$recordLimit` occupancy policy for one concrete module path.
 ///
-/// `context_id` roots the candidate subtree; omitted for root protocol paths
+/// `context_id` roots the candidate subtree; omitted for root module paths
 /// and selections scoped only by direct parent. `parent_id` lists explicitly
 /// selected direct-parent groups; `None` spans every group in scope, while an
 /// explicitly empty list selects nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordLimitOccupancy {
-    pub protocol: String,
-    pub protocol_path: String,
+    pub module: String,
+    pub module_path: String,
     pub context_id: Option<String>,
     pub parent_id: Option<Vec<String>>,
     pub max: u64,
@@ -71,12 +71,12 @@ pub fn occupancy_candidate_filters(policy: &RecordLimitOccupancy) -> Filters {
         Filter::Equal(Value::Bool(true)),
     );
     map.insert(
-        FilterKey::Index("protocol".to_string()),
-        Filter::Equal(Value::String(policy.protocol.clone())),
+        FilterKey::Index("module".to_string()),
+        Filter::Equal(Value::String(policy.module.clone())),
     );
     map.insert(
-        FilterKey::Index("protocolPath".to_string()),
-        Filter::Equal(Value::String(policy.protocol_path.clone())),
+        FilterKey::Index("modulePath".to_string()),
+        Filter::Equal(Value::String(policy.module_path.clone())),
     );
     if let Some(context_id) = policy.context_id.as_deref() {
         map.insert(
@@ -348,8 +348,8 @@ mod tests {
     #[test]
     fn candidate_filter_pins_latest_live_writes_for_policy_path() {
         let policy = RecordLimitOccupancy {
-            protocol: "https://example.com/protocol/threads".to_string(),
-            protocol_path: "thread/message".to_string(),
+            module: "https://example.com/module/threads".to_string(),
+            module_path: "thread/message".to_string(),
             context_id: Some("ctx-a".to_string()),
             parent_id: None,
             max: 2,
@@ -363,11 +363,11 @@ mod tests {
             ("method".to_string(), Value::String("Write".to_string())),
             ("isLatestBaseState".to_string(), Value::Bool(true)),
             (
-                "protocol".to_string(),
-                Value::String("https://example.com/protocol/threads".to_string()),
+                "module".to_string(),
+                Value::String("https://example.com/module/threads".to_string()),
             ),
             (
-                "protocolPath".to_string(),
+                "modulePath".to_string(),
                 Value::String("thread/message".to_string()),
             ),
             (

@@ -415,12 +415,12 @@ fn event_indexes(event: &MessageEvent<Descriptor>) -> MapValue {
     if let Some(write) = write {
         if let Ok(descriptor) = records_write_descriptor(&write) {
             indexes.insert(
-                "protocol".to_string(),
-                Value::String(descriptor.protocol.clone()),
+                "module".to_string(),
+                Value::String(descriptor.module.clone()),
             );
             indexes.insert(
-                "protocolPath".to_string(),
-                Value::String(descriptor.protocol_path.clone()),
+                "modulePath".to_string(),
+                Value::String(descriptor.module_path.clone()),
             );
         }
         if let Ok(fields) = write_fields(&write) {
@@ -493,10 +493,10 @@ fn subscription_filters(
 mod tests {
     use super::*;
     use crate::handlers::messages::authorization::MessagesRoleAuthorization;
-    use crate::handlers::records::common::ResolvedProtocolRole;
+    use crate::handlers::records::common::ResolvedModuleRole;
     use crate::stores::replication_feed_reader::build_token;
 
-    const PROTOCOL: &str = "https://example.com/chat";
+    const MODULE: &str = "https://example.com/chat";
     const ROLE_PATH: &str = "thread/participant";
     const CONTEXT: &str = "thread-1";
     const FILTER_CONTEXT: &str = "thread-1/message-1";
@@ -506,9 +506,9 @@ mod tests {
         MessagesAuthorization::Role(MessagesRoleAuthorization {
             author: "did:example:bob".to_string(),
             metadata_only,
-            resolved_role: ResolvedProtocolRole {
-                protocol: PROTOCOL.to_string(),
-                protocol_path: ROLE_PATH.to_string(),
+            resolved_role: ResolvedModuleRole {
+                module: MODULE.to_string(),
+                module_path: ROLE_PATH.to_string(),
                 context_id_prefix: Some(FILTER_CONTEXT.to_string()),
                 role_record_id: ROLE_ID.to_string(),
             },
@@ -525,8 +525,8 @@ mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 3,
                 "dataFormat": "text/plain",
-                "protocol": PROTOCOL,
-                "protocolPath": ROLE_PATH,
+                "module": MODULE,
+                "modulePath": ROLE_PATH,
                 "recipient": "did:example:bob"
             },
             "recordId": ROLE_ID,
@@ -546,7 +546,7 @@ mod tests {
             seq: Some("1".to_string()),
             message_cid: Some("cid-1".to_string()),
             is_latest_base_state: Some(true),
-            protocol: Some(PROTOCOL.to_string()),
+            module: Some(MODULE.to_string()),
             encoded_data: Some("YWJj".to_string()),
         }
     }
@@ -559,8 +559,8 @@ mod tests {
                 "messageTimestamp": "2026-01-01T00:00:00.000000Z",
                 "filters": [{
                     "interface": "Records",
-                    "protocol": PROTOCOL,
-                    "protocolPath": "thread/message",
+                    "module": MODULE,
+                    "modulePath": "thread/message",
                     "contextIdPrefix": "thread-1/message-1"
                 }]
             }
@@ -571,8 +571,8 @@ mod tests {
     #[test]
     fn role_subscription_adds_an_internal_record_wake_filter() {
         let caller = Filters::from(BTreeMap::from([(
-            FilterKey::Index("protocol".to_string()),
-            Filter::Equal(Value::String(PROTOCOL.to_string())),
+            FilterKey::Index("module".to_string()),
+            Filter::Equal(Value::String(MODULE.to_string())),
         )]));
 
         let filters = subscription_filters(Some(caller), &role_authorization(false)).unwrap();
@@ -611,8 +611,8 @@ mod tests {
         let matching = messages_filters_to_filters(
             &[crate::message_filters::Messages {
                 interface: Some("Records".to_string()),
-                protocol: Some(PROTOCOL.to_string()),
-                protocol_path: Some(ROLE_PATH.to_string()),
+                module: Some(MODULE.to_string()),
+                module_path: Some(ROLE_PATH.to_string()),
                 context_id_prefix: Some(CONTEXT.to_string()),
                 ..Default::default()
             }],
@@ -623,8 +623,8 @@ mod tests {
         let nonmatching = messages_filters_to_filters(
             &[crate::message_filters::Messages {
                 interface: Some("Records".to_string()),
-                protocol: Some(PROTOCOL.to_string()),
-                protocol_path: Some("thread/message".to_string()),
+                module: Some(MODULE.to_string()),
+                module_path: Some("thread/message".to_string()),
                 context_id_prefix: Some(CONTEXT.to_string()),
                 ..Default::default()
             }],

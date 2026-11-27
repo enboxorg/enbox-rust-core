@@ -16,7 +16,7 @@ use syn::{Fields, FieldsNamed, Ident, ItemStruct, Path};
 /// explicitly rather than silently inheriting `none`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GrantKind {
-    /// Singular `permissionGrantId` for direct Records/Protocols operations.
+    /// Singular `permissionGrantId` for direct Records/Modules operations.
     Single,
     /// Plural `permissionGrantIds` for Messages operations.
     Multi,

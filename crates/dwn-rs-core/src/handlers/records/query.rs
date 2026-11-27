@@ -7,7 +7,7 @@ use crate::canonical_rfc3339;
 use crate::descriptors::Descriptor;
 use crate::descriptors::RecordsQueryDescriptor;
 use crate::dwn::{Handler, HandlerContext};
-use crate::filters::context::validate_nested_protocol_path_scope;
+use crate::filters::context::validate_nested_module_path_scope;
 use crate::filters::Filters;
 use crate::handlers::records::common::{
     attach_initial_writes, date_sort_to_message_sort, published_sort_name,
@@ -56,7 +56,7 @@ where
                 }
             }
 
-            if let Err(reason) = validate_nested_protocol_path_scope(&descriptor.filter, false) {
+            if let Err(reason) = validate_nested_module_path_scope(&descriptor.filter, false) {
                 return Response::bad_request(format!(
                     "RecordsQueryNestedModulePathContextIdInvalid: {reason}"
                 ));

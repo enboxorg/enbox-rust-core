@@ -122,7 +122,7 @@ mod inner {
         pub message_timestamp: chrono::DateTime<chrono::Utc>,
         pub action: SyncAction,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub protocol: Option<String>,
+        pub module: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub prefix: Option<String>,
         #[serde(rename = "permissionGrantIds", skip_serializing_if = "Option::is_none")]

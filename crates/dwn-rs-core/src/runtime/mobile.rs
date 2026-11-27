@@ -107,7 +107,7 @@ pub struct MobileSyncRequest {
     pub tenant: String,
     pub remote: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
+    pub module: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -487,7 +487,7 @@ mod tests {
             .sync_once(MobileSyncRequest {
                 tenant: "did:example:alice".to_string(),
                 remote: "https://remote.example".to_string(),
-                protocol: None,
+                module: None,
                 reason: Some("foreground".to_string()),
             })
             .await

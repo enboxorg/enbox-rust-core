@@ -6,13 +6,13 @@ use dwn_rs_core::auth::{
     ed25519_jwk, jws::Algorithm, Jws, PrivateJwkSigner, StaticPublicKeyResolver,
 };
 use dwn_rs_core::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
-use dwn_rs_core::descriptors::ConfigureDescriptor;
+use dwn_rs_core::descriptors::ModulesConfigureDescriptor;
 use dwn_rs_core::dwn::current_handler_kinds;
 use dwn_rs_core::filters::{Filter, FilterKey, Filters};
-use dwn_rs_core::handlers::protocols::fetch_protocol_definition;
+use dwn_rs_core::handlers::modules::fetch_module_definition;
 use dwn_rs_core::interfaces::messages::descriptors::records::WriteDescriptor;
-use dwn_rs_core::interfaces::messages::protocols::ActionWho;
-use dwn_rs_core::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Type, Who};
+use dwn_rs_core::interfaces::messages::modules::ActionWho;
+use dwn_rs_core::interfaces::messages::modules::{Action, Can, Definition, RuleSet, Type, Who};
 use dwn_rs_core::stores::MessageStore;
 use dwn_rs_core::{Reply, Value};
 use serde_json::{json, Value as JsonValue};
@@ -65,7 +65,7 @@ async fn native_dwn_handlers_do_not_return_not_implemented() {
 }
 
 #[tokio::test]
-async fn native_dwn_processes_protocols_configure_and_messages_read() {
+async fn native_dwn_processes_modules_configure_and_messages_read() {
     let node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
@@ -94,8 +94,8 @@ async fn native_dwn_processes_protocols_configure_and_messages_read() {
     assert!(entry.message.is_some());
 }
 
-async fn signed_configure_message(protocol: &str, published: bool, timestamp: &str) -> JsonValue {
-    let descriptor = configure_descriptor(protocol, published, timestamp);
+async fn signed_configure_message(module: &str, published: bool, timestamp: &str) -> JsonValue {
+    let descriptor = configure_descriptor(module, published, timestamp);
     signed_descriptor_message(descriptor, json!({})).await
 }
 
@@ -132,9 +132,9 @@ async fn signed_descriptor_message(descriptor: JsonValue, extra_payload: JsonVal
     })
 }
 
-fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> JsonValue {
+fn configure_descriptor(module: &str, published: bool, timestamp: &str) -> JsonValue {
     let definition = Definition {
-        protocol: protocol.to_string(),
+        module: module.to_string(),
         published,
         uses: None,
         key_agreement: None,
@@ -158,7 +158,7 @@ fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> Jso
             },
         )]),
     };
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: timestamp.parse().unwrap(),
         permission_grant_id: None,
         definition,
@@ -203,7 +203,7 @@ fn test_resolver() -> StaticPublicKeyResolver {
 }
 
 #[tokio::test]
-async fn fetch_protocol_definition_after_example_native_dwn_configure() {
+async fn fetch_module_definition_after_example_native_dwn_configure() {
     let node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
@@ -218,64 +218,64 @@ async fn fetch_protocol_definition_after_example_native_dwn_configure() {
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
     let definition =
-        fetch_protocol_definition(TENANT, "http://example.com/native-dwn", node.store(), None)
+        fetch_module_definition(TENANT, "http://example.com/native-dwn", node.store(), None)
             .await
-            .expect("latest protocol definition should be found");
-    assert_eq!(definition.protocol, "http://example.com/native-dwn");
+            .expect("latest module definition should be found");
+    assert_eq!(definition.module, "http://example.com/native-dwn");
 }
 
 #[tokio::test]
-async fn fetch_protocol_definition_after_default_test_protocol_configure() {
+async fn fetch_module_definition_after_default_test_module_configure() {
     let node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
-    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z").await;
+    let configure = signed_default_test_module_configure("2025-01-01T00:00:00.000000Z").await;
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
-    let protocol_only = Filters::from(vec![BTreeMap::from([(
-        FilterKey::Index("protocol".to_string()),
-        Filter::Equal(Value::String("http://test-protocol.xyz".to_string())),
+    let module_only = Filters::from(vec![BTreeMap::from([(
+        FilterKey::Index("module".to_string()),
+        Filter::Equal(Value::String("http://test-module.xyz".to_string())),
     )])]);
     let stored = node
         .store()
-        .query(TENANT, protocol_only, None, None, None)
+        .query(TENANT, module_only, None, None, None)
         .await
         .expect("query stored configure messages");
     assert!(
         !stored.messages.is_empty(),
-        "configure message should be indexed by protocol"
+        "configure message should be indexed by module"
     );
 
     let definition_latest =
-        fetch_protocol_definition(TENANT, "http://test-protocol.xyz", node.store(), None)
+        fetch_module_definition(TENANT, "http://test-module.xyz", node.store(), None)
             .await
-            .expect("latest protocol definition should be found");
-    assert_eq!(definition_latest.protocol, "http://test-protocol.xyz");
+            .expect("latest module definition should be found");
+    assert_eq!(definition_latest.module, "http://test-module.xyz");
 
-    let definition = fetch_protocol_definition(
+    let definition = fetch_module_definition(
         TENANT,
-        "http://test-protocol.xyz",
+        "http://test-module.xyz",
         node.store(),
         Some("2025-01-01T00:00:01.000000Z"),
     )
     .await
-    .expect("temporal protocol definition should be found");
-    assert_eq!(definition.protocol, "http://test-protocol.xyz");
+    .expect("temporal module definition should be found");
+    assert_eq!(definition.module, "http://test-module.xyz");
 }
 
 #[tokio::test]
-async fn native_dwn_records_write_after_default_test_protocol_configure() {
+async fn native_dwn_records_write_after_default_test_module_configure() {
     let node = SqliteNativeDwn::open_in_memory(test_resolver())
         .await
         .expect("open native node");
 
-    let configure = signed_default_test_protocol_configure("2025-01-01T00:00:00.000000Z").await;
+    let configure = signed_default_test_module_configure("2025-01-01T00:00:00.000000Z").await;
     let configure_reply = node.dwn().process_message(TENANT, configure).await;
     assert_eq!(configure_reply.status.code, 202, "{configure_reply:?}");
 
-    let write = signed_default_test_protocol_records_write("2025-01-01T00:00:01.000000Z").await;
+    let write = signed_default_test_module_records_write("2025-01-01T00:00:01.000000Z").await;
     let write_reply = node
         .process_message_with_data(
             TENANT,
@@ -286,9 +286,9 @@ async fn native_dwn_records_write_after_default_test_protocol_configure() {
     assert_eq!(write_reply.status.code, 202, "{write_reply:?}");
 }
 
-async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
+async fn signed_default_test_module_configure(timestamp: &str) -> JsonValue {
     let definition = Definition {
-        protocol: "http://test-protocol.xyz".to_string(),
+        module: "http://test-module.xyz".to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -312,7 +312,7 @@ async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
             },
         )]),
     };
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: timestamp.parse().unwrap(),
         permission_grant_id: None,
         definition,
@@ -320,11 +320,11 @@ async fn signed_default_test_protocol_configure(timestamp: &str) -> JsonValue {
     signed_descriptor_message(serde_json::to_value(descriptor).unwrap(), json!({})).await
 }
 
-async fn signed_default_test_protocol_records_write(timestamp: &str) -> JsonValue {
+async fn signed_default_test_module_records_write(timestamp: &str) -> JsonValue {
     let data_cid = generate_dag_pb_cid_from_bytes(b"loopback-test-payload").to_string();
     let descriptor = WriteDescriptor {
-        protocol: "http://test-protocol.xyz".to_string(),
-        protocol_path: "testRecord".to_string(),
+        module: "http://test-module.xyz".to_string(),
+        module_path: "testRecord".to_string(),
         recipient: None,
         schema: Some("foo/bar".to_string()),
         tags: None,

@@ -24,21 +24,21 @@ pub(crate) fn a256kw_kek(
     shared_secret: &[u8],
     key_id: &str,
     derivation_scheme: DerivationScheme,
-    protocol: Option<&str>,
+    module: Option<&str>,
     role_path: Option<&str>,
 ) -> Result<Vec<u8>, EncryptionError> {
     let info = match derivation_scheme {
-        DerivationScheme::ProtocolPath => {
-            serde_json::to_string(&[KEY_AGREEMENT_ALGORITHM, "protocolPath", key_id])
-                .expect("protocolPath KEK info must serialize")
+        DerivationScheme::ModulePath => {
+            serde_json::to_string(&[KEY_AGREEMENT_ALGORITHM, "modulePath", key_id])
+                .expect("modulePath KEK info must serialize")
         }
         DerivationScheme::RoleAudience => {
-            let protocol = protocol.ok_or(EncryptionError::MissingRoleAudienceProtocol)?;
+            let module = module.ok_or(EncryptionError::MissingRoleAudienceModule)?;
             let role_path = role_path.ok_or(EncryptionError::MissingRoleAudienceRolePath)?;
             serde_json::to_string(&[
                 KEY_AGREEMENT_ALGORITHM,
                 "roleAudience",
-                protocol,
+                module,
                 role_path,
                 key_id,
             ])
@@ -48,11 +48,11 @@ pub(crate) fn a256kw_kek(
     hkdf_sha256_32(shared_secret, info.as_bytes())
 }
 
-/// Derives the seal KEK. Binds protocol, rolePath, contextId, and
+/// Derives the seal KEK. Binds module, rolePath, contextId, and
 /// audienceKeyId (no `keyId`).
 pub(crate) fn seal_kek(
     shared_secret: &[u8],
-    protocol: &str,
+    module: &str,
     role_path: &str,
     context_id: &str,
     audience_key_id: &str,
@@ -60,7 +60,7 @@ pub(crate) fn seal_kek(
     let info = serde_json::to_string(&[
         KEY_AGREEMENT_ALGORITHM,
         "seal",
-        protocol,
+        module,
         role_path,
         context_id,
         audience_key_id,
@@ -71,7 +71,7 @@ pub(crate) fn seal_kek(
 
 /// Derives a hardened hierarchical deterministic private key along a relative
 /// derivation path, matching `@enbox/dwn-sdk-js` `HdKey.derivePrivateKeyBytes`
-/// (`Records.derivePrivateKey`) used by the `protocolPath` decrypt path.
+/// (`Records.derivePrivateKey`) used by the `modulePath` decrypt path.
 ///
 /// Each path segment is applied as one HKDF-SHA256 step with an empty salt and
 /// the segment bytes as the `info` value, producing a 32-byte key that becomes

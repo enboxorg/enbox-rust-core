@@ -1,5 +1,5 @@
 pub mod builder;
-pub mod core_protocol;
+pub mod core_module;
 pub mod validation;
 
 use std::collections::BTreeMap;
@@ -13,7 +13,7 @@ use serde_json::Value;
 pub use crate::descriptors::MessageKind;
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::interfaces::messages::descriptors::{
-    ConcreteDescriptor, FromDescriptor, InterfaceUnion, Messages, Protocols, Records,
+    ConcreteDescriptor, FromDescriptor, InterfaceUnion, Messages, Modules, Records,
 };
 use crate::interfaces::replies::Status;
 use crate::validation::{admit_message, ingress_rejection, parse_message};
@@ -442,7 +442,7 @@ where
 
 /// The set of `(interface, method)` kinds this node dispatches handlers for.
 ///
-/// Derived from the descriptor declarations: each interface union (`Records`/`Protocols`/
+/// Derived from the descriptor declarations: each interface union (`Records`/`Modules`/
 /// `Messages`) reports its kinds via [`InterfaceUnion::KINDS`] are filtered out. Adding
 /// a handler-backed descriptor in a `#[interface]` module registers it here automatically
 /// — no hand-maintained list to keep in sync.
@@ -450,7 +450,7 @@ pub fn current_handler_kinds() -> Vec<MessageKind> {
     Records::KINDS
         .iter()
         .chain(Messages::KINDS)
-        .chain(Protocols::KINDS)
+        .chain(Modules::KINDS)
         .filter_map(|&(i, m)| MessageKind::from_parts(i, m))
         .collect()
 }
@@ -568,7 +568,7 @@ mod tests {
                         "method": "Query",
                         "messageTimestamp": "2025-01-01T00:00:00.000000Z",
                         "filter": {
-                            "protocol": "https://example.com/test"
+                            "module": "https://example.com/test"
                         }
                     }
                 }),
@@ -597,7 +597,7 @@ mod tests {
                         "method": "Query",
                         "messageTimestamp": "2025-01-01T00:00:00.000000Z",
                         "filter": {
-                            "protocol": "https://example.com/test"
+                            "module": "https://example.com/test"
                         }
                     }
                 }),

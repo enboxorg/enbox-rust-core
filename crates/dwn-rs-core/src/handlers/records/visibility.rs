@@ -20,10 +20,10 @@ use crate::permissions::{self, AuthorizationContext};
 use crate::{Descriptor, Message};
 
 use super::common::{
-    authorize_protocol_query_or_subscribe, filter_includes_published_records,
+    authorize_module_query_or_subscribe, filter_includes_published_records,
     non_owner_records_event_filters, non_owner_records_filters, owner_records_event_filter,
     owner_records_filter, published_records_event_filter, published_records_filter,
-    should_protocol_authorize, ProtocolAuthorizationError,
+    should_module_authorize, ModuleAuthorizationError,
 };
 use super::control;
 use super::RecordsAuthorizationKind;
@@ -51,7 +51,7 @@ pub enum VisibilityClass {
 pub(crate) struct CollectionAuthorization {
     pub visibility: VisibilityClass,
     pub author: Option<String>,
-    pub protocol_authorized: bool,
+    pub module_authorized: bool,
     /// Whether an invoked grant covered the request at open. Retained for
     /// delivery-time revalidation of mutable grant state.
     pub grant_authorized: bool,
@@ -69,7 +69,7 @@ pub(crate) async fn authorize_collection<MessageStore>(
     message_store: &MessageStore,
     request_timestamp: &str,
     kind: RecordsAuthorizationKind,
-) -> Result<CollectionAuthorization, ProtocolAuthorizationError>
+) -> Result<CollectionAuthorization, ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -77,7 +77,7 @@ where
         return Ok(CollectionAuthorization {
             visibility: VisibilityClass::Published,
             author: None,
-            protocol_authorized: false,
+            module_authorized: false,
             grant_authorized: false,
         });
     }
@@ -94,7 +94,7 @@ where
         // it here would leave a legitimately grant-bearing requester with no
         // branch at all.
         let invoked =
-            should_protocol_authorize(signature) || signature.permission_grant_id().is_some();
+            should_module_authorize(signature) || signature.permission_grant_id().is_some();
         return Ok(CollectionAuthorization {
             visibility: if signature.author == tenant {
                 VisibilityClass::Owner
@@ -102,7 +102,7 @@ where
                 VisibilityClass::NonOwner
             },
             author: Some(signature.author.clone()),
-            protocol_authorized: invoked,
+            module_authorized: invoked,
             grant_authorized: invoked,
         });
     }
@@ -116,8 +116,8 @@ where
     )
     .await
     .map_err(|error| error.to_string())?;
-    if should_protocol_authorize(signature) {
-        authorize_protocol_query_or_subscribe(
+    if should_module_authorize(signature) {
+        authorize_module_query_or_subscribe(
             tenant,
             filter,
             signature,
@@ -127,19 +127,19 @@ where
         )
         .await?;
     }
-    let protocol_authorized = should_protocol_authorize(signature) || grant_authorized;
+    let module_authorized = should_module_authorize(signature) || grant_authorized;
     if signature.author == tenant {
         Ok(CollectionAuthorization {
             visibility: VisibilityClass::Owner,
             author: Some(signature.author.clone()),
-            protocol_authorized,
+            module_authorized,
             grant_authorized,
         })
     } else {
         Ok(CollectionAuthorization {
             visibility: VisibilityClass::NonOwner,
             author: Some(signature.author.clone()),
-            protocol_authorized,
+            module_authorized,
             grant_authorized,
         })
     }
@@ -174,7 +174,7 @@ pub(crate) fn collection_filters(
                 filter,
                 date_sort,
                 author,
-                auth.protocol_authorized,
+                auth.module_authorized,
                 control::filter_pins_an_audience_scope(filter),
             ))
         }
@@ -186,7 +186,7 @@ pub(crate) fn collection_filters(
             Filters::from(non_owner_records_event_filters(
                 filter,
                 author,
-                auth.protocol_authorized,
+                auth.module_authorized,
                 control::filter_pins_an_audience_scope(filter),
             ))
         }
@@ -218,7 +218,7 @@ mod tests {
                 delegated_grant_id: None,
                 permission_grant_id: None,
                 permission_grant_ids: None,
-                protocol_role: None,
+                module_role: None,
             }),
             permission_grant_invocation: PermissionGrantInvocation::None,
             author_delegated_grant: None,
@@ -236,8 +236,8 @@ mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 0,
                 "dataFormat": "application/json",
-                "protocol": "https://example.com/protocol/threads",
-                "protocolPath": "thread/message",
+                "module": "https://example.com/module/threads",
+                "modulePath": "thread/message",
                 "recipient": PLAN_TENANT
             },
             "recordId": record_id,
@@ -276,7 +276,7 @@ mod tests {
         let owner = CollectionAuthorization {
             visibility: VisibilityClass::Owner,
             author: Some(PLAN_TENANT.to_string()),
-            protocol_authorized: false,
+            module_authorized: false,
             grant_authorized: false,
         };
         let owner_sets = collection_filters(&owner, &filter, None, PlanMode::Snapshot).set;
@@ -293,7 +293,7 @@ mod tests {
         let published = CollectionAuthorization {
             visibility: VisibilityClass::Published,
             author: None,
-            protocol_authorized: false,
+            module_authorized: false,
             grant_authorized: false,
         };
         let published_sets = collection_filters(&published, &filter, None, PlanMode::Snapshot).set;
@@ -307,7 +307,7 @@ mod tests {
         let non_owner = CollectionAuthorization {
             visibility: VisibilityClass::NonOwner,
             author: Some(PLAN_AUTHOR.to_string()),
-            protocol_authorized: false,
+            module_authorized: false,
             grant_authorized: false,
         };
         let non_owner_sets = collection_filters(&non_owner, &filter, None, PlanMode::Snapshot).set;
@@ -331,7 +331,7 @@ mod tests {
         let owner = CollectionAuthorization {
             visibility: VisibilityClass::Owner,
             author: Some(PLAN_TENANT.to_string()),
-            protocol_authorized: false,
+            module_authorized: false,
             grant_authorized: false,
         };
         let filter = RecordsFilter::default();

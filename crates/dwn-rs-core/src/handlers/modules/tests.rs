@@ -11,18 +11,18 @@ use ssi_jwk::Algorithm;
 use crate::auth::{ed25519_jwk, Jws, PrivateJwkSigner, StaticPublicKeyResolver, JWK};
 use crate::cid::{generate_cid_from_json, generate_dag_pb_cid_from_bytes};
 use crate::descriptors::{
-    ConfigureDescriptor, Descriptor, ProtocolQueryDescriptor, Protocols, RecordsWriteDescriptor,
+    Descriptor, Modules, ModulesConfigureDescriptor, ModulesQueryDescriptor, RecordsWriteDescriptor,
 };
 use crate::dwn::{Dwn, Handler};
-use crate::encryption::{protocol::encryption_protocol_definition, ENCRYPTION_PROTOCOL_URI};
+use crate::encryption::{module::encryption_module_definition, ENCRYPTION_MODULE_URI};
 use crate::fields::WriteFields;
-use crate::handlers::configure::{fetch_protocol_definition, ProtocolsConfigureHandler};
-use crate::handlers::query::ProtocolsQueryHandler;
-use crate::interfaces::messages::protocols::{
-    self as protocol_types, Action, ActionRole, ActionWho, Can, Definition, ProtocolKeyAgreement,
-    Type, Who,
+use crate::handlers::configure::{fetch_module_definition, ModulesConfigureHandler};
+use crate::handlers::query::ModulesQueryHandler;
+use crate::interfaces::messages::modules::{
+    self as module_types, Action, ActionRole, ActionWho, Can, Definition, ModuleKeyAgreement, Type,
+    Who,
 };
-use crate::protocols::RuleSet;
+use crate::modules::RuleSet;
 use crate::stores::memory::MemoryMessageStore;
 use crate::stores::occupancy::{is_occupant, occupant_ids_for_rows};
 use crate::stores::{
@@ -37,19 +37,19 @@ use crate::{
 use super::common::*;
 
 #[tokio::test]
-async fn protocols_configure_stores_latest_base_state() {
+async fn modules_configure_stores_latest_base_state() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let older = signed_configure_message(
-        "http://example.com/protocol",
+        "http://example.com/module",
         true,
         "2025-01-01T00:00:00.000000Z",
     )
     .await;
     let newer = signed_configure_message(
-        "http://example.com/protocol",
+        "http://example.com/module",
         false,
         "2025-01-01T00:00:01.000000Z",
     )
@@ -83,7 +83,7 @@ async fn protocols_configure_stores_latest_base_state() {
     let latest = message_store
         .query(
             "did:example:alice",
-            protocol_configure_filters("http://example.com/protocol", true),
+            module_configure_filters("http://example.com/module", true),
             None,
             None,
             None,
@@ -92,7 +92,7 @@ async fn protocols_configure_stores_latest_base_state() {
         .unwrap();
     assert_eq!(latest.messages.len(), 1);
     assert!(
-        !protocols_configure_descriptor(&latest.messages[0])
+        !modules_configure_descriptor(&latest.messages[0])
             .unwrap()
             .definition
             .published
@@ -100,11 +100,11 @@ async fn protocols_configure_stores_latest_base_state() {
 }
 
 #[tokio::test]
-async fn protocols_configure_duplicate_preserves_feed_identity() {
+async fn modules_configure_duplicate_preserves_feed_identity() {
     let mut message_store = MemoryMessageStore::default();
     message_store.open().await.unwrap();
     let handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let configure = signed_configure_message(
         "http://example.com/duplicate",
         true,
@@ -138,7 +138,7 @@ async fn protocols_configure_duplicate_preserves_feed_identity() {
 }
 
 #[tokio::test]
-async fn protocols_configure_arrival_orders_converge_and_retain_history() {
+async fn modules_configure_arrival_orders_converge_and_retain_history() {
     let left = signed_configure_message(
         "http://example.com/convergent",
         true,
@@ -162,7 +162,7 @@ async fn protocols_configure_arrival_orders_converge_and_retain_history() {
         let mut message_store = TestMessageStore::default();
         message_store.open().await.unwrap();
         let handler =
-            ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+            ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
         for configure in order {
             assert_eq!(
                 handler
@@ -177,7 +177,7 @@ async fn protocols_configure_arrival_orders_converge_and_retain_history() {
         let retained = message_store
             .query(
                 "did:example:alice",
-                protocol_configure_filters("http://example.com/convergent", false),
+                module_configure_filters("http://example.com/convergent", false),
                 None,
                 None,
                 None,
@@ -189,7 +189,7 @@ async fn protocols_configure_arrival_orders_converge_and_retain_history() {
         let latest = message_store
             .query(
                 "did:example:alice",
-                protocol_configure_filters("http://example.com/convergent", true),
+                module_configure_filters("http://example.com/convergent", true),
                 None,
                 None,
                 None,
@@ -202,11 +202,11 @@ async fn protocols_configure_arrival_orders_converge_and_retain_history() {
 }
 
 #[tokio::test]
-async fn protocols_configure_failed_atomic_transition_preserves_previous_latest() {
+async fn modules_configure_failed_atomic_transition_preserves_previous_latest() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let older = signed_configure_message(
         "http://example.com/rollback",
         true,
@@ -242,7 +242,7 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
     let latest = message_store
         .query(
             "did:example:alice",
-            protocol_configure_filters("http://example.com/rollback", true),
+            module_configure_filters("http://example.com/rollback", true),
             None,
             None,
             None,
@@ -251,7 +251,7 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
         .unwrap();
     assert_eq!(latest.messages.len(), 1);
     assert!(
-        protocols_configure_descriptor(&latest.messages[0])
+        modules_configure_descriptor(&latest.messages[0])
             .unwrap()
             .definition
             .published
@@ -260,7 +260,7 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
         message_store
             .query(
                 "did:example:alice",
-                protocol_configure_filters("http://example.com/rollback", false),
+                module_configure_filters("http://example.com/rollback", false),
                 None,
                 None,
                 None
@@ -278,10 +278,10 @@ async fn protocols_configure_failed_atomic_transition_preserves_previous_latest(
 /// the two predicates could disagree, and it never reaches the handler: `Authorization`
 /// requires a signature, so `{}` matches no `Fields` variant and ingress rejects the message.
 #[tokio::test]
-async fn protocols_query_with_empty_authorization_is_rejected_at_ingress() {
+async fn modules_query_with_empty_authorization_is_rejected_at_ingress() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
-    let query_handler = ProtocolsQueryHandler::new(message_store.clone(), None);
+    let query_handler = ModulesQueryHandler::new(message_store.clone(), None);
 
     let mut message = unsigned_query_message(None);
     message["authorization"] = serde_json::json!({});
@@ -297,12 +297,12 @@ async fn protocols_query_with_empty_authorization_is_rejected_at_ingress() {
 }
 
 #[tokio::test]
-async fn protocols_query_unsigned_returns_only_published_latest_configures() {
+async fn modules_query_unsigned_returns_only_published_latest_configures() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let configure_handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
-    let query_handler = ProtocolsQueryHandler::new(message_store.clone(), None);
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+    let query_handler = ModulesQueryHandler::new(message_store.clone(), None);
 
     configure_handler
         .run(
@@ -337,19 +337,19 @@ async fn protocols_query_unsigned_returns_only_published_latest_configures() {
     let entries = body["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(
-        entries[0]["descriptor"]["definition"]["protocol"].as_str(),
+        entries[0]["descriptor"]["definition"]["module"].as_str(),
         Some("http://example.com/public")
     );
 }
 
 #[tokio::test]
-async fn protocols_query_signed_by_tenant_returns_private_configures() {
+async fn modules_query_signed_by_tenant_returns_private_configures() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let configure_handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let query_handler =
-        ProtocolsQueryHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesQueryHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     configure_handler
         .run(
@@ -382,12 +382,12 @@ async fn protocols_query_signed_by_tenant_returns_private_configures() {
 }
 
 #[tokio::test]
-async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures() {
+async fn modules_query_signed_by_non_tenant_falls_back_to_published_configures() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let configure_handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
-    let query_handler = ProtocolsQueryHandler::new(
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+    let query_handler = ModulesQueryHandler::new(
         message_store.clone(),
         Some(Arc::new(test_resolver_with_bob())),
     );
@@ -429,18 +429,18 @@ async fn protocols_query_signed_by_non_tenant_falls_back_to_published_configures
     let entries = body["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(
-        entries[0]["descriptor"]["definition"]["protocol"].as_str(),
+        entries[0]["descriptor"]["definition"]["module"].as_str(),
         Some("http://example.com/public")
     );
 }
 
 #[tokio::test]
-async fn protocols_query_with_permission_grant_returns_private_configure() {
+async fn modules_query_with_permission_grant_returns_private_configure() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let configure_handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
-    let query_handler = ProtocolsQueryHandler::new(
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+    let query_handler = ModulesQueryHandler::new(
         message_store.clone(),
         Some(Arc::new(test_resolver_with_bob())),
     );
@@ -457,10 +457,10 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
             None,
         )
         .await;
-    put_protocols_query_grant(
+    put_modules_query_grant(
         "did:example:alice",
         &message_store,
-        "grant-protocols-query",
+        "grant-modules-query",
         Some("http://example.com/private"),
     )
     .await;
@@ -471,7 +471,7 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
             &signed_query_message_with_grant(
                 Some("http://example.com/private"),
                 test_signer_with_key_id("did:example:bob#key1"),
-                "grant-protocols-query",
+                "grant-modules-query",
             )
             .await,
             None,
@@ -488,17 +488,17 @@ async fn protocols_query_with_permission_grant_returns_private_configure() {
 }
 
 #[tokio::test]
-async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
+async fn modules_configure_rejects_tampered_descriptor_cid_as_bad_request() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::new(message_store, Some(Arc::new(test_resolver())));
+    let handler = ModulesConfigureHandler::new(message_store, Some(Arc::new(test_resolver())));
     let mut message = signed_configure_message(
         "http://example.com/original",
         true,
         "2025-01-01T00:00:00.000000Z",
     )
     .await;
-    message["descriptor"]["definition"]["protocol"] =
+    message["descriptor"]["definition"]["module"] =
         serde_json::Value::String("http://example.com/tampered".to_string());
 
     let reply = handler.run("did:example:alice", &message, None).await;
@@ -506,17 +506,17 @@ async fn protocols_configure_rejects_tampered_descriptor_cid_as_bad_request() {
 }
 
 #[tokio::test]
-async fn protocols_configure_rejects_non_tenant_signer() {
+async fn modules_configure_rejects_non_tenant_signer() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let handler =
-        ProtocolsConfigureHandler::new(message_store, Some(Arc::new(test_resolver_with_bob())));
+        ModulesConfigureHandler::new(message_store, Some(Arc::new(test_resolver_with_bob())));
 
     let reply = handler
         .run(
             "did:example:alice",
             &signed_configure_message_with_signer(
-                "http://example.com/protocol",
+                "http://example.com/module",
                 true,
                 "2025-01-01T00:00:00.000000Z",
                 test_signer_with_key_id("did:example:bob#key1"),
@@ -529,11 +529,11 @@ async fn protocols_configure_rejects_non_tenant_signer() {
 }
 
 #[tokio::test]
-async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
+async fn fetch_module_definition_supports_latest_and_temporal_lookup() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     handler
         .run(
@@ -560,7 +560,7 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
         )
         .await;
 
-    let historical = fetch_protocol_definition(
+    let historical = fetch_module_definition(
         "did:example:alice",
         "http://example.com/versioned",
         &message_store,
@@ -570,7 +570,7 @@ async fn fetch_protocol_definition_supports_latest_and_temporal_lookup() {
     .unwrap();
     assert!(historical.published);
 
-    let latest = fetch_protocol_definition(
+    let latest = fetch_module_definition(
         "did:example:alice",
         "http://example.com/versioned",
         &message_store,
@@ -587,13 +587,13 @@ async fn core_encryption_definition_takes_precedence_over_tenant_configure() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
     let handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     // A tenant configuration at the core URI is accepted and stored ...
     let reply = handler
         .run(
             "did:example:alice",
-            &signed_configure_message(ENCRYPTION_PROTOCOL_URI, true, "2025-01-01T00:00:00.000000Z")
+            &signed_configure_message(ENCRYPTION_MODULE_URI, true, "2025-01-01T00:00:00.000000Z")
                 .await,
             None,
         )
@@ -601,22 +601,22 @@ async fn core_encryption_definition_takes_precedence_over_tenant_configure() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     // ... but never consulted: the registry definition wins over the stored one.
-    let definition = fetch_protocol_definition(
+    let definition = fetch_module_definition(
         "did:example:alice",
-        ENCRYPTION_PROTOCOL_URI,
+        ENCRYPTION_MODULE_URI,
         &message_store,
         None,
     )
     .await
     .unwrap();
-    assert_eq!(definition, encryption_protocol_definition());
+    assert_eq!(definition, encryption_module_definition());
 }
 
 #[tokio::test]
-async fn protocols_configure_validates_composition_dependencies() {
+async fn modules_configure_validates_composition_dependencies() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
-    let handler = ProtocolsConfigureHandler::new(message_store, Some(Arc::new(test_resolver())));
+    let handler = ModulesConfigureHandler::new(message_store, Some(Arc::new(test_resolver())));
 
     let missing_dependency = signed_configure_descriptor(composed_descriptor(
         "http://example.com/composed-missing",
@@ -679,16 +679,16 @@ async fn protocols_configure_validates_composition_dependencies() {
 }
 
 #[tokio::test]
-async fn protocol_handlers_integrate_with_dwn_dispatch() {
+async fn module_handlers_integrate_with_dwn_dispatch() {
     let mut message_store = TestMessageStore::default();
     message_store.open().await.unwrap();
 
     let mut dwn = Dwn::default();
-    dwn.register(ProtocolsConfigureHandler::new(
+    dwn.register(ModulesConfigureHandler::new(
         message_store.clone(),
         Some(Arc::new(test_resolver())),
     ));
-    dwn.register(ProtocolsQueryHandler::new(message_store, None));
+    dwn.register(ModulesQueryHandler::new(message_store, None));
 
     let configure = signed_configure_message(
         "http://example.com/dispatch",
@@ -703,8 +703,8 @@ async fn protocol_handlers_integrate_with_dwn_dispatch() {
         .process_message("did:example:alice", unsigned_query_message(None))
         .await;
     assert_eq!(query_reply.status.code, 200);
-    let crate::Reply::ProtocolsQuery(reply) = query_reply.reply else {
-        panic!("expected ProtocolsQuery reply");
+    let crate::Reply::ModulesQuery(reply) = query_reply.reply else {
+        panic!("expected ModulesQuery reply");
     };
     assert_eq!(reply.entries.as_ref().unwrap().len(), 1);
 }
@@ -937,32 +937,32 @@ fn put_test_message(
 }
 
 async fn signed_configure_message(
-    protocol: &str,
+    module: &str,
     published: bool,
     timestamp: &str,
 ) -> serde_json::Value {
-    signed_configure_message_with_signer(protocol, published, timestamp, test_signer()).await
+    signed_configure_message_with_signer(module, published, timestamp, test_signer()).await
 }
 
 async fn signed_configure_message_with_signer(
-    protocol: &str,
+    module: &str,
     published: bool,
     timestamp: &str,
     signer: PrivateJwkSigner,
 ) -> serde_json::Value {
     signed_configure_descriptor_with_signer(
-        configure_descriptor(protocol, published, timestamp),
+        configure_descriptor(module, published, timestamp),
         signer,
     )
     .await
 }
 
-async fn signed_configure_descriptor(descriptor: ConfigureDescriptor) -> serde_json::Value {
+async fn signed_configure_descriptor(descriptor: ModulesConfigureDescriptor) -> serde_json::Value {
     signed_configure_descriptor_with_signer(descriptor, test_signer()).await
 }
 
 async fn signed_configure_descriptor_with_signer(
-    descriptor: ConfigureDescriptor,
+    descriptor: ModulesConfigureDescriptor,
     signer: PrivateJwkSigner,
 ) -> serde_json::Value {
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
@@ -978,11 +978,8 @@ async fn signed_configure_descriptor_with_signer(
     })
 }
 
-async fn signed_query_message(
-    protocol: Option<&str>,
-    signer: PrivateJwkSigner,
-) -> serde_json::Value {
-    let descriptor = query_descriptor(protocol);
+async fn signed_query_message(module: Option<&str>, signer: PrivateJwkSigner) -> serde_json::Value {
+    let descriptor = query_descriptor(module);
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let payload = serde_json::json!({
         "descriptorCid": generate_cid_from_json(&descriptor_json).unwrap().to_string(),
@@ -997,11 +994,11 @@ async fn signed_query_message(
 }
 
 async fn signed_query_message_with_grant(
-    protocol: Option<&str>,
+    module: Option<&str>,
     signer: PrivateJwkSigner,
     permission_grant_id: &str,
 ) -> serde_json::Value {
-    let mut descriptor = query_descriptor(protocol);
+    let mut descriptor = query_descriptor(module);
     descriptor.permission_grant_id = Some(permission_grant_id.to_string());
     let descriptor_json = serde_json::to_value(&descriptor).unwrap();
     let payload = serde_json::json!({
@@ -1017,13 +1014,13 @@ async fn signed_query_message_with_grant(
     })
 }
 
-fn unsigned_query_message(protocol: Option<&str>) -> serde_json::Value {
-    serde_json::json!({ "descriptor": query_descriptor(protocol) })
+fn unsigned_query_message(module: Option<&str>) -> serde_json::Value {
+    serde_json::json!({ "descriptor": query_descriptor(module) })
 }
 
-fn query_descriptor(protocol: Option<&str>) -> ProtocolQueryDescriptor {
-    let filter = protocol.map(|protocol| serde_json::json!({ "protocol": protocol }));
-    ProtocolQueryDescriptor {
+fn query_descriptor(module: Option<&str>) -> ModulesQueryDescriptor {
+    let filter = module.map(|module| serde_json::json!({ "module": module }));
+    ModulesQueryDescriptor {
         message_timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-01T00:10:00.000000Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
@@ -1032,20 +1029,20 @@ fn query_descriptor(protocol: Option<&str>) -> ProtocolQueryDescriptor {
     }
 }
 
-async fn put_protocols_query_grant(
+async fn put_modules_query_grant(
     tenant: &str,
     message_store: &TestMessageStore,
     grant_id: &str,
-    protocol: Option<&str>,
+    module: Option<&str>,
 ) {
-    let scope = match protocol {
-        Some(protocol) => serde_json::json!({
-            "interface": "Protocols",
+    let scope = match module {
+        Some(module) => serde_json::json!({
+            "interface": "Modules",
             "method": "Query",
-            "protocol": protocol,
+            "module": module,
         }),
         None => serde_json::json!({
-            "interface": "Protocols",
+            "interface": "Modules",
             "method": "Query",
         }),
     };
@@ -1055,12 +1052,12 @@ async fn put_protocols_query_grant(
     }))
     .unwrap();
     let descriptor = RecordsWriteDescriptor {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         schema: None,
-        tags: protocol.map(|protocol| {
-            MapValue::from([("protocol".to_string(), Value::String(protocol.to_string()))])
+        tags: module.map(|module| {
+            MapValue::from([("module".to_string(), Value::String(module.to_string()))])
         }),
         parent_id: None,
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -1104,11 +1101,11 @@ async fn put_protocols_query_grant(
         ),
         ("method".to_string(), Value::String("Write".to_string())),
         (
-            "protocol".to_string(),
-            Value::String(permissions::PERMISSIONS_PROTOCOL_URI.to_string()),
+            "module".to_string(),
+            Value::String(permissions::PERMISSIONS_MODULE_URI.to_string()),
         ),
         (
-            "protocolPath".to_string(),
+            "modulePath".to_string(),
             Value::String(permissions::PERMISSIONS_GRANT_PATH.to_string()),
         ),
         (
@@ -1125,13 +1122,17 @@ async fn put_protocols_query_grant(
     message_store.put(tenant, message, indexes).await.unwrap();
 }
 
-fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> ConfigureDescriptor {
-    ConfigureDescriptor {
+fn configure_descriptor(
+    module: &str,
+    published: bool,
+    timestamp: &str,
+) -> ModulesConfigureDescriptor {
+    ModulesConfigureDescriptor {
         message_timestamp: chrono::DateTime::parse_from_rfc3339(timestamp)
             .unwrap()
             .with_timezone(&chrono::Utc),
         definition: Definition {
-            protocol: protocol.to_string(),
+            module: module.to_string(),
             published,
             uses: None,
             key_agreement: None,
@@ -1159,13 +1160,13 @@ fn configure_descriptor(protocol: &str, published: bool, timestamp: &str) -> Con
     }
 }
 
-fn base_thread_descriptor() -> ConfigureDescriptor {
-    ConfigureDescriptor {
+fn base_thread_descriptor() -> ModulesConfigureDescriptor {
+    ModulesConfigureDescriptor {
         message_timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00.000000Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
         definition: Definition {
-            protocol: "http://example.com/thread-protocol".to_string(),
+            module: "http://example.com/thread-module".to_string(),
             published: true,
             uses: None,
             key_agreement: None,
@@ -1215,17 +1216,17 @@ fn base_thread_descriptor() -> ConfigureDescriptor {
     }
 }
 
-fn composed_descriptor(protocol: &str, role: &str) -> ConfigureDescriptor {
-    ConfigureDescriptor {
+fn composed_descriptor(module: &str, role: &str) -> ModulesConfigureDescriptor {
+    ModulesConfigureDescriptor {
         message_timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-01T00:01:00.000000Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
         definition: Definition {
-            protocol: protocol.to_string(),
+            module: module.to_string(),
             published: true,
             uses: Some(BTreeMap::from([(
                 "threads".to_string(),
-                "http://example.com/thread-protocol".to_string(),
+                "http://example.com/thread-module".to_string(),
             )])),
             key_agreement: None,
             types: BTreeMap::from([(
@@ -1374,7 +1375,7 @@ fn test_store_error(error: String) -> crate::errors::MessageStoreError {
 #[tokio::test]
 async fn generic_message_deserializes_typescript_authorization_shape() {
     let raw = signed_configure_message(
-        "http://example.com/protocol",
+        "http://example.com/module",
         true,
         "2025-01-01T00:00:00.000000Z",
     )
@@ -1382,15 +1383,15 @@ async fn generic_message_deserializes_typescript_authorization_shape() {
     let message: Message<Descriptor> = serde_json::from_value(raw.clone()).unwrap();
     assert_eq!(serde_json::to_value(message).unwrap(), raw);
 
-    let unsigned = serde_json::json!({ "descriptor": configure_descriptor("http://example.com/protocol", true, "2025-01-01T00:00:00.000000Z") });
+    let unsigned = serde_json::json!({ "descriptor": configure_descriptor("http://example.com/module", true, "2025-01-01T00:00:00.000000Z") });
     let message: Message<Descriptor> = serde_json::from_value(unsigned.clone()).unwrap();
     assert_eq!(serde_json::to_value(message).unwrap(), unsigned);
 }
 
 #[test]
-fn validate_definition_rejects_invalid_protocol_rules() {
+fn validate_definition_rejects_invalid_module_rules() {
     let mut descriptor = configure_descriptor(
-        "http://example.com/protocol",
+        "http://example.com/module",
         true,
         "2025-01-01T00:00:00.000000Z",
     );
@@ -1399,16 +1400,16 @@ fn validate_definition_rejects_invalid_protocol_rules() {
         .structure
         .get_mut("note")
         .unwrap()
-        .size = Some(protocol_types::Size {
+        .size = Some(module_types::Size {
         min: Some(10),
         max: Some(1),
     });
-    let error = protocol_types::validate_definition(&descriptor.definition).unwrap_err();
+    let error = module_types::validate_definition(&descriptor.definition).unwrap_err();
     assert_eq!(error.code, "ModulesConfigureInvalidSize");
 }
 
-fn enc_key_agreement() -> ProtocolKeyAgreement {
-    ProtocolKeyAgreement {
+fn enc_key_agreement() -> ModuleKeyAgreement {
+    ModuleKeyAgreement {
         public_key_jwk: serde_json::from_value(serde_json::json!({
             "kty": "OKP",
             "crv": "X25519",
@@ -1420,7 +1421,7 @@ fn enc_key_agreement() -> ProtocolKeyAgreement {
 
 fn enc_reader_definition() -> Definition {
     Definition {
-        protocol: "http://example.com/enc".to_string(),
+        module: "http://example.com/enc".to_string(),
         published: true,
         uses: None,
         key_agreement: Some(enc_key_agreement()),
@@ -1473,7 +1474,7 @@ fn enc_reader_definition() -> Definition {
 
 #[test]
 fn validate_definition_accepts_keyed_encrypted_definition() {
-    protocol_types::validate_definition(&enc_reader_definition())
+    module_types::validate_definition(&enc_reader_definition())
         .expect("keyed encrypted definition must validate");
 }
 
@@ -1481,7 +1482,7 @@ fn validate_definition_accepts_keyed_encrypted_definition() {
 fn validate_definition_rejects_encrypted_types_without_top_level_key() {
     let mut definition = enc_reader_definition();
     definition.key_agreement = None;
-    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    let error = module_types::validate_definition(&definition).unwrap_err();
     assert_eq!(error.code, "ModulesConfigureMissingTopLevelKeyAgreement");
 }
 
@@ -1489,7 +1490,7 @@ fn validate_definition_rejects_encrypted_types_without_top_level_key() {
 fn validate_definition_rejects_encrypted_path_without_path_key() {
     let mut definition = enc_reader_definition();
     definition.structure.get_mut("note").unwrap().key_agreement = None;
-    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    let error = module_types::validate_definition(&definition).unwrap_err();
     assert_eq!(
         error.code,
         "ModulesConfigureMissingEncryptedPathKeyAgreement"
@@ -1509,7 +1510,7 @@ fn validate_definition_rejects_encrypted_path_readable_by_anyone() {
             of: None,
             can: vec![Can::Create, Can::Read],
         }));
-    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    let error = module_types::validate_definition(&definition).unwrap_err();
     assert_eq!(error.code, "ModulesConfigureInvalidEncryptedAnyoneRead");
 }
 
@@ -1521,7 +1522,7 @@ fn validate_definition_rejects_role_resolving_to_encrypted_type() {
         .get_mut("member")
         .unwrap()
         .encryption_required = Some(true);
-    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    let error = module_types::validate_definition(&definition).unwrap_err();
     assert_eq!(error.code, "ModulesConfigureInvalidEncryptedRoleType");
 }
 
@@ -1533,7 +1534,7 @@ fn validate_definition_rejects_read_role_without_owning_key() {
         .get_mut("member")
         .unwrap()
         .key_agreement = None;
-    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    let error = module_types::validate_definition(&definition).unwrap_err();
     assert_eq!(
         error.code,
         "ModulesConfigureInvalidEncryptedRoleMissingKeyAgreement"
@@ -1542,16 +1543,16 @@ fn validate_definition_rejects_read_role_without_owning_key() {
 
 // Covers: DWN-PROTO-001, DWN-PROTO-005
 #[tokio::test]
-async fn protocols_configure_rejects_cross_protocol_role_with_encrypted_type() {
-    use crate::testing::put_protocol_definition;
+async fn modules_configure_rejects_cross_module_role_with_encrypted_type() {
+    use crate::testing::put_module_definition;
 
     let mut message_store = MemoryMessageStore::default();
     message_store.open().await.unwrap();
-    put_protocol_definition(
+    put_module_definition(
         "did:example:alice",
         &message_store,
         Definition {
-            protocol: "http://example.com/blog".to_string(),
+            module: "http://example.com/blog".to_string(),
             published: true,
             uses: None,
             key_agreement: Some(enc_key_agreement()),
@@ -1581,10 +1582,10 @@ async fn protocols_configure_rejects_cross_protocol_role_with_encrypted_type() {
     )
     .await;
     let handler =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
 
     let definition = Definition {
-        protocol: "http://example.com/composed".to_string(),
+        module: "http://example.com/composed".to_string(),
         published: true,
         uses: Some(BTreeMap::from([(
             "blog".to_string(),
@@ -1610,7 +1611,7 @@ async fn protocols_configure_rejects_cross_protocol_role_with_encrypted_type() {
             },
         )]),
     };
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-02T00:00:00.000000Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
@@ -1636,7 +1637,7 @@ async fn protocols_configure_rejects_cross_protocol_role_with_encrypted_type() {
 }
 
 #[test]
-fn validate_definition_rejects_cross_protocol_read_role_on_encrypted_path() {
+fn validate_definition_rejects_cross_module_read_role_on_encrypted_path() {
     let mut definition = enc_reader_definition();
     definition.uses = Some(BTreeMap::from([(
         "blog".to_string(),
@@ -1646,7 +1647,7 @@ fn validate_definition_rejects_cross_protocol_read_role_on_encrypted_path() {
         role: "blog:member".to_string(),
         can: vec![Can::Create, Can::Read],
     })];
-    let error = protocol_types::validate_definition(&definition).unwrap_err();
+    let error = module_types::validate_definition(&definition).unwrap_err();
     assert_eq!(
         error.code,
         "ModulesConfigureInvalidEncryptedCrossModuleRole"
@@ -1654,9 +1655,9 @@ fn validate_definition_rejects_cross_protocol_read_role_on_encrypted_path() {
 }
 
 #[allow(dead_code)]
-fn _message_from_descriptor(descriptor: ConfigureDescriptor) -> Message<Descriptor> {
+fn _message_from_descriptor(descriptor: ModulesConfigureDescriptor) -> Message<Descriptor> {
     Message {
-        descriptor: Descriptor::Protocols(Box::new(Protocols::Configure(descriptor))),
+        descriptor: Descriptor::Modules(Box::new(Modules::Configure(descriptor))),
         fields: Fields::Write(WriteFields::default()),
     }
 }
@@ -1669,7 +1670,7 @@ use crate::stores::{DataStore, DataStoreGetResult, DataStorePutResult};
 use crate::testing::{signed_write_message, WriteSpec};
 use futures_util::{stream, Stream, StreamExt};
 
-const FLIP_PROTOCOL: &str = "http://example.com/flip";
+const FLIP_MODULE: &str = "http://example.com/flip";
 const FLIP_T1: &str = "2025-01-01T00:00:00.000000Z";
 const FLIP_T1_5: &str = "2025-01-01T12:00:00.000000Z";
 const FLIP_MID: &str = "2025-01-02T00:00:00.000000Z";
@@ -1694,10 +1695,10 @@ fn flip_key_id(x: &str) -> String {
 
 fn flip_keyed(encrypted: bool, x: &str) -> Definition {
     Definition {
-        protocol: FLIP_PROTOCOL.to_string(),
+        module: FLIP_MODULE.to_string(),
         published: true,
         uses: None,
-        key_agreement: Some(ProtocolKeyAgreement {
+        key_agreement: Some(ModuleKeyAgreement {
             public_key_jwk: flip_key_jwk(x),
         }),
         types: BTreeMap::from([(
@@ -1711,7 +1712,7 @@ fn flip_keyed(encrypted: bool, x: &str) -> Definition {
         structure: BTreeMap::from([(
             "note".to_string(),
             RuleSet {
-                key_agreement: Some(ProtocolKeyAgreement {
+                key_agreement: Some(ModuleKeyAgreement {
                     public_key_jwk: flip_key_jwk(x),
                 }),
                 actions: vec![Action::Who(ActionWho {
@@ -1727,7 +1728,7 @@ fn flip_keyed(encrypted: bool, x: &str) -> Definition {
 
 fn flip_plain() -> Definition {
     Definition {
-        protocol: FLIP_PROTOCOL.to_string(),
+        module: FLIP_MODULE.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -1757,7 +1758,7 @@ fn flip_envelope(key_id: &str) -> EncryptionEnvelope {
     EncryptionEnvelope {
         algorithm: ContentEncryptionAlgorithm::A256Ctr,
         initialization_vector: "oKGio6SlpqeoqaqrrK2urw".to_string(),
-        key_encryption: vec![KeyEncryption::ProtocolPath {
+        key_encryption: vec![KeyEncryption::ModulePath {
             algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
             key_id: key_id.to_string(),
             ephemeral_public_key: flip_key_jwk("C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"),
@@ -1845,14 +1846,14 @@ impl DataStore for StubDataStore {
 }
 
 async fn flip_harness() -> (
-    ProtocolsConfigureHandler<MemoryMessageStore>,
+    ModulesConfigureHandler<MemoryMessageStore>,
     RecordsWriteHandler<MemoryMessageStore, StubDataStore>,
     MemoryMessageStore,
 ) {
     let mut message_store = MemoryMessageStore::default();
     message_store.open().await.unwrap();
     let configures =
-        ProtocolsConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
+        ModulesConfigureHandler::new(message_store.clone(), Some(Arc::new(test_resolver())));
     let writes = RecordsWriteHandler::new(
         message_store.clone(),
         StubDataStore::default(),
@@ -1862,14 +1863,14 @@ async fn flip_harness() -> (
 }
 
 async fn run_flip_configure<S>(
-    configures: &ProtocolsConfigureHandler<S>,
+    configures: &ModulesConfigureHandler<S>,
     definition: Definition,
     timestamp: &str,
-) -> crate::Response<crate::replies::protocols::Configure>
+) -> crate::Response<crate::replies::modules::Configure>
 where
     S: MessageStore + Clone + Send + Sync + 'static,
 {
-    let descriptor = ConfigureDescriptor {
+    let descriptor = ModulesConfigureDescriptor {
         message_timestamp: chrono::DateTime::parse_from_rfc3339(timestamp)
             .unwrap()
             .with_timezone(&chrono::Utc),
@@ -1887,8 +1888,8 @@ where
 
 async fn admit_flip_record<S>(
     writes: &RecordsWriteHandler<S, StubDataStore>,
-    protocol: &str,
-    protocol_path: &str,
+    module: &str,
+    module_path: &str,
     timestamp: &str,
     envelope: Option<EncryptionEnvelope>,
 ) -> crate::Response<crate::replies::records::Write>
@@ -1899,8 +1900,8 @@ where
 
     let data = Bytes::from_static(FLIP_DATA);
     let message = signed_write_message(WriteSpec {
-        protocol: protocol.to_string(),
-        protocol_path: protocol_path.to_string(),
+        module: module.to_string(),
+        module_path: module_path.to_string(),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
         encryption: envelope,
@@ -1912,14 +1913,14 @@ where
 
 // Covers: DWN-PROTO-001, DWN-PROTO-004
 #[tokio::test]
-async fn protocols_configure_rejects_plaintext_to_encrypted_flip_after_use() {
+async fn modules_configure_rejects_plaintext_to_encrypted_flip_after_use() {
     let (configures, writes, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
     let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    let reply = admit_flip_record(&writes, FLIP_MODULE, "note", FLIP_MID, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
@@ -1939,7 +1940,7 @@ async fn protocols_configure_rejects_plaintext_to_encrypted_flip_after_use() {
 
 // Covers: DWN-PROTO-001, DWN-PROTO-004
 #[tokio::test]
-async fn protocols_configure_rejects_encrypted_to_plaintext_flip_after_use() {
+async fn modules_configure_rejects_encrypted_to_plaintext_flip_after_use() {
     let (configures, writes, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
@@ -1948,7 +1949,7 @@ async fn protocols_configure_rejects_encrypted_to_plaintext_flip_after_use() {
 
     let reply = admit_flip_record(
         &writes,
-        FLIP_PROTOCOL,
+        FLIP_MODULE,
         "note",
         FLIP_MID,
         Some(flip_envelope(&flip_key_id(flip_x))),
@@ -1970,7 +1971,7 @@ async fn protocols_configure_rejects_encrypted_to_plaintext_flip_after_use() {
 
 // Covers: DWN-PROTO-001
 #[tokio::test]
-async fn protocols_configure_accepts_policy_change_without_records() {
+async fn modules_configure_accepts_policy_change_without_records() {
     let (configures, _, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
@@ -1983,7 +1984,7 @@ async fn protocols_configure_accepts_policy_change_without_records() {
 
 // Covers: DWN-PROTO-004
 #[tokio::test]
-async fn protocols_configure_accepts_removed_populated_path() {
+async fn modules_configure_accepts_removed_populated_path() {
     let (configures, writes, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
@@ -1996,13 +1997,13 @@ async fn protocols_configure_accepts_removed_populated_path() {
             encryption_required: Some(true),
         },
     );
-    v1.key_agreement = Some(ProtocolKeyAgreement {
+    v1.key_agreement = Some(ModuleKeyAgreement {
         public_key_jwk: flip_key_jwk(flip_x),
     });
     v1.structure.insert(
         "doc".to_string(),
         RuleSet {
-            key_agreement: Some(ProtocolKeyAgreement {
+            key_agreement: Some(ModuleKeyAgreement {
                 public_key_jwk: flip_key_jwk(flip_x),
             }),
             actions: vec![Action::Who(ActionWho {
@@ -2018,7 +2019,7 @@ async fn protocols_configure_accepts_removed_populated_path() {
 
     let reply = admit_flip_record(
         &writes,
-        FLIP_PROTOCOL,
+        FLIP_MODULE,
         "doc",
         FLIP_MID,
         Some(flip_envelope(&flip_key_id(flip_x))),
@@ -2032,7 +2033,7 @@ async fn protocols_configure_accepts_removed_populated_path() {
 
 // Covers: DWN-PROTO-004
 #[tokio::test]
-async fn protocols_configure_accepts_key_rotation_and_governs_new_writes() {
+async fn modules_configure_accepts_key_rotation_and_governs_new_writes() {
     let (configures, writes, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
@@ -2041,7 +2042,7 @@ async fn protocols_configure_accepts_key_rotation_and_governs_new_writes() {
 
     let reply = admit_flip_record(
         &writes,
-        FLIP_PROTOCOL,
+        FLIP_MODULE,
         "note",
         FLIP_MID,
         Some(flip_envelope(&flip_key_id(flip_x))),
@@ -2054,7 +2055,7 @@ async fn protocols_configure_accepts_key_rotation_and_governs_new_writes() {
 
     let reply = admit_flip_record(
         &writes,
-        FLIP_PROTOCOL,
+        FLIP_MODULE,
         "note",
         FLIP_T3,
         Some(flip_envelope(&flip_key_id(ROTATED_X))),
@@ -2065,7 +2066,7 @@ async fn protocols_configure_accepts_key_rotation_and_governs_new_writes() {
 
 // Covers: DWN-PROTO-004, DWN-PROTO-005
 #[tokio::test]
-async fn protocols_configure_rejects_composed_policy_flip() {
+async fn modules_configure_rejects_composed_policy_flip() {
     const BLOG: &str = "http://example.com/blog";
     const COMPOSER: &str = "http://example.com/composer";
 
@@ -2073,7 +2074,7 @@ async fn protocols_configure_rejects_composed_policy_flip() {
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
     let blog_v1 = Definition {
-        protocol: BLOG.to_string(),
+        module: BLOG.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -2111,7 +2112,7 @@ async fn protocols_configure_rejects_composed_policy_flip() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let composer = Definition {
-        protocol: COMPOSER.to_string(),
+        module: COMPOSER.to_string(),
         published: true,
         uses: Some(BTreeMap::from([("blog".to_string(), BLOG.to_string())])),
         key_agreement: None,
@@ -2143,7 +2144,7 @@ async fn protocols_configure_rejects_composed_policy_flip() {
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let mut blog_v2 = flip_keyed(true, flip_x);
-    blog_v2.protocol = BLOG.to_string();
+    blog_v2.module = BLOG.to_string();
     blog_v2.types = BTreeMap::from([
         (
             "post".to_string(),
@@ -2165,7 +2166,7 @@ async fn protocols_configure_rejects_composed_policy_flip() {
     blog_v2.structure = BTreeMap::from([(
         "post".to_string(),
         RuleSet {
-            key_agreement: Some(ProtocolKeyAgreement {
+            key_agreement: Some(ModuleKeyAgreement {
                 public_key_jwk: flip_key_jwk(flip_x),
             }),
             actions: vec![Action::Who(ActionWho {
@@ -2179,7 +2180,7 @@ async fn protocols_configure_rejects_composed_policy_flip() {
     let reply = run_flip_configure(&configures, blog_v2, FLIP_T2).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert!(
-        reply.status.detail.contains("imported by protocol"),
+        reply.status.detail.contains("imported by module"),
         "{}",
         reply.status.detail
     );
@@ -2192,7 +2193,7 @@ async fn protocols_configure_rejects_composed_policy_flip() {
 
 // Covers: DWN-PROTO-004
 #[tokio::test]
-async fn protocols_configure_out_of_order_arrival_uses_governing_definition() {
+async fn modules_configure_out_of_order_arrival_uses_governing_definition() {
     let (configures, writes, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
@@ -2202,7 +2203,7 @@ async fn protocols_configure_out_of_order_arrival_uses_governing_definition() {
     let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    let reply = admit_flip_record(&writes, FLIP_MODULE, "note", FLIP_MID, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let reply = run_flip_configure(&configures, flip_plain(), FLIP_T4).await;
@@ -2211,7 +2212,7 @@ async fn protocols_configure_out_of_order_arrival_uses_governing_definition() {
 
 // Covers: DWN-PROTO-001, DWN-PROTO-004
 #[tokio::test]
-async fn protocols_configure_rejects_historical_insert_matching_newest_policy() {
+async fn modules_configure_rejects_historical_insert_matching_newest_policy() {
     let (configures, writes, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
@@ -2221,7 +2222,7 @@ async fn protocols_configure_rejects_historical_insert_matching_newest_policy() 
     let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    let reply = admit_flip_record(&writes, FLIP_MODULE, "note", FLIP_MID, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     // Same policy as newest, but a retained record contradicts the incoming
@@ -2240,7 +2241,7 @@ async fn protocols_configure_rejects_historical_insert_matching_newest_policy() 
 
 // Covers: DWN-PROTO-001, DWN-PROTO-004
 #[tokio::test]
-async fn protocols_configure_rejects_historical_insert_contradicting_records() {
+async fn modules_configure_rejects_historical_insert_contradicting_records() {
     let (configures, writes, _) = flip_harness().await;
     let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
 
@@ -2250,12 +2251,12 @@ async fn protocols_configure_rejects_historical_insert_contradicting_records() {
     let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    let reply = admit_flip_record(&writes, FLIP_MODULE, "note", FLIP_MID, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let reply = admit_flip_record(
         &writes,
-        FLIP_PROTOCOL,
+        FLIP_MODULE,
         "note",
         FLIP_T4,
         Some(flip_envelope(&flip_key_id(flip_x))),
@@ -2281,16 +2282,16 @@ struct FailRecordsQueries {
     inner: MemoryMessageStore,
 }
 
-fn is_protocol_records_query(filters: &Filters) -> bool {
+fn is_module_records_query(filters: &Filters) -> bool {
     filters.set.iter().any(|entry| {
         let is_write = matches!(
             entry.get(&FilterKey::Index("method".to_string())),
             Some(Filter::Equal(Value::String(method))) if method == "Write"
         );
-        let has_protocol = entry
+        let has_module = entry
             .keys()
-            .any(|key| matches!(key, FilterKey::Index(name) if name == "protocol"));
-        is_write && has_protocol
+            .any(|key| matches!(key, FilterKey::Index(name) if name == "module"));
+        is_write && has_module
     })
 }
 
@@ -2343,7 +2344,7 @@ impl MessageStore for FailRecordsQueries {
         let inner = self.inner.clone();
         let tenant = tenant.to_string();
         async move {
-            if is_protocol_records_query(&filters) {
+            if is_module_records_query(&filters) {
                 return Err(crate::errors::MessageStoreError::StoreError(
                     crate::errors::StoreError::InternalException(
                         "injected records query failure".to_string(),
@@ -2381,11 +2382,11 @@ impl MessageStore for FailRecordsQueries {
 
 // Covers: DWN-PROTO-001
 #[tokio::test]
-async fn protocols_configure_scan_failure_fails_closed() {
+async fn modules_configure_scan_failure_fails_closed() {
     let mut inner = MemoryMessageStore::default();
     inner.open().await.unwrap();
     let store = FailRecordsQueries { inner };
-    let configures = ProtocolsConfigureHandler::new(store.clone(), Some(Arc::new(test_resolver())));
+    let configures = ModulesConfigureHandler::new(store.clone(), Some(Arc::new(test_resolver())));
     let writes = RecordsWriteHandler::new(
         store.clone(),
         StubDataStore::default(),
@@ -2396,7 +2397,7 @@ async fn protocols_configure_scan_failure_fails_closed() {
     let reply = run_flip_configure(&configures, flip_plain(), FLIP_T1).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
-    let reply = admit_flip_record(&writes, FLIP_PROTOCOL, "note", FLIP_MID, None).await;
+    let reply = admit_flip_record(&writes, FLIP_MODULE, "note", FLIP_MID, None).await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 
     let reply = run_flip_configure(&configures, flip_keyed(true, flip_x), FLIP_T2).await;
@@ -2407,21 +2408,21 @@ async fn protocols_configure_scan_failure_fails_closed() {
 /// must report. The `types` and root-`structure` cases share a key name, so the
 /// expected wording is what keeps them from proving the same thing twice.
 const RESERVED_NAMESPACE_PLACEMENTS: [(&str, &str); 4] = [
-    ("types", "protocol type '$encryption'"),
-    ("root", "protocol structure path '$encryption'"),
-    ("nested", "protocol structure path 'thread/$encryption'"),
-    // Deeper than the protocol's own 10-level nesting rule. The scan carries no
+    ("types", "module type '$encryption'"),
+    ("root", "module structure path '$encryption'"),
+    ("nested", "module structure path 'thread/$encryption'"),
+    // Deeper than the module's own 10-level nesting rule. The scan carries no
     // depth limit of its own, so the reservation is still named rather than
     // falling through to an anonymous schema failure.
     (
         "deep",
-        "protocol structure path 'thread/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/d11/$encryption'",
+        "module structure path 'thread/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/d11/$encryption'",
     ),
 ];
 
 fn definition_with_reserved_namespace(placement: &str) -> serde_json::Value {
     let mut definition = serde_json::json!({
-        "protocol": "http://example.com/protocol",
+        "module": "http://example.com/module",
         "published": true,
         "types": { "thread": {} },
         "structure": { "thread": {} }
@@ -2446,7 +2447,7 @@ fn definition_with_reserved_namespace(placement: &str) -> serde_json::Value {
 fn configure_message_with_raw_definition(definition: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
         "descriptor": {
-            "interface": "Protocols",
+            "interface": "Modules",
             "method": "Configure",
             "messageTimestamp": "2025-01-01T00:00:00.000000Z",
             "definition": definition
@@ -2506,7 +2507,7 @@ async fn reserved_encryption_namespace_is_rejected_during_construction() {
             serde_json::from_value(definition_with_reserved_namespace(placement))
                 .expect("definition fixture must deserialize");
 
-        let error = crate::descriptors::protocols::ConfigureParameters {
+        let error = crate::descriptors::modules::ConfigureParameters {
             message_timestamp: None,
             definition,
             permission_grant_id: None,
@@ -2543,7 +2544,7 @@ fn reserved_namespace_is_named_even_when_the_definition_cannot_be_typed() {
         (
             "reserved structure entry holding a non-rule-set",
             serde_json::json!({
-                "protocol": "http://example.com/protocol", "published": true,
+                "module": "http://example.com/module", "published": true,
                 "types": { "thread": {} },
                 "structure": { "thread": { "$encryption": "garbage" } }
             }),
@@ -2551,7 +2552,7 @@ fn reserved_namespace_is_named_even_when_the_definition_cannot_be_typed() {
         (
             "reserved type holding a non-type",
             serde_json::json!({
-                "protocol": "http://example.com/protocol", "published": true,
+                "module": "http://example.com/module", "published": true,
                 "types": { "$encryption": 42 },
                 "structure": { "thread": {} }
             }),
@@ -2563,7 +2564,7 @@ fn reserved_namespace_is_named_even_when_the_definition_cannot_be_typed() {
             serde_json::from_value::<Definition>(raw.clone()).is_err(),
             "{label} must be untypeable, or this test proves nothing"
         );
-        let error = crate::protocols::validate_reserved_control_namespace(&raw)
+        let error = crate::modules::validate_reserved_control_namespace(&raw)
             .expect_err("reserved namespace must still be named");
         assert_eq!(
             error.code,

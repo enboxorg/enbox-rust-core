@@ -75,14 +75,14 @@ where
 const TENANT: &str = "did:example:alice";
 const OTHER_TENANT: &str = "did:example:bob";
 
-fn message(timestamp: &str, protocol: &str, encoded_data: Option<&str>) -> Message<Descriptor> {
+fn message(timestamp: &str, module: &str, encoded_data: Option<&str>) -> Message<Descriptor> {
     let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
         .unwrap()
         .with_timezone(&chrono::Utc);
     let descriptor =
         Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-            protocol: protocol.to_string(),
-            protocol_path: "note".to_string(),
+            module: module.to_string(),
+            module_path: "note".to_string(),
             recipient: None,
             schema: None,
             tags: None,
@@ -122,9 +122,8 @@ fn indexes(message: &Message<Descriptor>) -> KeyValues {
         Value::String("Records".to_string()),
     );
     indexes.insert("method".to_string(), Value::String("Write".to_string()));
-    if let Some(protocol) = serde_json::to_value(&message.descriptor).unwrap()["protocol"].as_str()
-    {
-        indexes.insert("protocol".to_string(), Value::String(protocol.to_string()));
+    if let Some(module) = serde_json::to_value(&message.descriptor).unwrap()["module"].as_str() {
+        indexes.insert("module".to_string(), Value::String(module.to_string()));
     }
     indexes
 }
@@ -135,10 +134,10 @@ fn message_cid(message: &Message<Descriptor>) -> String {
     canonical.cid().unwrap().to_string()
 }
 
-fn protocol_filter(protocol: &str) -> Filters {
+fn module_filter(module: &str) -> Filters {
     Filters::from([[(
-        FilterKey::Index("protocol".to_string()),
-        Filter::Equal(Value::String(protocol.to_string())),
+        FilterKey::Index("module".to_string()),
+        Filter::Equal(Value::String(module.to_string())),
     )]])
 }
 
@@ -151,7 +150,7 @@ where
     let store = new_message_store(factory).await;
     let msg = message(
         "2025-01-01T00:00:00.000000Z",
-        "https://example.com/protocol/notes",
+        "https://example.com/module/notes",
         Some("aGVsbG8"),
     );
     let cid = message_cid(&msg);
@@ -173,24 +172,24 @@ where
     let store = new_message_store(factory).await;
     let first = message(
         "2025-01-01T00:00:00.000000Z",
-        "https://example.com/protocol/notes",
+        "https://example.com/module/notes",
         None,
     );
     let second = message(
         "2025-01-01T00:00:01.000000Z",
-        "https://example.com/protocol/notes",
+        "https://example.com/module/notes",
         None,
     );
     let third = message(
         "2025-01-01T00:00:02.000000Z",
-        "https://example.com/protocol/tasks",
+        "https://example.com/module/tasks",
         None,
     );
     for msg in [&first, &second, &third] {
         store.put(TENANT, msg.clone(), indexes(msg)).await.unwrap();
     }
 
-    let filters = protocol_filter("https://example.com/protocol/notes");
+    let filters = module_filter("https://example.com/module/notes");
     assert_eq!(
         store
             .count(TENANT, filters.clone(), None, None)
@@ -229,7 +228,7 @@ where
     let all = store
         .query(
             TENANT,
-            protocol_filter("https://example.com/protocol/notes"),
+            module_filter("https://example.com/module/notes"),
             Some(MessageSort::Timestamp(SortDirection::Ascending)),
             None,
             None,
@@ -248,7 +247,7 @@ where
     let store = new_message_store(factory).await;
     let msg = message(
         "2025-01-01T00:00:00.000000Z",
-        "https://example.com/protocol/notes",
+        "https://example.com/module/notes",
         None,
     );
     let cid = message_cid(&msg);
@@ -260,7 +259,7 @@ where
         store
             .count(
                 TENANT,
-                protocol_filter("https://example.com/protocol/notes"),
+                module_filter("https://example.com/module/notes"),
                 None,
                 None,
             )
@@ -283,7 +282,7 @@ where
     let store = new_message_store(factory).await;
     let msg = message(
         "2025-01-01T00:00:00.000000Z",
-        "https://example.com/protocol/notes",
+        "https://example.com/module/notes",
         None,
     );
     let cid = message_cid(&msg);
@@ -299,7 +298,7 @@ where
         .await
         .unwrap();
 
-    let filters = protocol_filter("https://example.com/protocol/notes");
+    let filters = module_filter("https://example.com/module/notes");
     assert_eq!(
         store
             .count(TENANT, filters.clone(), None, None)
@@ -323,13 +322,13 @@ where
 {
     let store = new_message_store(factory).await;
     for ts in ["2025-01-01T00:00:00.000000Z", "2025-01-01T00:00:01.000000Z"] {
-        let msg = message(ts, "https://example.com/protocol/notes", None);
+        let msg = message(ts, "https://example.com/module/notes", None);
         store.put(TENANT, msg.clone(), indexes(&msg)).await.unwrap();
     }
 
     store.clear().await.unwrap();
 
-    let filters = protocol_filter("https://example.com/protocol/notes");
+    let filters = module_filter("https://example.com/module/notes");
     assert_eq!(
         store
             .count(TENANT, filters.clone(), None, None)
@@ -477,7 +476,7 @@ async fn memory_message_store_excludes_rows_missing_the_sort_property() {
 // insertion order, per-group partitioning, pagination and counting over the
 // admitted set, and fail-closed reads. SQLite runs in `dwn-rs-stores`.
 
-const LIMIT_PROTOCOL: &str = "https://example.com/protocol/threads";
+const LIMIT_MODULE: &str = "https://example.com/module/threads";
 const LIMIT_ROOT_PATH: &str = "thread";
 const LIMIT_NESTED_PATH: &str = "thread/message";
 
@@ -491,7 +490,7 @@ pub struct LimitRow {
     parent_id: Option<String>,
     context_id: Option<String>,
     date_created: String,
-    protocol_path: String,
+    module_path: String,
     latest: bool,
     tombstone: bool,
 }
@@ -502,14 +501,14 @@ pub fn limit_row(
     parent_id: Option<&str>,
     context_id: Option<&str>,
     day: u32,
-    protocol_path: &str,
+    module_path: &str,
 ) -> LimitRow {
     LimitRow {
         record_id: record_id.to_string(),
         parent_id: parent_id.map(str::to_string),
         context_id: context_id.map(str::to_string),
         date_created: limit_day(day),
-        protocol_path: protocol_path.to_string(),
+        module_path: module_path.to_string(),
         latest: true,
         tombstone: false,
     }
@@ -522,8 +521,8 @@ pub fn limit_message(row: &LimitRow) -> Message<Descriptor> {
         .with_timezone(&chrono::Utc);
     let descriptor =
         Descriptor::Records(Box::new(Records::Write(Box::new(RecordsWriteDescriptor {
-            protocol: LIMIT_PROTOCOL.to_string(),
-            protocol_path: row.protocol_path.clone(),
+            module: LIMIT_MODULE.to_string(),
+            module_path: row.module_path.clone(),
             recipient: None,
             schema: None,
             tags: None,
@@ -560,12 +559,12 @@ pub fn limit_indexes(row: &LimitRow) -> KeyValues {
         ),
         ("isLatestBaseState".to_string(), Value::Bool(row.latest)),
         (
-            "protocol".to_string(),
-            Value::String(LIMIT_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(LIMIT_MODULE.to_string()),
         ),
         (
-            "protocolPath".to_string(),
-            Value::String(row.protocol_path.clone()),
+            "modulePath".to_string(),
+            Value::String(row.module_path.clone()),
         ),
         ("recordId".to_string(), Value::String(row.record_id.clone())),
         (
@@ -605,14 +604,14 @@ pub fn write_record_ids(messages: &[Message<Descriptor>]) -> Vec<String> {
 
 /// Shared with the record-limit reopen test in `dwn-rs-stores`.
 pub fn limit_policy(
-    protocol_path: &str,
+    module_path: &str,
     max: u64,
     context_id: Option<&str>,
     parent_id: Option<Vec<String>>,
 ) -> super::RecordLimitOccupancy {
     super::RecordLimitOccupancy {
-        protocol: LIMIT_PROTOCOL.to_string(),
-        protocol_path: protocol_path.to_string(),
+        module: LIMIT_MODULE.to_string(),
+        module_path: module_path.to_string(),
         context_id: context_id.map(str::to_string),
         parent_id,
         max,

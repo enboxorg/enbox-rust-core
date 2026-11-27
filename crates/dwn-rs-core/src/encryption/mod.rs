@@ -16,7 +16,7 @@ pub mod control;
 pub mod ctr;
 pub mod error;
 pub mod kdf;
-pub mod protocol;
+pub mod module;
 pub mod resolution;
 pub mod x25519;
 
@@ -38,21 +38,21 @@ use crate::auth::resolver::recipient::RecipientKey;
 pub const KEY_AGREEMENT_ALGORITHM: &str = "X25519-HKDF-SHA256+A256KW";
 pub const ROLE_AUDIENCE_DERIVATION_SCHEME: &str = "roleAudience";
 pub const SEAL_DERIVATION_SCHEME: &str = "seal";
-pub const ENCRYPTION_PROTOCOL_URI: &str = "https://identity.foundation/dwn/protocols/encryption";
-pub const ENCRYPTION_PROTOCOL_GRANT_KEY_PATH: &str = "grantKey";
-pub const ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH: &str = "wrappedGrantKey";
-/// Reserved virtual protocol-path root owning the control record paths
-/// below. A protocol definition may never declare it; enforcement lives with
-/// the rest of protocol-definition validation in
-/// [`crate::protocols::validate_reserved_control_namespace`].
+pub const ENCRYPTION_MODULE_URI: &str = "https://identity.foundation/dwn/modules/encryption";
+pub const ENCRYPTION_MODULE_GRANT_KEY_PATH: &str = "grantKey";
+pub const ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH: &str = "wrappedGrantKey";
+/// Reserved virtual module-path root owning the control record paths
+/// below. A module definition may never declare it; enforcement lives with
+/// the rest of module-definition validation in
+/// [`crate::modules::validate_reserved_control_namespace`].
 pub const ENCRYPTION_CONTROL_ROOT_PATH: &str = "$encryption";
 pub const ENCRYPTION_CONTROL_AUDIENCE_PATH: &str = "$encryption/audience";
 pub const ENCRYPTION_CONTROL_DELIVERY_PATH: &str = "$encryption/delivery";
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum DerivationScheme {
-    #[serde(rename = "protocolPath")]
-    ProtocolPath,
+    #[serde(rename = "modulePath")]
+    ModulePath,
     #[serde(rename = "roleAudience")]
     RoleAudience,
 }
@@ -60,7 +60,7 @@ pub enum DerivationScheme {
 impl DerivationScheme {
     pub fn as_str(&self) -> &'static str {
         match self {
-            DerivationScheme::ProtocolPath => "protocolPath",
+            DerivationScheme::ModulePath => "modulePath",
             DerivationScheme::RoleAudience => "roleAudience",
         }
     }
@@ -87,13 +87,13 @@ impl KeyAgreementAlgorithm {
 }
 
 /// A single `DwnEncryption.keyEncryption` entry, discriminated by
-/// `derivationScheme`. `protocolPath` carries no extra fields; `roleAudience`
-/// requires both `protocol` and `rolePath` (enforced structurally).
+/// `derivationScheme`. `modulePath` carries no extra fields; `roleAudience`
+/// requires both `module` and `rolePath` (enforced structurally).
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "derivationScheme")]
 pub enum KeyEncryption {
-    #[serde(rename = "protocolPath")]
-    ProtocolPath {
+    #[serde(rename = "modulePath")]
+    ModulePath {
         algorithm: KeyAgreementAlgorithm,
         #[serde(rename = "keyId")]
         key_id: String,
@@ -111,7 +111,7 @@ pub enum KeyEncryption {
         ephemeral_public_key: JWK,
         #[serde(rename = "encryptedKey")]
         encrypted_key: String,
-        protocol: String,
+        module: String,
         #[serde(rename = "rolePath")]
         role_path: String,
     },
@@ -120,14 +120,14 @@ pub enum KeyEncryption {
 impl KeyEncryption {
     pub fn key_id(&self) -> &str {
         match self {
-            KeyEncryption::ProtocolPath { key_id, .. } => key_id,
+            KeyEncryption::ModulePath { key_id, .. } => key_id,
             KeyEncryption::RoleAudience { key_id, .. } => key_id,
         }
     }
 
     pub fn ephemeral_public_key(&self) -> &JWK {
         match self {
-            KeyEncryption::ProtocolPath {
+            KeyEncryption::ModulePath {
                 ephemeral_public_key,
                 ..
             } => ephemeral_public_key,
@@ -140,35 +140,35 @@ impl KeyEncryption {
 
     pub fn encrypted_key(&self) -> &str {
         match self {
-            KeyEncryption::ProtocolPath { encrypted_key, .. } => encrypted_key,
+            KeyEncryption::ModulePath { encrypted_key, .. } => encrypted_key,
             KeyEncryption::RoleAudience { encrypted_key, .. } => encrypted_key,
         }
     }
 
     pub fn derivation_scheme(&self) -> DerivationScheme {
         match self {
-            KeyEncryption::ProtocolPath { .. } => DerivationScheme::ProtocolPath,
+            KeyEncryption::ModulePath { .. } => DerivationScheme::ModulePath,
             KeyEncryption::RoleAudience { .. } => DerivationScheme::RoleAudience,
         }
     }
 
-    pub fn protocol(&self) -> Option<&str> {
+    pub fn module(&self) -> Option<&str> {
         match self {
-            KeyEncryption::ProtocolPath { .. } => None,
-            KeyEncryption::RoleAudience { protocol, .. } => Some(protocol),
+            KeyEncryption::ModulePath { .. } => None,
+            KeyEncryption::RoleAudience { module, .. } => Some(module),
         }
     }
 
     pub fn role_path(&self) -> Option<&str> {
         match self {
-            KeyEncryption::ProtocolPath { .. } => None,
+            KeyEncryption::ModulePath { .. } => None,
             KeyEncryption::RoleAudience { role_path, .. } => Some(role_path),
         }
     }
 
     pub fn algorithm(&self) -> KeyAgreementAlgorithm {
         match self {
-            KeyEncryption::ProtocolPath { algorithm, .. } => *algorithm,
+            KeyEncryption::ModulePath { algorithm, .. } => *algorithm,
             KeyEncryption::RoleAudience { algorithm, .. } => *algorithm,
         }
     }
@@ -206,7 +206,7 @@ pub fn recipient_key_encryption_inputs(
         })
         .collect::<Result<BTreeMap<_, _>, EncryptionError>>()?
         .into_iter()
-        .map(|(key_id, public_key)| KeyEncryptionInput::ProtocolPath {
+        .map(|(key_id, public_key)| KeyEncryptionInput::ModulePath {
             algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
             key_id,
             public_key,
@@ -215,12 +215,12 @@ pub fn recipient_key_encryption_inputs(
 }
 
 /// Builder input for a single `keyEncryption` entry, discriminated by
-/// `derivationScheme`. `roleAudience` requires `protocol`/`rolePath`.
+/// `derivationScheme`. `roleAudience` requires `module`/`rolePath`.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "derivationScheme")]
 pub enum KeyEncryptionInput {
-    #[serde(rename = "protocolPath")]
-    ProtocolPath {
+    #[serde(rename = "modulePath")]
+    ModulePath {
         algorithm: KeyAgreementAlgorithm,
         #[serde(rename = "keyId")]
         key_id: String,
@@ -234,7 +234,7 @@ pub enum KeyEncryptionInput {
         key_id: String,
         #[serde(rename = "publicKey")]
         public_key: JWK,
-        protocol: String,
+        module: String,
         #[serde(rename = "rolePath")]
         role_path: String,
     },
@@ -243,49 +243,49 @@ pub enum KeyEncryptionInput {
 impl KeyEncryptionInput {
     pub fn key_id(&self) -> &str {
         match self {
-            KeyEncryptionInput::ProtocolPath { key_id, .. } => key_id,
+            KeyEncryptionInput::ModulePath { key_id, .. } => key_id,
             KeyEncryptionInput::RoleAudience { key_id, .. } => key_id,
         }
     }
 
     pub fn public_key(&self) -> &JWK {
         match self {
-            KeyEncryptionInput::ProtocolPath { public_key, .. } => public_key,
+            KeyEncryptionInput::ModulePath { public_key, .. } => public_key,
             KeyEncryptionInput::RoleAudience { public_key, .. } => public_key,
         }
     }
 
     pub fn derivation_scheme(&self) -> DerivationScheme {
         match self {
-            KeyEncryptionInput::ProtocolPath { .. } => DerivationScheme::ProtocolPath,
+            KeyEncryptionInput::ModulePath { .. } => DerivationScheme::ModulePath,
             KeyEncryptionInput::RoleAudience { .. } => DerivationScheme::RoleAudience,
         }
     }
 
-    pub fn protocol(&self) -> Option<&str> {
+    pub fn module(&self) -> Option<&str> {
         match self {
-            KeyEncryptionInput::ProtocolPath { .. } => None,
-            KeyEncryptionInput::RoleAudience { protocol, .. } => Some(protocol),
+            KeyEncryptionInput::ModulePath { .. } => None,
+            KeyEncryptionInput::RoleAudience { module, .. } => Some(module),
         }
     }
 
     pub fn role_path(&self) -> Option<&str> {
         match self {
-            KeyEncryptionInput::ProtocolPath { .. } => None,
+            KeyEncryptionInput::ModulePath { .. } => None,
             KeyEncryptionInput::RoleAudience { role_path, .. } => Some(role_path),
         }
     }
 
     pub fn algorithm(&self) -> KeyAgreementAlgorithm {
         match self {
-            KeyEncryptionInput::ProtocolPath { algorithm, .. } => *algorithm,
+            KeyEncryptionInput::ModulePath { algorithm, .. } => *algorithm,
             KeyEncryptionInput::RoleAudience { algorithm, .. } => *algorithm,
         }
     }
 }
 
 /// Agent encryption-control seal key wrap. This is a separate type from
-/// `DwnEncryption.keyEncryption`; its KEK derivation binds protocol,
+/// `DwnEncryption.keyEncryption`; its KEK derivation binds module,
 /// rolePath, contextId, and audienceKeyId, not a `keyId`.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "derivationScheme")]
@@ -336,7 +336,7 @@ pub struct SealKeyWrapInput<'a> {
     pub algorithm: KeyAgreementAlgorithm,
     pub key_id: String,
     pub public_key: JWK,
-    pub protocol: &'a str,
+    pub module: &'a str,
     pub role_path: &'a str,
     pub context_id: &'a str,
     pub audience_key_id: &'a str,
@@ -377,28 +377,26 @@ impl EncryptionEnvelope {
                 &x25519::public_key_bytes(key_input.public_key())?,
                 key_input.key_id(),
                 key_input.derivation_scheme(),
-                key_input.protocol(),
+                key_input.module(),
                 key_input.role_path(),
                 &input.key,
             )?;
 
             key_encryption.push(match key_input {
-                KeyEncryptionInput::ProtocolPath { .. } => KeyEncryption::ProtocolPath {
+                KeyEncryptionInput::ModulePath { .. } => KeyEncryption::ModulePath {
                     algorithm,
                     key_id: key_input.key_id().to_string(),
                     ephemeral_public_key: x25519::public_jwk(ephemeral_public.as_bytes()),
                     encrypted_key: base64url.encode(wrapped_key),
                 },
                 KeyEncryptionInput::RoleAudience {
-                    protocol,
-                    role_path,
-                    ..
+                    module, role_path, ..
                 } => KeyEncryption::RoleAudience {
                     algorithm,
                     key_id: key_input.key_id().to_string(),
                     ephemeral_public_key: x25519::public_jwk(ephemeral_public.as_bytes()),
                     encrypted_key: base64url.encode(wrapped_key),
-                    protocol: protocol.clone(),
+                    module: module.clone(),
                     role_path: role_path.clone(),
                 },
             });
@@ -507,7 +505,7 @@ impl EncryptionEnvelope {
             &x25519::public_key_bytes(key_encryption.ephemeral_public_key())?,
             key_encryption.key_id(),
             key_encryption.derivation_scheme(),
-            key_encryption.protocol(),
+            key_encryption.module(),
             key_encryption.role_path(),
             &encrypted_key,
         )
@@ -537,7 +535,7 @@ pub fn x25519_hkdf_a256kw_wrap(
     recipient_public_key: &[u8; 32],
     key_id: &str,
     derivation_scheme: DerivationScheme,
-    protocol: Option<&str>,
+    module: Option<&str>,
     role_path: Option<&str>,
     cek: &[u8],
 ) -> Result<Vec<u8>, EncryptionError> {
@@ -545,13 +543,7 @@ pub fn x25519_hkdf_a256kw_wrap(
         return Err(EncryptionError::InvalidContentEncryptionKeyLength { found: cek.len() });
     }
     let shared_secret = x25519::shared_secret(ephemeral_private_key, recipient_public_key)?;
-    let kek = kdf::a256kw_kek(
-        &shared_secret,
-        key_id,
-        derivation_scheme,
-        protocol,
-        role_path,
-    )?;
+    let kek = kdf::a256kw_kek(&shared_secret, key_id, derivation_scheme, module, role_path)?;
     aes_kw::wrap(&kek, cek)
 }
 
@@ -561,22 +553,16 @@ pub fn x25519_hkdf_a256kw_unwrap(
     ephemeral_public_key: &[u8; 32],
     key_id: &str,
     derivation_scheme: DerivationScheme,
-    protocol: Option<&str>,
+    module: Option<&str>,
     role_path: Option<&str>,
     wrapped_key: &[u8],
 ) -> Result<Vec<u8>, EncryptionError> {
     let shared_secret = x25519::shared_secret(recipient_private_key, ephemeral_public_key)?;
-    let kek = kdf::a256kw_kek(
-        &shared_secret,
-        key_id,
-        derivation_scheme,
-        protocol,
-        role_path,
-    )?;
+    let kek = kdf::a256kw_kek(&shared_secret, key_id, derivation_scheme, module, role_path)?;
     aes_kw::unwrap(&kek, wrapped_key)
 }
 
-/// Seals a private key (seal key wrap). The KEK derivation binds protocol,
+/// Seals a private key (seal key wrap). The KEK derivation binds module,
 /// rolePath, contextId, and audienceKeyId.
 pub fn seal_wrap(
     input: &SealKeyWrapInput<'_>,
@@ -590,7 +576,7 @@ pub fn seal_wrap(
     )?;
     let kek = kdf::seal_kek(
         &shared_secret,
-        input.protocol,
+        input.module,
         input.role_path,
         input.context_id,
         input.audience_key_id,
@@ -609,7 +595,7 @@ pub fn seal_wrap(
 pub fn seal_unwrap(
     recipient_private_key: &[u8; 32],
     seal: &SealKeyWrap,
-    protocol: &str,
+    module: &str,
     role_path: &str,
     context_id: &str,
     audience_key_id: &str,
@@ -620,7 +606,7 @@ pub fn seal_unwrap(
     )?;
     let kek = kdf::seal_kek(
         &shared_secret,
-        protocol,
+        module,
         role_path,
         context_id,
         audience_key_id,
@@ -688,8 +674,8 @@ mod tests {
 
     #[test]
     fn key_encryption_tagged_serialization() {
-        let protocol_path = serde_json::json!({
-            "derivationScheme": "protocolPath",
+        let module_path = serde_json::json!({
+            "derivationScheme": "modulePath",
             "algorithm": "X25519-HKDF-SHA256+A256KW",
             "keyId": "kid",
             "ephemeralPublicKey": {
@@ -699,10 +685,10 @@ mod tests {
             },
             "encryptedKey": "a2V5"
         });
-        let parsed: KeyEncryption = serde_json::from_value(protocol_path.clone()).unwrap();
-        assert_eq!(parsed.derivation_scheme(), DerivationScheme::ProtocolPath);
-        assert_eq!(parsed.protocol(), None);
-        assert_eq!(serde_json::to_value(&parsed).unwrap(), protocol_path);
+        let parsed: KeyEncryption = serde_json::from_value(module_path.clone()).unwrap();
+        assert_eq!(parsed.derivation_scheme(), DerivationScheme::ModulePath);
+        assert_eq!(parsed.module(), None);
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), module_path);
 
         let role_audience = serde_json::json!({
             "derivationScheme": "roleAudience",
@@ -714,16 +700,16 @@ mod tests {
                 "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
             },
             "encryptedKey": "a2V5",
-            "protocol": "https://example.com/protocol",
+            "module": "https://example.com/module",
             "rolePath": "member"
         });
         let parsed: KeyEncryption = serde_json::from_value(role_audience.clone()).unwrap();
         assert_eq!(parsed.derivation_scheme(), DerivationScheme::RoleAudience);
-        assert_eq!(parsed.protocol(), Some("https://example.com/protocol"));
+        assert_eq!(parsed.module(), Some("https://example.com/module"));
         assert_eq!(parsed.role_path(), Some("member"));
         assert_eq!(serde_json::to_value(&parsed).unwrap(), role_audience);
 
-        // `roleAudience` entries require protocol/rolePath.
+        // `roleAudience` entries require module/rolePath.
         assert!(serde_json::from_value::<KeyEncryption>(serde_json::json!({
             "derivationScheme": "roleAudience",
             "algorithm": "X25519-HKDF-SHA256+A256KW",
@@ -748,7 +734,7 @@ mod tests {
                 "x": "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc"
             },
             "encryptedKey": "a2V5",
-            "protocol": "https://example.com/protocol"
+            "module": "https://example.com/module"
         }))
         .is_err());
     }
@@ -810,7 +796,7 @@ mod tests {
                 !input.key_id().starts_with("did:"),
                 "entry keyId must be a thumbprint, not a verification-method id"
             );
-            assert_eq!(input.derivation_scheme(), DerivationScheme::ProtocolPath);
+            assert_eq!(input.derivation_scheme(), DerivationScheme::ModulePath);
         }
     }
 
@@ -865,7 +851,7 @@ mod tests {
             algorithm: None,
             key: (0u8..32).collect(),
             initialization_vector: (0xa0u8..0xb0).collect(),
-            key_encryption_inputs: vec![KeyEncryptionInput::ProtocolPath {
+            key_encryption_inputs: vec![KeyEncryptionInput::ModulePath {
                 algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
                 key_id: "kid".to_string(),
                 public_key: serde_json::from_value(serde_json::json!({
@@ -902,7 +888,7 @@ mod tests {
 
     #[test]
     fn validate_accepts_16_byte_iv_and_rejects_other_lengths() {
-        let key_encryption = KeyEncryption::ProtocolPath {
+        let key_encryption = KeyEncryption::ModulePath {
             algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
             key_id: "kid".to_string(),
             ephemeral_public_key: serde_json::from_value(serde_json::json!({
@@ -953,7 +939,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_non_okp_ephemeral_key() {
-        let key_encryption = KeyEncryption::ProtocolPath {
+        let key_encryption = KeyEncryption::ModulePath {
             algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
             key_id: "kid".to_string(),
             ephemeral_public_key: serde_json::from_value(serde_json::json!({
@@ -1072,7 +1058,7 @@ mod tests {
                 &private_key,
                 &low_order_public_key,
                 "kid",
-                DerivationScheme::ProtocolPath,
+                DerivationScheme::ModulePath,
                 None,
                 None,
                 &cek,
@@ -1087,7 +1073,7 @@ mod tests {
                 &private_key,
                 &low_order_public_key,
                 "kid",
-                DerivationScheme::ProtocolPath,
+                DerivationScheme::ModulePath,
                 None,
                 None,
                 &[0; 24],
@@ -1099,7 +1085,7 @@ mod tests {
             algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
             key_id: "seal-kid".to_string(),
             public_key: x25519::public_jwk(&low_order_public_key),
-            protocol: "https://example.com/protocol",
+            module: "https://example.com/module",
             role_path: "member",
             context_id: "context",
             audience_key_id: "audience-kid",
@@ -1119,7 +1105,7 @@ mod tests {
             seal_unwrap(
                 &private_key,
                 &low_order_seal,
-                "https://example.com/protocol",
+                "https://example.com/module",
                 "member",
                 "context",
                 "audience-kid",

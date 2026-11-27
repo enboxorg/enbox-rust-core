@@ -42,15 +42,15 @@ where
     let mut filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
         ("method", string_filter(WRITE_METHOD)),
-        ("protocol", string_filter(&scope.protocol)),
+        ("module", string_filter(&scope.module)),
         (
-            "protocolPath",
-            string_filter(ControlKind::Audience.protocol_path()),
+            "modulePath",
+            string_filter(ControlKind::Audience.module_path()),
         ),
         ("isLatestBaseState", bool_filter(true)),
     ]);
     for (tag, value) in [
-        ("protocol", scope.protocol.as_str()),
+        ("module", scope.module.as_str()),
         ("rolePath", scope.role_path.as_str()),
         ("contextId", scope.context_id.as_str()),
     ] {

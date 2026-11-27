@@ -1,17 +1,17 @@
 use std::fmt::Display;
 
 use crate::descriptors::messages::MessagesMethod as DescriptorMessagesMethod;
-use crate::descriptors::protocols::ProtocolsMethod as DescriptorProtocolsMethod;
+use crate::descriptors::modules::ModulesMethod as DescriptorModulesMethod;
 use crate::descriptors::records::RecordsMethod as DescriptorRecordsMethod;
 use crate::descriptors::{Interface, MessageKind};
-use crate::descriptors::{CONFIGURE, DELETE, MESSAGES, PROTOCOLS, QUERY, READ, RECORDS, WRITE};
+use crate::descriptors::{CONFIGURE, DELETE, MESSAGES, MODULES, QUERY, READ, RECORDS, WRITE};
 use crate::filters::message_filters::Messages as MessagesFilter;
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PermissionScope {
-    Protocols(ProtocolsScope),
+    Modules(ModulesScope),
     Messages(MessagesScope),
     Records(RecordsScope),
 }
@@ -21,7 +21,7 @@ impl PermissionScope {
         matches!(
             self,
             Self::Messages(MessagesScope {
-                protocol: None,
+                module: None,
                 selector: None,
             })
         )
@@ -29,33 +29,33 @@ impl PermissionScope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProtocolsScope {
-    pub method: ProtocolsMethod,
-    pub protocol: Option<String>,
+pub struct ModulesScope {
+    pub method: ModulesMethod,
+    pub module: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProtocolsMethod {
+pub enum ModulesMethod {
     Configure,
     Query,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessagesScope {
-    pub protocol: Option<String>,
+    pub module: Option<String>,
     pub selector: Option<MessagesSelector>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessagesSelector {
     ContextId(ContextId),
-    ProtocolPath(ProtocolPath),
+    ModulePath(ModulePath),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordsScope {
     pub method: RecordsMethod,
-    pub protocol: String,
+    pub module: String,
     pub selector: Option<RecordsSelector>,
 }
 
@@ -69,34 +69,34 @@ pub enum RecordsMethod {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordsSelector {
     ContextId(ContextId),
-    ProtocolPath(ProtocolPath),
+    ModulePath(ModulePath),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextId(pub String);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProtocolPath(pub String);
+pub struct ModulePath(pub String);
 
 impl PermissionScope {
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
             Self::Messages(MessagesScope {
-                protocol: None,
+                module: None,
                 selector: Some(_),
-            }) => Err("Messages permission scope selectors require protocol"),
+            }) => Err("Messages permission scope selectors require module"),
             _ => Ok(()),
         }
     }
 
     pub fn method(&self) -> &'static str {
         match self {
-            Self::Protocols(ProtocolsScope {
-                method: ProtocolsMethod::Configure,
+            Self::Modules(ModulesScope {
+                method: ModulesMethod::Configure,
                 ..
             }) => CONFIGURE,
-            Self::Protocols(ProtocolsScope {
-                method: ProtocolsMethod::Query,
+            Self::Modules(ModulesScope {
+                method: ModulesMethod::Query,
                 ..
             }) => QUERY,
             Self::Messages(_) => READ,
@@ -117,7 +117,7 @@ impl PermissionScope {
 
     pub fn interface(&self) -> Interface {
         match self {
-            Self::Protocols(_) => Interface::Protocols,
+            Self::Modules(_) => Interface::Modules,
             Self::Messages(_) => Interface::Messages,
             Self::Records(_) => Interface::Records,
         }
@@ -165,28 +165,28 @@ impl PermissionScope {
                 MessageKind::Records(DescriptorRecordsMethod::Delete),
             ) => true,
             (
-                Self::Protocols(ProtocolsScope {
-                    method: ProtocolsMethod::Configure,
+                Self::Modules(ModulesScope {
+                    method: ModulesMethod::Configure,
                     ..
                 }),
-                MessageKind::Protocols(DescriptorProtocolsMethod::Configure),
+                MessageKind::Modules(DescriptorModulesMethod::Configure),
             ) => true,
             (
-                Self::Protocols(ProtocolsScope {
-                    method: ProtocolsMethod::Query,
+                Self::Modules(ModulesScope {
+                    method: ModulesMethod::Query,
                     ..
                 }),
-                MessageKind::Protocols(DescriptorProtocolsMethod::Query),
+                MessageKind::Modules(DescriptorModulesMethod::Query),
             ) => true,
             _ => false,
         }
     }
 
-    pub fn protocol(&self) -> Option<&str> {
+    pub fn module(&self) -> Option<&str> {
         match self {
-            Self::Protocols(scope) => scope.protocol.as_deref(),
-            Self::Messages(scope) => scope.protocol.as_deref(),
-            Self::Records(scope) => Some(&scope.protocol),
+            Self::Modules(scope) => scope.module.as_deref(),
+            Self::Messages(scope) => scope.module.as_deref(),
+            Self::Records(scope) => Some(&scope.module),
         }
     }
 
@@ -204,28 +204,28 @@ impl PermissionScope {
         }
     }
 
-    pub fn protocol_path(&self) -> Option<&str> {
+    pub fn module_path(&self) -> Option<&str> {
         match self {
             Self::Messages(MessagesScope {
-                selector: Some(MessagesSelector::ProtocolPath(ProtocolPath(path))),
+                selector: Some(MessagesSelector::ModulePath(ModulePath(path))),
                 ..
             })
             | Self::Records(RecordsScope {
-                selector: Some(RecordsSelector::ProtocolPath(ProtocolPath(path))),
+                selector: Some(RecordsSelector::ModulePath(ModulePath(path))),
                 ..
             }) => Some(path),
             _ => None,
         }
     }
 
-    pub fn matches_protocol_target(&self, target: &ProtocolScopeTarget<'_>) -> bool {
-        let protocol_match = self.protocol().is_none() || self.protocol() == target.protocol;
+    pub fn matches_module_target(&self, target: &ModuleScopeTarget<'_>) -> bool {
+        let module_match = self.module().is_none() || self.module() == target.module;
         let context_id_match = self.context_id().is_none()
             || matches_subtree(self.context_id().unwrap_or(""), target.context_id);
-        let protocol_path_match = self.protocol_path().is_none()
-            || matches_subtree(self.protocol_path().unwrap_or(""), target.protocol_path);
+        let module_path_match = self.module_path().is_none()
+            || matches_subtree(self.module_path().unwrap_or(""), target.module_path);
 
-        protocol_match && context_id_match && protocol_path_match
+        module_match && context_id_match && module_path_match
     }
 }
 
@@ -240,11 +240,11 @@ struct SerializedPermissionScope<'a> {
     interface: &'static str,
     method: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    protocol: Option<&'a str>,
+    module: Option<&'a str>,
     #[serde(rename = "contextId", skip_serializing_if = "Option::is_none")]
     context_id: Option<&'a str>,
-    #[serde(rename = "protocolPath", skip_serializing_if = "Option::is_none")]
-    protocol_path: Option<&'a str>,
+    #[serde(rename = "modulePath", skip_serializing_if = "Option::is_none")]
+    module_path: Option<&'a str>,
 }
 
 impl Serialize for PermissionScope {
@@ -256,57 +256,57 @@ impl Serialize for PermissionScope {
         SerializedPermissionScope {
             interface: self.interface().as_str(),
             method: self.method(),
-            protocol: self.protocol(),
+            module: self.module(),
             context_id: self.context_id(),
-            protocol_path: self.protocol_path(),
+            module_path: self.module_path(),
         }
         .serialize(serializer)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtocolScopeTarget<'a> {
-    pub protocol: Option<&'a str>,
+pub struct ModuleScopeTarget<'a> {
+    pub module: Option<&'a str>,
     pub context_id: Option<&'a str>,
-    pub protocol_path: Option<&'a str>,
+    pub module_path: Option<&'a str>,
 }
 
-impl Display for ProtocolScopeTarget<'_> {
+impl Display for ModuleScopeTarget<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ProtocolScopeTarget {{ protocol: {:?}, context_id: {:?}, protocol_path: {:?} }}",
-            self.protocol, self.context_id, self.protocol_path
+            "ModuleScopeTarget {{ module: {:?}, context_id: {:?}, module_path: {:?} }}",
+            self.module, self.context_id, self.module_path
         )
     }
 }
 
-impl<'a> From<&'a MessagesFilter> for ProtocolScopeTarget<'a> {
+impl<'a> From<&'a MessagesFilter> for ModuleScopeTarget<'a> {
     fn from(value: &'a MessagesFilter) -> Self {
         Self {
-            protocol: value.protocol.as_deref(),
+            module: value.module.as_deref(),
             context_id: value.context_id_prefix.as_deref(),
-            protocol_path: value
-                .protocol_path
+            module_path: value
+                .module_path
                 .as_deref()
-                .or(value.protocol_path_prefix.as_deref()),
+                .or(value.module_path_prefix.as_deref()),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OwnedProtocolScopeTarget {
-    pub protocol: Option<String>,
+pub struct OwnedModuleScopeTarget {
+    pub module: Option<String>,
     pub context_id: Option<String>,
-    pub protocol_path: Option<String>,
+    pub module_path: Option<String>,
 }
 
-impl OwnedProtocolScopeTarget {
-    pub fn as_ref(&self) -> ProtocolScopeTarget<'_> {
-        ProtocolScopeTarget {
-            protocol: self.protocol.as_deref(),
+impl OwnedModuleScopeTarget {
+    pub fn as_ref(&self) -> ModuleScopeTarget<'_> {
+        ModuleScopeTarget {
+            module: self.module.as_deref(),
             context_id: self.context_id.as_deref(),
-            protocol_path: self.protocol_path.as_deref(),
+            module_path: self.module_path.as_deref(),
         }
     }
 }
@@ -321,57 +321,57 @@ impl<'de> Deserialize<'de> for PermissionScope {
         struct RawPermissionScope {
             interface: String,
             method: String,
-            protocol: Option<String>,
+            module: Option<String>,
             #[serde(rename = "contextId")]
             context_id: Option<String>,
-            #[serde(rename = "protocolPath")]
-            protocol_path: Option<String>,
+            #[serde(rename = "modulePath")]
+            module_path: Option<String>,
         }
 
         let raw = RawPermissionScope::deserialize(deserializer)?;
         let selector_count =
-            usize::from(raw.context_id.is_some()) + usize::from(raw.protocol_path.is_some());
+            usize::from(raw.context_id.is_some()) + usize::from(raw.module_path.is_some());
         if selector_count > 1 {
             return Err(serde::de::Error::custom(
-                "permission scope cannot contain both contextId and protocolPath",
+                "permission scope cannot contain both contextId and modulePath",
             ));
         }
 
         match (raw.interface.as_str(), raw.method.as_str()) {
-            (PROTOCOLS, CONFIGURE) | (PROTOCOLS, QUERY) => {
-                if raw.context_id.is_some() || raw.protocol_path.is_some() {
+            (MODULES, CONFIGURE) | (MODULES, QUERY) => {
+                if raw.context_id.is_some() || raw.module_path.is_some() {
                     return Err(serde::de::Error::custom(
-                        "Protocols permission scopes cannot contain contextId or protocolPath",
+                        "Modules permission scopes cannot contain contextId or modulePath",
                     ));
                 }
                 let method = if raw.method == CONFIGURE {
-                    ProtocolsMethod::Configure
+                    ModulesMethod::Configure
                 } else {
-                    ProtocolsMethod::Query
+                    ModulesMethod::Query
                 };
-                Ok(Self::Protocols(ProtocolsScope {
+                Ok(Self::Modules(ModulesScope {
                     method,
-                    protocol: raw.protocol,
+                    module: raw.module,
                 }))
             }
             (MESSAGES, READ) => {
-                let protocol = raw.protocol;
-                let selector = match (raw.context_id, raw.protocol_path) {
+                let module = raw.module;
+                let selector = match (raw.context_id, raw.module_path) {
                     (Some(context_id), None) => {
                         Some(MessagesSelector::ContextId(ContextId(context_id)))
                     }
-                    (None, Some(protocol_path)) => {
-                        Some(MessagesSelector::ProtocolPath(ProtocolPath(protocol_path)))
+                    (None, Some(module_path)) => {
+                        Some(MessagesSelector::ModulePath(ModulePath(module_path)))
                     }
                     (None, None) => None,
                     (Some(_), Some(_)) => unreachable!("checked above"),
                 };
-                if selector.is_some() && protocol.is_none() {
+                if selector.is_some() && module.is_none() {
                     return Err(serde::de::Error::custom(
-                        "Messages permission scope selectors require protocol",
+                        "Messages permission scope selectors require module",
                     ));
                 }
-                Ok(Self::Messages(MessagesScope { protocol, selector }))
+                Ok(Self::Messages(MessagesScope { module, selector }))
             }
             (RECORDS, READ) | (RECORDS, WRITE) | (RECORDS, DELETE) => {
                 let method = match raw.method.as_str() {
@@ -380,22 +380,22 @@ impl<'de> Deserialize<'de> for PermissionScope {
                     DELETE => RecordsMethod::Delete,
                     _ => unreachable!("matched above"),
                 };
-                let protocol = raw.protocol.ok_or_else(|| {
-                    serde::de::Error::custom("Records permission scopes require protocol")
+                let module = raw.module.ok_or_else(|| {
+                    serde::de::Error::custom("Records permission scopes require module")
                 })?;
-                let selector = match (raw.context_id, raw.protocol_path) {
+                let selector = match (raw.context_id, raw.module_path) {
                     (Some(context_id), None) => {
                         Some(RecordsSelector::ContextId(ContextId(context_id)))
                     }
-                    (None, Some(protocol_path)) => {
-                        Some(RecordsSelector::ProtocolPath(ProtocolPath(protocol_path)))
+                    (None, Some(module_path)) => {
+                        Some(RecordsSelector::ModulePath(ModulePath(module_path)))
                     }
                     (None, None) => None,
                     (Some(_), Some(_)) => unreachable!("checked above"),
                 };
                 Ok(Self::Records(RecordsScope {
                     method,
-                    protocol,
+                    module,
                     selector,
                 }))
             }
@@ -414,22 +414,20 @@ mod tests {
 
     #[test]
     fn serializes_each_legal_scope_shape_with_fixed_discriminants() {
-        let protocol = "https://example.com/notes".to_string();
+        let module = "https://example.com/notes".to_string();
         let scopes = [
-            PermissionScope::Protocols(ProtocolsScope {
-                method: ProtocolsMethod::Configure,
-                protocol: Some(protocol.clone()),
+            PermissionScope::Modules(ModulesScope {
+                method: ModulesMethod::Configure,
+                module: Some(module.clone()),
             }),
             PermissionScope::Messages(MessagesScope {
-                protocol: Some(protocol.clone()),
+                module: Some(module.clone()),
                 selector: Some(MessagesSelector::ContextId(ContextId("ctx-1".to_string()))),
             }),
             PermissionScope::Records(RecordsScope {
                 method: RecordsMethod::Delete,
-                protocol,
-                selector: Some(RecordsSelector::ProtocolPath(ProtocolPath(
-                    "note".to_string(),
-                ))),
+                module,
+                selector: Some(RecordsSelector::ModulePath(ModulePath("note".to_string()))),
             }),
         ];
 
@@ -437,9 +435,9 @@ mod tests {
         assert_eq!(
             values[0],
             serde_json::json!({
-                "interface": "Protocols",
+                "interface": "Modules",
                 "method": "Configure",
-                "protocol": "https://example.com/notes"
+                "module": "https://example.com/notes"
             })
         );
         assert_eq!(
@@ -447,7 +445,7 @@ mod tests {
             serde_json::json!({
                 "interface": "Messages",
                 "method": "Read",
-                "protocol": "https://example.com/notes",
+                "module": "https://example.com/notes",
                 "contextId": "ctx-1"
             })
         );
@@ -456,8 +454,8 @@ mod tests {
             serde_json::json!({
                 "interface": "Records",
                 "method": "Delete",
-                "protocol": "https://example.com/notes",
-                "protocolPath": "note"
+                "module": "https://example.com/notes",
+                "modulePath": "note"
             })
         );
     }
@@ -465,9 +463,9 @@ mod tests {
     #[test]
     fn deserializes_and_round_trips_legal_scope_shapes() {
         for json in [
-            r#"{"interface":"Protocols","method":"Query"}"#,
-            r#"{"interface":"Messages","method":"Read","protocol":"https://example.com/notes","protocolPath":"note"}"#,
-            r#"{"interface":"Records","method":"Read","protocol":"https://example.com/notes","contextId":"ctx-1"}"#,
+            r#"{"interface":"Modules","method":"Query"}"#,
+            r#"{"interface":"Messages","method":"Read","module":"https://example.com/notes","modulePath":"note"}"#,
+            r#"{"interface":"Records","method":"Read","module":"https://example.com/notes","contextId":"ctx-1"}"#,
         ] {
             let scope: PermissionScope = from_str(json).unwrap();
             let round_trip: PermissionScope =
@@ -481,11 +479,11 @@ mod tests {
         for json in [
             r#"{"interface":"Messages","method":"Query"}"#,
             r#"{"interface":"Messages","method":"Sync"}"#,
-            r#"{"interface":"Records","method":"Query","protocol":"https://example.com/notes"}"#,
+            r#"{"interface":"Records","method":"Query","module":"https://example.com/notes"}"#,
             r#"{"interface":"Records","method":"Read"}"#,
             r#"{"interface":"Messages","method":"Read","contextId":"ctx-1"}"#,
-            r#"{"interface":"Records","method":"Read","protocol":"https://example.com/notes","contextId":"ctx-1","protocolPath":"note"}"#,
-            r#"{"interface":"Protocols","method":"Query","contextId":"ctx-1"}"#,
+            r#"{"interface":"Records","method":"Read","module":"https://example.com/notes","contextId":"ctx-1","modulePath":"note"}"#,
+            r#"{"interface":"Modules","method":"Query","contextId":"ctx-1"}"#,
             r#"{"interface":"messages","method":"Read"}"#,
         ] {
             assert!(
@@ -501,164 +499,162 @@ mod tests {
         assert!(from_str::<PermissionScope>(unknown_field).is_err());
 
         let invalid = PermissionScope::Messages(MessagesScope {
-            protocol: None,
+            module: None,
             selector: Some(MessagesSelector::ContextId(ContextId("ctx-1".to_string()))),
         });
         assert!(serde_json::to_value(invalid).is_err());
     }
 
     #[test]
-    fn matches_protocol_target() {
+    fn matches_module_target() {
         let notes_scope = PermissionScope::Records(RecordsScope {
             method: RecordsMethod::Read,
-            protocol: "https://example.com/notes".to_string(),
+            module: "https://example.com/notes".to_string(),
             selector: None,
         });
         let notes_scope_with_context = PermissionScope::Records(RecordsScope {
             method: RecordsMethod::Read,
-            protocol: "https://example.com/notes".to_string(),
+            module: "https://example.com/notes".to_string(),
             selector: Some(RecordsSelector::ContextId(ContextId("c/1".to_string()))),
         });
 
-        let notes_scope_with_protocol = PermissionScope::Records(RecordsScope {
+        let notes_scope_with_module = PermissionScope::Records(RecordsScope {
             method: RecordsMethod::Read,
-            protocol: "https://example.com/notes".to_string(),
-            selector: Some(RecordsSelector::ProtocolPath(ProtocolPath(
-                "a/b".to_string(),
-            ))),
+            module: "https://example.com/notes".to_string(),
+            selector: Some(RecordsSelector::ModulePath(ModulePath("a/b".to_string()))),
         });
         let unscoped_messages_scope = PermissionScope::Messages(MessagesScope {
-            protocol: None,
+            module: None,
             selector: None,
         });
 
         let tt = [
-            // Records scope { protocol: notes }
+            // Records scope { module: notes }
             (
                 &notes_scope,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: None,
-                    protocol_path: None,
+                    module_path: None,
                 },
                 true,
             ),
             (
                 &notes_scope,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: Some("ctx-1"),
-                    protocol_path: None,
+                    module_path: None,
                 },
                 true,
             ),
             (
                 &notes_scope,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/chat"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/chat"),
                     context_id: None,
-                    protocol_path: None,
+                    module_path: None,
                 },
                 false,
             ),
             (
                 &notes_scope,
-                ProtocolScopeTarget {
-                    protocol: None,
+                ModuleScopeTarget {
+                    module: None,
                     context_id: None,
-                    protocol_path: None,
+                    module_path: None,
                 },
                 false,
             ),
-            // Records scope { protocol: notes, contextId: c/1 }
+            // Records scope { module: notes, contextId: c/1 }
             (
                 &notes_scope_with_context,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: Some("c/1"),
-                    protocol_path: None,
+                    module_path: None,
                 },
                 true,
             ),
             (
                 &notes_scope_with_context,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: Some("c/1/x"),
-                    protocol_path: None,
+                    module_path: None,
                 },
                 true,
             ),
             (
                 &notes_scope_with_context,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: Some("c/10"),
-                    protocol_path: None,
+                    module_path: None,
                 },
                 false,
             ),
             (
                 &notes_scope_with_context,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: None,
-                    protocol_path: None,
+                    module_path: None,
                 },
                 false,
             ),
-            // Records scope { protocol: notes, protocolPath: a/b }
+            // Records scope { module: notes, modulePath: a/b }
             (
-                &notes_scope_with_protocol,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                &notes_scope_with_module,
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: None,
-                    protocol_path: Some("a/b"),
+                    module_path: Some("a/b"),
                 },
                 true,
             ),
             (
-                &notes_scope_with_protocol,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                &notes_scope_with_module,
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: None,
-                    protocol_path: Some("a/b/c"),
+                    module_path: Some("a/b/c"),
                 },
                 true,
             ),
             (
-                &notes_scope_with_protocol,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                &notes_scope_with_module,
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: None,
-                    protocol_path: Some("a/x"),
+                    module_path: Some("a/x"),
                 },
                 false,
             ),
             (
-                &notes_scope_with_protocol,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                &notes_scope_with_module,
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: None,
-                    protocol_path: Some("a/bc"),
+                    module_path: Some("a/bc"),
                 },
                 false,
             ),
             (
                 &unscoped_messages_scope,
-                ProtocolScopeTarget {
-                    protocol: Some("https://example.com/notes"),
+                ModuleScopeTarget {
+                    module: Some("https://example.com/notes"),
                     context_id: Some("ctx-1"),
-                    protocol_path: Some("note"),
+                    module_path: Some("note"),
                 },
                 true,
             ),
             (
                 &unscoped_messages_scope,
-                ProtocolScopeTarget {
-                    protocol: None,
+                ModuleScopeTarget {
+                    module: None,
                     context_id: None,
-                    protocol_path: None,
+                    module_path: None,
                 },
                 true,
             ),
@@ -666,7 +662,7 @@ mod tests {
 
         for (scope, target, expected) in tt {
             assert_eq!(
-                scope.matches_protocol_target(&target),
+                scope.matches_module_target(&target),
                 expected,
                 "scope: {:?}, target: {:?}",
                 scope,

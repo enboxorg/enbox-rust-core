@@ -15,8 +15,8 @@ use crate::descriptors::{
     Descriptor,
 };
 use crate::encryption::control::ControlKind;
-use crate::encryption::protocol::validate_encryption_delivery;
-use crate::encryption::ENCRYPTION_PROTOCOL_URI;
+use crate::encryption::module::validate_encryption_delivery;
+use crate::encryption::ENCRYPTION_MODULE_URI;
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::handlers::records::common::{set_encoded_data, validate_data_integrity};
 use crate::handlers::records::control;
@@ -50,7 +50,7 @@ where
     // An audience record's payload is part of its admission contract: the
     // key it publishes and the seal over that key are checked here, once
     // the bytes the descriptor commits to are actually in hand.
-    if let Some(kind) = ControlKind::from_protocol_path(&descriptor.protocol_path) {
+    if let Some(kind) = ControlKind::from_module_path(&descriptor.module_path) {
         control::validate_payload(tenant, message, kind, &data, message_store)
             .await
             .map_err(RecordsWriteValidationError::from)?;
@@ -62,7 +62,7 @@ where
         // no data, which is what lets dataless initial writes through.
         // Only the encryption check runs here: the permissions check
         // reads back the encoded data set below, so it stays post-hoc.
-        if descriptor.protocol.as_str() == ENCRYPTION_PROTOCOL_URI {
+        if descriptor.module.as_str() == ENCRYPTION_MODULE_URI {
             validate_encryption_delivery(message, &data).map_err(|error| match error.code() {
                 Some(code) => RecordsWriteValidationError::Dwn(DwnError::new(code, error.detail())),
                 None => RecordsWriteValidationError::Internal(error.to_string()),

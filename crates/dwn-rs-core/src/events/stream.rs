@@ -335,6 +335,7 @@ mod test {
                             filter: Default::default(),
                             permission_grant_id: None,
                             date_sort: None,
+                            include_replication_support: None,
                         },
                     )))),
                     fields: Fields::Authorization(Default::default()),

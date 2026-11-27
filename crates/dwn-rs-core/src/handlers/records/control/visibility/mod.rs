@@ -102,26 +102,26 @@ fn request_timestamp(read_message: &Message<Descriptor>) -> Result<String, Contr
 /// Whether a request targets control records exclusively.
 ///
 /// Such a request cannot match anything else, which is what makes it safe to
-/// let control authorization decide it instead of the ordinary protocol ladder
+/// let control authorization decide it instead of the ordinary module ladder
 /// — a ladder that would reject it outright, since these paths are not
-/// declared by any protocol.
+/// declared by any module.
 pub(crate) fn filter_targets_only_controls(filter: &RecordsFilter) -> bool {
     filter
-        .protocol_path
+        .module_path
         .as_deref()
-        .is_some_and(|path| ControlKind::from_protocol_path(path).is_some())
+        .is_some_and(|path| ControlKind::from_module_path(path).is_some())
 }
 
 /// Whether a request's candidate population could contain control records.
 ///
-/// Only a filter pinned to some other protocol path provably excludes them. A
-/// protocol-wide or unpinned request may sweep up audiences and deliveries, and
+/// Only a filter pinned to some other module path provably excludes them. A
+/// module-wide or unpinned request may sweep up audiences and deliveries, and
 /// must therefore be projected and visibility-checked like any other control
 /// request — counting such a population through the store would report
 /// superseded audiences and records the requester cannot read.
 pub(crate) fn filter_may_match_controls(filter: &RecordsFilter) -> bool {
-    match filter.protocol_path.as_deref() {
-        Some(path) => ControlKind::from_protocol_path(path).is_some(),
+    match filter.module_path.as_deref() {
+        Some(path) => ControlKind::from_module_path(path).is_some(),
         None => true,
     }
 }
@@ -232,7 +232,7 @@ where
     Ok(visible)
 }
 
-/// Whether a Records grant of `method` covers this role path, by exact protocol
+/// Whether a Records grant of `method` covers this role path, by exact module
 /// and path-boundary subtree.
 pub(super) fn grant_covers_role(
     scope: &PermissionScope,
@@ -245,9 +245,9 @@ pub(super) fn grant_covers_role(
     if records.method != method {
         return false;
     }
-    scope.matches_protocol_target(&ProtocolScopeTarget {
-        protocol: Some(&id.scope.protocol),
-        protocol_path: Some(&id.scope.role_path),
+    scope.matches_module_target(&ModuleScopeTarget {
+        module: Some(&id.scope.module),
+        module_path: Some(&id.scope.role_path),
         context_id: None,
     })
 }

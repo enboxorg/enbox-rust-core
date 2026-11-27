@@ -49,7 +49,7 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
             "did:example:alice",
             &cid,
             MapValue::from([(
-                "protocol".to_string(),
+                "module".to_string(),
                 Value::String("http://example.com/notes".to_string()),
             )]),
         )
@@ -64,7 +64,7 @@ async fn messages_sync_diff_returns_remote_messages_and_inline_data() {
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Diff,
-        protocol: Some("http://example.com/notes".to_string()),
+        module: Some("http://example.com/notes".to_string()),
         depth: Some(1),
         hashes: Some(BTreeMap::new()),
         signer: test_signer(),
@@ -109,7 +109,7 @@ async fn messages_sync_is_not_authorized_by_messages_read_grant() {
     );
     let request = signed_sync_message(SyncSpec {
         action: SyncAction::Root,
-        protocol: Some("http://example.com/notes".to_string()),
+        module: Some("http://example.com/notes".to_string()),
         signer: bob_signer(),
         permission_grant_ids: Some(vec!["grant-sync-1".to_string()]),
         ..SyncSpec::new("2025-01-01T00:10:00.000000Z")
@@ -125,7 +125,7 @@ async fn messages_sync_is_not_authorized_by_messages_read_grant() {
 }
 
 #[tokio::test]
-async fn messages_sync_rejection_does_not_depend_on_protocol_scope() {
+async fn messages_sync_rejection_does_not_depend_on_module_scope() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore;
     let mut state_index = MemoryStateIndex::default();
@@ -209,7 +209,7 @@ async fn messages_subscribe_replays_from_cursor_and_sends_eose() {
     );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
-            protocol: Some("http://example.com/notes".to_string()),
+            module: Some("http://example.com/notes".to_string()),
             ..Default::default()
         }],
         cursor: Some(first),
@@ -281,7 +281,7 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
     );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
-            protocol: Some("http://example.com/notes".to_string()),
+            module: Some("http://example.com/notes".to_string()),
             ..Default::default()
         }],
         cursor: Some(stale_cursor),
@@ -303,11 +303,11 @@ async fn messages_subscribe_maps_progress_gap_to_410() {
 #[tokio::test]
 async fn messages_subscribe_stops_replay_when_grant_has_expired_at_delivery() {
     const TENANT: &str = "did:example:alice";
-    const PROTOCOL: &str = "http://example.com/notes";
+    const MODULE: &str = "http://example.com/notes";
 
     let mut authorization_store = TestMessageStore::default();
     authorization_store.open().await.unwrap();
-    let grant = permission_grant_message("grant-expired-at-delivery", Some(PROTOCOL)).await;
+    let grant = permission_grant_message("grant-expired-at-delivery", Some(MODULE)).await;
     authorization_store
         .insert(TENANT, "grant-expired-at-delivery", grant)
         .await;
@@ -327,7 +327,7 @@ async fn messages_subscribe_stops_replay_when_grant_has_expired_at_delivery() {
     );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
-            protocol: Some(PROTOCOL.to_string()),
+            module: Some(MODULE.to_string()),
             ..Default::default()
         }],
         permission_grant_ids: Some(vec!["grant-expired-at-delivery".to_string()]),
@@ -349,7 +349,7 @@ async fn messages_subscribe_stops_replay_when_grant_has_expired_at_delivery() {
 
     let (_, stored_message) = records_write_with_inline_data();
     feed_store
-        .put(TENANT, stored_message, records_feed_indexes(PROTOCOL))
+        .put(TENANT, stored_message, records_feed_indexes(MODULE))
         .await
         .unwrap();
     for _ in 0..20 {
@@ -383,7 +383,7 @@ async fn messages_subscribe_role_reply_identifies_the_resolved_role_record() {
     );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![exact_filter("thread/message")],
-        protocol_role: Some(ROLE.to_string()),
+        module_role: Some(ROLE.to_string()),
         ..SubscribeSpec::new("2025-01-01T00:10:00.000000Z")
     })
     .await;
@@ -449,7 +449,7 @@ async fn messages_subscribe_attaches_post_installation_head_and_fingerprint() {
 
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
-            protocol: Some("http://example.com/notes".to_string()),
+            module: Some("http://example.com/notes".to_string()),
             method: Some("Write".to_string()),
             ..Default::default()
         }],
@@ -491,7 +491,7 @@ async fn messages_subscribe_empty_feed_uses_position_zero_snapshot() {
 }
 
 #[tokio::test]
-async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
+async fn messages_subscribe_rejects_filter_outside_grant_module_path_scope() {
     let mut message_store = TestMessageStore::default();
     let event_log = feed_backed_event_log();
     message_store.open().await.unwrap();
@@ -501,8 +501,8 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
         json!({
             "interface": "Messages",
             "method": "Read",
-            "protocol": "http://example.com/notes",
-            "protocolPath": "note",
+            "module": "http://example.com/notes",
+            "modulePath": "note",
         }),
     )
     .await;
@@ -518,8 +518,8 @@ async fn messages_subscribe_rejects_filter_outside_grant_protocol_path_scope() {
     );
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![message_filters::Messages {
-            protocol: Some("http://example.com/notes".to_string()),
-            protocol_path_prefix: Some("comment".to_string()),
+            module: Some("http://example.com/notes".to_string()),
+            module_path_prefix: Some("comment".to_string()),
             ..Default::default()
         }],
         permission_grant_ids: Some(vec!["grant-subscribe-path".to_string()]),
@@ -550,11 +550,11 @@ async fn messages_subscribe_allows_filters_covered_by_different_grants() {
     let event_log = feed_backed_event_log();
     message_store.open().await.unwrap();
 
-    for (grant_id, protocol) in [
+    for (grant_id, module) in [
         ("grant-notes", "http://example.com/notes"),
         ("grant-chat", "http://example.com/chat"),
     ] {
-        let grant = permission_grant_message(grant_id, Some(protocol)).await;
+        let grant = permission_grant_message(grant_id, Some(module)).await;
         message_store
             .insert("did:example:alice", grant_id, grant)
             .await;
@@ -569,11 +569,11 @@ async fn messages_subscribe_allows_filters_covered_by_different_grants() {
     let request = signed_subscribe_message(SubscribeSpec {
         filters: vec![
             message_filters::Messages {
-                protocol: Some("http://example.com/notes".to_string()),
+                module: Some("http://example.com/notes".to_string()),
                 ..Default::default()
             },
             message_filters::Messages {
-                protocol: Some("http://example.com/chat".to_string()),
+                module: Some("http://example.com/chat".to_string()),
                 ..Default::default()
             },
         ],
@@ -597,8 +597,8 @@ async fn messages_subscribe_allows_filters_covered_by_different_grants() {
 fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
     let data = Bytes::from_static(b"hello");
     let descriptor = RecordsWriteDescriptor {
-        protocol: "http://example.com/notes".to_string(),
-        protocol_path: "note".to_string(),
+        module: "http://example.com/notes".to_string(),
+        module_path: "note".to_string(),
         recipient: None,
         schema: None,
         tags: None,
@@ -630,14 +630,14 @@ fn records_write_with_inline_data() -> (String, Message<Descriptor>) {
 
 /// Indexes matching what real `RecordsWrite` handling commits, so feed-backed
 /// subscription filters can match seeded messages.
-fn records_feed_indexes(protocol: &str) -> KeyValues {
+fn records_feed_indexes(module: &str) -> KeyValues {
     KeyValues::from([
         (
             "interface".to_string(),
             Value::String("Records".to_string()),
         ),
         ("method".to_string(), Value::String("Write".to_string())),
-        ("protocol".to_string(), Value::String(protocol.to_string())),
+        ("module".to_string(), Value::String(module.to_string())),
     ])
 }
 
@@ -655,12 +655,12 @@ fn feed_backed_event_log() -> DurableEventLog<MemoryMessageStore, InProcessWakeB
     DurableEventLog::new(message_store, wake_bus, None, None)
 }
 
-async fn permission_grant_message(grant_id: &str, protocol: Option<&str>) -> Message<Descriptor> {
-    let scope = match protocol {
-        Some(protocol) => json!({
+async fn permission_grant_message(grant_id: &str, module: Option<&str>) -> Message<Descriptor> {
+    let scope = match module {
+        Some(module) => json!({
             "interface": "Messages",
             "method": "Read",
-            "protocol": protocol,
+            "module": module,
         }),
         None => json!({
             "interface": "Messages",
@@ -680,15 +680,15 @@ async fn permission_grant_message_with_scope(
     }))
     .unwrap();
     let descriptor = RecordsWriteDescriptor {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some("did:example:bob".to_string()),
         schema: None,
         tags: scope
-            .get("protocol")
+            .get("module")
             .and_then(serde_json::Value::as_str)
-            .map(|protocol| {
-                MapValue::from([("protocol".to_string(), Value::String(protocol.to_string()))])
+            .map(|module| {
+                MapValue::from([("module".to_string(), Value::String(module.to_string()))])
             }),
         parent_id: None,
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -728,7 +728,7 @@ struct SubscribeSpec {
     timestamp: String,
     filters: Vec<message_filters::Messages>,
     permission_grant_ids: Option<Vec<String>>,
-    protocol_role: Option<String>,
+    module_role: Option<String>,
     cursor: Option<ProgressToken>,
     signer: PrivateJwkSigner,
 }
@@ -739,7 +739,7 @@ impl SubscribeSpec {
             timestamp: timestamp.to_string(),
             filters: Vec::new(),
             permission_grant_ids: None,
-            protocol_role: None,
+            module_role: None,
             cursor: None,
             signer: test_signer(),
         }
@@ -768,10 +768,10 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
             serde_json::to_value(permission_grant_ids).unwrap(),
         );
     }
-    if let Some(protocol_role) = spec.protocol_role {
+    if let Some(module_role) = spec.module_role {
         payload.insert(
-            "protocolRole".to_string(),
-            serde_json::Value::String(protocol_role),
+            "moduleRole".to_string(),
+            serde_json::Value::String(module_role),
         );
     }
     let signature = Jws::create(
@@ -792,7 +792,7 @@ async fn signed_subscribe_message(spec: SubscribeSpec) -> serde_json::Value {
 struct SyncSpec {
     timestamp: String,
     action: SyncAction,
-    protocol: Option<String>,
+    module: Option<String>,
     prefix: Option<String>,
     permission_grant_ids: Option<Vec<String>>,
     hashes: Option<BTreeMap<String, String>>,
@@ -805,7 +805,7 @@ impl SyncSpec {
         Self {
             timestamp: timestamp.to_string(),
             action: SyncAction::Root,
-            protocol: None,
+            module: None,
             prefix: None,
             permission_grant_ids: None,
             hashes: None,
@@ -819,7 +819,7 @@ async fn signed_sync_message(spec: SyncSpec) -> serde_json::Value {
     let descriptor = MessagesSyncDescriptor {
         message_timestamp: parse_time(&spec.timestamp),
         action: spec.action,
-        protocol: spec.protocol,
+        module: spec.module,
         prefix: spec.prefix,
         permission_grant_ids: spec.permission_grant_ids.clone(),
         hashes: spec.hashes,

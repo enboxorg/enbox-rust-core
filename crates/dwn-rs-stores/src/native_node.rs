@@ -159,7 +159,7 @@ impl SqliteNativeDwn {
         &self.sync_ledger
     }
 
-    /// Register a tenant DID and protocol scope for sync runs on this node.
+    /// Register a tenant DID and module scope for sync runs on this node.
     pub async fn register_sync_identity(&self, options: SyncIdentityOptions) -> SyncResult<()> {
         dwn_rs_core::sync::validate_identity_options(&options)?;
         let mut identities = self.sync_identities.write().await;

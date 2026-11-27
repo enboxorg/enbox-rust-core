@@ -9,17 +9,17 @@ use crate::canonical_rfc3339;
 use crate::cid::generate_cid_from_json;
 use crate::descriptors::{Descriptor, Records, SubscribeDescriptor};
 use crate::dwn::{Handler, HandlerContext};
-use crate::filters::context::validate_nested_protocol_path_scope;
+use crate::filters::context::validate_nested_module_path_scope;
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::Filters;
 use crate::handlers::guarded_subscription::{
     create_guarded_subscription, DeliveryDecision, GuardedSubscription,
 };
 use crate::handlers::records::common::{
-    attach_initial_writes, authorize_protocol_query_or_subscribe, bool_filter,
+    attach_initial_writes, authorize_module_query_or_subscribe, bool_filter,
     date_sort_to_message_sort, event_log_error_reply, filter_map, message_record_id,
     message_record_limit_policy, records_subscribe_descriptor, records_subscribe_reply,
-    resolve_record_limit_policy, should_protocol_authorize, store_error_reply, string_filter,
+    resolve_record_limit_policy, should_module_authorize, store_error_reply, string_filter,
 };
 use crate::handlers::records::control;
 use crate::handlers::records::visibility::{authorize_collection, collection_filters, PlanMode};
@@ -53,7 +53,7 @@ pub(crate) struct DeliveryAuthorization {
     pub(crate) role_invoked: bool,
     pub(crate) request_timestamp: String,
     /// Whether the request was authorized through the control gate rather than
-    /// the ordinary protocol ladder, and so must be rechecked through it.
+    /// the ordinary module ladder, and so must be rechecked through it.
     pub(crate) control_only: bool,
 }
 
@@ -116,10 +116,10 @@ where
                     .is_some_and(|limit| limit > 0)
                 && signature
                     .as_ref()
-                    .and_then(|signature| signature.protocol_role())
+                    .and_then(|signature| signature.module_role())
                     .is_none_or(|role| !role.contains('/'));
             if let Err(reason) =
-                validate_nested_protocol_path_scope(&descriptor.filter, allow_bounded_path_wide)
+                validate_nested_module_path_scope(&descriptor.filter, allow_bounded_path_wide)
             {
                 return Response::bad_request(format!(
                     "RecordsSubscribeNestedModulePathContextIdInvalid: {reason}"
@@ -250,7 +250,7 @@ where
 /// embedded author-delegated grants. Everything else is immutable.
 fn needs_delivery_reauth(signature: &AuthorizationContext) -> bool {
     signature.permission_grant_id().is_some()
-        || should_protocol_authorize(signature)
+        || should_module_authorize(signature)
         || signature.author_delegated_grant.is_some()
 }
 
@@ -293,7 +293,7 @@ where
     // A control-only subscription was opened through the control gate and is
     // rechecked through it. The ordinary path would ask whether the invoked
     // grant's scope covers `$encryption/audience` or `$encryption/delivery` —
-    // paths no protocol declares and no grant can name — so a perfectly valid
+    // paths no module declares and no grant can name — so a perfectly valid
     // grant over the keyed role would be read as out of scope and close the
     // subscription at its first event. The gate re-runs on the restamped
     // message, so expiry and revocation since open are still what terminate it,
@@ -341,7 +341,7 @@ where
         }
     }
     if auth.role_invoked {
-        authorize_protocol_query_or_subscribe(
+        authorize_module_query_or_subscribe(
             tenant,
             &auth.filter,
             &auth.auth_ctx,
@@ -384,8 +384,8 @@ where
         ("interface", string_filter(RECORDS_INTERFACE)),
         ("method", string_filter(WRITE_METHOD)),
         ("isLatestBaseState", bool_filter(true)),
-        ("protocol", string_filter(&policy.protocol)),
-        ("protocolPath", string_filter(&policy.protocol_path)),
+        ("module", string_filter(&policy.module)),
+        ("modulePath", string_filter(&policy.module_path)),
         ("recordId", string_filter(&record_id)),
     ]);
     let count = message_store
@@ -561,10 +561,10 @@ where
                 .is_some_and(|limit| limit > 0)
             && signature
                 .as_ref()
-                .and_then(|signature| signature.protocol_role())
+                .and_then(|signature| signature.module_role())
                 .is_none_or(|role| !role.contains('/'));
         if let Err(reason) =
-            validate_nested_protocol_path_scope(&descriptor.filter, allow_bounded_path_wide)
+            validate_nested_module_path_scope(&descriptor.filter, allow_bounded_path_wide)
         {
             return records_subscribe_reply(
                 Response::bad_request(format!(
@@ -740,7 +740,7 @@ where
                 filter: descriptor.filter.clone(),
                 auth_ctx: signature.clone(),
                 grant_valid_at_open: auth.grant_authorized,
-                role_invoked: should_protocol_authorize(signature),
+                role_invoked: should_module_authorize(signature),
                 request_timestamp,
                 control_only: control::filter_targets_only_controls(&descriptor.filter),
             }),
@@ -772,7 +772,7 @@ mod tests {
 
     fn auth_ctx(
         permission_grant_id: Option<String>,
-        protocol_role: Option<String>,
+        module_role: Option<String>,
         delegated_grant: Option<PermissionGrant>,
     ) -> AuthorizationContext {
         AuthorizationContext {
@@ -783,7 +783,7 @@ mod tests {
                 delegated_grant_id: None,
                 permission_grant_id: permission_grant_id.clone(),
                 permission_grant_ids: None,
-                protocol_role,
+                module_role,
             }),
             permission_grant_invocation: permission_grant_id
                 .map(PermissionGrantInvocation::Single)
@@ -803,7 +803,7 @@ mod tests {
             delegated: Some(true),
             scope: PermissionScope::Records(RecordsScope {
                 method: RecordsMethod::Read,
-                protocol: "http://example.com/notes".to_string(),
+                module: "http://example.com/notes".to_string(),
                 selector: None,
             }),
             conditions: None,

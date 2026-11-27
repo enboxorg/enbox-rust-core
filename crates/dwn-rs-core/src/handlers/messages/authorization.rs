@@ -4,7 +4,7 @@ use crate::{
     canonical_rfc3339,
     descriptors::RECORDS,
     handlers::records::{
-        common::{authorize_protocol_query_or_subscribe, ResolvedProtocolRole},
+        common::{authorize_module_query_or_subscribe, ResolvedModuleRole},
         RecordsAuthorizationKind,
     },
     message_filters,
@@ -15,12 +15,10 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub(crate) enum MessageAuthorizationError {
-    #[error("role-authorized message filters require Records, protocol, protocolPath, and contextIdPrefix to be specified")]
+    #[error("role-authorized message filters require Records, module, modulePath, and contextIdPrefix to be specified")]
     InvalidRoleMessage,
 
-    #[error(
-        "role-authorized message filters must all be for the same protocol and contextIdPrefix"
-    )]
+    #[error("role-authorized message filters must all be for the same module and contextIdPrefix")]
     ShareProtoContext,
 
     #[error("role-authorized message filters must contain at least one filter")]
@@ -29,15 +27,13 @@ pub(crate) enum MessageAuthorizationError {
     #[error("message failed authorization: {0}")]
     AuthorizationFailed(#[from] PermissionError),
 
-    #[error("missing protocol role in authorization context")]
-    MissingProtocolRole,
+    #[error("missing module role in authorization context")]
+    MissingModuleRole,
 
-    #[error("protocol error: {0}")]
-    ProtocolAuthorization(String),
+    #[error("module error: {0}")]
+    ModuleAuthorization(String),
 
-    #[error(
-        "role-authorized message filters resolved to inconsistent protocol roles from records"
-    )]
+    #[error("role-authorized message filters resolved to inconsistent module roles from records")]
     InconsistentResolvedRole,
 
     #[error("message failed authorization")]
@@ -48,7 +44,7 @@ pub(crate) enum MessageAuthorizationError {
 pub(crate) struct MessagesRoleAuthorization {
     pub author: String,
     pub metadata_only: bool,
-    pub resolved_role: ResolvedProtocolRole,
+    pub resolved_role: ResolvedModuleRole,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,8 +120,8 @@ pub(crate) enum MessageAuthorizationKind {
 
 #[derive(Debug, Clone)]
 struct ExactRoleFilter<'a> {
-    protocol: &'a str,
-    protocol_path: &'a str,
+    module: &'a str,
+    module_path: &'a str,
     context_id_prefix: &'a str,
 }
 
@@ -148,7 +144,7 @@ where
         return authorize_grant(tenant, message, filters, auth, messages_store).await;
     }
 
-    if auth.protocol_role().is_some() {
+    if auth.module_role().is_some() {
         return authorize_role(tenant, message, filters, auth, messages_store, kind).await;
     }
 
@@ -213,8 +209,8 @@ where
 {
     let exact_filters = require_exact_role_filters(filters)?;
 
-    auth.protocol_role()
-        .ok_or(MessageAuthorizationError::MissingProtocolRole)?;
+    auth.module_role()
+        .ok_or(MessageAuthorizationError::MissingModuleRole)?;
 
     let metadata_only =
         authorize_author_delegate_if_present(tenant, message, filters, auth, messages_store)
@@ -225,9 +221,9 @@ where
         MessageAuthorizationKind::Subscribe => RecordsAuthorizationKind::Subscribe,
     };
 
-    let mut resolved: Option<ResolvedProtocolRole> = None;
+    let mut resolved: Option<ResolvedModuleRole> = None;
 
-    // The records role check resolves the protocol definition governing the
+    // The records role check resolves the module definition governing the
     // signed Messages request time, exactly as the Records handlers do.
     let request_timestamp = match &message.descriptor {
         Descriptor::Messages(messages) => match messages.as_ref() {
@@ -244,13 +240,13 @@ where
 
     for filter in exact_filters {
         let record_filter = message_filters::Records {
-            protocol: Some(filter.protocol.to_string()),
-            protocol_path: Some(filter.protocol_path.to_string()),
+            module: Some(filter.module.to_string()),
+            module_path: Some(filter.module_path.to_string()),
             context_id: Some(filter.context_id_prefix.to_string()),
             ..Default::default()
         };
 
-        let candidate = authorize_protocol_query_or_subscribe(
+        let candidate = authorize_module_query_or_subscribe(
             tenant,
             &record_filter,
             auth,
@@ -259,7 +255,7 @@ where
             records_kind,
         )
         .await
-        .map_err(|err| MessageAuthorizationError::ProtocolAuthorization(err.to_string()))?;
+        .map_err(|err| MessageAuthorizationError::ModuleAuthorization(err.to_string()))?;
 
         if let Some(first) = &resolved {
             if first != &candidate {
@@ -289,11 +285,11 @@ fn require_exact_role_filters(
     let mut exact_role_filters = Vec::new();
 
     for filter in filters {
-        let Some(protocol) = filter.protocol.as_deref() else {
+        let Some(module) = filter.module.as_deref() else {
             return Err(MessageAuthorizationError::InvalidRoleMessage);
         };
 
-        let Some(protocol_path) = filter.protocol_path.as_deref() else {
+        let Some(module_path) = filter.module_path.as_deref() else {
             return Err(MessageAuthorizationError::InvalidRoleMessage);
         };
 
@@ -302,25 +298,25 @@ fn require_exact_role_filters(
         };
 
         if filter.interface.as_deref() != Some(RECORDS)
-            || filter.protocol_path_prefix.is_some()
-            || protocol.is_empty()
-            || protocol_path.is_empty()
+            || filter.module_path_prefix.is_some()
+            || module.is_empty()
+            || module_path.is_empty()
             || context_id_prefix.is_empty()
         {
             return Err(MessageAuthorizationError::InvalidRoleMessage);
         }
 
         exact_role_filters.push(ExactRoleFilter {
-            protocol,
-            protocol_path,
+            module,
+            module_path,
             context_id_prefix,
         });
     }
 
     if let Some(first) = exact_role_filters.clone().first() {
-        let invalid_msg = exact_role_filters.iter().any(|f| {
-            f.protocol != first.protocol || f.context_id_prefix != first.context_id_prefix
-        });
+        let invalid_msg = exact_role_filters
+            .iter()
+            .any(|f| f.module != first.module || f.context_id_prefix != first.context_id_prefix);
 
         if invalid_msg {
             return Err(MessageAuthorizationError::ShareProtoContext);
@@ -343,15 +339,15 @@ pub(crate) mod tests {
 
     pub(crate) const TENANT: &str = "did:example:tenant";
     pub(crate) const AUTHOR: &str = "did:example:alice";
-    pub(crate) const PROTOCOL: &str = "https://example.com/protocol/chat";
+    pub(crate) const MODULE: &str = "https://example.com/module/chat";
     pub(crate) const ROLE: &str = "thread/participant";
     pub(crate) const CONTEXT: &str = "thread-1/message-1";
 
     pub(crate) fn exact_filter(path: &str) -> message_filters::Messages {
         message_filters::Messages {
             interface: Some(RECORDS.to_string()),
-            protocol: Some(PROTOCOL.to_string()),
-            protocol_path: Some(path.to_string()),
+            module: Some(MODULE.to_string()),
+            module_path: Some(path.to_string()),
             context_id_prefix: Some(CONTEXT.to_string()),
             ..Default::default()
         }
@@ -365,7 +361,7 @@ pub(crate) mod tests {
         author: &str,
         signer: &str,
         grant_ids: Option<Vec<String>>,
-        protocol_role: Option<&str>,
+        module_role: Option<&str>,
     ) -> AuthorizationContext {
         AuthorizationContext {
             signer: signer.to_string(),
@@ -375,7 +371,7 @@ pub(crate) mod tests {
                 delegated_grant_id: None,
                 permission_grant_id: None,
                 permission_grant_ids: grant_ids.clone(),
-                protocol_role: protocol_role.map(str::to_string),
+                module_role: module_role.map(str::to_string),
             }),
             permission_grant_invocation: grant_ids
                 .map(PermissionGrantInvocation::Multi)
@@ -385,14 +381,14 @@ pub(crate) mod tests {
         }
     }
 
-    fn protocol_message() -> Message<Descriptor> {
+    fn module_message() -> Message<Descriptor> {
         serde_json::from_value(serde_json::json!({
             "descriptor": {
-                "interface": "Protocols",
+                "interface": "Modules",
                 "method": "Configure",
                 "messageTimestamp": "2024-12-31T00:00:00.000000Z",
                 "definition": {
-                    "protocol": PROTOCOL,
+                    "module": MODULE,
                     "published": false,
                     "types": {
                         "thread": {},
@@ -416,7 +412,7 @@ pub(crate) mod tests {
                 }
             }
         }))
-        .expect("protocol message must deserialize")
+        .expect("module message must deserialize")
     }
 
     pub(crate) fn role_record() -> Message<Descriptor> {
@@ -429,8 +425,8 @@ pub(crate) mod tests {
                 "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
                 "dataSize": 0,
                 "dataFormat": "application/json",
-                "protocol": PROTOCOL,
-                "protocolPath": ROLE,
+                "module": MODULE,
+                "modulePath": ROLE,
                 "recipient": AUTHOR
             },
             "recordId": "role-record-1",
@@ -441,18 +437,18 @@ pub(crate) mod tests {
 
     pub(crate) async fn role_store() -> (MemoryMessageStore, Message<Descriptor>) {
         let store = MemoryMessageStore::default();
-        let protocol = protocol_message();
+        let module = module_message();
         store
             .put(
                 TENANT,
-                protocol.clone(),
+                module.clone(),
                 BTreeMap::from([
                     (
                         "interface".to_string(),
-                        Value::String("Protocols".to_string()),
+                        Value::String("Modules".to_string()),
                     ),
                     ("method".to_string(), Value::String("Configure".to_string())),
-                    ("protocol".to_string(), Value::String(PROTOCOL.to_string())),
+                    ("module".to_string(), Value::String(MODULE.to_string())),
                     ("published".to_string(), Value::Bool(false)),
                     ("isLatestBaseState".to_string(), Value::Bool(true)),
                     (
@@ -462,7 +458,7 @@ pub(crate) mod tests {
                 ]),
             )
             .await
-            .expect("protocol must be stored");
+            .expect("module must be stored");
         store
             .put(
                 TENANT,
@@ -473,8 +469,8 @@ pub(crate) mod tests {
                         Value::String("Records".to_string()),
                     ),
                     ("method".to_string(), Value::String("Write".to_string())),
-                    ("protocol".to_string(), Value::String(PROTOCOL.to_string())),
-                    ("protocolPath".to_string(), Value::String(ROLE.to_string())),
+                    ("module".to_string(), Value::String(MODULE.to_string())),
+                    ("modulePath".to_string(), Value::String(ROLE.to_string())),
                     ("recipient".to_string(), Value::String(AUTHOR.to_string())),
                     (
                         "contextId".to_string(),
@@ -494,7 +490,7 @@ pub(crate) mod tests {
 
     /// Production-shaped Messages request carrying the signed request time.
     /// Role authorization resolves policy at this timestamp, so tests must
-    /// pass the real request shape rather than a protocol message stand-in.
+    /// pass the real request shape rather than a module message stand-in.
     fn messages_request(kind: MessageAuthorizationKind) -> Message<Descriptor> {
         let method = match kind {
             MessageAuthorizationKind::Query => "Query",
@@ -519,7 +515,7 @@ pub(crate) mod tests {
 
         let multiple_filters = [exact_filter("thread/message"), exact_filter("thread/image")];
         let multiple = require_exact_role_filters(&multiple_filters)
-            .expect("different paths in one protocol and context must be valid");
+            .expect("different paths in one module and context must be valid");
         assert_eq!(multiple.len(), 2);
     }
 
@@ -532,16 +528,16 @@ pub(crate) mod tests {
 
         let mut cases = Vec::new();
         let mut filter = exact_filter("thread/message");
-        filter.interface = Some("Protocols".to_string());
+        filter.interface = Some("Modules".to_string());
         cases.push(filter);
         let mut filter = exact_filter("thread/message");
-        filter.protocol = None;
+        filter.module = None;
         cases.push(filter);
         let mut filter = exact_filter("thread/message");
-        filter.protocol_path = None;
+        filter.module_path = None;
         cases.push(filter);
         let mut filter = exact_filter("thread/message");
-        filter.protocol_path_prefix = Some("thread".to_string());
+        filter.module_path_prefix = Some("thread".to_string());
         cases.push(filter);
         let mut filter = exact_filter("thread/message");
         filter.context_id_prefix = None;
@@ -554,11 +550,11 @@ pub(crate) mod tests {
             ));
         }
 
-        for clear in ["protocol", "path", "context"] {
+        for clear in ["module", "path", "context"] {
             let mut filter = exact_filter("thread/message");
             match clear {
-                "protocol" => filter.protocol = Some(String::new()),
-                "path" => filter.protocol_path = Some(String::new()),
+                "module" => filter.module = Some(String::new()),
+                "path" => filter.module_path = Some(String::new()),
                 "context" => filter.context_id_prefix = Some(String::new()),
                 _ => unreachable!(),
             }
@@ -570,11 +566,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn exact_role_filter_validation_rejects_different_protocol_or_context() {
-        let mut other_protocol = exact_filter("thread/image");
-        other_protocol.protocol = Some("https://example.com/protocol/other".to_string());
+    fn exact_role_filter_validation_rejects_different_module_or_context() {
+        let mut other_module = exact_filter("thread/image");
+        other_module.module = Some("https://example.com/module/other".to_string());
         assert!(matches!(
-            require_exact_role_filters(&[exact_filter("thread/message"), other_protocol]),
+            require_exact_role_filters(&[exact_filter("thread/message"), other_module]),
             Err(MessageAuthorizationError::ShareProtoContext)
         ));
 
@@ -612,8 +608,8 @@ pub(crate) mod tests {
             };
             assert_eq!(role.author, AUTHOR);
             assert!(!role.metadata_only);
-            assert_eq!(role.resolved_role.protocol, PROTOCOL);
-            assert_eq!(role.resolved_role.protocol_path, ROLE);
+            assert_eq!(role.resolved_role.module, MODULE);
+            assert_eq!(role.resolved_role.module_path, ROLE);
             assert_eq!(
                 role.resolved_role.context_id_prefix.as_deref(),
                 Some(CONTEXT)
@@ -640,7 +636,7 @@ pub(crate) mod tests {
 
         assert!(matches!(
             result,
-            Err(MessageAuthorizationError::ProtocolAuthorization(_))
+            Err(MessageAuthorizationError::ModuleAuthorization(_))
         ));
     }
 

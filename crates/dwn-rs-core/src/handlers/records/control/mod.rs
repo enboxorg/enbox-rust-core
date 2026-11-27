@@ -1,12 +1,12 @@
 //! Admission and writer authorization for encryption-control records.
 //!
-//! Control records sit at reserved virtual paths inside the source protocol,
+//! Control records sit at reserved virtual paths inside the source module,
 //! where no application rule set exists. They are therefore admitted against a
-//! fixed contract rather than a protocol definition's type and rule map: they
+//! fixed contract rather than a module definition's type and rule map: they
 //! are immutable, unpublished, small enough to validate inline, and carry
 //! their identity in tags.
 //!
-//! What a control record *does* still borrow from the protocol is the role it
+//! What a control record *does* still borrow from the module is the role it
 //! names. That role is resolved against the definition governing the record's
 //! own timestamp, not the newest one, so a configuration learned later cannot
 //! retroactively change what a record meant when it was written.
@@ -44,9 +44,9 @@ use crate::errors::{DwnError, DwnErrorCode};
 use crate::filters::message_filters::Records as RecordsFilter;
 use crate::filters::query::Cursor;
 use crate::filters::{FilterKey, Filters};
-use crate::interfaces::messages::protocols::{Action, Can, Definition, RuleSet, Who};
+use crate::interfaces::messages::modules::{Action, Can, Definition, RuleSet, Who};
 use crate::permissions::control::{resolve_control_actor, ControlActor};
-use crate::permissions::scopes::ProtocolScopeTarget;
+use crate::permissions::scopes::ModuleScopeTarget;
 use crate::permissions::{
     fetch_grant, perform_base_validation, AuthorizationContext, PermissionGrant, PermissionScope,
     RecordsMethod,
@@ -58,9 +58,7 @@ use super::common::{
     filter_map, role_record_exists, string_filter,
 };
 use super::{RECORDS_INTERFACE, WRITE_METHOD};
-use crate::handlers::protocols::configure::{
-    fetch_protocol_definition, ProtocolDefinitionLookupError,
-};
+use crate::handlers::modules::configure::{fetch_module_definition, ModuleDefinitionLookupError};
 
 fn control_error(code: DwnErrorCode, detail: impl Into<String>) -> ControlValidationError {
     ControlValidationError::Dwn(DwnError::new(code, detail))
@@ -118,20 +116,20 @@ where
     // and contradicts this record", never "the configuration was missing" or
     // "the store was unavailable". Both of those are repairable and keep their
     // own classification.
-    let definition = fetch_protocol_definition(
+    let definition = fetch_module_definition(
         tenant,
-        &id.scope.protocol,
+        &id.scope.module,
         message_store,
         Some(message_timestamp),
     )
     .await
     .map_err(|error| match error {
-        ProtocolDefinitionLookupError::NotFound(uri) => ControlValidationError::Dwn(DwnError::new(
+        ModuleDefinitionLookupError::NotFound(uri) => ControlValidationError::Dwn(DwnError::new(
             DwnErrorCode::ModuleAuthorizationModuleNotFound,
-            format!("unable to find protocol definition for {uri}"),
+            format!("unable to find module definition for {uri}"),
         )),
-        ProtocolDefinitionLookupError::Store(detail) => ControlValidationError::Internal(detail),
-        ProtocolDefinitionLookupError::InvalidMessage(detail) => {
+        ModuleDefinitionLookupError::Store(detail) => ControlValidationError::Internal(detail),
+        ModuleDefinitionLookupError::InvalidMessage(detail) => {
             ControlValidationError::Detail(detail)
         }
     })?;

@@ -2,7 +2,7 @@
 //!
 //! The control plane is admitted, authorized, read, projected and repaired by
 //! `records::control`; the tests are split the same way, and everything they
-//! all need to build a tenant, a protocol and a control record lives here.
+//! all need to build a tenant, a module and a control record lives here.
 
 use crate::auth::PrivateJwkSigner;
 
@@ -14,7 +14,7 @@ mod projection;
 mod repair;
 mod visibility;
 
-const CONTROL_PROTOCOL: &str = "http://example.com/control-threads";
+const CONTROL_MODULE: &str = "http://example.com/control-threads";
 
 const CONTROL_TENANT: &str = "did:example:alice";
 
@@ -54,16 +54,16 @@ fn audience_key_jwk() -> JWK {
 fn control_definition() -> Definition {
     let keyed_role = || RuleSet {
         role: Some(true),
-        key_agreement: Some(ProtocolKeyAgreement {
+        key_agreement: Some(ModuleKeyAgreement {
             public_key_jwk: role_key_jwk(),
         }),
         ..Default::default()
     };
     Definition {
-        protocol: CONTROL_PROTOCOL.to_string(),
+        module: CONTROL_MODULE.to_string(),
         published: true,
         uses: None,
-        key_agreement: Some(ProtocolKeyAgreement {
+        key_agreement: Some(ModuleKeyAgreement {
             public_key_jwk: role_key_jwk(),
         }),
         types: BTreeMap::from([
@@ -120,8 +120,8 @@ fn control_definition() -> Definition {
 fn audience_tags(role_path: &str, context_id: &str, key_id: &str) -> MapValue {
     MapValue::from([
         (
-            "protocol".to_string(),
-            Value::String(CONTROL_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(CONTROL_MODULE.to_string()),
         ),
         ("rolePath".to_string(), Value::String(role_path.to_string())),
         (
@@ -153,7 +153,7 @@ fn audience_payload_for(
 ) -> Bytes {
     Bytes::from(
         serde_json::to_vec(&json!({
-            "protocol": CONTROL_PROTOCOL,
+            "module": CONTROL_MODULE,
             "rolePath": role_path,
             "contextId": context_id,
             "keyId": key_id,
@@ -190,7 +190,7 @@ async fn control_fixture_on(mut message_store: MemoryMessageStore) -> ControlFix
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_protocol_definition(
+    put_module_definition(
         CONTROL_TENANT,
         &message_store,
         control_definition(),
@@ -211,15 +211,15 @@ async fn control_fixture_on(mut message_store: MemoryMessageStore) -> ControlFix
 
 /// Builds a control write, letting each test perturb exactly one thing.
 async fn control_write(
-    protocol_path: &str,
+    module_path: &str,
     tags: MapValue,
     data: &Bytes,
     timestamp: &str,
     mutate: impl FnOnce(&mut WriteSpec),
 ) -> serde_json::Value {
     let mut spec = WriteSpec {
-        protocol: CONTROL_PROTOCOL.to_string(),
-        protocol_path: protocol_path.to_string(),
+        module: CONTROL_MODULE.to_string(),
+        module_path: module_path.to_string(),
         tags: Some(tags),
         data_cid: generate_dag_pb_cid_from_bytes(data).to_string(),
         data_size: data.len() as u64,
@@ -233,7 +233,7 @@ async fn control_write(
 /// A delivery's envelope. Its contents are never inspected by admission, which
 /// is the point: the node has no private key and must not need one.
 fn delivery_envelope() -> EncryptionEnvelope {
-    envelope_with_entries(vec![KeyEncryption::ProtocolPath {
+    envelope_with_entries(vec![KeyEncryption::ModulePath {
         algorithm: KeyAgreementAlgorithm::X25519HkdfSha256A256Kw,
         key_id: "delivery-key".to_string(),
         ephemeral_public_key: role_key_jwk(),
@@ -251,11 +251,11 @@ fn delivery_tags(role_path: &str, context_id: &str, key_id: &str, authority: &st
 }
 
 /// Grants `recipient` the `member` role by storing a role record directly:
-/// role membership is the protocol's business, not the control plane's.
+/// role membership is the module's business, not the control plane's.
 async fn grant_member_role(message_store: &MemoryMessageStore, recipient: &str, timestamp: &str) {
     let role = signed_write_message(WriteSpec {
-        protocol: CONTROL_PROTOCOL.to_string(),
-        protocol_path: "member".to_string(),
+        module: CONTROL_MODULE.to_string(),
+        module_path: "member".to_string(),
         recipient: Some(recipient.to_string()),
         ..WriteSpec::new(timestamp)
     })
@@ -268,11 +268,11 @@ async fn grant_member_role(message_store: &MemoryMessageStore, recipient: &str, 
         ),
         ("method".to_string(), Value::String("Write".to_string())),
         (
-            "protocol".to_string(),
-            Value::String(CONTROL_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(CONTROL_MODULE.to_string()),
         ),
         (
-            "protocolPath".to_string(),
+            "modulePath".to_string(),
             Value::String("member".to_string()),
         ),
         (
@@ -319,28 +319,17 @@ async fn admit_audience(fixture: &ControlFixture, key_id: &str, timestamp: &str)
     );
 }
 
-/// Issues a tenant-to-Bob Records Write grant scoped to `protocol_path`.
-async fn issue_write_grant(
-    fixture: &ControlFixture,
-    protocol_path: &str,
-    timestamp: &str,
-) -> String {
-    issue_grant(
-        fixture,
-        "Write",
-        "did:example:bob",
-        protocol_path,
-        timestamp,
-    )
-    .await
+/// Issues a tenant-to-Bob Records Write grant scoped to `module_path`.
+async fn issue_write_grant(fixture: &ControlFixture, module_path: &str, timestamp: &str) -> String {
+    issue_grant(fixture, "Write", "did:example:bob", module_path, timestamp).await
 }
 
-/// Issues a tenant-issued Records grant to `grantee`, scoped to `protocol_path`.
+/// Issues a tenant-issued Records grant to `grantee`, scoped to `module_path`.
 async fn issue_grant(
     fixture: &ControlFixture,
     method: &str,
     grantee: &str,
-    protocol_path: &str,
+    module_path: &str,
     timestamp: &str,
 ) -> String {
     let data = Bytes::from(
@@ -352,20 +341,20 @@ async fn issue_grant(
             "scope": {
                 "interface": "Records",
                 "method": method,
-                "protocol": CONTROL_PROTOCOL,
-                "protocolPath": protocol_path
+                "module": CONTROL_MODULE,
+                "modulePath": module_path
             },
             "delegated": true
         }))
         .unwrap(),
     );
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(grantee.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
-            Value::String(CONTROL_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(CONTROL_MODULE.to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
@@ -409,7 +398,7 @@ async fn signed_request(
 
 fn exact_tuple_filter(key_id: Option<&str>) -> serde_json::Value {
     let mut tags = json!({
-        "protocol": CONTROL_PROTOCOL,
+        "module": CONTROL_MODULE,
         "rolePath": "member",
         "contextId": "",
     });
@@ -417,8 +406,8 @@ fn exact_tuple_filter(key_id: Option<&str>) -> serde_json::Value {
         tags["keyId"] = json!(key_id);
     }
     json!({
-        "protocol": CONTROL_PROTOCOL,
-        "protocolPath": AUDIENCE_PATH,
+        "module": CONTROL_MODULE,
+        "modulePath": AUDIENCE_PATH,
         "tags": tags,
     })
 }
@@ -461,7 +450,7 @@ async fn admit_audience_signed(
 /// Installs `definition` at `timestamp`, so a later configuration can change
 /// what an already-stored record means.
 async fn reconfigure(fixture: &ControlFixture, definition: Definition, timestamp: &str) {
-    put_protocol_definition(
+    put_module_definition(
         CONTROL_TENANT,
         &fixture.message_store,
         definition,

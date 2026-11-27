@@ -11,7 +11,7 @@ use crate::agent::{
     key_agreement_root_key_id, now_utc, AgentIdentityError, AgentIdentityResult, AgentKeyManager,
     CredentialStore, DidProvider, PortableDid,
 };
-use dwn_rs_core::interfaces::messages::protocols::Definition;
+use dwn_rs_core::interfaces::messages::modules::Definition;
 use dwn_rs_core::permissions::{PermissionScope, RecordsMethod, RecordsScope};
 use ssi_jwk::JWK;
 
@@ -22,7 +22,7 @@ pub const DELEGATE_CONTEXT_KEYS_KEY: &str = "enbox:auth:delegateContextKeys";
 pub const DELEGATE_MULTI_PARTY_PROTOCOLS_KEY: &str = "enbox:auth:delegateMultiPartyProtocols";
 pub const SESSION_REVOCATIONS_KEY: &str = "enbox:auth:sessionRevocations";
 
-const PROTOCOL_PATH_DERIVATION_SCHEME: &str = "protocolPath";
+const PROTOCOL_PATH_DERIVATION_SCHEME: &str = "modulePath";
 const PROTOCOL_CONTEXT_DERIVATION_SCHEME: &str = "protocolContext";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -273,13 +273,13 @@ where
                 continue;
             }
             if multi_party {
-                if scope.protocol_path().is_none() {
-                    multi_party_protocols.insert(request.protocol_definition.protocol.clone());
+                if scope.module_path().is_none() {
+                    multi_party_protocols.insert(request.protocol_definition.module.clone());
                 }
                 continue;
             }
-            let protocol = request.protocol_definition.protocol.clone();
-            let (derivation_path, decryption_scope) = match scope.protocol_path() {
+            let protocol = request.protocol_definition.module.clone();
+            let (derivation_path, decryption_scope) = match scope.module_path() {
                 Some(protocol_path) => {
                     let mut derivation_path = vec![
                         PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
@@ -530,7 +530,7 @@ impl DelegateSessionCache {
         let Some(grant) = state.grants.remove(grant_id) else {
             return Ok(false);
         };
-        let revoked_protocol = grant.scope.protocol().map(str::to_owned);
+        let revoked_protocol = grant.scope.module().map(str::to_owned);
         state.decryption_keys.retain(|key| {
             revoked_protocol
                 .as_ref()
@@ -634,10 +634,8 @@ mod tests {
         jwk_curve, AgentIdentityInitializeRequest, AgentIdentityService,
         DeterministicDidJwkProvider, MemoryKeyManager, MemoryPortableDidStore,
     };
-    use dwn_rs_core::interfaces::messages::protocols::{
-        Action, ActionWho, Can, RuleSet, Type, Who,
-    };
-    use dwn_rs_core::permissions::{ProtocolPath, RecordsMethod, RecordsScope, RecordsSelector};
+    use dwn_rs_core::interfaces::messages::modules::{Action, ActionWho, Can, RuleSet, Type, Who};
+    use dwn_rs_core::permissions::{ModulePath, RecordsMethod, RecordsScope, RecordsSelector};
 
     #[tokio::test]
     async fn read_like_scope_receives_decryption_key_and_write_only_does_not() {
@@ -728,7 +726,7 @@ mod tests {
             Utc::now() + Duration::days(1),
             None,
         );
-        let protocol = grant.scope.protocol().unwrap().to_string();
+        let protocol = grant.scope.module().unwrap().to_string();
         cache.insert_grant(grant.clone()).unwrap();
         cache
             .set_decryption_keys(vec![sample_decryption_key(&protocol)])
@@ -793,9 +791,9 @@ mod tests {
                 "Delete" => RecordsMethod::Delete,
                 _ => panic!("unsupported Records permission method in test: {method}"),
             },
-            protocol: "https://protocol.example/notes".to_string(),
+            module: "https://protocol.example/notes".to_string(),
             selector: protocol_path
-                .map(|path| RecordsSelector::ProtocolPath(ProtocolPath(path.to_string()))),
+                .map(|path| RecordsSelector::ModulePath(ModulePath(path.to_string()))),
         })
     }
 
@@ -812,7 +810,7 @@ mod tests {
             note_rule.role = Some(true);
         }
         Definition {
-            protocol: "https://protocol.example/notes".to_string(),
+            module: "https://protocol.example/notes".to_string(),
             published: true,
             uses: None,
             key_agreement: None,
@@ -848,7 +846,7 @@ mod tests {
         DerivedPrivateJwk {
             root_key_id: "did:example:owner#enc".to_string(),
             derivation_scheme: PROTOCOL_PATH_DERIVATION_SCHEME.to_string(),
-            derivation_path: vec!["protocolPath".to_string()],
+            derivation_path: vec![PROTOCOL_PATH_DERIVATION_SCHEME.to_string()],
             derived_private_key: serde_json::from_value(serde_json::json!({
                 "kty": "OKP",
                 "crv": "X25519",

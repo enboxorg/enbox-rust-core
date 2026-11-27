@@ -11,16 +11,16 @@ use serde_json::json;
 use crate::cid::generate_dag_pb_cid_from_bytes;
 use crate::dwn::Handler;
 use crate::encryption::{
-    EncryptionEnvelope, ENCRYPTION_PROTOCOL_GRANT_KEY_PATH, ENCRYPTION_PROTOCOL_URI,
-    ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH,
+    EncryptionEnvelope, ENCRYPTION_MODULE_GRANT_KEY_PATH, ENCRYPTION_MODULE_URI,
+    ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH,
 };
-use crate::interfaces::messages::protocols::{
-    Action, ActionRole, Can, Definition, ProtocolKeyAgreement, RuleSet, Type,
+use crate::interfaces::messages::modules::{
+    Action, ActionRole, Can, Definition, ModuleKeyAgreement, RuleSet, Type,
 };
 use crate::interfaces::replies::records::Write;
 use crate::interfaces::replies::Response;
 use crate::testing::{
-    bob_signer, put_protocol_definition, signed_write_message, test_signer, WriteSpec,
+    bob_signer, put_module_definition, signed_write_message, test_signer, WriteSpec,
 };
 use crate::{MapValue, Value};
 
@@ -28,7 +28,7 @@ use super::{enc_test_handler, open_stores, RecordsWriteHandler, TestDataStore, T
 
 const TENANT: &str = "did:example:alice";
 const GRANTEE: &str = "did:example:bob";
-const APP_PROTOCOL: &str = "http://example.com/threads";
+const APP_MODULE: &str = "http://example.com/threads";
 const GRANT_TIME: &str = "2024-12-01T00:00:00.000000Z";
 const DELIVERY_TIME: &str = "2025-01-03T00:00:00.000000Z";
 const FAR_FUTURE: &str = "2099-01-01T00:00:00.000000Z";
@@ -49,14 +49,14 @@ async fn fixture() -> DeliveryFixture {
     }
 }
 
-/// Application protocol under test: `team` reads through the keyed `member`
+/// Application module under test: `team` reads through the keyed `member`
 /// role and nests the keyed `team/lead` role beside the plain `team/doc`.
 fn app_definition() -> Definition {
-    let keyed = || ProtocolKeyAgreement {
+    let keyed = || ModuleKeyAgreement {
         public_key_jwk: super::path_key_jwk(),
     };
     Definition {
-        protocol: APP_PROTOCOL.to_string(),
+        module: APP_MODULE.to_string(),
         published: true,
         uses: None,
         key_agreement: None,
@@ -113,7 +113,7 @@ fn app_definition() -> Definition {
 }
 
 async fn install_app(fixture: &DeliveryFixture) {
-    put_protocol_definition(TENANT, &fixture.message_store, app_definition(), GRANT_TIME).await;
+    put_module_definition(TENANT, &fixture.message_store, app_definition(), GRANT_TIME).await;
 }
 
 /// Issues a tenant grant to `GRANTEE`; `scope` is the grant scope JSON.
@@ -133,12 +133,12 @@ async fn issue_grant(
         .unwrap(),
     );
     let grant = signed_write_message(WriteSpec {
-        protocol: crate::permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: crate::permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: crate::permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: crate::permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(grantee.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
-            Value::String(APP_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(APP_MODULE.to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
@@ -159,13 +159,13 @@ async fn issue_grant(
 async fn revoke_grant(fixture: &DeliveryFixture, grant_id: &str, timestamp: &str) {
     let data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
-        protocol: crate::permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: crate::permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        module: crate::permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: crate::permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
         parent_id: Some(grant_id.to_string()),
         parent_context_id: Some(grant_id.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
-            Value::String(APP_PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(APP_MODULE.to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
         data_size: data.len() as u64,
@@ -185,10 +185,10 @@ fn scope_json(method: &str, path: Option<&str>, context: Option<&str>) -> serde_
     let mut scope = json!({
         "interface": "Records",
         "method": method,
-        "protocol": APP_PROTOCOL,
+        "module": APP_MODULE,
     });
     if let Some(path) = path {
-        scope["protocolPath"] = json!(path);
+        scope["modulePath"] = json!(path);
     }
     if let Some(context) = context {
         scope["contextId"] = json!(context);
@@ -196,17 +196,14 @@ fn scope_json(method: &str, path: Option<&str>, context: Option<&str>) -> serde_
     scope
 }
 
-fn delivery_tags(grant_id: &str, protocol_path: Option<&str>) -> MapValue {
+fn delivery_tags(grant_id: &str, module_path: Option<&str>) -> MapValue {
     let mut tags = MapValue::from([
         ("grantId".to_string(), Value::String(grant_id.to_string())),
-        (
-            "protocol".to_string(),
-            Value::String(APP_PROTOCOL.to_string()),
-        ),
+        ("module".to_string(), Value::String(APP_MODULE.to_string())),
         ("keyId".to_string(), Value::String(KEY_ID.to_string())),
     ]);
-    if let Some(path) = protocol_path {
-        tags.insert("protocolPath".to_string(), Value::String(path.to_string()));
+    if let Some(path) = module_path {
+        tags.insert("modulePath".to_string(), Value::String(path.to_string()));
     }
     tags
 }
@@ -229,8 +226,8 @@ async fn deliver(
         (TENANT.to_string(), test_signer())
     };
     let write = signed_write_message(WriteSpec {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-        protocol_path: path.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
+        module_path: path.to_string(),
         recipient: recipient.map(str::to_string),
         tags: Some(tags),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -246,7 +243,7 @@ async fn deliver(
 }
 
 fn grant_key_envelope() -> EncryptionEnvelope {
-    super::envelope_with_entries(vec![super::protocol_path_entry("recipient-kid")])
+    super::envelope_with_entries(vec![super::module_path_entry("recipient-kid")])
 }
 
 /// Asserts rejection identity through the typed error code.
@@ -269,7 +266,7 @@ async fn accepts_valid_read_delivery() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some(GRANTEE),
@@ -295,7 +292,7 @@ async fn rejects_plaintext_grant_key() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some(GRANTEE),
@@ -323,7 +320,7 @@ async fn rejects_encrypted_wrapped_delivery() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some(GRANTEE),
@@ -349,8 +346,8 @@ async fn rejects_oversized_wrapped_delivery() {
     .await;
     let big = Bytes::from(vec![0u8; 30_001]);
     let write = signed_write_message(WriteSpec {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-        protocol_path: ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
+        module_path: ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(delivery_tags(&grant_id, None)),
         data_cid: generate_dag_pb_cid_from_bytes(&big).to_string(),
@@ -382,8 +379,8 @@ async fn rejects_malformed_tags() {
 
     let mut no_grant_id = delivery_tags(&grant_id, None);
     no_grant_id.remove("grantId");
-    let mut numeric_protocol = delivery_tags(&grant_id, None);
-    numeric_protocol.insert("protocol".to_string(), Value::Number(7.into()));
+    let mut numeric_module = delivery_tags(&grant_id, None);
+    numeric_module.insert("module".to_string(), Value::Number(7.into()));
     let mut short_key = delivery_tags(&grant_id, None);
     short_key.insert("keyId".to_string(), Value::String("x".repeat(42)));
     let mut symbols_key = delivery_tags(&grant_id, None);
@@ -391,13 +388,13 @@ async fn rejects_malformed_tags() {
 
     for (why, tags) in [
         ("missing grantId", no_grant_id),
-        ("non-string protocol", numeric_protocol),
+        ("non-string module", numeric_module),
         ("42-char keyId", short_key),
         ("non-base64url keyId", symbols_key),
     ] {
         let reply = deliver(
             &fixture,
-            ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+            ENCRYPTION_MODULE_GRANT_KEY_PATH,
             tags,
             false,
             Some(GRANTEE),
@@ -424,7 +421,7 @@ async fn missing_grant_is_not_a_scope_denial() {
     // can retry once the grant arrives.
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(
             "bafyreibsau7v7ewevad2flcgvuxet2fvpidnt5kabzb2urerpg2oa2qlmu",
             None,
@@ -456,7 +453,7 @@ async fn rejects_inactive_grant() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&future_grant, None),
         false,
         Some(GRANTEE),
@@ -478,7 +475,7 @@ async fn rejects_inactive_grant() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&short_grant, None),
         false,
         Some(GRANTEE),
@@ -507,7 +504,7 @@ async fn revocation_is_not_retroactive() {
     revoke_grant(&fixture, &grant_id, "2025-02-01T00:00:00.000000Z").await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some(GRANTEE),
@@ -522,7 +519,7 @@ async fn revocation_is_not_retroactive() {
     revoke_grant(&fixture, &grant_id, DELIVERY_TIME).await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some(GRANTEE),
@@ -549,7 +546,7 @@ async fn rejects_wrong_author_and_recipient() {
 
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         true,
         Some(GRANTEE),
@@ -567,7 +564,7 @@ async fn rejects_wrong_author_and_recipient() {
 
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some("did:example:carol"),
@@ -601,14 +598,14 @@ async fn rejects_ineligible_grants() {
             json!({
                 "interface": "Messages",
                 "method": "Read",
-                "protocol": APP_PROTOCOL,
+                "module": APP_MODULE,
             }),
         ),
     ] {
         let grant_id = issue_grant(&fixture, GRANTEE, scope, GRANT_TIME, FAR_FUTURE).await;
         let reply = deliver(
             &fixture,
-            ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+            ENCRYPTION_MODULE_GRANT_KEY_PATH,
             delivery_tags(&grant_id, None),
             false,
             Some(GRANTEE),
@@ -634,12 +631,12 @@ async fn rejects_ineligible_grants() {
     .await;
     let mut foreign = delivery_tags(&grant_id, None);
     foreign.insert(
-        "protocol".to_string(),
+        "module".to_string(),
         Value::String("http://example.com/other".to_string()),
     );
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         foreign,
         false,
         Some(GRANTEE),
@@ -673,7 +670,7 @@ async fn read_coverage_follows_the_directional_table() {
     for path in ["team", "team/doc", "team/lead"] {
         let reply = deliver(
             &fixture,
-            ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+            ENCRYPTION_MODULE_GRANT_KEY_PATH,
             delivery_tags(&team_grant, Some(path)),
             false,
             Some(GRANTEE),
@@ -685,11 +682,11 @@ async fn read_coverage_follows_the_directional_table() {
         assert_eq!(reply.status.code, 202, "{path}: {}", reply.status.detail);
     }
 
-    // ... but not siblings, ancestors, the protocol key, or prefix collisions.
+    // ... but not siblings, ancestors, the module key, or prefix collisions.
     for path in [None, Some("teaming"), Some("other")] {
         let reply = deliver(
             &fixture,
-            ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+            ENCRYPTION_MODULE_GRANT_KEY_PATH,
             delivery_tags(&team_grant, path),
             false,
             Some(GRANTEE),
@@ -708,7 +705,7 @@ async fn read_coverage_follows_the_directional_table() {
     // The keyed-role exception reaches roles the subtree reads through.
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&team_grant, Some("member")),
         false,
         Some(GRANTEE),
@@ -736,7 +733,7 @@ async fn write_coverage_reaches_keyed_roles_only() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&write_grant, Some("team/lead")),
         false,
         Some(GRANTEE),
@@ -750,7 +747,7 @@ async fn write_coverage_reaches_keyed_roles_only() {
     for path in [None, Some("team/doc"), Some("member")] {
         let reply = deliver(
             &fixture,
-            ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+            ENCRYPTION_MODULE_GRANT_KEY_PATH,
             delivery_tags(&write_grant, path),
             false,
             Some(GRANTEE),
@@ -766,7 +763,7 @@ async fn write_coverage_reaches_keyed_roles_only() {
         );
     }
 
-    // A protocol-wide Write grant reaches any keyed role.
+    // A module-wide Write grant reaches any keyed role.
     let wide_grant = issue_grant(
         &fixture,
         GRANTEE,
@@ -777,7 +774,7 @@ async fn write_coverage_reaches_keyed_roles_only() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&wide_grant, Some("member")),
         false,
         Some(GRANTEE),
@@ -806,7 +803,7 @@ async fn missing_history_stays_distinguishable_from_scope_denial() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&team_grant, Some("member")),
         false,
         Some(GRANTEE),
@@ -826,7 +823,7 @@ async fn representation_precedes_grant_lookup() {
     tags.remove("grantId");
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         tags,
         false,
         Some(GRANTEE),
@@ -852,8 +849,8 @@ async fn exact_replay_of_an_accepted_delivery_is_duplicate() {
     .await;
     let data = Bytes::from_static(b"{\"wrapped\":true}");
     let write = signed_write_message(WriteSpec {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-        protocol_path: ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
+        module_path: ENCRYPTION_MODULE_GRANT_KEY_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(delivery_tags(&grant_id, None)),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -899,8 +896,8 @@ async fn deliver_wrapped(
     data: Bytes,
 ) -> Response<Write> {
     let write = signed_write_message(WriteSpec {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-        protocol_path: ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
+        module_path: ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(delivery_tags(grant_id, None)),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -992,8 +989,8 @@ async fn accepts_wrapped_delivery_without_a_data_stream() {
     // change to require data is visible.
     let empty = Bytes::from_static(b"");
     let write = signed_write_message(WriteSpec {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-        protocol_path: ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
+        module_path: ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(delivery_tags(&grant_id, None)),
         data_cid: generate_dag_pb_cid_from_bytes(&empty).to_string(),
@@ -1032,7 +1029,7 @@ async fn rejects_undefined_tags() {
     );
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         tags,
         false,
         Some(GRANTEE),
@@ -1062,8 +1059,8 @@ async fn metadata_precedes_payload_validation() {
     tags.remove("grantId");
     let data = Bytes::from_static(b"not json{{{");
     let write = signed_write_message(WriteSpec {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-        protocol_path: ENCRYPTION_PROTOCOL_WRAPPED_GRANT_KEY_PATH.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
+        module_path: ENCRYPTION_MODULE_WRAPPED_GRANT_KEY_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(tags),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -1089,7 +1086,7 @@ async fn unexpected_path_falls_to_the_generic_gate() {
     )
     .await;
     // No rule set declares a third path, so generic referential integrity
-    // rejects before the protocol hook ever runs. The hook-level identity
+    // rejects before the module hook ever runs. The hook-level identity
     // stays pinned by unit test; this pins the observable precedence.
     let reply = deliver(
         &fixture,
@@ -1107,7 +1104,7 @@ async fn unexpected_path_falls_to_the_generic_gate() {
         reply
             .status
             .detail
-            .starts_with("ProtocolAuthorizationInvalidProtocolPath:"),
+            .starts_with("ModuleAuthorizationInvalidModulePath:"),
         "generic gate preempts, got: {}",
         reply.status.detail
     );
@@ -1136,20 +1133,20 @@ async fn accepts_delegated_author() {
             "scope": {
                 "interface": "Records",
                 "method": "Write",
-                "protocol": ENCRYPTION_PROTOCOL_URI,
-                "protocolPath": ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+                "module": ENCRYPTION_MODULE_URI,
+                "modulePath": ENCRYPTION_MODULE_GRANT_KEY_PATH,
             },
             "delegated": true,
         }))
         .unwrap(),
     );
     let delegation = signed_write_message(WriteSpec {
-        protocol: crate::permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: crate::permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: crate::permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: crate::permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
-            Value::String(ENCRYPTION_PROTOCOL_URI.to_string()),
+            "module".to_string(),
+            Value::String(ENCRYPTION_MODULE_URI.to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&delegation_data).to_string(),
         data_size: delegation_data.len() as u64,
@@ -1174,8 +1171,8 @@ async fn accepts_delegated_author() {
     // every directly-authored write.
     let data = Bytes::from_static(b"{\"wrapped\":true}");
     let delivery = signed_write_message(WriteSpec {
-        protocol: ENCRYPTION_PROTOCOL_URI.to_string(),
-        protocol_path: ENCRYPTION_PROTOCOL_GRANT_KEY_PATH.to_string(),
+        module: ENCRYPTION_MODULE_URI.to_string(),
+        module_path: ENCRYPTION_MODULE_GRANT_KEY_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(delivery_tags(&grant_id, None)),
         data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
@@ -1209,7 +1206,7 @@ async fn accepts_self_grant_direct_delivery() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some(TENANT),
@@ -1243,7 +1240,7 @@ async fn resolution_rechecks_what_admission_accepted() {
     .await;
     let reply = deliver(
         &fixture,
-        ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        ENCRYPTION_MODULE_GRANT_KEY_PATH,
         delivery_tags(&grant_id, None),
         false,
         Some(GRANTEE),
@@ -1273,35 +1270,35 @@ async fn resolution_rechecks_what_admission_accepted() {
     let payload = GrantKeyPayload {
         grant_id: grant_id.clone(),
         scope: PayloadScope {
-            scheme: "protocolPath".to_string(),
-            protocol: APP_PROTOCOL.to_string(),
-            protocol_path: None,
+            scheme: "modulePath".to_string(),
+            module: APP_MODULE.to_string(),
+            module_path: None,
         },
         key_material: KeyMaterial {
             algorithm: crate::encryption::KEY_AGREEMENT_ALGORITHM.to_string(),
-            derivation_scheme: "protocolPath".to_string(),
+            derivation_scheme: "modulePath".to_string(),
             key_id: key_id.clone(),
-            derivation_path: vec!["protocolPath".to_string(), APP_PROTOCOL.to_string()],
+            derivation_path: vec!["modulePath".to_string(), APP_MODULE.to_string()],
             public_key_jwk: public_jwk,
             private_key_jwk: private_jwk,
         },
     };
     let tags = DeliveryTags {
         grant_id: grant_id.clone(),
-        protocol: APP_PROTOCOL.to_string(),
-        protocol_path: None,
+        module: APP_MODULE.to_string(),
+        module_path: None,
         key_id: key_id.clone(),
     };
     let target = ResolutionTarget {
-        protocol: APP_PROTOCOL.to_string(),
-        protocol_path: Some("team/doc".to_string()),
+        module: APP_MODULE.to_string(),
+        module_path: Some("team/doc".to_string()),
     };
 
     let base = ResolutionInput {
         grant: &grant,
         grantor: TENANT,
         grantee: GRANTEE,
-        delivery_path: ENCRYPTION_PROTOCOL_GRANT_KEY_PATH,
+        delivery_path: ENCRYPTION_MODULE_GRANT_KEY_PATH,
         has_envelope: true,
         tags: tags.clone(),
         payload: &payload,

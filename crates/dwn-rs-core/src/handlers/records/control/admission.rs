@@ -126,7 +126,7 @@ where
     let holds_role = role_record_exists(
         tenant,
         recipient,
-        &id.scope.protocol,
+        &id.scope.module,
         &id.scope.role_path,
         Some(id.scope.context_id.as_str()),
         message_store,
@@ -154,15 +154,15 @@ where
     let mut filter = filter_map([
         ("interface", string_filter(RECORDS_INTERFACE)),
         ("method", string_filter(WRITE_METHOD)),
-        ("protocol", string_filter(&id.scope.protocol)),
+        ("module", string_filter(&id.scope.module)),
         (
-            "protocolPath",
-            string_filter(ControlKind::Audience.protocol_path()),
+            "modulePath",
+            string_filter(ControlKind::Audience.module_path()),
         ),
         ("isLatestBaseState", bool_filter(true)),
     ]);
     for (tag, value) in [
-        ("protocol", id.scope.protocol.as_str()),
+        ("module", id.scope.module.as_str()),
         ("rolePath", id.scope.role_path.as_str()),
         ("contextId", id.scope.context_id.as_str()),
         ("keyId", id.key_id.as_str()),

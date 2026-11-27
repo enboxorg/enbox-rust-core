@@ -33,8 +33,8 @@ pub enum EncryptionError {
     #[error("X25519 private JWK missing 'd' parameter")]
     MissingPrivateKeyMaterial,
 
-    #[error("roleAudience key encryption requires a protocol")]
-    MissingRoleAudienceProtocol,
+    #[error("roleAudience key encryption requires a module")]
+    MissingRoleAudienceModule,
 
     #[error("roleAudience key encryption requires a rolePath")]
     MissingRoleAudienceRolePath,

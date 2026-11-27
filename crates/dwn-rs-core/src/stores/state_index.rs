@@ -23,7 +23,7 @@ pub struct MemoryStateIndex {
 #[derive(Debug, Clone, Default)]
 struct TenantState {
     global: BTreeSet<String>,
-    protocols: BTreeMap<String, BTreeSet<String>>,
+    modules: BTreeMap<String, BTreeSet<String>>,
     metadata: BTreeMap<String, Option<String>>,
 }
 
@@ -59,26 +59,26 @@ impl StateIndex for MemoryStateIndex {
         let tenant = tenant.to_string();
         let message_cid = message_cid.to_string();
         async move {
-            let protocol = protocol_index(&indexes);
+            let module = module_index(&indexes);
             let mut tenants = tenants.write().map_err(lock_error)?;
             let state = tenants.entry(tenant).or_default();
 
-            let previous_protocol = state.metadata.get(&message_cid).cloned().flatten();
-            if previous_protocol.as_ref() != protocol.as_ref() {
-                if let Some(previous_protocol) = previous_protocol {
-                    remove_protocol_cid(state, &previous_protocol, &message_cid);
+            let previous_module = state.metadata.get(&message_cid).cloned().flatten();
+            if previous_module.as_ref() != module.as_ref() {
+                if let Some(previous_module) = previous_module {
+                    remove_module_cid(state, &previous_module, &message_cid);
                 }
             }
 
             state.global.insert(message_cid.clone());
-            if let Some(protocol) = protocol.clone() {
+            if let Some(module) = module.clone() {
                 state
-                    .protocols
-                    .entry(protocol)
+                    .modules
+                    .entry(module)
                     .or_default()
                     .insert(message_cid.clone());
             }
-            state.metadata.insert(message_cid, protocol);
+            state.metadata.insert(message_cid, module);
             Ok(())
         }
     }
@@ -99,8 +99,8 @@ impl StateIndex for MemoryStateIndex {
 
             for message_cid in message_cids {
                 state.global.remove(&message_cid);
-                if let Some(Some(protocol)) = state.metadata.remove(&message_cid) {
-                    remove_protocol_cid(state, &protocol, &message_cid);
+                if let Some(Some(module)) = state.metadata.remove(&message_cid) {
+                    remove_module_cid(state, &module, &message_cid);
                 }
             }
             Ok(())
@@ -120,17 +120,17 @@ impl StateIndex for MemoryStateIndex {
         }
     }
 
-    fn get_protocol_root(
+    fn get_module_root(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send {
         let tenants = self.tenants.clone();
         let tenant = tenant.to_string();
-        let protocol = protocol.to_string();
+        let module = module.to_string();
         async move {
             let tenants = tenants.read().map_err(lock_error)?;
-            let cids = protocol_cids(&tenants, &tenant, &protocol);
+            let cids = module_cids(&tenants, &tenant, &module);
             Ok(root_hash(&cids))
         }
     }
@@ -153,19 +153,19 @@ impl StateIndex for MemoryStateIndex {
         }
     }
 
-    fn get_protocol_subtree_hash(
+    fn get_module_subtree_hash(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<StateHash, StoreError>> + Send {
         let tenants = self.tenants.clone();
         let tenant = tenant.to_string();
-        let protocol = protocol.to_string();
+        let module = module.to_string();
         let prefix = prefix.to_vec();
         async move {
             let tenants = tenants.read().map_err(lock_error)?;
-            let cids = protocol_cids(&tenants, &tenant, &protocol);
+            let cids = module_cids(&tenants, &tenant, &module);
             Ok(subtree_hash(&cids, &prefix))
         }
     }
@@ -188,45 +188,45 @@ impl StateIndex for MemoryStateIndex {
         }
     }
 
-    fn get_protocol_leaves(
+    fn get_module_leaves(
         &self,
         tenant: &str,
-        protocol: &str,
+        module: &str,
         prefix: &[bool],
     ) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send {
         let tenants = self.tenants.clone();
         let tenant = tenant.to_string();
-        let protocol = protocol.to_string();
+        let module = module.to_string();
         let prefix = prefix.to_vec();
         async move {
             let tenants = tenants.read().map_err(lock_error)?;
-            let cids = protocol_cids(&tenants, &tenant, &protocol);
+            let cids = module_cids(&tenants, &tenant, &module);
             Ok(leaves(&cids, &prefix))
         }
     }
 }
 
-fn remove_protocol_cid(state: &mut TenantState, protocol: &str, message_cid: &str) {
-    if let Some(cids) = state.protocols.get_mut(protocol) {
+fn remove_module_cid(state: &mut TenantState, module: &str, message_cid: &str) {
+    if let Some(cids) = state.modules.get_mut(module) {
         cids.remove(message_cid);
     }
 }
 
-fn protocol_index(indexes: &KeyValues) -> Option<String> {
-    match indexes.get("protocol") {
-        Some(Value::String(protocol)) => Some(protocol.clone()),
+fn module_index(indexes: &KeyValues) -> Option<String> {
+    match indexes.get("module") {
+        Some(Value::String(module)) => Some(module.clone()),
         _ => None,
     }
 }
 
-fn protocol_cids(
+fn module_cids(
     tenants: &BTreeMap<String, TenantState>,
     tenant: &str,
-    protocol: &str,
+    module: &str,
 ) -> BTreeSet<String> {
     tenants
         .get(tenant)
-        .and_then(|state| state.protocols.get(protocol))
+        .and_then(|state| state.modules.get(module))
         .cloned()
         .unwrap_or_default()
 }

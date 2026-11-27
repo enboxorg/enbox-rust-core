@@ -29,8 +29,8 @@ fn context_message(record_id: &str, context_id: &str) -> Message<Descriptor> {
             "dataCid": "bafkreighhqlnlu3xumutodqyjeg6dkd6bhuhqydnemkjgoyn7eveukkfai",
             "dataSize": 0,
             "dataFormat": "text/plain",
-            "protocol": "https://example.com/protocol/threads",
-            "protocolPath": "thread/message"
+            "module": "https://example.com/module/threads",
+            "modulePath": "thread/message"
         },
         "recordId": record_id,
         "contextId": context_id
@@ -46,11 +46,11 @@ fn context_indexes(record_id: &str, context_id: &str) -> KeyValues {
         ),
         ("method".to_string(), Value::String("Write".to_string())),
         (
-            "protocol".to_string(),
-            Value::String("https://example.com/protocol/threads".to_string()),
+            "module".to_string(),
+            Value::String("https://example.com/module/threads".to_string()),
         ),
         (
-            "protocolPath".to_string(),
+            "modulePath".to_string(),
             Value::String("thread/message".to_string()),
         ),
         ("recordId".to_string(), Value::String(record_id.to_string())),

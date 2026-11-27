@@ -70,9 +70,9 @@ pub(crate) fn is_initial_write(
     Ok(entry_id(author, descriptor)? == record_id)
 }
 
-pub fn write_tag_protocol(message: &Message<Descriptor>) -> Option<&str> {
+pub fn write_tag_module(message: &Message<Descriptor>) -> Option<&str> {
     let descriptor = records_write_descriptor(message).ok()?;
-    match descriptor.tags.as_ref()?.get("protocol")? {
+    match descriptor.tags.as_ref()?.get("module")? {
         crate::Value::String(value) => Some(value.as_str()),
         _ => None,
     }
@@ -143,6 +143,11 @@ mod inner {
         pub permission_grant_id: Option<String>,
         #[serde(rename = "dateSort", skip_serializing_if = "Option::is_none")]
         pub date_sort: Option<DateSort>,
+        #[serde(
+            rename = "includeReplicationSupport",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub include_replication_support: Option<bool>,
     }
 
     /// CountDescriptor represents the RecordsCount interface method for counting records.
@@ -204,9 +209,9 @@ mod inner {
         grant = single
     )]
     pub struct WriteDescriptor {
-        pub protocol: String,
-        #[serde(rename = "protocolPath")]
-        pub protocol_path: String,
+        pub module: String,
+        #[serde(rename = "modulePath")]
+        pub module_path: String,
         pub recipient: Option<String>,
         pub schema: Option<String>,
         pub tags: Option<MapValue>,

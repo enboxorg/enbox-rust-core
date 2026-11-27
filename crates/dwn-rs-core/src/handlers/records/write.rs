@@ -7,19 +7,19 @@ use crate::descriptors::{
     messages::record_id, records::records_write_descriptor, Descriptor, Records,
     RecordsWriteDescriptor,
 };
-use crate::dwn::core_protocol::CoreProtocolStores;
-use crate::dwn::core_protocol::{CoreProtocolError, CoreProtocolRegistry};
+use crate::dwn::core_module::CoreModuleStores;
+use crate::dwn::core_module::{CoreModuleError, CoreModuleRegistry};
 use crate::dwn::{Handler, HandlerContext};
 use crate::encryption::control::ControlKind;
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::filters::Filters;
-use crate::handlers::protocols::configure::ProtocolDefinitionLookupError;
+use crate::handlers::modules::configure::ModuleDefinitionLookupError;
 use crate::handlers::records::common::{
-    authorize_against_protocol, compare_messages, core_protocol_error_reply,
+    authorize_against_module, compare_messages, core_module_error_reply,
     delete_from_data_store_if_needed, encoded_data_bytes, filter_map, find_initial_write,
     message_cid, newest_message, records_write_indexes, store_error_reply, string_filter,
     validate_records_write_integrity, verify_immutable_properties, GoverningTimestampError,
-    ProtocolAuthorizationError,
+    ModuleAuthorizationError,
 };
 use crate::handlers::records::control;
 use crate::permissions::{self, AuthorizationContext};
@@ -36,7 +36,7 @@ use super::{RecordsAuthorizationKind, RECORDS_INTERFACE};
 pub struct RecordsWriteHandler<MessageStore, DataStore> {
     message_store: MessageStore,
     data_store: DataStore,
-    core_protocol_registry: CoreProtocolRegistry,
+    core_module_registry: CoreModuleRegistry,
     did_resolver: Option<Arc<dyn DidResolver>>,
 }
 
@@ -78,15 +78,15 @@ impl From<GoverningTimestampError> for RecordsWriteValidationError {
     }
 }
 
-impl From<ProtocolDefinitionLookupError> for RecordsWriteValidationError {
-    fn from(error: ProtocolDefinitionLookupError) -> Self {
+impl From<ModuleDefinitionLookupError> for RecordsWriteValidationError {
+    fn from(error: ModuleDefinitionLookupError) -> Self {
         match error {
-            ProtocolDefinitionLookupError::NotFound(protocol) => Self::Dwn(DwnError::new(
+            ModuleDefinitionLookupError::NotFound(module) => Self::Dwn(DwnError::new(
                 DwnErrorCode::ModuleAuthorizationModuleNotFound,
-                format!("unable to find protocol definition for {protocol}"),
+                format!("unable to find module definition for {module}"),
             )),
-            ProtocolDefinitionLookupError::Store(detail) => Self::Internal(detail),
-            ProtocolDefinitionLookupError::InvalidMessage(detail) => Self::Detail(detail),
+            ModuleDefinitionLookupError::Store(detail) => Self::Internal(detail),
+            ModuleDefinitionLookupError::InvalidMessage(detail) => Self::Detail(detail),
         }
     }
 }
@@ -114,7 +114,7 @@ where
 
             // Covers: DWN-REC-003
             // Exact replay is classified from the parsed message alone, before
-            // authentication and before mutable protocol, role, grant, parent,
+            // authentication and before mutable module, role, grant, parent,
             // record-limit, or state-relative admission can reinterpret it. An
             // identical retained CID is the same bytes the store already
             // admitted, so re-resolving its signer proves nothing and must not
@@ -170,7 +170,7 @@ where
                 tenant,
                 &message,
                 &signature.author,
-                &self.core_protocol_registry,
+                &self.core_module_registry,
                 &self.message_store,
             )
             .await
@@ -192,14 +192,14 @@ where
             }
 
             if let Err(error) = self
-                .core_protocol_registry
+                .core_module_registry
                 .pre_process_write(tenant, &message, &self.message_store)
                 .await
             {
                 return match error {
-                    CoreProtocolError::GrantKey(error) => error.reply(),
-                    CoreProtocolError::Detail(detail) => {
-                        core_protocol_error_reply(&self.core_protocol_registry, detail)
+                    CoreModuleError::GrantKey(error) => error.reply(),
+                    CoreModuleError::Detail(detail) => {
+                        core_module_error_reply(&self.core_module_registry, detail)
                     }
                 };
             }
@@ -325,11 +325,11 @@ where
                 is_latest_base_state = true;
             }
 
-            if let Err(error) = self.core_protocol_registry.validate_record(&message, None) {
+            if let Err(error) = self.core_module_registry.validate_record(&message, None) {
                 return match error {
-                    CoreProtocolError::GrantKey(error) => error.reply(),
-                    CoreProtocolError::Detail(detail) => {
-                        core_protocol_error_reply(&self.core_protocol_registry, detail)
+                    CoreModuleError::GrantKey(error) => error.reply(),
+                    CoreModuleError::Detail(detail) => {
+                        core_module_error_reply(&self.core_module_registry, detail)
                     }
                 };
             }
@@ -393,11 +393,11 @@ where
             }
 
             if let Err(detail) = self
-                .core_protocol_registry
+                .core_module_registry
                 .post_process_write(
                     tenant,
                     &message,
-                    CoreProtocolStores {
+                    CoreModuleStores {
                         message_store: &self.message_store,
                         data_store: &self.data_store,
                     },
@@ -426,7 +426,7 @@ impl<MessageStore, DataStore> RecordsWriteHandler<MessageStore, DataStore> {
         Self {
             message_store,
             data_store,
-            core_protocol_registry: CoreProtocolRegistry::with_core_protocols(),
+            core_module_registry: CoreModuleRegistry::with_core_modules(),
             did_resolver,
         }
     }
@@ -461,10 +461,10 @@ where
         tenant: &str,
         message: &Message<Descriptor>,
         auth: &AuthorizationContext,
-    ) -> Result<(), ProtocolAuthorizationError> {
+    ) -> Result<(), ModuleAuthorizationError> {
         // Control writes carry their own authority question — may this actor
         // mint this role's key material — so they do not fall through to the
-        // ordinary grant and protocol-action ladder.
+        // ordinary grant and module-action ladder.
         if let Some(kind) = ControlKind::of(message) {
             return control::authorize_write(tenant, message, kind, auth, &self.message_store)
                 .await
@@ -490,17 +490,17 @@ where
         {
             return Ok(());
         }
-        self.authorize_against_protocol(tenant, message, auth, RecordsAuthorizationKind::Write)
+        self.authorize_against_module(tenant, message, auth, RecordsAuthorizationKind::Write)
             .await
     }
 
-    async fn authorize_against_protocol(
+    async fn authorize_against_module(
         &self,
         tenant: &str,
         message: &Message<Descriptor>,
         auth: &AuthorizationContext,
         kind: RecordsAuthorizationKind,
-    ) -> Result<(), ProtocolAuthorizationError> {
-        authorize_against_protocol(tenant, message, auth, kind, None, &self.message_store).await
+    ) -> Result<(), ModuleAuthorizationError> {
+        authorize_against_module(tenant, message, auth, kind, None, &self.message_store).await
     }
 }

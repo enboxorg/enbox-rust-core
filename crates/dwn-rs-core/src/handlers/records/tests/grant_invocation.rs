@@ -16,7 +16,7 @@ use crate::filters::Records as CollectionFilter;
 
 pub(crate) const TENANT: &str = "did:example:alice";
 pub(crate) const GRANTEE: &str = "did:example:bob";
-pub(crate) const PROTOCOL: &str = "http://example.com/notes";
+pub(crate) const MODULE: &str = "http://example.com/notes";
 pub(crate) const NOTE_PATH: &str = "note";
 
 pub(crate) const TS_GRANT: &str = "2025-01-01T00:00:00.000000Z";
@@ -25,8 +25,8 @@ pub(crate) const TS_REQUEST: &str = "2025-01-01T00:10:00.000000Z";
 
 pub(crate) fn note_filter() -> CollectionFilter {
     CollectionFilter {
-        protocol: Some(PROTOCOL.to_string()),
-        protocol_path: Some(NOTE_PATH.to_string()),
+        module: Some(MODULE.to_string()),
+        module_path: Some(NOTE_PATH.to_string()),
         ..Default::default()
     }
 }
@@ -42,7 +42,7 @@ pub(crate) async fn collection_fixture() -> CollectionFixture {
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
     data_store.open().await.unwrap();
-    put_notes_protocol_without_actions(TENANT, &message_store).await;
+    put_notes_module_without_actions(TENANT, &message_store).await;
 
     let write_handler = RecordsWriteHandler::<_, _>::new(
         message_store.clone(),
@@ -73,7 +73,7 @@ pub(crate) async fn collection_fixture() -> CollectionFixture {
     }
 }
 
-/// Issues a tenant grant to Bob scoped to `method` over the notes protocol.
+/// Issues a tenant grant to Bob scoped to `method` over the notes module.
 pub(crate) async fn issue_collection_grant(
     fixture: &CollectionFixture,
     method: &str,
@@ -103,19 +103,19 @@ where
             "scope": {
                 "interface": "Records",
                 "method": method,
-                "protocol": PROTOCOL,
-                "protocolPath": NOTE_PATH,
+                "module": MODULE,
+                "modulePath": NOTE_PATH,
             },
         }))
         .unwrap(),
     );
     let grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(grantee.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
-            Value::String(PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(MODULE.to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&grant_data).to_string(),
         data_size: grant_data.len() as u64,
@@ -154,13 +154,13 @@ pub(crate) async fn revoke_grant_on<S>(
 {
     let revoke_data = Bytes::from_static(br#"{"description":"revoke"}"#);
     let revocation = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_REVOCATION_PATH.to_string(),
         parent_id: Some(grant_id.to_string()),
         parent_context_id: Some(grant_id.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
-            Value::String(PROTOCOL.to_string()),
+            "module".to_string(),
+            Value::String(MODULE.to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&revoke_data).to_string(),
         data_size: revoke_data.len() as u64,
@@ -418,10 +418,7 @@ async fn grant_authorized_query_and_count_see_private_records() {
     let entries = reply.reply.entries.as_ref().unwrap();
     assert_eq!(entries.len(), 1, "grant must reveal the private note");
     let entry = serde_json::to_value(&entries[0]).unwrap();
-    assert_eq!(
-        entry["descriptor"]["protocolPath"].as_str(),
-        Some(NOTE_PATH)
-    );
+    assert_eq!(entry["descriptor"]["modulePath"].as_str(), Some(NOTE_PATH));
 
     let reply = query_handler
         .run(
@@ -575,7 +572,7 @@ async fn grant_authorized_delete_removes_record() {
     );
 }
 
-// The grant must name this grantee, this method, and this protocol target.
+// The grant must name this grantee, this method, and this module target.
 #[tokio::test]
 // Covers: DWN-AUTH-003
 async fn grant_for_wrong_grantee_method_or_scope_is_rejected() {
@@ -638,18 +635,18 @@ async fn grant_for_wrong_grantee_method_or_scope_is_rejected() {
         reply.status.detail
     );
 
-    let other_data = Bytes::from_static(br#"{"dateExpires":"2030-01-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","protocol":"http://example.com/other","protocolPath":"note"}}"#);
+    let other_data = Bytes::from_static(br#"{"dateExpires":"2030-01-01T00:00:00.000000Z","scope":{"interface":"Records","method":"Read","module":"http://example.com/other","modulePath":"note"}}"#);
     let write_handler = RecordsWriteHandler::<_, _>::new(
         fixture.message_store.clone(),
         fixture.data_store.clone(),
         Some(Arc::new(test_resolver())),
     );
     let other_grant = signed_write_message(WriteSpec {
-        protocol: permissions::PERMISSIONS_PROTOCOL_URI.to_string(),
-        protocol_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
+        module: permissions::PERMISSIONS_MODULE_URI.to_string(),
+        module_path: permissions::PERMISSIONS_GRANT_PATH.to_string(),
         recipient: Some(GRANTEE.to_string()),
         tags: Some(MapValue::from([(
-            "protocol".to_string(),
+            "module".to_string(),
             Value::String("http://example.com/other".to_string()),
         )])),
         data_cid: generate_dag_pb_cid_from_bytes(&other_data).to_string(),
