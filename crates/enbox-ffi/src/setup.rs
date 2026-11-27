@@ -1,14 +1,14 @@
 //! Glue between [`dwn_rs_agent::auth::setup`] and the FFI surface.
 //!
-//! Exposes a local [`ProtocolEndpoint`] backed by [`SqliteNativeDwn`] plus
-//! the helpers needed to extract a `ProtocolsConfigure`/`ProtocolsQuery`
+//! Exposes a local [`ModuleEndpoint`] backed by [`SqliteNativeDwn`] plus
+//! the helpers needed to extract a `ModulesConfigure`/`ModulesQuery`
 //! signer from a [`PortableDid`].
 
 use std::sync::Arc;
 
 use chrono::Utc;
 use dwn_rs_agent::agent::{AgentIdentityError, AgentIdentityResult, PortableDid};
-use dwn_rs_agent::auth::setup::{ProtocolEndpoint, SetupFuture};
+use dwn_rs_agent::auth::setup::{ModuleEndpoint, SetupFuture};
 use dwn_rs_core::auth::{Jws, PrivateJwkSigner, JWK};
 use dwn_rs_core::cid::generate_cid_from_json;
 use dwn_rs_core::descriptors::{ModulesConfigureDescriptor, ModulesQueryDescriptor};
@@ -21,7 +21,7 @@ use ssi_jwk::{Algorithm, Params};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PushProtocolInput {
+pub(crate) struct PushModuleInput {
     pub tenant_did: PortableDid,
     pub remote_url: String,
     pub definition: Definition,
@@ -33,7 +33,7 @@ pub(crate) struct RunRestoreFlowInput {
     pub agent_did: PortableDid,
     pub remote_url: String,
     #[serde(default)]
-    pub protocols: Vec<Definition>,
+    pub modules: Vec<Definition>,
 }
 
 /// Build a [`PrivateJwkSigner`] from a [`PortableDid`].
@@ -110,9 +110,9 @@ pub fn signer_from_portable_did(
     Ok(PrivateJwkSigner::new(kid, algorithm, private))
 }
 
-/// Build a signed `ProtocolsConfigure` message JSON suitable for
+/// Build a signed `ModulesConfigure` message JSON suitable for
 /// `Dwn::process_message`.
-pub async fn build_signed_protocols_configure(
+pub async fn build_signed_modules_configure(
     definition: Definition,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
@@ -121,23 +121,23 @@ pub async fn build_signed_protocols_configure(
         definition,
         permission_grant_id: None,
     };
-    sign_descriptor(&descriptor, signer, "AgentProtocolsConfigureInvalid").await
+    sign_descriptor(&descriptor, signer, "AgentModulesConfigureInvalid").await
 }
 
-/// Build a signed `ProtocolsQuery` message JSON filtered by protocol URI.
-pub async fn build_signed_protocols_query(
-    protocol: &str,
+/// Build a signed `ModulesQuery` message JSON filtered by module URI.
+pub async fn build_signed_modules_query(
+    module: &str,
     signer: &PrivateJwkSigner,
 ) -> AgentIdentityResult<JsonValue> {
     let descriptor = ModulesQueryDescriptor {
         message_timestamp: Utc::now(),
         filter: Some(QueryFilter {
-            module: Some(protocol.to_string()),
+            module: Some(module.to_string()),
             recipient: None,
         }),
         permission_grant_id: None,
     };
-    sign_descriptor(&descriptor, signer, "AgentProtocolsQueryInvalid").await
+    sign_descriptor(&descriptor, signer, "AgentModulesQueryInvalid").await
 }
 
 async fn sign_descriptor<D: serde::Serialize>(
@@ -162,18 +162,18 @@ async fn sign_descriptor<D: serde::Serialize>(
     }))
 }
 
-/// [`ProtocolEndpoint`] backed by a local [`SqliteNativeDwn`].
+/// [`ModuleEndpoint`] backed by a local [`SqliteNativeDwn`].
 ///
-/// `query_protocol` issues a signed `ProtocolsQuery` filtered by URI and
+/// `query_module` issues a signed `ModulesQuery` filtered by URI and
 /// returns the latest `Definition` from the reply body, if any.
-/// `configure_protocol` issues a signed `ProtocolsConfigure`.
+/// `configure_module` issues a signed `ModulesConfigure`.
 #[derive(Clone)]
-pub struct LocalDwnProtocolEndpoint {
+pub struct LocalDwnModuleEndpoint {
     node: Arc<SqliteNativeDwn>,
     signer: PrivateJwkSigner,
 }
 
-impl LocalDwnProtocolEndpoint {
+impl LocalDwnModuleEndpoint {
     pub fn new(node: Arc<SqliteNativeDwn>, signer: PrivateJwkSigner) -> Self {
         Self { node, signer }
     }
@@ -184,16 +184,16 @@ impl LocalDwnProtocolEndpoint {
     }
 }
 
-impl ProtocolEndpoint for LocalDwnProtocolEndpoint {
-    fn query_protocol<'a>(
+impl ModuleEndpoint for LocalDwnModuleEndpoint {
+    fn query_module<'a>(
         &'a self,
         tenant: &'a str,
-        protocol: &'a str,
+        module: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
         Box::pin(async move {
-            let message = build_signed_protocols_query(protocol, &self.signer).await?;
+            let message = build_signed_modules_query(module, &self.signer).await?;
             let reply = self.process(tenant, message).await;
-            require_ok(&reply, "AgentProtocolsQueryRejected")?;
+            require_ok(&reply, "AgentModulesQueryRejected")?;
             // DwnReply body is `#[serde(flatten)]`, so the `entries` field
             // lives at the top level of the JSON, not under `body`.
             let Some(entries) = reply.get("entries") else {
@@ -210,27 +210,27 @@ impl ProtocolEndpoint for LocalDwnProtocolEndpoint {
                 .and_then(|descriptor| descriptor.get("definition"))
                 .ok_or_else(|| {
                     AgentIdentityError::new(
-                        "AgentProtocolsQueryRejected",
-                        "ProtocolsQuery reply entry is missing descriptor.definition",
+                        "AgentModulesQueryRejected",
+                        "ModulesQuery reply entry is missing descriptor.definition",
                     )
                 })?;
             let definition: Definition =
                 serde_json::from_value(definition_json.clone()).map_err(|err| {
-                    AgentIdentityError::new("AgentProtocolsQueryRejected", err.to_string())
+                    AgentIdentityError::new("AgentModulesQueryRejected", err.to_string())
                 })?;
             Ok(Some(definition))
         })
     }
 
-    fn configure_protocol<'a>(
+    fn configure_module<'a>(
         &'a self,
         tenant: &'a str,
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
         Box::pin(async move {
-            let message = build_signed_protocols_configure(definition, &self.signer).await?;
+            let message = build_signed_modules_configure(definition, &self.signer).await?;
             let reply = self.process(tenant, message).await;
-            require_ok(&reply, "AgentProtocolsConfigureRejected")?;
+            require_ok(&reply, "AgentModulesConfigureRejected")?;
             Ok(())
         })
     }
@@ -257,7 +257,7 @@ fn require_ok(reply: &JsonValue, error_code: &str) -> AgentIdentityResult<()> {
     ))
 }
 
-/// [`ProtocolEndpoint`] backed by a remote `@enbox/dwn-server`-style HTTP
+/// [`ModuleEndpoint`] backed by a remote `@enbox/dwn-server`-style HTTP
 /// endpoint.
 ///
 /// Sends signed `ModulesQuery`/`ModulesConfigure` messages as body-framed
@@ -266,19 +266,19 @@ fn require_ok(reply: &JsonValue, error_code: &str) -> AgentIdentityResult<()> {
 /// is read from the `dwn-response` header when present, otherwise from
 /// the response body.
 #[derive(Clone)]
-pub struct HttpDwnProtocolEndpoint {
+pub struct HttpDwnModuleEndpoint {
     url: String,
     client: reqwest::Client,
     signer: PrivateJwkSigner,
 }
 
-impl HttpDwnProtocolEndpoint {
+impl HttpDwnModuleEndpoint {
     pub fn new(url: impl Into<String>, signer: PrivateJwkSigner) -> AgentIdentityResult<Self> {
         let client = reqwest::Client::builder()
             .user_agent(format!("enbox-ffi/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|err| {
-                AgentIdentityError::new("HttpProtocolClientBuildFailed", err.to_string())
+                AgentIdentityError::new("HttpModuleClientBuildFailed", err.to_string())
             })?;
         Ok(Self::with_client(url, client, signer))
     }
@@ -304,11 +304,11 @@ impl HttpDwnProtocolEndpoint {
         });
         let body = dwn_rs_core::utils::http_rpc_framing::encode_request_body(
             &serde_json::to_vec(&envelope).map_err(|err| {
-                AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string())
+                AgentIdentityError::new("HttpModuleResponseInvalid", err.to_string())
             })?,
             None,
         )
-        .map_err(|err| AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string()))?;
+        .map_err(|err| AgentIdentityError::new("HttpModuleResponseInvalid", err.to_string()))?;
         let response = self
             .client
             .post(&self.url)
@@ -319,12 +319,10 @@ impl HttpDwnProtocolEndpoint {
             .body(body)
             .send()
             .await
-            .map_err(|err| {
-                AgentIdentityError::new("HttpProtocolTransportFailed", err.to_string())
-            })?;
+            .map_err(|err| AgentIdentityError::new("HttpModuleTransportFailed", err.to_string()))?;
         if !response.status().is_success() {
             return Err(AgentIdentityError::new(
-                "HttpProtocolTransportFailed",
+                "HttpModuleTransportFailed",
                 format!("remote server returned HTTP {}", response.status()),
             ));
         }
@@ -333,42 +331,41 @@ impl HttpDwnProtocolEndpoint {
             header
                 .to_str()
                 .map_err(|err| {
-                    AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string())
+                    AgentIdentityError::new("HttpModuleResponseInvalid", err.to_string())
                 })?
                 .to_string()
         } else {
             response.text().await.map_err(|err| {
-                AgentIdentityError::new("HttpProtocolTransportFailed", err.to_string())
+                AgentIdentityError::new("HttpModuleTransportFailed", err.to_string())
             })?
         };
-        let envelope: JsonValue = serde_json::from_str(&payload).map_err(|err| {
-            AgentIdentityError::new("HttpProtocolResponseInvalid", err.to_string())
-        })?;
+        let envelope: JsonValue = serde_json::from_str(&payload)
+            .map_err(|err| AgentIdentityError::new("HttpModuleResponseInvalid", err.to_string()))?;
         if let Some(error) = envelope.get("error") {
             return Err(AgentIdentityError::new(
-                "HttpProtocolJsonRpcError",
+                "HttpModuleJsonRpcError",
                 error.to_string(),
             ));
         }
         envelope.pointer("/result/reply").cloned().ok_or_else(|| {
             AgentIdentityError::new(
-                "HttpProtocolResponseInvalid",
+                "HttpModuleResponseInvalid",
                 "missing result.reply in JSON-RPC response",
             )
         })
     }
 }
 
-impl ProtocolEndpoint for HttpDwnProtocolEndpoint {
-    fn query_protocol<'a>(
+impl ModuleEndpoint for HttpDwnModuleEndpoint {
+    fn query_module<'a>(
         &'a self,
         tenant: &'a str,
-        protocol: &'a str,
+        module: &'a str,
     ) -> SetupFuture<'a, Option<Definition>> {
         Box::pin(async move {
-            let message = build_signed_protocols_query(protocol, &self.signer).await?;
+            let message = build_signed_modules_query(module, &self.signer).await?;
             let reply = self.process(tenant, message).await?;
-            require_ok(&reply, "HttpProtocolsQueryRejected")?;
+            require_ok(&reply, "HttpModulesQueryRejected")?;
             let Some(entries) = reply.get("entries") else {
                 return Ok(None);
             };
@@ -383,27 +380,27 @@ impl ProtocolEndpoint for HttpDwnProtocolEndpoint {
                 .and_then(|descriptor| descriptor.get("definition"))
                 .ok_or_else(|| {
                     AgentIdentityError::new(
-                        "HttpProtocolsQueryRejected",
-                        "ProtocolsQuery reply entry is missing descriptor.definition",
+                        "HttpModulesQueryRejected",
+                        "ModulesQuery reply entry is missing descriptor.definition",
                     )
                 })?;
             let definition: Definition =
                 serde_json::from_value(definition_json.clone()).map_err(|err| {
-                    AgentIdentityError::new("HttpProtocolsQueryRejected", err.to_string())
+                    AgentIdentityError::new("HttpModulesQueryRejected", err.to_string())
                 })?;
             Ok(Some(definition))
         })
     }
 
-    fn configure_protocol<'a>(
+    fn configure_module<'a>(
         &'a self,
         tenant: &'a str,
         definition: Definition,
     ) -> SetupFuture<'a, ()> {
         Box::pin(async move {
-            let message = build_signed_protocols_configure(definition, &self.signer).await?;
+            let message = build_signed_modules_configure(definition, &self.signer).await?;
             let reply = self.process(tenant, message).await?;
-            require_ok(&reply, "HttpProtocolsConfigureRejected")?;
+            require_ok(&reply, "HttpModulesConfigureRejected")?;
             Ok(())
         })
     }
