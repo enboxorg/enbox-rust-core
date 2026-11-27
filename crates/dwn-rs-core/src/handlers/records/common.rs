@@ -903,8 +903,8 @@ pub(crate) async fn authorize_records_read<MessageStore>(
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
-    let descriptor =
-        records_write_descriptor(matched_records_write).map_err(|error| error.to_string())?;
+    let descriptor = records_write_descriptor(matched_records_write)
+        .map_err(|error| ModuleAuthorizationError::internal(error.to_string()))?;
     if signature.map(|signature| signature.author.as_str()) == Some(tenant)
         || descriptor.published == Some(true)
     {
@@ -924,7 +924,7 @@ where
             message_store,
         )
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(grant_authorization_error)?
         {
             return Ok(());
         }
@@ -944,6 +944,20 @@ where
         "anonymous read is not authorized",
     )
     .into())
+}
+
+/// A grant failure is a denial unless the grant machinery itself failed, in
+/// which case the answer says nothing about authority and must propagate.
+fn grant_authorization_error(
+    error: permissions::errors::PermissionError,
+) -> ModuleAuthorizationError {
+    use permissions::errors::PermissionError;
+    match &error {
+        PermissionError::DataStoreError(_)
+        | PermissionError::MessageStoreError(_)
+        | PermissionError::StoreError(_) => ModuleAuthorizationError::internal(error.to_string()),
+        _ => ModuleAuthorizationError::Detail(error.to_string()),
+    }
 }
 
 pub(crate) async fn authorize_records_delete<MessageStore>(
@@ -992,12 +1006,15 @@ pub(crate) struct ResolvedModuleRole {
     pub role_record_id: String,
 }
 
-/// A module-authorization failure. `Code` carries a stable [`DwnErrorCode`];
-/// `Detail` is an action-rule rejection.
+/// A module-authorization failure. `Code` carries a stable [`DwnErrorCode`],
+/// `Detail` an action-rule rejection, and `Internal` an operational failure
+/// (store, parse, or unexpected) that proves nothing about the requester's
+/// authority.
 #[derive(Debug)]
 pub(crate) enum ModuleAuthorizationError {
     Code(DwnError),
     Detail(String),
+    Internal(String),
 }
 
 impl From<DwnError> for ModuleAuthorizationError {
@@ -1016,17 +1033,28 @@ impl std::fmt::Display for ModuleAuthorizationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Code(error) => error.fmt(formatter),
-            Self::Detail(detail) => formatter.write_str(detail),
+            Self::Detail(detail) | Self::Internal(detail) => formatter.write_str(detail),
         }
     }
 }
 
 impl ModuleAuthorizationError {
+    pub(crate) fn internal(detail: impl Into<String>) -> Self {
+        Self::Internal(detail.into())
+    }
+
+    /// Whether the failure is a classified authorization denial, which hides a
+    /// candidate, rather than an operational failure, which must propagate.
+    pub(crate) fn is_denial(&self) -> bool {
+        !matches!(self, Self::Internal(_))
+    }
+
     /// The HTTP 401 status carrying the stable code when one is present.
     pub(crate) fn into_status(self) -> Status {
         match self {
             Self::Code(error) => Status::from_error(401, error),
             Self::Detail(detail) => Status::new(401, detail),
+            Self::Internal(detail) => Status::new(500, detail),
         }
     }
 }
@@ -1049,7 +1077,7 @@ pub(crate) async fn verify_invoked_role<MessageStore>(
     definition: &Definition,
     evaluation_timestamp: &str,
     message_store: &MessageStore,
-) -> Result<Option<ResolvedModuleRole>, DwnError>
+) -> Result<Option<ResolvedModuleRole>, ModuleAuthorizationError>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -1092,15 +1120,15 @@ where
             )
             .await
             .map_err(|error| match error {
-                ModuleDefinitionLookupError::NotFound(_) => DwnError::new(
-                    DwnErrorCode::ModuleAuthorizationModuleNotFound,
-                    format!(
-                        "referenced module '{role_module}' is not defined at {evaluation_timestamp}"
+                ModuleDefinitionLookupError::NotFound(_) => ModuleAuthorizationError::Code(
+                    DwnError::new(
+                        DwnErrorCode::ModuleAuthorizationModuleNotFound,
+                        format!(
+                            "referenced module '{role_module}' is not defined at {evaluation_timestamp}"
+                        ),
                     ),
                 ),
-                other => {
-                    DwnError::new(DwnErrorCode::ModuleAuthorizationNotARole, other.to_string())
-                }
+                other => ModuleAuthorizationError::internal(other.to_string()),
             })?;
             referenced
                 .rule_at(&role_path)
@@ -1114,7 +1142,8 @@ where
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationNotARole,
             format!("module path '{invoked_role}' does not match a role record type"),
-        ));
+        )
+        .into());
     }
 
     if role_audience_context_id(&role_path, context_id).is_none() {
@@ -1123,7 +1152,8 @@ where
             format!(
                 "could not verify role '{invoked_role}' because contextId is missing or too shallow"
             ),
-        ));
+        )
+        .into());
     }
 
     let role_record = query_role_records(
@@ -1135,17 +1165,13 @@ where
         message_store,
     )
     .await
-    .map_err(|detail| {
-        DwnError::new(
-            DwnErrorCode::ModuleAuthorizationMatchingRoleRecordNotFound,
-            detail,
-        )
-    })?;
+    .map_err(ModuleAuthorizationError::internal)?;
     let Some(role_record) = role_record else {
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationMatchingRoleRecordNotFound,
             format!("no matching role record found for module path '{role_path}'"),
-        ));
+        )
+        .into());
     };
 
     Ok(Some(ResolvedModuleRole {
@@ -1276,7 +1302,8 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let author = auth.author.as_str();
-    let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
+    let descriptor = records_write_descriptor(message)
+        .map_err(|error| ModuleAuthorizationError::internal(error.to_string()))?;
     let module = descriptor.module.clone();
     let module_path = descriptor.module_path.clone();
     // Read and Delete evaluate at the operation's own timestamp; Write resolves
@@ -1285,7 +1312,7 @@ where
         Some(timestamp) => timestamp.to_string(),
         None => governing_timestamp(tenant, message, message_store, author)
             .await
-            .map_err(|error| error.to_string())?,
+            .map_err(|error| ModuleAuthorizationError::internal(error.to_string()))?,
     };
     let definition = fetch_module_definition(
         tenant,
@@ -1294,7 +1321,12 @@ where
         Some(&evaluation_timestamp),
     )
     .await
-    .map_err(|err| err.to_string())?;
+    .map_err(|error| match error {
+        ModuleDefinitionLookupError::NotFound(detail) => {
+            ModuleAuthorizationError::Detail(format!("ModuleAuthorizationModuleNotFound: {detail}"))
+        }
+        other => ModuleAuthorizationError::internal(other.to_string()),
+    })?;
     let rule_set = definition.rule_at(module_path.as_str()).ok_or_else(|| {
         format!("ModuleAuthorizationInvalidModulePath: {module_path} is not defined")
     })?;
@@ -1313,7 +1345,9 @@ where
         )
         .await?;
     }
-    let chain = construct_record_chain(tenant, message, message_store).await?;
+    let chain = construct_record_chain(tenant, message, message_store)
+        .await
+        .map_err(ModuleAuthorizationError::internal)?;
     let actions =
         actions_for_message_kind(tenant, message, author, kind, rule_set, message_store).await?;
     authorize_actions(
@@ -1530,7 +1564,7 @@ where
 {
     match kind {
         RecordsAuthorizationKind::Write => {
-            if is_initial_write(message, author).map_err(|error| error.to_string())? {
+            if is_initial_write(message, author).map_err(ModuleAuthorizationError::internal)? {
                 if rule_set.actions.is_empty() {
                     return Err(DwnError::new(
                         DwnErrorCode::ModuleAuthorizationActionRulesNotFound,
@@ -1539,14 +1573,14 @@ where
                     .into());
                 }
                 let squash = records_write_descriptor(message)
-                    .map_err(|error| error.to_string())?
+                    .map_err(|error| ModuleAuthorizationError::internal(error.to_string()))?
                     .squash
                     == Some(true);
                 Ok(rule_set.initial_write_actions(squash))
             } else if let Some(record_id) = record_id(message) {
                 let initial = fetch_initial_write_message(tenant, &record_id, message_store)
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(ModuleAuthorizationError::internal)?;
                 if initial
                     .and_then(|message| extract_author(&message))
                     .as_deref()
@@ -1573,7 +1607,7 @@ where
             if let Some(record_id) = record_id(message).or_else(|| message_record_id(message)) {
                 let initial = fetch_initial_write_message(tenant, &record_id, message_store)
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(ModuleAuthorizationError::internal)?;
                 if initial
                     .and_then(|message| extract_author(&message))
                     .as_deref()
