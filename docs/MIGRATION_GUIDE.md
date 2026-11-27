@@ -52,6 +52,8 @@ release cannot read, label, or translate: relabeling them would change their
 signatures, content identities, and potentially their derived keys. Keep old
 data only as a separate backup, then re-initialize the identity vault and
 re-issue module configurations, records, grants, and encryption material.
+Delegate decryption/context keys and the `enbox:auth:*` secret-store envelopes
+must also be re-derived and re-issued across the cutover.
 Previously queued offline writes and sync checkpoints cannot cross this format
 boundary.
 

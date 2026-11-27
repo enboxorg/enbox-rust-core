@@ -11,7 +11,7 @@ should insert the new message, demote retained writes, and delete displaced rows
 should apply retains and deletes even when the new message is a duplicate #189
 should reject a retain whose replacement message does not match its target CID without applying the insert #189
 should fold the insert and delete fingerprint contributions of a shared domain without losing either #189
-# completeData is the sibling store-owned completion transition (#189); the Rust
+# completeData is the sibling store-owned completion transition (#362); the Rust
 # store models ancestry-only writes without the completion surface, so the
 # adapter cannot dispatch it yet.
-should reject a non-RecordsWrite row #189
+should reject a non-RecordsWrite row #362

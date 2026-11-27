@@ -1166,6 +1166,29 @@ async fn ts_backup_fixture_restores_onto_fresh_and_initialized_stores() {
     );
 }
 
+// Covers: ENBOX-AGENT-005
+#[tokio::test]
+async fn ts_v2_backup_profile_restores_derivation_version_and_did() {
+    let fixture = read_fixture(TS_BACKUP_PATH);
+    let profile = &fixture["profiles"]["v2"];
+    let backup: IdentityVaultBackup = serde_json::from_value(profile["backup"].clone()).unwrap();
+
+    let (vault, _) = memory_vault();
+    vault
+        .restore(&backup, fixture["inputs"]["password"].as_str().unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        vault.status().await.unwrap().derivation_version,
+        Some(VaultDerivationVersion::V2)
+    );
+    assert_eq!(
+        vault.get_did().await.unwrap().uri,
+        profile["portableDidUri"].as_str().unwrap()
+    );
+}
+
 async fn restore_fixture_backup(
     vault: &IdentityVault,
     backup: &IdentityVaultBackup,
