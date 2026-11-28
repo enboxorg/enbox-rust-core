@@ -610,9 +610,11 @@ pub(crate) mod tests {
             assert!(!role.metadata_only);
             assert_eq!(role.resolved_role.module, MODULE);
             assert_eq!(role.resolved_role.module_path, ROLE);
+            // A nested role is scoped by its physical parent context, one
+            // level above the record context named by the filter.
             assert_eq!(
                 role.resolved_role.context_id_prefix.as_deref(),
-                Some(CONTEXT)
+                Some("thread-1")
             );
             assert_eq!(role.resolved_role.role_record_id, "role-record-1");
         }

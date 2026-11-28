@@ -16,9 +16,7 @@ use crate::encryption::{
 };
 use crate::errors::{DwnError, DwnErrorCode};
 use crate::handlers::records::common::{context_id, fetch_parent_record, message_record_id};
-use crate::interfaces::messages::modules::{
-    parse_cross_module_ref, Action, Can, Definition, RuleSet,
-};
+use crate::interfaces::messages::modules::Can;
 use crate::stores::MessageStore;
 use crate::Message;
 
@@ -105,15 +103,7 @@ where
                     )
                     .into());
                 }
-                validate_role_audiences(
-                    tenant,
-                    message,
-                    definition,
-                    rule_set,
-                    envelope,
-                    message_store,
-                )
-                .await?;
+                validate_role_audiences(tenant, message, &policy, envelope, message_store).await?;
             }
             None => {
                 let dynamic_recipient = definition.module == ENCRYPTION_MODULE_URI
@@ -164,92 +154,115 @@ where
         return Err("ModuleAuthorizationInvalidSquash: squash writes must be initial writes at a $squash path".to_string().into());
     }
 
-    if let Some(parent_id) = &descriptor.parent_id {
-        let parent_module = policy
-            .definition
-            .parent_module(descriptor.module_path.as_str());
-        let parent = fetch_parent_record(tenant, parent_id, &parent_module, message_store)
-            .await?
-            .ok_or_else(|| {
-                // A missing parent and a pruned parent are indistinguishable on the
-                // client-facing reply; the replication apply layer classifies a prune
-                // as terminal locally. See `record_has_prune`.
-                DwnError::new(
-                    DwnErrorCode::ModuleAuthorizationParentRecordNotFound,
-                    format!(
-                        "could not find parent record '{parent_id}' in module '{parent_module}'"
-                    ),
-                )
-            })?;
-        let parent_descriptor =
-            records_write_descriptor(&parent).map_err(|error| error.to_string())?;
-        let type_name = descriptor
-            .module_path
-            .rsplit('/')
-            .next()
-            .unwrap_or_default();
-        let expected_path = format!("{}/{type_name}", parent_descriptor.module_path);
-        if expected_path != descriptor.module_path {
+    verify_module_path_and_context_id(tenant, message, &policy.node, message_store).await?;
+
+    Ok(())
+}
+
+/// Verifies the declared parent and context against the resolved node's
+/// physical parent, independent of declared path depth.
+async fn verify_module_path_and_context_id<M>(
+    tenant: &str,
+    message: &Message<Descriptor>,
+    node: &crate::interfaces::messages::modules::graph::ResolvedModuleNode,
+    message_store: &M,
+) -> Result<(), RecordsWriteValidationError>
+where
+    M: MessageStore + Sync,
+{
+    let descriptor = records_write_descriptor(message).map_err(|error| error.to_string())?;
+    let Some(parent_id) = &descriptor.parent_id else {
+        if node.expected_parent.is_some() {
             return Err(DwnError::new(
-                DwnErrorCode::ModuleAuthorizationIncorrectModulePath,
+                DwnErrorCode::ModuleAuthorizationParentlessIncorrectModulePath,
                 format!(
-                    "declared module path '{}' does not extend parent path '{}'",
-                    descriptor.module_path, parent_descriptor.module_path
+                    "declared module path '{}' requires a physical parent.",
+                    descriptor.module_path
                 ),
             )
             .into());
         }
-        let parent_context = context_id(&parent).ok_or_else(|| {
-            DwnError::new(
-                DwnErrorCode::ModuleAuthorizationIncorrectContextId,
-                "parent contextId is required",
-            )
-        })?;
-        let record_id = message_record_id(message).ok_or_else(|| {
-            DwnError::new(
-                DwnErrorCode::ModuleAuthorizationIncorrectContextId,
-                "recordId is required",
-            )
-        })?;
-        let expected_context = format!("{parent_context}/{record_id}");
-        let context_id = write_fields(message)
-            .map_err(|error| error.to_string())?
-            .context_id
-            .clone()
-            .ok_or_else(|| {
-                DwnError::new(
-                    DwnErrorCode::ModuleAuthorizationIncorrectContextId,
-                    "contextId is required",
-                )
-            })?;
-        if context_id != expected_context {
-            return Err(DwnError::new(
-                DwnErrorCode::ModuleAuthorizationIncorrectContextId,
-                format!(
-                    "declared contextId '{context_id}' is not the expected '{expected_context}'"
-                ),
-            )
-            .into());
-        }
-    } else if descriptor.module_path.contains('/') {
+        return Ok(());
+    };
+    let Some(expected) = &node.expected_parent else {
         return Err(DwnError::new(
-            DwnErrorCode::ModuleAuthorizationParentlessIncorrectModulePath,
+            DwnErrorCode::ModuleAuthorizationIncorrectModulePath,
             format!(
-                "declared module path '{}' is not valid for records with no parent",
+                "root module path '{}' cannot have a parent.",
+                descriptor.module_path
+            ),
+        )
+        .into());
+    };
+    let parent = fetch_parent_record(
+        tenant,
+        parent_id,
+        &expected.owning_module_uri,
+        message_store,
+    )
+    .await?
+    .ok_or_else(|| {
+        // A missing parent and a pruned parent are indistinguishable on the
+        // client-facing reply; the replication apply layer classifies a prune
+        // as terminal locally. See `record_has_prune`.
+        DwnError::new(
+            DwnErrorCode::ModuleAuthorizationParentRecordNotFound,
+            format!(
+                "could not find parent record '{parent_id}' in module '{}'",
+                expected.owning_module_uri
+            ),
+        )
+    })?;
+    let parent_descriptor = records_write_descriptor(&parent).map_err(|error| error.to_string())?;
+    if parent_descriptor.module != expected.owning_module_uri
+        || parent_descriptor.module_path != expected.owning_module_path
+    {
+        return Err(DwnError::new(
+            DwnErrorCode::ModuleAuthorizationIncorrectModulePath,
+            format!(
+                "parent record does not match the resolved parent of module path '{}'.",
                 descriptor.module_path
             ),
         )
         .into());
     }
-
+    let parent_context = context_id(&parent).ok_or_else(|| {
+        DwnError::new(
+            DwnErrorCode::ModuleAuthorizationIncorrectContextId,
+            "parent contextId is required",
+        )
+    })?;
+    let record_id = message_record_id(message).ok_or_else(|| {
+        DwnError::new(
+            DwnErrorCode::ModuleAuthorizationIncorrectContextId,
+            "recordId is required",
+        )
+    })?;
+    let expected_context = format!("{parent_context}/{record_id}");
+    let context_id = write_fields(message)
+        .map_err(|error| error.to_string())?
+        .context_id
+        .clone()
+        .ok_or_else(|| {
+            DwnError::new(
+                DwnErrorCode::ModuleAuthorizationIncorrectContextId,
+                "contextId is required",
+            )
+        })?;
+    if context_id != expected_context {
+        return Err(DwnError::new(
+            DwnErrorCode::ModuleAuthorizationIncorrectContextId,
+            format!("declared contextId '{context_id}' is not the expected '{expected_context}'"),
+        )
+        .into());
+    }
     Ok(())
 }
 
 async fn validate_role_audiences<M>(
     tenant: &str,
     message: &Message<Descriptor>,
-    definition: &Definition,
-    rule_set: &RuleSet,
+    policy: &EffectivePolicy,
     envelope: &EncryptionEnvelope,
     message_store: &M,
 ) -> Result<(), RecordsWriteValidationError>
@@ -257,31 +270,27 @@ where
     M: MessageStore + Sync,
 {
     let record_context = context_id(message);
-    for action in &rule_set.actions {
-        let Action::Role(action) = action else {
+    for action in &policy.node.actions {
+        let Some(role) = &action.resolved_role else {
             continue;
         };
-        if !action.can.contains(&Can::Read) {
+        if !action.rule.can().contains(&Can::Read) {
             continue;
         }
-
-        let (module, role_path) = match parse_cross_module_ref(&action.role) {
-            Some(parsed) => {
-                let Some(module) = definition
-                    .uses
-                    .as_ref()
-                    .and_then(|uses| uses.get(parsed.alias))
-                else {
-                    continue;
-                };
-                (module.as_str(), parsed.module_path)
-            }
-            None => (definition.module.as_str(), action.role.as_str()),
-        };
         let Some(audience_context) =
-            super::common::role_audience_context_id(role_path, record_context.as_deref())
+            crate::interfaces::messages::modules::graph::role_audience_context_id(
+                role.parent_physical_depth,
+                record_context.as_deref(),
+            )
         else {
-            continue;
+            return Err(DwnError::new(
+                DwnErrorCode::ModuleAuthorizationMissingContextId,
+                format!(
+                    "could not resolve the encryption audience context for '{}'.",
+                    role.raw_role
+                ),
+            )
+            .into());
         };
 
         let matching_entries: Vec<&KeyEncryption> = envelope
@@ -294,7 +303,8 @@ where
                         module: entry_module,
                         role_path: entry_role_path,
                         ..
-                    } if entry_module == module && entry_role_path == role_path
+                    } if entry_module == &role.owning_module_uri
+                        && entry_role_path == &role.owning_module_path
                 )
             })
             .collect();
@@ -302,7 +312,8 @@ where
             return Err(DwnError::new(
                 DwnErrorCode::ModuleAuthorizationEncryptionRoleAudienceEntryMissing,
                 format!(
-                    "encrypted record is missing a roleAudience keyEncryption entry for role '{role_path}'"
+                    "encrypted record is missing a roleAudience keyEncryption entry for role '{}'",
+                    role.owning_module_path
                 ),
             )
             .into());
@@ -315,8 +326,8 @@ where
             };
             let id = AudienceId {
                 scope: AudienceScope {
-                    module: module.to_string(),
-                    role_path: role_path.to_string(),
+                    module: role.owning_module_uri.clone(),
+                    role_path: role.owning_module_path.clone(),
                     context_id: audience_context.clone(),
                 },
                 key_id: key_id.clone(),
@@ -331,7 +342,9 @@ where
             return Err(DwnError::new(
                 DwnErrorCode::ModuleAuthorizationEncryptionRoleAudienceMissing,
                 format!(
-                    "encrypted record references no retained audience for module '{module}', role '{role_path}', context '{audience_context}', and key IDs [{}]",
+                    "encrypted record references no retained audience for module '{}', role '{}', context '{audience_context}', and key IDs [{}]",
+                    role.owning_module_uri,
+                    role.owning_module_path,
                     missing_key_ids.join(", ")
                 ),
             )

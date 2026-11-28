@@ -221,14 +221,23 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
         .await
         .unwrap();
 
-    // The role's parent depth is 2, so `x/y` addresses it and `x` does not.
+    // Callers resolve the role's physical parent depth first, so only the
+    // context at that depth reaches the holder.
+    assert_eq!(
+        crate::interfaces::messages::modules::graph::role_audience_context_id(
+            2,
+            Some("x/y/branch")
+        )
+        .as_deref(),
+        Some("x/y")
+    );
     assert!(
         role_record_exists(
             CONTROL_TENANT,
             HOLDER,
             CONTROL_MODULE,
             "a/b/member",
-            Some("x/y"),
+            "x/y",
             &message_store
         )
         .await
@@ -241,25 +250,12 @@ async fn a_context_shallower_than_the_role_matches_nothing() {
             HOLDER,
             CONTROL_MODULE,
             "a/b/member",
-            Some("x"),
+            "x/z",
             &message_store
         )
         .await
         .unwrap(),
-        "a context shallower than the role must not widen into sibling contexts"
-    );
-    assert!(
-        !role_record_exists(
-            CONTROL_TENANT,
-            HOLDER,
-            CONTROL_MODULE,
-            "a/b/member",
-            None,
-            &message_store
-        )
-        .await
-        .unwrap(),
-        "an absent context cannot address a nested role"
+        "a sibling context must not widen into the role's context"
     );
 }
 

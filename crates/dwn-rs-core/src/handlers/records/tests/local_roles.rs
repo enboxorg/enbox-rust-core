@@ -81,10 +81,18 @@ fn threads_definition(participant_role: bool) -> Definition {
                         (
                             "message".to_string(),
                             RuleSet {
-                                actions: vec![Action::Role(ActionRole {
-                                    role: "thread/participant".to_string(),
-                                    can: vec![Can::Create, Can::Read, Can::CoDelete],
-                                })],
+                                actions: if participant_role {
+                                    vec![Action::Role(ActionRole {
+                                        role: "thread/participant".to_string(),
+                                        can: vec![Can::Create, Can::Read, Can::CoDelete],
+                                    })]
+                                } else {
+                                    vec![Action::Who(ActionWho {
+                                        who: Who::Anyone,
+                                        of: None,
+                                        can: vec![Can::Create, Can::Read, Can::CoDelete],
+                                    })]
+                                },
                                 rules: BTreeMap::from([(
                                     "participant".to_string(),
                                     RuleSet {

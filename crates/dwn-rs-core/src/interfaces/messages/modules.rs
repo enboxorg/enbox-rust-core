@@ -102,6 +102,16 @@ pub enum Action {
     Role(ActionRole),
 }
 
+impl Action {
+    /// The actions this rule grants, regardless of actor or role selector.
+    pub fn can(&self) -> &[Can] {
+        match self {
+            Self::Who(action) => &action.can,
+            Self::Role(action) => &action.can,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[skip_serializing_none]
 pub struct ModuleKeyAgreement {
@@ -360,32 +370,6 @@ impl Definition {
             .get(root_segment)
             .and_then(|rule_set| rule_set.reference.as_deref())?;
         parse_cross_module_ref(reference)
-    }
-
-    /// The module URI that governs the parent of a record at `module_path`.
-    /// The parent lives in the referenced module exactly when the path has
-    /// two segments and its root segment is a `$ref` whose alias resolves in
-    /// `uses`; every other parent lives in this composing module.
-    pub fn parent_module(&self, module_path: &str) -> String {
-        let segments: Vec<&str> = module_path.split('/').collect();
-        if segments.len() != 2 {
-            return self.module.clone();
-        }
-        let Some(reference) = self
-            .structure
-            .get(segments[0])
-            .and_then(|rule_set| rule_set.reference.as_deref())
-        else {
-            return self.module.clone();
-        };
-        let Some(parsed) = parse_cross_module_ref(reference) else {
-            return self.module.clone();
-        };
-        self.uses
-            .as_ref()
-            .and_then(|uses| uses.get(parsed.alias))
-            .cloned()
-            .unwrap_or_else(|| self.module.clone())
     }
 }
 
@@ -1299,82 +1283,6 @@ mod tests {
         assert_eq!(position.module_path, "post");
         assert!(definition.ref_position("post/comment").is_none());
         assert!(definition.ref_position("missing").is_none());
-    }
-
-    // Covers: DWN-PROTO-005
-    #[test]
-    fn parent_module_resolves_only_two_segment_ref_roots() {
-        let definition = Definition {
-            module: "https://module.example/composed".to_string(),
-            published: true,
-            uses: Some(BTreeMap::from([(
-                "blog".to_string(),
-                "https://module.example/blog".to_string(),
-            )])),
-            key_agreement: None,
-            types: BTreeMap::new(),
-            structure: BTreeMap::from([
-                (
-                    "post".to_string(),
-                    RuleSet {
-                        reference: Some("blog:post".to_string()),
-                        rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "discussion".to_string(),
-                    RuleSet {
-                        reference: Some("blog:post".to_string()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "multi".to_string(),
-                    RuleSet {
-                        reference: Some("blog:post/participant".to_string()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "ghost".to_string(),
-                    RuleSet {
-                        reference: Some("missing:post".to_string()),
-                        ..Default::default()
-                    },
-                ),
-                ("local".to_string(), RuleSet::default()),
-            ]),
-        };
-
-        // A two-segment child of a `$ref` root is parented in the referenced module.
-        assert_eq!(
-            definition.parent_module("post/comment"),
-            "https://module.example/blog"
-        );
-        // A `$ref` root whose alias is absent from `uses` falls back to the composing module.
-        assert_eq!(
-            definition.parent_module("ghost/comment"),
-            "https://module.example/composed"
-        );
-        // Renamed and multi-segment `$ref` targets still name the referenced module.
-        assert_eq!(
-            definition.parent_module("discussion/comment"),
-            "https://module.example/blog"
-        );
-        assert_eq!(
-            definition.parent_module("multi/comment"),
-            "https://module.example/blog"
-        );
-        // Local roots and deeper paths are parented in the composing module.
-        assert_eq!(
-            definition.parent_module("local/child"),
-            "https://module.example/composed"
-        );
-        assert_eq!(
-            definition.parent_module("post/comment/reaction"),
-            "https://module.example/composed"
-        );
     }
 
     // Covers: DWN-PROTO-001
