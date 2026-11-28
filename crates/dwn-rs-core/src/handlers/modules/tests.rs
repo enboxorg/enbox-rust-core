@@ -2596,3 +2596,355 @@ fn reserved_namespace_is_named_even_when_the_definition_cannot_be_typed() {
         );
     }
 }
+
+const UPGRADE_PROVIDER: &str = "https://example.com/upgrade-provider";
+const UPGRADE_OTHER: &str = "https://example.com/upgrade-other";
+const UPGRADE_COMPOSER: &str = "https://example.com/upgrade-composer";
+const UPGRADE_T0: &str = "2025-01-01T00:00:00.000000Z";
+const UPGRADE_T0_5: &str = "2025-01-01T12:00:00.000000Z";
+const UPGRADE_T1: &str = "2025-01-02T00:00:00.000000Z";
+const UPGRADE_T2: &str = "2025-01-03T00:00:00.000000Z";
+const UPGRADE_T3: &str = "2025-01-04T00:00:00.000000Z";
+
+fn upgrade_provider_definition(module: &str, schema: &str) -> Definition {
+    Definition {
+        module: module.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "post".to_string(),
+            Type {
+                schema: Some(schema.to_string()),
+                data_formats: Some(vec!["text/plain".to_string()]),
+                encryption_required: None,
+            },
+        )]),
+        structure: BTreeMap::from([(
+            "post".to_string(),
+            RuleSet {
+                actions: vec![Action::Who(ActionWho {
+                    who: Who::Anyone,
+                    of: None,
+                    can: vec![Can::Create, Can::Read],
+                })],
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+fn upgrade_composer_definition(alias: &str, target: &str, with_attachment: bool) -> Definition {
+    Definition {
+        module: UPGRADE_COMPOSER.to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([(alias.to_string(), target.to_string())])),
+        key_agreement: None,
+        types: BTreeMap::from([(
+            "comment".to_string(),
+            Type {
+                schema: None,
+                data_formats: None,
+                encryption_required: None,
+            },
+        )]),
+        structure: if with_attachment {
+            BTreeMap::from([(
+                "post".to_string(),
+                RuleSet {
+                    reference: Some(format!("{alias}:post")),
+                    rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                    ..Default::default()
+                },
+            )])
+        } else {
+            BTreeMap::new()
+        },
+    }
+}
+
+async fn install<S>(
+    configures: &ModulesConfigureHandler<S>,
+    definition: Definition,
+    timestamp: &str,
+) where
+    S: MessageStore + Clone + Send + Sync + 'static,
+{
+    let reply = run_flip_configure(configures, definition, timestamp).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+async fn write_child(
+    writes: &RecordsWriteHandler<MemoryMessageStore, StubDataStore>,
+    module: &str,
+    module_path: &str,
+    parent: Option<(&str, &str)>,
+    timestamp: &str,
+) -> crate::Response<crate::replies::records::Write> {
+    use bytes::Bytes;
+
+    let data = Bytes::from_static(b"child");
+    let (parent_id, parent_context_id) = match parent {
+        Some((record_id, context_id)) => {
+            (Some(record_id.to_string()), Some(context_id.to_string()))
+        }
+        None => (None, None),
+    };
+    let message = signed_write_message(WriteSpec {
+        module: module.to_string(),
+        module_path: module_path.to_string(),
+        parent_id,
+        parent_context_id,
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    writes.run("did:example:alice", &message, Some(data)).await
+}
+
+// Covers: DWN-PROTO-004, DWN-PROTO-005, ENBOX-ERR-001
+#[tokio::test]
+async fn active_update_rejects_uses_alias_rename_and_retarget() {
+    let (configures, _, _) = flip_harness().await;
+    let provider = upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post");
+    let other = upgrade_provider_definition(UPGRADE_OTHER, "https://schema.example/post");
+    install(&configures, provider, UPGRADE_T0).await;
+    install(&configures, other, UPGRADE_T0).await;
+    install(
+        &configures,
+        upgrade_composer_definition("posts", UPGRADE_PROVIDER, true),
+        UPGRADE_T1,
+    )
+    .await;
+
+    let renamed = upgrade_composer_definition("articles", UPGRADE_PROVIDER, true);
+    let reply = run_flip_configure(&configures, renamed, UPGRADE_T2).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureInvalidUsesUpdate"),
+        "{}",
+        reply.status.detail
+    );
+
+    let retargeted = upgrade_composer_definition("posts", UPGRADE_OTHER, true);
+    let reply = run_flip_configure(&configures, retargeted, UPGRADE_T2).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureInvalidUsesUpdate"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-PROTO-004, DWN-PROTO-005, ENBOX-ERR-001
+#[tokio::test]
+async fn provider_update_breaking_a_dependent_contract_is_rejected() {
+    let (configures, _, _) = flip_harness().await;
+    install(
+        &configures,
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post-v1"),
+        UPGRADE_T0,
+    )
+    .await;
+    install(
+        &configures,
+        upgrade_composer_definition("posts", UPGRADE_PROVIDER, true),
+        UPGRADE_T1,
+    )
+    .await;
+
+    let reply = run_flip_configure(
+        &configures,
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post-v2"),
+        UPGRADE_T2,
+    )
+    .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureIncompatibleContractUpdate"),
+        "{}",
+        reply.status.detail
+    );
+    assert!(
+        reply.status.detail.contains(UPGRADE_COMPOSER),
+        "{}",
+        reply.status.detail
+    );
+
+    // An unrelated extension keeps every imported contract intact.
+    let mut compatible =
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post-v1");
+    compatible.types.insert(
+        "extra".to_string(),
+        Type {
+            schema: None,
+            data_formats: None,
+            encryption_required: None,
+        },
+    );
+    compatible
+        .structure
+        .insert("extra".to_string(), RuleSet::default());
+    install(&configures, compatible, UPGRADE_T3).await;
+}
+
+// Covers: DWN-PROTO-004, DWN-PROTO-005, ENBOX-ERR-001
+#[tokio::test]
+async fn attachment_removal_with_stored_records_is_rejected() {
+    let (configures, writes, _) = flip_harness().await;
+    install(
+        &configures,
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post"),
+        UPGRADE_T0,
+    )
+    .await;
+    install(
+        &configures,
+        upgrade_composer_definition("posts", UPGRADE_PROVIDER, true),
+        UPGRADE_T1,
+    )
+    .await;
+
+    let post = write_child(&writes, UPGRADE_PROVIDER, "post", None, UPGRADE_T2).await;
+    assert_eq!(post.status.code, 202, "{}", post.status.detail);
+    // The parent record id is derived from the signed descriptor; reuse the
+    // stored record by reading it back.
+    let parent = newest_provider_post(&configures).await;
+    let comment = write_child(
+        &writes,
+        UPGRADE_COMPOSER,
+        "post/comment",
+        Some((&parent.0, &parent.1)),
+        UPGRADE_T2,
+    )
+    .await;
+    assert_eq!(comment.status.code, 202, "{}", comment.status.detail);
+
+    let reply = run_flip_configure(
+        &configures,
+        upgrade_composer_definition("posts", UPGRADE_PROVIDER, false),
+        UPGRADE_T3,
+    )
+    .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureIncompatibleContractUpdate"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+async fn newest_provider_post(
+    configures: &ModulesConfigureHandler<MemoryMessageStore>,
+) -> (String, String) {
+    use bytes::Bytes;
+
+    // Re-derive the stored record identity from its signed message so the
+    // child write addresses the same parent the store admitted.
+    let data = Bytes::from_static(b"child");
+    let message = signed_write_message(WriteSpec {
+        module: UPGRADE_PROVIDER.to_string(),
+        module_path: "post".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&data).to_string(),
+        data_size: data.len() as u64,
+        ..WriteSpec::new(UPGRADE_T2)
+    })
+    .await;
+    let _ = configures;
+    (
+        message["recordId"].as_str().unwrap().to_string(),
+        message["contextId"].as_str().unwrap().to_string(),
+    )
+}
+
+// Covers: DWN-PROTO-004, ENBOX-ERR-001
+#[tokio::test]
+async fn introducing_an_attachment_over_stored_records_is_rejected() {
+    let (configures, writes, _) = flip_harness().await;
+    install(
+        &configures,
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post"),
+        UPGRADE_T0,
+    )
+    .await;
+    let mut local = upgrade_provider_definition(UPGRADE_COMPOSER, "https://schema.example/post");
+    local.uses = None;
+    install(&configures, local, UPGRADE_T1).await;
+
+    let post = write_child(&writes, UPGRADE_COMPOSER, "post", None, UPGRADE_T2).await;
+    assert_eq!(post.status.code, 202, "{}", post.status.detail);
+
+    let reply = run_flip_configure(
+        &configures,
+        upgrade_composer_definition("posts", UPGRADE_PROVIDER, true),
+        UPGRADE_T3,
+    )
+    .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureIncompatibleContractUpdate"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-PROTO-004, ENBOX-ERR-001
+#[tokio::test]
+async fn historical_import_validates_its_governing_snapshot_only() {
+    let (configures, _, _) = flip_harness().await;
+    install(
+        &configures,
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post-v1"),
+        UPGRADE_T1,
+    )
+    .await;
+    install(
+        &configures,
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post-v2"),
+        UPGRADE_T2,
+    )
+    .await;
+    install(
+        &configures,
+        upgrade_composer_definition("posts", UPGRADE_PROVIDER, true),
+        UPGRADE_T3,
+    )
+    .await;
+
+    // The historical provider contract would break the active consumer if it
+    // were validated against today's dependents; as an older import it only
+    // resolves its own governing-time closure.
+    let reply = run_flip_configure(
+        &configures,
+        upgrade_provider_definition(UPGRADE_PROVIDER, "https://schema.example/post-v0"),
+        UPGRADE_T0_5,
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // A historical consumer may hold an alias shape the active head has since
+    // changed, because it never becomes the active head.
+    let reply = run_flip_configure(
+        &configures,
+        upgrade_composer_definition("articles", UPGRADE_PROVIDER, true),
+        "2025-01-01T18:00:00.000000Z",
+    )
+    .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
