@@ -4,7 +4,6 @@ use std::ops::Bound;
 
 use crate::descriptors::{Descriptor, Modules, ModulesConfigureDescriptor};
 use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
-use crate::interfaces::messages::modules::{self as module_types, Definition, RuleSet};
 use crate::interfaces::replies::Status;
 use crate::stores::KeyValues;
 use crate::{canonical_rfc3339, permissions, Response};
@@ -55,7 +54,6 @@ pub(crate) fn module_configure_filters(module: &str, latest_only: bool) -> Filte
     Filters::from(filters)
 }
 
-#[allow(dead_code)]
 pub(crate) fn latest_configure_filters() -> Filters {
     let mut filters = BTreeMap::new();
     filters.insert(
@@ -187,116 +185,6 @@ pub(crate) fn compare_configure_messages(
 
 pub(crate) fn extract_author(message: &Message<Descriptor>) -> Option<String> {
     permissions::message_author(message)
-}
-
-pub(crate) fn validate_refs_and_roles_recursively(
-    rule_set: &BTreeMap<String, RuleSet>,
-    module_path: &str,
-    referenced: &BTreeMap<String, Definition>,
-) -> Result<(), String> {
-    for (key, child_rule_set) in rule_set {
-        let child_module_path = if module_path.is_empty() {
-            key.clone()
-        } else {
-            format!("{module_path}/{key}")
-        };
-
-        if let Some(reference) = &child_rule_set.reference {
-            if let Some(parsed) = module_types::parse_cross_module_ref(reference) {
-                let definition = referenced.get(parsed.alias).ok_or_else(|| {
-                    format!(
-                        "ModulesConfigureInvalidRefAlias: '$ref' alias '{}' at module path '{}' was not found.",
-                        parsed.alias, child_module_path
-                    )
-                })?;
-                let mut current = &definition.structure;
-                let mut traversed = Vec::new();
-                for segment in parsed.module_path.split('/') {
-                    traversed.push(segment);
-                    let Some(node) = current.get(segment) else {
-                        return Err(format!(
-                            "ModulesConfigureInvalidRefModulePath: '$ref' at module path '{child_module_path}' references type path '{}' which does not exist in module '{}'.",
-                            parsed.module_path, definition.module
-                        ));
-                    };
-                    if node.reference.is_some() {
-                        return Err(format!(
-                            "ModulesConfigureInvalidRefTargetThroughRef: '$ref' at module path '{child_module_path}' references type path '{}' in module '{}', but node '{}' is itself a '$ref'.",
-                            parsed.module_path,
-                            definition.module,
-                            traversed.join("/")
-                        ));
-                    }
-                    current = &node.rules;
-                }
-            }
-        }
-
-        for action in &child_rule_set.actions {
-            match action {
-                module_types::Action::Role(action) => {
-                    if let Some(parsed) = module_types::parse_cross_module_ref(&action.role) {
-                        let definition = referenced.get(parsed.alias).ok_or_else(|| {
-                            format!(
-                                "ModulesConfigureInvalidCrossModuleRole: alias '{}' at module path '{}' was not found.",
-                                parsed.alias, child_module_path
-                            )
-                        })?;
-                        let Some(role_rule_set) = definition.rule_at(parsed.module_path) else {
-                            return Err(format!(
-                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at module path '{}' does not exist in module '{}'.",
-                                action.role, child_module_path, definition.module
-                            ));
-                        };
-                        if role_rule_set.role != Some(true) {
-                            return Err(format!(
-                                "ModulesConfigureInvalidCrossModuleRole: role '{}' at module path '{}' does not point to a valid role in module '{}'.",
-                                action.role, child_module_path, definition.module
-                            ));
-                        }
-                        let role_type = parsed
-                            .module_path
-                            .split('/')
-                            .next_back()
-                            .unwrap_or_default();
-                        let role_type_encrypted = definition
-                            .types
-                            .get(role_type)
-                            .and_then(|module_type| module_type.encryption_required)
-                            == Some(true);
-                        if role_type_encrypted {
-                            return Err(format!(
-                                "ModulesConfigureInvalidEncryptedRoleType: cross-module role '{}' at module path '{}' resolves to encrypted type '{role_type}' in module '{}'; role records cannot be encrypted.",
-                                action.role, child_module_path, definition.module
-                            ));
-                        }
-                    }
-                }
-                module_types::Action::Who(action) => {
-                    if let Some(of) = &action.of {
-                        if let Some(parsed) = module_types::parse_cross_module_ref(of) {
-                            let definition = referenced.get(parsed.alias).ok_or_else(|| {
-                                format!(
-                                    "ModulesConfigureInvalidCrossModuleOf: alias '{}' at module path '{}' was not found.",
-                                    parsed.alias, child_module_path
-                                )
-                            })?;
-                            if definition.rule_at(parsed.module_path).is_none() {
-                                return Err(format!(
-                                    "ModulesConfigureInvalidCrossModuleOf: reference '{}' at module path '{}' does not point to a valid type path in module '{}'.",
-                                    of, child_module_path, definition.module
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        validate_refs_and_roles_recursively(&child_rule_set.rules, &child_module_path, referenced)?;
-    }
-
-    Ok(())
 }
 
 pub(crate) fn store_error_reply<R: Default>(detail: String) -> Response<R> {

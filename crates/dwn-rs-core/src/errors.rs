@@ -276,6 +276,7 @@ impl DwnErrorCode {
             // disallowed static action.
             Self::EncryptionControlValidateAudienceRolePathInvalid
                 | Self::EncryptionControlValidateAudienceSealKeyIdMismatch
+                | Self::ModuleAuthorizationRefNodeWriteNotAllowed
                 | Self::ModuleAuthorizationStoredInitialWriteActionRulesNotFound
                 | Self::ModuleAuthorizationStoredInitialWriteActionNotAllowed
         )

@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -13,6 +13,9 @@ use crate::encryption::is_encryption_control_path;
 use crate::filters::Filters;
 use crate::handlers::records::common::{filter_map, string_filter};
 use crate::handlers::records::{RECORDS_INTERFACE, WRITE_METHOD};
+use crate::interfaces::messages::modules::graph::{
+    load_module_graph, ModuleGraphLoadError, ResolvedModuleGraph, ResolvedModuleNodeKind,
+};
 use crate::interfaces::messages::modules::{self as module_types, Definition};
 use crate::replies::modules::Configure;
 use crate::stores::{LatestStateMutation, LatestStateTransition, ManagedResumableTask};
@@ -22,6 +25,7 @@ use crate::{canonical_rfc3339, permissions, Handler, Message, Pagination, Respon
 use crate::{MessageSort, SortDirection};
 
 use super::common::*;
+use super::upgrade::{validate_imported_module_contracts, validate_module_upgrade};
 
 /// Re-examines stored control records after a configuration is accepted.
 ///
@@ -175,17 +179,25 @@ where
             if let Err(err) = module_types::validate_definition(&descriptor.definition) {
                 return Response::bad_request(err.to_string());
             }
+            // Covers: DWN-PROTO-004, DWN-PROTO-005
+            // Every configuration resolves its dependency closure at its own
+            // message timestamp, so a historical import never sees a newer
+            // provider snapshot.
+            let incoming_timestamp = canonical_rfc3339(descriptor.message_timestamp);
             if let Err(detail) = self
-                .validate_composition_dependencies(tenant, &descriptor.definition)
+                .validate_composition_dependencies(
+                    tenant,
+                    &descriptor.definition,
+                    Some(incoming_timestamp.as_str()),
+                )
                 .await
             {
-                return Response::bad_request(detail.to_string());
+                return Response::bad_request(detail);
             }
 
             // Covers: DWN-PROTO-001, DWN-PROTO-004, DWN-PROTO-005
             // Representation policy is immutable once records exist under a
             // path. The scan runs before the configure commits.
-            let incoming_timestamp = canonical_rfc3339(descriptor.message_timestamp);
             if let Err(reply) = self
                 .validate_encryption_policy_immutable(
                     tenant,
@@ -198,13 +210,25 @@ where
                 return reply;
             }
 
-            let transition =
+            let (transition, incoming_is_newest, previous_definition) =
                 match plan_configure_transition(message, &incoming_cid, &author, existing_messages)
                 {
-                    Ok(Some(transition)) => transition,
+                    Ok(Some(plan)) => plan,
                     Ok(None) => return Response::conflict(),
                     Err(detail) => return Response::bad_request(detail),
                 };
+            if incoming_is_newest {
+                if let Err(detail) = self
+                    .validate_active_configuration(
+                        tenant,
+                        &descriptor.definition,
+                        previous_definition.as_ref(),
+                    )
+                    .await
+                {
+                    return Response::bad_request(detail);
+                }
+            }
             // Covers: DWN-PROTO-004
             // The obligation to re-examine records is recorded before the
             // configuration it answers for is committed, so no crash can leave
@@ -255,41 +279,203 @@ impl<MessageStore> ModulesConfigureHandler<MessageStore>
 where
     MessageStore: crate::stores::MessageStore + Clone + Send + Sync + 'static,
 {
+    /// Resolves the whole dependency closure at the given governing snapshot.
     async fn validate_composition_dependencies(
         &self,
         tenant: &str,
         definition: &Definition,
+        message_timestamp: Option<&str>,
     ) -> Result<(), String> {
-        let Some(uses) = &definition.uses else {
-            return Ok(());
-        };
-
-        let mut referenced = BTreeMap::new();
-        for (alias, module_uri) in uses {
-            let Some(definition) = self
-                .fetch_installed_module_definition(tenant, module_uri)
-                .await?
-            else {
-                return Err(format!(
-                    "ModulesConfigureComposedModuleNotInstalled: composed module '{module_uri}' (alias '{alias}') is not installed for tenant '{tenant}'."
-                ));
-            };
-            referenced.insert(alias.clone(), definition);
-        }
-
-        validate_refs_and_roles_recursively(&definition.structure, "", &referenced)
+        let tenant = tenant.to_string();
+        let store = self.message_store.clone();
+        let message_timestamp = message_timestamp.map(str::to_string);
+        load_module_graph(definition.clone(), move |uri| {
+            let tenant = tenant.clone();
+            let store = store.clone();
+            let message_timestamp = message_timestamp.clone();
+            async move {
+                match fetch_module_definition(&tenant, &uri, &store, message_timestamp.as_deref())
+                    .await
+                {
+                    Ok(definition) => Ok(Some(definition)),
+                    Err(ModuleDefinitionLookupError::NotFound(_)) => Ok(None),
+                    Err(error) => Err(ModuleGraphLoadError::Store(error.to_string())),
+                }
+            }
+        })
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
-    async fn fetch_installed_module_definition(
+    /// Resolves a graph against an explicit snapshot, preferring the snapshot
+    /// over the active store so old and new heads are compared independently.
+    async fn load_graph(
         &self,
         tenant: &str,
-        module_uri: &str,
-    ) -> Result<Option<Definition>, String> {
-        match fetch_module_definition(tenant, module_uri, &self.message_store, None).await {
-            Ok(definition) => Ok(Some(definition)),
-            Err(ModuleDefinitionLookupError::NotFound(_)) => Ok(None),
-            Err(err) => Err(err.to_string()),
+        definition: &Definition,
+        snapshot: &BTreeMap<String, Definition>,
+    ) -> Result<ResolvedModuleGraph, ModuleGraphLoadError> {
+        let tenant = tenant.to_string();
+        let store = self.message_store.clone();
+        let snapshot = snapshot.clone();
+        load_module_graph(definition.clone(), move |uri| {
+            let tenant = tenant.clone();
+            let store = store.clone();
+            let snapshot_definition = snapshot.get(&uri).cloned();
+            async move {
+                if let Some(definition) = snapshot_definition {
+                    return Ok(Some(definition));
+                }
+                match fetch_module_definition(&tenant, &uri, &store, None).await {
+                    Ok(definition) => Ok(Some(definition)),
+                    Err(ModuleDefinitionLookupError::NotFound(_)) => Ok(None),
+                    Err(error) => Err(ModuleGraphLoadError::Store(error.to_string())),
+                }
+            }
+        })
+        .await
+    }
+
+    /// Active heads validate their dependents; historical imports do not.
+    async fn validate_active_configuration(
+        &self,
+        tenant: &str,
+        incoming: &Definition,
+        previous: Option<&Definition>,
+    ) -> Result<(), String> {
+        match previous {
+            Some(previous) => {
+                self.validate_composition_upgrade_compatibility(tenant, previous, incoming)
+                    .await
+            }
+            // A late first installation must also bind against today's active
+            // providers.
+            None => {
+                self.validate_composition_dependencies(tenant, incoming, None)
+                    .await
+            }
         }
+    }
+
+    /// Compares the active old and new snapshots without substituting
+    /// historical configurations into either.
+    async fn validate_composition_upgrade_compatibility(
+        &self,
+        tenant: &str,
+        previous: &Definition,
+        incoming: &Definition,
+    ) -> Result<(), String> {
+        let configurations = self
+            .message_store
+            .query(tenant, latest_configure_filters(), None, None, None)
+            .await
+            .map(|result| result.messages)
+            .map_err(|error| error.to_string())?;
+        let mut old_definitions = BTreeMap::new();
+        for configuration in &configurations {
+            let definition = modules_configure_descriptor(configuration)
+                .map_err(|error| error.to_string())?
+                .definition
+                .clone();
+            old_definitions.insert(definition.module.clone(), definition);
+        }
+        old_definitions.insert(previous.module.clone(), previous.clone());
+        let mut new_definitions = old_definitions.clone();
+        new_definitions.insert(incoming.module.clone(), incoming.clone());
+
+        let old_graph = self
+            .load_graph(tenant, previous, &old_definitions)
+            .await
+            .map_err(|error| error.to_string())?;
+        let new_graph = self
+            .load_graph(tenant, incoming, &new_definitions)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let removes_attachment = old_graph.nodes_by_declared_path.iter().any(|(path, node)| {
+            node.kind == ResolvedModuleNodeKind::Ref
+                && !new_graph.nodes_by_declared_path.contains_key(path)
+        });
+        let introduces_attachment = new_graph.nodes_by_declared_path.iter().any(|(path, node)| {
+            node.kind == ResolvedModuleNodeKind::Ref
+                && !old_graph.nodes_by_declared_path.contains_key(path)
+        });
+        let stored_paths = if removes_attachment || introduces_attachment {
+            self.stored_module_paths(tenant, &incoming.module).await?
+        } else {
+            BTreeSet::new()
+        };
+        validate_module_upgrade(previous, incoming, &old_graph, &new_graph, &stored_paths)
+            .map_err(|error| error.to_string())?;
+
+        // A changed module affects every current dependent reachable under
+        // either snapshot.
+        let affected = affected_modules(&old_definitions, &new_definitions, &incoming.module);
+        for uri in dependency_order(&affected, &new_definitions) {
+            if uri == incoming.module {
+                continue;
+            }
+            let changed = async {
+                let before = self
+                    .load_graph(
+                        tenant,
+                        old_definitions.get(&uri).ok_or_else(|| {
+                            ModuleGraphLoadError::Store(format!(
+                                "dependent '{uri}' has no active definition"
+                            ))
+                        })?,
+                        &old_definitions,
+                    )
+                    .await?;
+                let after = self
+                    .load_graph(
+                        tenant,
+                        new_definitions.get(&uri).ok_or_else(|| {
+                            ModuleGraphLoadError::Store(format!(
+                                "dependent '{uri}' has no active definition"
+                            ))
+                        })?,
+                        &new_definitions,
+                    )
+                    .await?;
+                validate_imported_module_contracts(&before, &after)
+                    .map_err(ModuleGraphLoadError::Definition)
+            }
+            .await;
+            if let Err(error) = changed {
+                return Err(format!(
+                    "ModulesConfigureIncompatibleContractUpdate: module '{}' update breaks dependent '{uri}': {error}",
+                    incoming.module
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn stored_module_paths(
+        &self,
+        tenant: &str,
+        module: &str,
+    ) -> Result<BTreeSet<String>, String> {
+        let filter = filter_map([
+            ("interface", string_filter(RECORDS_INTERFACE)),
+            ("method", string_filter(WRITE_METHOD)),
+            ("module", string_filter(module)),
+        ]);
+        let messages = self
+            .message_store
+            .query(tenant, Filters::from(filter), None, None, None)
+            .await
+            .map(|result| result.messages)
+            .map_err(|error| error.to_string())?;
+        let mut paths = BTreeSet::new();
+        for message in &messages {
+            let descriptor =
+                records_write_descriptor(message).map_err(|error| error.to_string())?;
+            paths.insert(descriptor.module_path.clone());
+        }
+        Ok(paths)
     }
 
     #[allow(clippy::result_large_err)]
@@ -415,7 +601,7 @@ fn plan_configure_transition(
     incoming_cid: &str,
     incoming_author: &str,
     existing: Vec<Message<Descriptor>>,
-) -> Result<Option<LatestStateTransition>, String> {
+) -> Result<Option<(LatestStateTransition, bool, Option<Definition>)>, String> {
     let mut comparable = Vec::with_capacity(existing.len());
     for message in &existing {
         let cid = message_cid(message)?;
@@ -428,13 +614,19 @@ fn plan_configure_transition(
     let incoming_is_latest = existing.iter().zip(&comparable).all(|(message, cid)| {
         compare_configure_messages(incoming_cid, &incoming, cid, message) == Ordering::Greater
     });
-    let latest_existing_cid = existing
-        .iter()
-        .zip(&comparable)
-        .max_by(|(left, left_cid), (right, right_cid)| {
-            compare_configure_messages(left_cid, left, right_cid, right)
+    let newest_existing =
+        existing
+            .iter()
+            .zip(&comparable)
+            .max_by(|(left, left_cid), (right, right_cid)| {
+                compare_configure_messages(left_cid, left, right_cid, right)
+            });
+    let latest_existing_cid = newest_existing.map(|(_, cid)| cid.clone());
+    let previous_definition = newest_existing
+        .map(|(message, _)| {
+            modules_configure_descriptor(message).map(|descriptor| descriptor.definition.clone())
         })
-        .map(|(_, cid)| cid.clone());
+        .transpose()?;
 
     let descriptor = modules_configure_descriptor(&incoming)?;
     let put = LatestStateMutation {
@@ -458,11 +650,15 @@ fn plan_configure_transition(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    Ok(Some(LatestStateTransition {
-        put,
-        retains,
-        deletes: Vec::new(),
-    }))
+    Ok(Some((
+        LatestStateTransition {
+            put,
+            retains,
+            deletes: Vec::new(),
+        },
+        incoming_is_latest,
+        previous_definition,
+    )))
 }
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
@@ -522,4 +718,73 @@ where
     modules_configure_descriptor(message)
         .map(|descriptor| descriptor.definition.clone())
         .map_err(ModuleDefinitionLookupError::InvalidMessage)
+}
+
+/// Every module depending directly or transitively on `root` under either
+/// snapshot.
+fn affected_modules(
+    old_definitions: &BTreeMap<String, Definition>,
+    new_definitions: &BTreeMap<String, Definition>,
+    root: &str,
+) -> BTreeSet<String> {
+    let mut affected = BTreeSet::from([root.to_string()]);
+    loop {
+        let mut expanded = false;
+        for definition in old_definitions.values().chain(new_definitions.values()) {
+            if affected.contains(&definition.module) {
+                continue;
+            }
+            let depends = definition
+                .uses
+                .iter()
+                .flat_map(|uses| uses.values())
+                .any(|uri| affected.contains(uri));
+            if depends {
+                affected.insert(definition.module.clone());
+                expanded = true;
+            }
+        }
+        if !expanded {
+            return affected;
+        }
+    }
+}
+
+/// Dependencies before their consumers, each level lexicographical.
+fn dependency_order(
+    affected: &BTreeSet<String>,
+    definitions: &BTreeMap<String, Definition>,
+) -> Vec<String> {
+    fn visit(
+        uri: &str,
+        affected: &BTreeSet<String>,
+        definitions: &BTreeMap<String, Definition>,
+        visited: &mut BTreeSet<String>,
+        order: &mut Vec<String>,
+    ) {
+        if !visited.insert(uri.to_string()) {
+            return;
+        }
+        if let Some(definition) = definitions.get(uri) {
+            let mut dependencies: Vec<&String> = definition
+                .uses
+                .iter()
+                .flat_map(|uses| uses.values())
+                .filter(|uri| affected.contains(*uri))
+                .collect();
+            dependencies.sort();
+            dependencies.dedup();
+            for dependency in dependencies {
+                visit(dependency, affected, definitions, visited, order);
+            }
+        }
+        order.push(uri.to_string());
+    }
+
+    let mut visited = BTreeSet::new();
+    let mut order = Vec::new();
+    for uri in affected {
+        visit(uri, affected, definitions, &mut visited, &mut order);
+    }
+    order
 }
