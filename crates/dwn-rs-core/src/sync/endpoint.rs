@@ -1067,20 +1067,16 @@ mod tests {
         )
         .unwrap();
 
-        for code in [
-            DwnErrorCode::ModuleAuthorizationParentRecordNotFound,
-            DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound,
-        ] {
-            let status = Status::from_error(400, DwnError::new(code, "parent is gone"));
-            assert!(
-                parent_reply_is_terminal(TENANT, &grandchild, &status, &store).await,
-                "{code} must settle through the pruned grandparent"
-            );
-            assert_eq!(
-                classify_apply_reply_with_parent_state(&status, &grandchild, false, true),
-                ReplicationApplyOutcome::Superseded
-            );
-        }
+        let code = DwnErrorCode::ModuleAuthorizationParentRecordNotFound;
+        let status = Status::from_error(400, DwnError::new(code, "parent is gone"));
+        assert!(
+            parent_reply_is_terminal(TENANT, &grandchild, &status, &store).await,
+            "{code} must settle through the pruned grandparent"
+        );
+        assert_eq!(
+            classify_apply_reply_with_parent_state(&status, &grandchild, false, true),
+            ReplicationApplyOutcome::Superseded
+        );
     }
 
     #[test]

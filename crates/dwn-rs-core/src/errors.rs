@@ -262,7 +262,7 @@ impl DwnErrorCode {
     /// failure is unrecoverable. A code earns a place here only when it can
     /// only arise from the configuration itself contradicting the record.
     ///
-    /// Scoped to the four classes a configuration can own. The wider
+    /// Scoped to the five classes a configuration can own. The wider
     /// alternative — also purging on encryption-policy and type/schema
     /// failures — must be reconciled deliberately rather than by quietly
     /// widening this list. Erring narrow retains a record that a broader rule
@@ -271,9 +271,9 @@ impl DwnErrorCode {
     pub const fn is_control_invalidity(self) -> bool {
         matches!(
             self,
-            // Exactly four classes: an invalid role, a
-            // governing seal-key mismatch, missing action rules, and a
-            // disallowed static action.
+            // Exactly five classes: an invalid role, a governing seal-key
+            // mismatch, a write at a `$ref` attachment node, missing action
+            // rules, and a disallowed static action.
             Self::EncryptionControlValidateAudienceRolePathInvalid
                 | Self::EncryptionControlValidateAudienceSealKeyIdMismatch
                 | Self::ModuleAuthorizationRefNodeWriteNotAllowed

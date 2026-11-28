@@ -2139,6 +2139,14 @@ fn read_role_definition() -> crate::modules::Definition {
             of: None,
             can: vec![crate::modules::Can::Create],
         })];
+    definition.types.insert(
+        "member".to_string(),
+        crate::modules::Type {
+            schema: None,
+            data_formats: None,
+            encryption_required: None,
+        },
+    );
     definition.structure.insert(
         "member".to_string(),
         crate::modules::RuleSet {

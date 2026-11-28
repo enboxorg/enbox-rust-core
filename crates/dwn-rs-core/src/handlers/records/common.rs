@@ -24,7 +24,9 @@ use crate::interfaces::messages::modules::graph::{
     role_audience_context_id, ResolvedActorReference, ResolvedModuleGraph, ResolvedModuleNode,
     ResolvedModuleNodeKind, ResolvedRoleReference,
 };
-use crate::interfaces::messages::modules::{self as module_types, Action, Can, Definition, Who};
+use crate::interfaces::messages::modules::{
+    self as module_types, Action, Can, Definition, RuleSet, Who,
+};
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::{QueryEntry, Subscribe};
@@ -3222,5 +3224,56 @@ mod tests {
         ));
     }
 
-    // Covers: DWN-REC-001
+    // Covers: DWN-PROTO-005
+    #[tokio::test]
+    async fn actor_matches_checks_resolved_physical_depth_positionally() {
+        use crate::testing::{signed_write_message, WriteSpec};
+
+        const THREADS: &str = "http://example.com/threads";
+        const DEPTH_ONE_RECIPIENT: &str = "did:example:depth-one";
+        const DEPTH_TWO_RECIPIENT: &str = "did:example:depth-two";
+
+        let depth_one: Message<Descriptor> = serde_json::from_value(
+            signed_write_message(WriteSpec {
+                module: THREADS.to_string(),
+                module_path: "thread".to_string(),
+                recipient: Some(DEPTH_ONE_RECIPIENT.to_string()),
+                ..WriteSpec::new("2025-01-01T00:00:00.000000Z")
+            })
+            .await,
+        )
+        .unwrap();
+        let depth_two: Message<Descriptor> = serde_json::from_value(
+            signed_write_message(WriteSpec {
+                module: THREADS.to_string(),
+                module_path: "thread".to_string(),
+                recipient: Some(DEPTH_TWO_RECIPIENT.to_string()),
+                ..WriteSpec::new("2025-01-01T00:01:00.000000Z")
+            })
+            .await,
+        )
+        .unwrap();
+        let chain = vec![depth_one, depth_two];
+
+        let actor_at_depth_two = ResolvedActorReference {
+            owning_module_uri: THREADS.to_string(),
+            owning_module_path: "thread".to_string(),
+            who: Who::Recipient,
+            raw_of: "threads:thread".to_string(),
+            physical_depth: 2,
+        };
+
+        assert!(actor_matches(
+            DEPTH_TWO_RECIPIENT,
+            &Who::Recipient,
+            &actor_at_depth_two,
+            &chain
+        ));
+        assert!(!actor_matches(
+            DEPTH_ONE_RECIPIENT,
+            &Who::Recipient,
+            &actor_at_depth_two,
+            &chain
+        ));
+    }
 }
