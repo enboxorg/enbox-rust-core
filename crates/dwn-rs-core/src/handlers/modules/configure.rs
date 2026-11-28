@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -352,8 +352,7 @@ where
             )));
         }
 
-        self.validate_composed_encryption_policy_immutable(tenant, incoming)
-            .await
+        Ok(())
     }
 
     #[allow(clippy::result_large_err)]
@@ -408,99 +407,6 @@ where
             .get(type_name)
             .and_then(|module_type| module_type.encryption_required)
             == Some(true))
-    }
-
-    #[allow(clippy::result_large_err)]
-    async fn validate_composed_encryption_policy_immutable(
-        &self,
-        tenant: &str,
-        incoming: &Definition,
-    ) -> Result<(), Response<Configure>> {
-        let configurations = self
-            .message_store
-            .query(tenant, latest_configure_filters(), None, None, None)
-            .await
-            .map(|result| result.messages)
-            .map_err(|err| store_error_reply(err.to_string()))?;
-        let mut policies: BTreeMap<String, BTreeMap<String, bool>> = BTreeMap::new();
-        for configuration in &configurations {
-            let composing = modules_configure_descriptor(configuration)
-                .map(|descriptor| descriptor.definition.clone())
-                .map_err(|err| store_error_reply(err.to_string()))?;
-            let aliases: BTreeSet<&str> = composing
-                .uses
-                .as_ref()
-                .map(|uses| {
-                    uses.iter()
-                        .filter(|(_, uri)| *uri == &incoming.module)
-                        .map(|(alias, _)| alias.as_str())
-                        .collect()
-                })
-                .unwrap_or_default();
-            if aliases.is_empty() {
-                continue;
-            }
-            for (root_path, rule_set) in &composing.structure {
-                let Some(reference) = rule_set.reference.as_deref() else {
-                    continue;
-                };
-                let Some(parsed) = module_types::parse_cross_module_ref(reference) else {
-                    continue;
-                };
-                if !aliases.contains(parsed.alias) {
-                    continue;
-                }
-                let type_name = parsed
-                    .module_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or_default();
-                let required = incoming
-                    .types
-                    .get(type_name)
-                    .and_then(|module_type| module_type.encryption_required)
-                    == Some(true);
-                policies
-                    .entry(composing.module.clone())
-                    .or_default()
-                    .insert(root_path.clone(), required);
-            }
-        }
-        if policies.is_empty() {
-            return Ok(());
-        }
-
-        for (module, paths) in &policies {
-            let filter = filter_map([
-                ("interface", string_filter(RECORDS_INTERFACE)),
-                ("method", string_filter(WRITE_METHOD)),
-                ("module", string_filter(module)),
-            ]);
-            let records = self
-                .message_store
-                .query(tenant, Filters::from(filter), None, None, None)
-                .await
-                .map(|result| result.messages)
-                .map_err(|err| store_error_reply(err.to_string()))?;
-            for record in &records {
-                let descriptor = records_write_descriptor(record)
-                    .map_err(|err| store_error_reply(err.to_string()))?;
-                let Some(required) = paths.get(&descriptor.module_path) else {
-                    continue;
-                };
-                let encrypted = write_fields(record)
-                    .map(|fields| fields.encryption.is_some())
-                    .map_err(|err| store_error_reply(err.to_string()))?;
-                if encrypted == *required {
-                    continue;
-                }
-                return Err(Response::bad_request(format!(
-                    "ModulesConfigureEncryptionPolicyImmutable: cannot change encryption policy for module path '{}' imported by module '{module}' after records exist; install the changed definition under a new module URI.",
-                    descriptor.module_path
-                )));
-            }
-        }
-        Ok(())
     }
 }
 

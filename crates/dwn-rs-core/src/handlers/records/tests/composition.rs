@@ -506,7 +506,7 @@ async fn missing_cross_module_parent_is_repairable() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationCrossModuleParentNotFound")
+        Some("ModuleAuthorizationParentRecordNotFound")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&comment), false),
@@ -571,7 +571,7 @@ async fn parent_with_matching_id_in_composing_module_does_not_satisfy_cross_modu
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationCrossModuleParentNotFound")
+        Some("ModuleAuthorizationParentRecordNotFound")
     );
 }
 
@@ -776,7 +776,7 @@ async fn pruned_parent_rejects_child_as_terminal() {
     // parent; prune is not disclosed on the wire.
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationCrossModuleParentNotFound")
+        Some("ModuleAuthorizationParentRecordNotFound")
     );
     // Without prune evidence the missing parent is a repairable dependency.
     assert_eq!(
@@ -842,7 +842,7 @@ async fn a_non_initial_parent_write_is_not_ancestry() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationCrossModuleParentNotFound")
+        Some("ModuleAuthorizationParentRecordNotFound")
     );
 
     // Control: a separate receiver that has the real initial write admits the

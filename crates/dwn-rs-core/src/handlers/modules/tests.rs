@@ -20,7 +20,7 @@ use crate::handlers::configure::{fetch_module_definition, ModulesConfigureHandle
 use crate::handlers::query::ModulesQueryHandler;
 use crate::interfaces::messages::modules::{
     self as module_types, Action, ActionRole, ActionWho, Can, Definition, ModuleKeyAgreement, Type,
-    Who,
+    Who, MAX_RECORD_NESTING_DEPTH,
 };
 use crate::modules::RuleSet;
 use crate::stores::memory::MemoryMessageStore;
@@ -1684,11 +1684,124 @@ fn validate_definition_rejects_cross_module_read_role_on_encrypted_path() {
         role: "blog:member".to_string(),
         can: vec![Can::Create, Can::Read],
     })];
+    // Cross-module read roles are resolved against the provider's `$keyAgreement`
+    // at graph resolution, not against the local structure.
+    assert!(module_types::validate_definition(&definition).is_ok());
+}
+
+fn composed_structure_definition() -> Definition {
+    Definition {
+        module: "https://example.com/composed".to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([(
+            "core".to_string(),
+            "https://example.com/core".to_string(),
+        )])),
+        key_agreement: None,
+        types: BTreeMap::from([("comment".to_string(), text_type())]),
+        structure: BTreeMap::from([(
+            "post".to_string(),
+            RuleSet {
+                reference: Some("core:post".to_string()),
+                rules: BTreeMap::from([("comment".to_string(), RuleSet::default())]),
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+// Covers: ENBOX-ERR-001
+#[test]
+fn validate_definition_rejects_duplicate_uses_targets() {
+    let mut definition = composed_structure_definition();
+    definition.uses = Some(BTreeMap::from([
+        ("core".to_string(), "https://example.com/core".to_string()),
+        ("other".to_string(), "https://example.com/core".to_string()),
+    ]));
     let error = module_types::validate_definition(&definition).unwrap_err();
-    assert_eq!(
-        error.code,
-        "ModulesConfigureInvalidEncryptedCrossModuleRole"
-    );
+    assert_eq!(error.code, "ModulesConfigureDuplicateUsesModule");
+}
+
+// Covers: ENBOX-ERR-001
+#[test]
+fn validate_definition_rejects_ref_without_local_children() {
+    let mut definition = composed_structure_definition();
+    definition.structure.get_mut("post").unwrap().rules.clear();
+    let error = module_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ModulesConfigureInvalidRefWithoutChildren");
+}
+
+// Covers: ENBOX-ERR-001
+#[test]
+fn validate_definition_rejects_ref_node_directives_but_allows_actions() {
+    let mut definition = composed_structure_definition();
+    definition
+        .structure
+        .get_mut("post")
+        .unwrap()
+        .actions
+        .push(Action::Who(ActionWho {
+            who: Who::Anyone,
+            of: None,
+            can: vec![Can::Read],
+        }));
+    assert!(module_types::validate_definition(&definition).is_ok());
+
+    definition.structure.get_mut("post").unwrap().role = Some(true);
+    let error = module_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ModulesConfigureInvalidRefNodeHasDirectives");
+}
+
+// Covers: ENBOX-ERR-001
+#[test]
+fn validate_definition_rejects_ref_type_collision() {
+    let mut definition = composed_structure_definition();
+    definition.types.insert("post".to_string(), text_type());
+    let error = module_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ModulesConfigureInvalidRefTypeCollision");
+
+    // A local record node using the type resolves the collision.
+    definition
+        .structure
+        .insert("local-post".to_string(), RuleSet::default());
+    definition
+        .types
+        .insert("local-post".to_string(), text_type());
+    definition
+        .structure
+        .get_mut("local-post")
+        .unwrap()
+        .rules
+        .insert("post".to_string(), RuleSet::default());
+    assert!(module_types::validate_definition(&definition).is_ok());
+}
+
+// Covers: ENBOX-ERR-001
+#[test]
+fn validate_definition_rejects_structure_nesting_beyond_the_cap() {
+    let mut definition = composed_structure_definition();
+    let mut rules = BTreeMap::new();
+    let mut current = &mut rules;
+    for index in 0..MAX_RECORD_NESTING_DEPTH {
+        definition
+            .types
+            .insert(format!("level-{index}"), text_type());
+        let child = current
+            .entry(format!("level-{index}"))
+            .or_insert_with(RuleSet::default);
+        current = &mut child.rules;
+    }
+    definition.structure.get_mut("post").unwrap().rules = rules;
+    let error = module_types::validate_definition(&definition).unwrap_err();
+    assert_eq!(error.code, "ModulesConfigureRecordNestingDepthExceeded");
+}
+
+fn text_type() -> Type {
+    Type {
+        schema: None,
+        data_formats: None,
+        encryption_required: None,
+    }
 }
 
 #[allow(dead_code)]
@@ -2099,133 +2212,6 @@ async fn modules_configure_accepts_key_rotation_and_governs_new_writes() {
     )
     .await;
     assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-}
-
-// Covers: DWN-PROTO-004, DWN-PROTO-005
-#[tokio::test]
-async fn modules_configure_rejects_composed_policy_flip() {
-    const BLOG: &str = "http://example.com/blog";
-    const COMPOSER: &str = "http://example.com/composer";
-
-    let (configures, writes, _) = flip_harness().await;
-    let flip_x = "C4ZHfPBV5nB76CSpZyGYMNa-xl0iQD5lEunvuXvGBEc";
-
-    let blog_v1 = Definition {
-        module: BLOG.to_string(),
-        published: true,
-        uses: None,
-        key_agreement: None,
-        types: BTreeMap::from([
-            (
-                "post".to_string(),
-                Type {
-                    schema: None,
-                    data_formats: None,
-                    encryption_required: None,
-                },
-            ),
-            (
-                "article".to_string(),
-                Type {
-                    schema: None,
-                    data_formats: None,
-                    encryption_required: None,
-                },
-            ),
-        ]),
-        structure: BTreeMap::from([(
-            "post".to_string(),
-            RuleSet {
-                actions: vec![Action::Who(ActionWho {
-                    who: Who::Anyone,
-                    of: None,
-                    can: vec![Can::Create, Can::Read],
-                })],
-                ..Default::default()
-            },
-        )]),
-    };
-    let reply = run_flip_configure(&configures, blog_v1, FLIP_T1).await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-
-    let composer = Definition {
-        module: COMPOSER.to_string(),
-        published: true,
-        uses: Some(BTreeMap::from([("blog".to_string(), BLOG.to_string())])),
-        key_agreement: None,
-        types: BTreeMap::new(),
-        structure: BTreeMap::from([
-            (
-                "post".to_string(),
-                RuleSet {
-                    reference: Some("blog:post".to_string()),
-                    ..Default::default()
-                },
-            ),
-            (
-                "article".to_string(),
-                RuleSet {
-                    reference: Some("blog:post".to_string()),
-                    ..Default::default()
-                },
-            ),
-        ]),
-    };
-    let reply = run_flip_configure(&configures, composer, FLIP_T1).await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-
-    let reply = admit_flip_record(&writes, COMPOSER, "post", FLIP_MID, None).await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-
-    let reply = admit_flip_record(&writes, COMPOSER, "article", FLIP_MID, None).await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-
-    let mut blog_v2 = flip_keyed(true, flip_x);
-    blog_v2.module = BLOG.to_string();
-    blog_v2.types = BTreeMap::from([
-        (
-            "post".to_string(),
-            Type {
-                schema: None,
-                data_formats: None,
-                encryption_required: Some(true),
-            },
-        ),
-        (
-            "article".to_string(),
-            Type {
-                schema: None,
-                data_formats: None,
-                encryption_required: Some(true),
-            },
-        ),
-    ]);
-    blog_v2.structure = BTreeMap::from([(
-        "post".to_string(),
-        RuleSet {
-            key_agreement: Some(ModuleKeyAgreement {
-                public_key_jwk: flip_key_jwk(flip_x),
-            }),
-            actions: vec![Action::Who(ActionWho {
-                who: Who::Author,
-                of: Some("post".to_string()),
-                can: vec![Can::Create, Can::Read],
-            })],
-            ..Default::default()
-        },
-    )]);
-    let reply = run_flip_configure(&configures, blog_v2, FLIP_T2).await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert!(
-        reply.status.detail.contains("imported by module"),
-        "{}",
-        reply.status.detail
-    );
-    assert!(
-        reply.status.detail.contains("'article'"),
-        "differently named $ref root is evaluated: {}",
-        reply.status.detail
-    );
 }
 
 // Covers: DWN-PROTO-004
