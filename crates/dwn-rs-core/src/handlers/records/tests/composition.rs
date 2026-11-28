@@ -3,7 +3,7 @@
 //! A composing module references a base module through `$ref`. Runtime
 //! admission must resolve every parent-bearing write in the module the
 //! composing structure names, then require the declared path and context to
-//! extend exactly that parent's (`DWN-PROTO-001`, `DWN-PROTO-005`).
+//! extend exactly that parent's.
 
 use super::*;
 use crate::descriptors::{
@@ -2027,4 +2027,990 @@ async fn pruning_a_referenced_parent_cascades_to_composing_children() {
         comments.is_empty(),
         "pruned parent must purge composing children"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Chained `$ref` inheritance across three modules.
+// ---------------------------------------------------------------------------
+
+const CHAIN_CORE: &str = "https://chain.example/core";
+const CHAIN_COMMENTS: &str = "https://chain.example/comments";
+const CHAIN_REACTIONS: &str = "https://chain.example/reactions";
+const CHAIN_BOB: &str = "did:example:bob";
+
+fn chain_core_definition(keyed_role: bool) -> Definition {
+    let role_rule = RuleSet {
+        role: Some(true),
+        key_agreement: keyed_role.then(|| ModuleKeyAgreement {
+            public_key_jwk: path_key_jwk(),
+        }),
+        actions: vec![Action::Who(ActionWho {
+            who: Who::Author,
+            of: Some("notebook/note".to_string()),
+            can: vec![Can::Create],
+        })],
+        ..Default::default()
+    };
+    Definition {
+        module: CHAIN_CORE.to_string(),
+        published: true,
+        uses: None,
+        key_agreement: None,
+        types: BTreeMap::from([
+            ("notebook".to_string(), text_type()),
+            ("note".to_string(), text_type()),
+            ("participant".to_string(), text_type()),
+            ("member".to_string(), text_type()),
+        ]),
+        structure: BTreeMap::from([
+            (
+                "member".to_string(),
+                RuleSet {
+                    role: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "notebook".to_string(),
+                RuleSet {
+                    actions: vec![Action::Who(ActionWho {
+                        who: Who::Anyone,
+                        of: None,
+                        can: vec![Can::Create, Can::Read],
+                    })],
+                    rules: BTreeMap::from([(
+                        "note".to_string(),
+                        RuleSet {
+                            actions: vec![Action::Who(ActionWho {
+                                who: Who::Anyone,
+                                of: None,
+                                can: vec![Can::Create, Can::Read],
+                            })],
+                            rules: BTreeMap::from([("participant".to_string(), role_rule)]),
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    }
+}
+
+fn chain_comments_definition() -> Definition {
+    Definition {
+        module: CHAIN_COMMENTS.to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([(
+            "core".to_string(),
+            CHAIN_CORE.to_string(),
+        )])),
+        key_agreement: None,
+        types: BTreeMap::from([("comment".to_string(), text_type())]),
+        structure: BTreeMap::from([(
+            "note".to_string(),
+            RuleSet {
+                reference: Some("core:notebook/note".to_string()),
+                rules: BTreeMap::from([(
+                    "comment".to_string(),
+                    RuleSet {
+                        actions: vec![Action::Role(ActionRole {
+                            role: "core:notebook/note/participant".to_string(),
+                            can: vec![Can::Create, Can::Read],
+                        })],
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+fn chain_reactions_definition() -> Definition {
+    Definition {
+        module: CHAIN_REACTIONS.to_string(),
+        published: true,
+        uses: Some(BTreeMap::from([(
+            "comments".to_string(),
+            CHAIN_COMMENTS.to_string(),
+        )])),
+        key_agreement: None,
+        types: BTreeMap::from([("reaction".to_string(), text_type())]),
+        structure: BTreeMap::from([(
+            "comment".to_string(),
+            RuleSet {
+                reference: Some("comments:note/comment".to_string()),
+                rules: BTreeMap::from([("reaction".to_string(), RuleSet::default())]),
+                ..Default::default()
+            },
+        )]),
+    }
+}
+
+async fn chain_fixture() -> CompositionFixture {
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(TENANT, &message_store, chain_core_definition(true), INSTALL).await;
+    put_module_definition(TENANT, &message_store, chain_comments_definition(), INSTALL).await;
+    put_module_definition(
+        TENANT,
+        &message_store,
+        chain_reactions_definition(),
+        INSTALL,
+    )
+    .await;
+    CompositionFixture {
+        write_handler: RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        delete_handler: RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        read_handler: RecordsReadHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        query_handler: RecordsQueryHandler::new(
+            message_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        message_store,
+    }
+}
+
+async fn seed_report(
+    fixture: &CompositionFixture,
+    timestamp: &str,
+) -> ((String, String), (String, String)) {
+    let (notebook, notebook_data) =
+        write_record(CHAIN_CORE, "notebook", timestamp, None, b"notebook").await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &notebook, Some(notebook_data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let notebook = (record_id(&notebook), context_id(&notebook));
+
+    let (note, note_data) = write_record(
+        CHAIN_CORE,
+        "notebook/note",
+        timestamp,
+        Some((&notebook.0, &notebook.1)),
+        b"note",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &note, Some(note_data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let note = (record_id(&note), context_id(&note));
+    (notebook, note)
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-005
+#[tokio::test]
+async fn three_module_chain_writes_carry_physical_context() {
+    let fixture = chain_fixture().await;
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+
+    let (comment, comment_data) = write_record(
+        CHAIN_COMMENTS,
+        "note/comment",
+        TS_COMMENT,
+        Some((&note.0, &note.1)),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(comment_data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    let comment = (record_id(&comment), context_id(&comment));
+
+    let (reaction, reaction_data) = write_record(
+        CHAIN_REACTIONS,
+        "comment/reaction",
+        TS_REACTION,
+        Some((&comment.0, &comment.1)),
+        b"reaction",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &reaction, Some(reaction_data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // Declared paths are two segments everywhere; physical context is the
+    // four-deep record chain.
+    assert_eq!(
+        context_id(&reaction),
+        format!("{}/{}", comment.1, reaction["recordId"].as_str().unwrap())
+    );
+    assert_eq!(remark_context_depth(&context_id(&reaction)), 4);
+}
+
+fn remark_context_depth(context_id: &str) -> usize {
+    context_id.split('/').count()
+}
+
+// Covers: DWN-PROTO-001
+#[tokio::test]
+async fn tenant_write_at_a_chained_ref_attachment_is_rejected() {
+    let fixture = chain_fixture().await;
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+
+    let (message, data) = write_record(
+        CHAIN_COMMENTS,
+        "note",
+        TS_COMMENT,
+        Some((&note.0, &note.1)),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationRefNodeWriteNotAllowed")
+    );
+}
+
+// Covers: DWN-REC-004
+#[tokio::test]
+async fn pruned_core_note_settles_a_late_composing_comment_as_superseded() {
+    let fixture = chain_fixture().await;
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+
+    let prune = signed_delete_message(&note.0, true, TS_COMMENT).await;
+    let reply = fixture.delete_handler.run(TENANT, &prune, None).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let (comment, data) = write_record(
+        CHAIN_COMMENTS,
+        "note/comment",
+        TS_REACTION,
+        Some((&note.0, &note.1)),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationParentRecordNotFound")
+    );
+    assert_eq!(
+        classify_apply_reply_with_parent_state(
+            &reply.status,
+            &parsed(&comment),
+            false,
+            record_has_prune(TENANT, &note.0, &fixture.message_store)
+                .await
+                .unwrap(),
+        ),
+        ReplicationApplyOutcome::Superseded
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cross-module roles, root roles, and `of` actors.
+// ---------------------------------------------------------------------------
+
+async fn bob_create_no_role(
+    module: &str,
+    module_path: &str,
+    parent: (&str, &str),
+    timestamp: &str,
+    data: &'static [u8],
+) -> (serde_json::Value, Bytes) {
+    let bytes = Bytes::from_static(data);
+    let message = signed_write_message(WriteSpec {
+        author: CHAIN_BOB.to_string(),
+        signer: bob_signer(),
+        module: module.to_string(),
+        module_path: module_path.to_string(),
+        parent_id: Some(parent.0.to_string()),
+        parent_context_id: Some(parent.1.to_string()),
+        data_cid: generate_dag_pb_cid_from_bytes(&bytes).to_string(),
+        data_size: bytes.len() as u64,
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    (message, bytes)
+}
+
+async fn chain_hold_role(
+    fixture: &CompositionFixture,
+    note: (&str, &str),
+    recipient: &str,
+    timestamp: &str,
+) -> String {
+    let bytes = Bytes::from_static(b"role");
+    let message = signed_write_message(WriteSpec {
+        module: CHAIN_CORE.to_string(),
+        module_path: "notebook/note/participant".to_string(),
+        parent_id: Some(note.0.to_string()),
+        parent_context_id: Some(note.1.to_string()),
+        recipient: Some(recipient.to_string()),
+        data_cid: generate_dag_pb_cid_from_bytes(&bytes).to_string(),
+        data_size: bytes.len() as u64,
+        ..WriteSpec::new(timestamp)
+    })
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(bytes))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+    record_id(&message)
+}
+
+// Covers: DWN-PROTO-002, DWN-PROTO-003
+#[tokio::test]
+async fn chain_context_role_authorizes_the_owning_context_only() {
+    let fixture = chain_fixture().await;
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+    let (other_notebook, other_note) = seed_report(&fixture, "2025-01-01T00:00:10.000000Z").await;
+    let _ = other_notebook;
+    chain_hold_role(&fixture, (&note.0, &note.1), CHAIN_BOB, TS_ROLE).await;
+
+    let role = "core:notebook/note/participant";
+    let (message, data) = bob_create(
+        CHAIN_COMMENTS,
+        "note/comment",
+        (&note.0, &note.1),
+        role,
+        TS_COMMENT,
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // The same role in a sibling context does not authorize.
+    let (message, data) = bob_create(
+        CHAIN_COMMENTS,
+        "note/comment",
+        (&other_note.0, &other_note.1),
+        role,
+        TS_REACTION,
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationMatchingRoleRecordNotFound")
+    );
+}
+
+// Covers: DWN-PROTO-002
+#[tokio::test]
+async fn chain_root_role_authorizes_without_a_parent_context() {
+    let mut definition = chain_comments_definition();
+    definition.structure.get_mut("note").unwrap().rules.insert(
+        "comment".to_string(),
+        RuleSet {
+            actions: vec![Action::Role(ActionRole {
+                role: "core:member".to_string(),
+                can: vec![Can::Create, Can::Read],
+            })],
+            ..Default::default()
+        },
+    );
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(TENANT, &message_store, chain_core_definition(true), INSTALL).await;
+    put_module_definition(TENANT, &message_store, definition, INSTALL).await;
+    let fixture = CompositionFixture {
+        write_handler: RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        delete_handler: RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        read_handler: RecordsReadHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        query_handler: RecordsQueryHandler::new(
+            message_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        message_store,
+    };
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+
+    // A root role record lives in the provider, has no parent, and grants
+    // tenant-wide authority.
+    let bytes = Bytes::from_static(b"role");
+    let role_record = signed_write_message(WriteSpec {
+        module: CHAIN_CORE.to_string(),
+        module_path: "member".to_string(),
+        recipient: Some(CHAIN_BOB.to_string()),
+        data_cid: generate_dag_pb_cid_from_bytes(&bytes).to_string(),
+        data_size: bytes.len() as u64,
+        ..WriteSpec::new(TS_ROLE)
+    })
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &role_record, Some(bytes))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let (message, data) = bob_create(
+        CHAIN_COMMENTS,
+        "note/comment",
+        (&note.0, &note.1),
+        "core:member",
+        TS_COMMENT,
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: DWN-PROTO-003, DWN-PROTO-005
+#[tokio::test]
+async fn chain_of_actor_resolves_the_owning_provider_record() {
+    let mut definition = chain_comments_definition();
+    definition.structure.get_mut("note").unwrap().rules.insert(
+        "comment".to_string(),
+        RuleSet {
+            actions: vec![Action::Who(ActionWho {
+                who: Who::Author,
+                of: Some("core:notebook/note".to_string()),
+                can: vec![Can::Create, Can::Read],
+            })],
+            ..Default::default()
+        },
+    );
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(TENANT, &message_store, chain_core_definition(true), INSTALL).await;
+    put_module_definition(TENANT, &message_store, definition, INSTALL).await;
+    let fixture = CompositionFixture {
+        write_handler: RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        delete_handler: RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        read_handler: RecordsReadHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        query_handler: RecordsQueryHandler::new(
+            message_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        message_store,
+    };
+
+    // Bob authors the provider note, so the `of` author rule reaches him.
+    let (notebook, notebook_data) =
+        write_record(CHAIN_CORE, "notebook", TS_THREAD, None, b"notebook").await;
+    assert_eq!(
+        fixture
+            .write_handler
+            .run(TENANT, &notebook, Some(notebook_data))
+            .await
+            .status
+            .code,
+        202
+    );
+    let note_bytes = Bytes::from_static(b"note");
+    let note = signed_write_message(WriteSpec {
+        author: CHAIN_BOB.to_string(),
+        signer: bob_signer(),
+        module: CHAIN_CORE.to_string(),
+        module_path: "notebook/note".to_string(),
+        parent_id: Some(record_id(&notebook)),
+        parent_context_id: Some(context_id(&notebook)),
+        data_cid: generate_dag_pb_cid_from_bytes(&note_bytes).to_string(),
+        data_size: note_bytes.len() as u64,
+        ..WriteSpec::new(TS_THREAD)
+    })
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &note, Some(note_bytes))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let (message, data) = bob_create_no_role(
+        CHAIN_COMMENTS,
+        "note/comment",
+        (&record_id(&note), &context_id(&note)),
+        TS_COMMENT,
+        b"comment",
+    )
+    .await;
+    // No invoked role: the `of` author rule authorizes Bob directly.
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // A tenant-authored note does not authorize Bob through the same rule.
+    let (_notebook, tenant_note) = seed_report(&fixture, "2025-01-01T00:00:20.000000Z").await;
+    let (message, data) = bob_create_no_role(
+        CHAIN_COMMENTS,
+        "note/comment",
+        (&tenant_note.0, &tenant_note.1),
+        TS_REACTION,
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+}
+
+// Covers: ENBOX-REC-003
+#[tokio::test]
+async fn composed_record_limit_groups_by_physical_parent_context() {
+    let mut comments = chain_comments_definition();
+    comments
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .rules
+        .get_mut("comment")
+        .unwrap()
+        .record_limit = Some(crate::modules::RecordLimit { max: 2 });
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(TENANT, &message_store, chain_core_definition(true), INSTALL).await;
+    put_module_definition(TENANT, &message_store, comments, INSTALL).await;
+    let fixture = CompositionFixture {
+        write_handler: RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        delete_handler: RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        read_handler: RecordsReadHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        query_handler: RecordsQueryHandler::new(
+            message_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        message_store,
+    };
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+
+    let mut comment_contexts = Vec::new();
+    for (index, timestamp) in [TS_COMMENT, TS_REACTION, "2025-01-01T00:03:00.000000Z"]
+        .into_iter()
+        .enumerate()
+    {
+        let (comment, data) = write_record(
+            CHAIN_COMMENTS,
+            "note/comment",
+            timestamp,
+            Some((&note.0, &note.1)),
+            b"comment",
+        )
+        .await;
+        let reply = fixture
+            .write_handler
+            .run(TENANT, &comment, Some(data))
+            .await;
+        assert_eq!(
+            reply.status.code, 202,
+            "comment {index}: {}",
+            reply.status.detail
+        );
+        comment_contexts.push(context_id(&comment));
+    }
+
+    // A filter at the comment's physical depth scopes its direct parent, so
+    // all three siblings share one occupant group and only two are visible.
+    let query = owner_scoped_query(
+        CHAIN_COMMENTS,
+        "note/comment",
+        Some(&note.1),
+        "2025-01-01T00:04:00.000000Z",
+    )
+    .await;
+    let reply = fixture.query_handler.run(TENANT, &query, None).await;
+    assert_eq!(reply.status.code, 200, "{}", reply.status.detail);
+    assert_eq!(reply.reply.entries.unwrap_or_default().len(), 2);
+}
+
+// Covers: DWN-PROTO-006
+#[tokio::test]
+async fn encrypted_consumer_requires_the_provider_role_key_agreement() {
+    let mut comments = chain_comments_definition();
+    comments
+        .types
+        .get_mut("comment")
+        .unwrap()
+        .encryption_required = Some(true);
+    comments
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .rules
+        .get_mut("comment")
+        .unwrap()
+        .key_agreement = Some(ModuleKeyAgreement {
+        public_key_jwk: path_key_jwk(),
+    });
+    comments
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .rules
+        .get_mut("comment")
+        .unwrap()
+        .actions = vec![Action::Role(ActionRole {
+        role: "core:notebook/note/participant".to_string(),
+        can: vec![Can::Create, Can::Read],
+    })];
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(TENANT, &message_store, chain_core_definition(true), INSTALL).await;
+    put_module_definition(TENANT, &message_store, comments, INSTALL).await;
+    let fixture = CompositionFixture {
+        write_handler: RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        delete_handler: RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        read_handler: RecordsReadHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        query_handler: RecordsQueryHandler::new(
+            message_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        message_store,
+    };
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+
+    let bytes = Bytes::from_static(b"comment");
+    let envelope = envelope_with_entries(vec![
+        module_path_entry(&path_key_id()),
+        role_audience_entry_for(CHAIN_CORE, "notebook/note/participant", "role-key"),
+    ]);
+    let message = signed_write_message(WriteSpec {
+        module: CHAIN_COMMENTS.to_string(),
+        module_path: "note/comment".to_string(),
+        parent_id: Some(note.0.clone()),
+        parent_context_id: Some(note.1.clone()),
+        data_cid: generate_dag_pb_cid_from_bytes(&bytes).to_string(),
+        data_size: bytes.len() as u64,
+        encryption: Some(envelope),
+        ..WriteSpec::new(TS_COMMENT)
+    })
+    .await;
+    let comment_context = context_id(&message);
+    put_retained_audience(
+        &fixture.message_store,
+        CHAIN_CORE,
+        "notebook/note/participant",
+        &note.1,
+        "role-key",
+        TS_ROLE,
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(bytes))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    // The same key material under a foreign role namespace is not an audience.
+    let other_bytes = Bytes::from_static(b"comment");
+    let wrong_namespace = envelope_with_entries(vec![
+        module_path_entry(&path_key_id()),
+        role_audience_entry_for(CHAIN_REACTIONS, "notebook/note/participant", "role-key"),
+    ]);
+    let message = signed_write_message(WriteSpec {
+        module: CHAIN_COMMENTS.to_string(),
+        module_path: "note/comment".to_string(),
+        parent_id: Some(note.0),
+        parent_context_id: Some(comment_context),
+        data_cid: generate_dag_pb_cid_from_bytes(&other_bytes).to_string(),
+        data_size: other_bytes.len() as u64,
+        encryption: Some(wrong_namespace),
+        ..WriteSpec::new(TS_REACTION)
+    })
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(other_bytes))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationEncryptionRoleAudienceEntryMissing")
+    );
+}
+
+// Covers: DWN-PROTO-006, ENBOX-ERR-001
+#[tokio::test]
+async fn encrypted_consumer_rejects_a_provider_role_without_key_agreement() {
+    let mut comments = chain_comments_definition();
+    comments
+        .types
+        .get_mut("comment")
+        .unwrap()
+        .encryption_required = Some(true);
+    comments
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .rules
+        .get_mut("comment")
+        .unwrap()
+        .key_agreement = Some(ModuleKeyAgreement {
+        public_key_jwk: path_key_jwk(),
+    });
+    comments
+        .structure
+        .get_mut("note")
+        .unwrap()
+        .rules
+        .get_mut("comment")
+        .unwrap()
+        .actions = vec![Action::Role(ActionRole {
+        role: "core:notebook/note/participant".to_string(),
+        can: vec![Can::Create, Can::Read],
+    })];
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    // `keyed_role = false`: the provider role has no `$keyAgreement`.
+    put_module_definition(
+        TENANT,
+        &message_store,
+        chain_core_definition(false),
+        INSTALL,
+    )
+    .await;
+    put_module_definition(TENANT, &message_store, comments, INSTALL).await;
+    let handler = RecordsWriteHandler::<_, _>::new(
+        message_store,
+        data_store,
+        Some(Arc::new(test_resolver())),
+    );
+
+    let bytes = Bytes::from_static(b"comment");
+    let message = signed_write_message(WriteSpec {
+        module: CHAIN_COMMENTS.to_string(),
+        module_path: "note/comment".to_string(),
+        data_cid: generate_dag_pb_cid_from_bytes(&bytes).to_string(),
+        data_size: bytes.len() as u64,
+        ..WriteSpec::new(TS_COMMENT)
+    })
+    .await;
+    let reply = handler.run(TENANT, &message, Some(bytes)).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureInvalidEncryptedRoleMissingKeyAgreement"),
+        "{}",
+        reply.status.detail
+    );
+}
+
+// Covers: DWN-PROTO-001, DWN-PROTO-005
+#[tokio::test]
+async fn chain_child_rejects_a_mismatched_parent_or_context() {
+    let fixture = chain_fixture().await;
+    let (_notebook, note) = seed_report(&fixture, TS_THREAD).await;
+
+    let (comment, data) = write_record(
+        CHAIN_COMMENTS,
+        "note/comment",
+        TS_COMMENT,
+        Some(("missing-note", "missing-context")),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationParentRecordNotFound")
+    );
+
+    let (comment, data) = write_record(
+        CHAIN_COMMENTS,
+        "note/comment",
+        TS_COMMENT,
+        Some((&note.0, "wrong/parent/context")),
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &comment, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationIncorrectContextId")
+    );
+}
+
+// Covers: DWN-PROTO-003, DWN-PROTO-005
+#[tokio::test]
+async fn chain_of_recipient_resolves_the_owning_provider_record() {
+    let mut definition = chain_comments_definition();
+    definition.structure.get_mut("note").unwrap().rules.insert(
+        "comment".to_string(),
+        RuleSet {
+            actions: vec![Action::Who(ActionWho {
+                who: Who::Recipient,
+                of: Some("core:notebook/note".to_string()),
+                can: vec![Can::Create, Can::Read],
+            })],
+            ..Default::default()
+        },
+    );
+    let mut message_store = TestMessageStore::default();
+    let mut data_store = TestDataStore::default();
+    message_store.open().await.unwrap();
+    data_store.open().await.unwrap();
+    put_module_definition(TENANT, &message_store, chain_core_definition(true), INSTALL).await;
+    put_module_definition(TENANT, &message_store, definition, INSTALL).await;
+    let fixture = CompositionFixture {
+        write_handler: RecordsWriteHandler::<_, _>::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        delete_handler: RecordsDeleteHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        read_handler: RecordsReadHandler::new(
+            message_store.clone(),
+            data_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        query_handler: RecordsQueryHandler::new(
+            message_store.clone(),
+            Some(Arc::new(test_resolver())),
+        ),
+        message_store,
+    };
+
+    let (notebook, notebook_data) =
+        write_record(CHAIN_CORE, "notebook", TS_THREAD, None, b"notebook").await;
+    assert_eq!(
+        fixture
+            .write_handler
+            .run(TENANT, &notebook, Some(notebook_data))
+            .await
+            .status
+            .code,
+        202
+    );
+    let note_bytes = Bytes::from_static(b"note");
+    let note = signed_write_message(WriteSpec {
+        module: CHAIN_CORE.to_string(),
+        module_path: "notebook/note".to_string(),
+        parent_id: Some(record_id(&notebook)),
+        parent_context_id: Some(context_id(&notebook)),
+        recipient: Some(CHAIN_BOB.to_string()),
+        data_cid: generate_dag_pb_cid_from_bytes(&note_bytes).to_string(),
+        data_size: note_bytes.len() as u64,
+        ..WriteSpec::new(TS_THREAD)
+    })
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &note, Some(note_bytes))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+
+    let (message, data) = bob_create_no_role(
+        CHAIN_COMMENTS,
+        "note/comment",
+        (&record_id(&note), &context_id(&note)),
+        TS_COMMENT,
+        b"comment",
+    )
+    .await;
+    let reply = fixture
+        .write_handler
+        .run(TENANT, &message, Some(data))
+        .await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
