@@ -4155,6 +4155,9 @@ fn enc_role_definition(
                 role.to_string(),
                 RuleSet {
                     role: Some(true),
+                    key_agreement: Some(ModuleKeyAgreement {
+                        public_key_jwk: path_key_jwk(),
+                    }),
                     ..Default::default()
                 },
             );
@@ -4171,6 +4174,9 @@ fn enc_role_definition(
                 segments[1].to_string(),
                 RuleSet {
                     role: Some(true),
+                    key_agreement: Some(ModuleKeyAgreement {
+                        public_key_jwk: path_key_jwk(),
+                    }),
                     ..Default::default()
                 },
             );
@@ -4525,12 +4531,8 @@ async fn records_write_role_audience_accepts_any_retained_matching_key() {
 
 // Covers: ENBOX-ENC-001, DWN-PROTO-002
 #[tokio::test]
-async fn records_write_role_audience_uses_root_nested_and_unresolved_contexts() {
-    for (role, requires_entry) in [
-        ("member", true),
-        ("note/role", true),
-        ("note/role/deep", false),
-    ] {
+async fn records_write_role_audience_uses_root_and_nested_contexts() {
+    for (role, requires_entry) in [("member", true), ("note/role", true)] {
         let (message_store, data_store) = open_stores().await;
         put_module_definition(
             TENANT,
@@ -4580,48 +4582,108 @@ async fn records_write_role_audience_uses_root_nested_and_unresolved_contexts() 
 
 // Covers: ENBOX-ENC-001, DWN-PROTO-005
 #[tokio::test]
-async fn records_write_role_audience_resolves_uses_and_skips_unresolved_rules() {
+async fn records_write_role_audience_resolves_uses_rules() {
     let role_module = "http://example.com/roles";
-    for uses in [
-        None,
-        Some(BTreeMap::from([(
-            "roles".to_string(),
-            role_module.to_string(),
+    let (message_store, data_store) = open_stores().await;
+    put_module_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition(
+            "roles:member",
+            vec![Can::Read],
+            Some(BTreeMap::from([(
+                "roles".to_string(),
+                role_module.to_string(),
+            )])),
+        ),
+        ENC_T1,
+    )
+    .await;
+    put_module_definition(
+        TENANT,
+        &message_store,
+        Definition {
+            module: role_module.to_string(),
+            published: false,
+            uses: None,
+            key_agreement: None,
+            types: BTreeMap::from([(
+                "member".to_string(),
+                Type {
+                    schema: None,
+                    data_formats: None,
+                    encryption_required: None,
+                },
+            )]),
+            structure: BTreeMap::from([(
+                "member".to_string(),
+                RuleSet {
+                    role: Some(true),
+                    key_agreement: Some(ModuleKeyAgreement {
+                        public_key_jwk: path_key_jwk(),
+                    }),
+                    ..Default::default()
+                },
+            )]),
+        },
+        ENC_T1,
+    )
+    .await;
+    put_retained_audience(
+        &message_store,
+        role_module,
+        "member",
+        "",
+        "role-key",
+        ENC_T2,
+    )
+    .await;
+    let write = enc_module_write(
+        ENC_NOTES_MODULE,
+        "note",
+        ENC_WRITE_TIME,
+        Some(envelope_with_entries(vec![
+            module_path_entry(&path_key_id()),
+            role_audience_entry_for(role_module, "member", "role-key"),
+        ])),
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+    let reply = handler.run(TENANT, &write, write_data()).await;
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
+}
+
+// Covers: ENBOX-ENC-001, DWN-PROTO-005
+#[tokio::test]
+async fn records_write_role_audience_rejects_an_unresolvable_cross_module_alias() {
+    let (message_store, data_store) = open_stores().await;
+    put_module_definition(
+        TENANT,
+        &message_store,
+        enc_role_definition("roles:member", vec![Can::Read], None),
+        ENC_T1,
+    )
+    .await;
+    let write = enc_module_write(
+        ENC_NOTES_MODULE,
+        "note",
+        ENC_WRITE_TIME,
+        Some(envelope_with_entries(vec![module_path_entry(
+            &path_key_id(),
         )])),
-    ] {
-        let (message_store, data_store) = open_stores().await;
-        let resolved = uses.is_some();
-        put_module_definition(
-            TENANT,
-            &message_store,
-            enc_role_definition("roles:member", vec![Can::Read], uses),
-            ENC_T1,
-        )
-        .await;
-        let mut entries = vec![module_path_entry(&path_key_id())];
-        if resolved {
-            put_retained_audience(
-                &message_store,
-                role_module,
-                "member",
-                "",
-                "role-key",
-                ENC_T2,
-            )
-            .await;
-            entries.push(role_audience_entry_for(role_module, "member", "role-key"));
-        }
-        let write = enc_module_write(
-            ENC_NOTES_MODULE,
-            "note",
-            ENC_WRITE_TIME,
-            Some(envelope_with_entries(entries)),
-        )
-        .await;
-        let handler = enc_test_handler(message_store, data_store).await;
-        let reply = handler.run(TENANT, &write, write_data()).await;
-        assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-    }
+    )
+    .await;
+    let handler = enc_test_handler(message_store, data_store).await;
+    let reply = handler.run(TENANT, &write, write_data()).await;
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureInvalidRefAlias"),
+        "{}",
+        reply.status.detail
+    );
 }
 
 // Covers: ENBOX-ENC-001
@@ -4893,74 +4955,20 @@ fn composed_definition() -> Definition {
                 encryption_required: Some(true),
             },
         )]),
-        structure: BTreeMap::from([
-            (
-                "post".to_string(),
-                RuleSet {
-                    reference: Some("blog:post".to_string()),
-                    rules: BTreeMap::from([("comment".to_string(), keyed_rule_set())]),
-                    ..Default::default()
-                },
-            ),
-            (
-                "article".to_string(),
-                RuleSet {
-                    reference: Some("blog:post".to_string()),
-                    ..Default::default()
-                },
-            ),
-        ]),
-    }
-}
-
-fn keyed_blog_definition() -> Definition {
-    Definition {
-        module: REF_BLOG_MODULE.to_string(),
-        published: true,
-        uses: None,
-        key_agreement: Some(ModuleKeyAgreement {
-            public_key_jwk: path_key_jwk(),
-        }),
-        types: BTreeMap::from([(
+        structure: BTreeMap::from([(
             "post".to_string(),
-            Type {
-                schema: None,
-                data_formats: None,
-                encryption_required: Some(true),
+            RuleSet {
+                reference: Some("blog:post".to_string()),
+                rules: BTreeMap::from([("comment".to_string(), keyed_rule_set())]),
+                ..Default::default()
             },
         )]),
-        structure: BTreeMap::from([("post".to_string(), keyed_rule_set())]),
     }
 }
 
-// Covers: DWN-PROTO-004, DWN-PROTO-005
+// Covers: DWN-PROTO-001
 #[tokio::test]
-async fn records_write_ref_position_follows_referenced_type_policy() {
-    let (message_store, data_store) = open_stores().await;
-    put_module_definition(
-        "did:example:alice",
-        &message_store,
-        referenced_blog_definition(true),
-        ENC_T1,
-    )
-    .await;
-    put_module_definition(
-        "did:example:alice",
-        &message_store,
-        composed_definition(),
-        ENC_T1,
-    )
-    .await;
-    let handler = enc_test_handler(message_store, data_store).await;
-
-    let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, None).await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationEncryptionRequired")
-    );
-
+async fn records_write_at_a_ref_attachment_root_is_rejected_for_the_tenant() {
     let (message_store, data_store) = open_stores().await;
     put_module_definition(
         "did:example:alice",
@@ -4978,64 +4986,12 @@ async fn records_write_ref_position_follows_referenced_type_policy() {
     .await;
     let handler = enc_test_handler(message_store, data_store).await;
 
-    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
-    let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, Some(envelope)).await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationEncryptionNotAllowed")
-    );
-}
-
-// Covers: DWN-PROTO-001, DWN-PROTO-005
-#[tokio::test]
-async fn records_write_ref_roots_reject_referenced_encryption_and_unknown_local_key() {
-    let (message_store, data_store) = open_stores().await;
-    put_module_definition(
-        "did:example:alice",
-        &message_store,
-        keyed_blog_definition(),
-        ENC_T1,
-    )
-    .await;
-    put_module_definition(
-        "did:example:alice",
-        &message_store,
-        composed_definition(),
-        ENC_T1,
-    )
-    .await;
-    let handler = enc_test_handler(message_store, data_store).await;
-
-    // The referenced `post` type requires encryption, but a `$ref` node carries
-    // no `$keyAgreement`, so a plaintext write is rejected and an encrypted one
-    // has no key namespace to protect it.
     let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, None).await;
     let reply = handler.run("did:example:alice", &write, write_data()).await;
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationEncryptionRequired")
-    );
-
-    let envelope = envelope_with_entries(vec![module_path_entry(&path_key_id())]);
-    let write = enc_module_write(COMPOSED_MODULE, "post", ENC_WRITE_TIME, Some(envelope)).await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationEncryptionKeyAgreementMissing")
-    );
-
-    // The `$ref` position type is looked up by the local structure key, so a
-    // renamed key with no matching referenced type is invalid.
-    let write = enc_module_write(COMPOSED_MODULE, "article", ENC_WRITE_TIME, None).await;
-    let reply = handler.run("did:example:alice", &write, write_data()).await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationInvalidType")
+        Some("ModuleAuthorizationRefNodeWriteNotAllowed")
     );
 }
 

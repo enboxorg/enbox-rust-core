@@ -128,7 +128,7 @@ where
         recipient,
         &id.scope.module,
         &id.scope.role_path,
-        Some(id.scope.context_id.as_str()),
+        id.scope.context_id.as_str(),
         message_store,
     )
     .await

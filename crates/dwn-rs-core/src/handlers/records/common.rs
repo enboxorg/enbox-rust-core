@@ -20,9 +20,11 @@ use crate::filters::{Filter, FilterKey, Filters, RangeFilter};
 use crate::handlers::configure::fetch_module_definition;
 use crate::handlers::modules::configure::ModuleDefinitionLookupError;
 use crate::handlers::records::subscribe::RecordsSubscribeReply;
-use crate::interfaces::messages::modules::{
-    self as module_types, Action, Can, Definition, RuleSet, Who,
+use crate::interfaces::messages::modules::graph::{
+    role_audience_context_id, ResolvedActorReference, ResolvedModuleGraph, ResolvedModuleNode,
+    ResolvedModuleNodeKind, ResolvedRoleReference,
 };
+use crate::interfaces::messages::modules::{self as module_types, Action, Can, Definition, Who};
 use crate::interfaces::replies::Status;
 use crate::permissions::{self, AuthorizationContext};
 use crate::replies::records::{QueryEntry, Subscribe};
@@ -741,15 +743,16 @@ pub(crate) fn published_sort_name(
 }
 
 /// Reads the `$recordLimit` max governing a module path at the request
-/// timestamp. A missing module or absent rule means no restriction; any
-/// other failure is an error, never unrestricted visibility.
-async fn record_limit_max<MessageStore>(
+/// timestamp, with the resolved physical depth that scopes occupancy. A
+/// missing module or absent rule means no restriction; any other failure is an
+/// error, never unrestricted visibility.
+async fn record_limit_policy<MessageStore>(
     tenant: &str,
     module: &str,
     module_path: &str,
     message_store: &MessageStore,
     request_timestamp: &str,
-) -> Result<Option<u64>, String>
+) -> Result<Option<(u64, usize)>, String>
 where
     MessageStore: crate::stores::MessageStore + Sync,
 {
@@ -760,11 +763,22 @@ where
             Err(ModuleDefinitionLookupError::NotFound(_)) => return Ok(None),
             Err(error) => return Err(error.to_string()),
         };
-    let rule_set = match definition.rule_at(module_path) {
-        Some(rule_set) => rule_set,
-        None => return Ok(None),
+    let graph = crate::handlers::records::policy::load_definition_graph(
+        definition,
+        tenant,
+        message_store,
+        Some(request_timestamp),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(node) = graph.record_node(module_path) else {
+        return Ok(None);
     };
-    Ok(rule_set.record_limit.as_ref().map(|rule| rule.max))
+    Ok(node
+        .rule_set
+        .record_limit
+        .as_ref()
+        .map(|rule| (rule.max, node.physical_depth)))
 }
 
 /// Derives the read-time occupancy policy for a collection filter, mirroring
@@ -785,7 +799,7 @@ where
     else {
         return Ok(None);
     };
-    let Some(max) = record_limit_max(
+    let Some((max, physical_depth)) = record_limit_policy(
         tenant,
         module,
         module_path,
@@ -803,7 +817,9 @@ where
         parent_id: None,
         max,
     };
-    if !module_path.contains('/') {
+    // Root paths carry no occupancy scope; nested paths group by physical
+    // direct-parent context rather than declared path depth.
+    if physical_depth == 1 {
         return Ok(Some(policy));
     }
     if let Some(parent_id) = filter.parent_id.as_deref() {
@@ -816,8 +832,7 @@ where
     // least one segment on a nested path); deeper selections scope the
     // subtree itself.
     let context_depth = context_id.split('/').count();
-    let path_depth = module_path.split('/').count();
-    policy.context_id = Some(if context_depth == path_depth {
+    policy.context_id = Some(if context_depth == physical_depth {
         parent_context_id(context_id).unwrap_or_default()
     } else {
         context_id.to_string()
@@ -838,7 +853,7 @@ where
     MessageStore: crate::stores::MessageStore + Sync,
 {
     let descriptor = records_write_descriptor(message).map_err(|detail| detail.to_string())?;
-    let Some(max) = record_limit_max(
+    let Some((max, physical_depth)) = record_limit_policy(
         tenant,
         &descriptor.module,
         &descriptor.module_path,
@@ -856,6 +871,9 @@ where
         parent_id: None,
         max,
     };
+    if physical_depth == 1 {
+        return Ok(Some(policy));
+    }
     if let Some(context_id) = context_id(message) {
         let parent = parent_context_id(&context_id).unwrap_or_default();
         if !parent.is_empty() {
@@ -1092,21 +1110,17 @@ impl ModuleAuthorizationError {
 
 /// Verifies the role named by `moduleRole` and returns its resolved address.
 ///
-/// Mirrors the parity target's `verifyInvokedRole`: a local invoked role must
-/// be a `$role` node in the composing definition, and an `alias:path` role
-/// resolves through `uses` to the referenced module. Either way the role's
-/// context source must carry its ancestor depth, and `author` must hold an
-/// active role record. A role that fails any check is rejected before action
-/// rules are matched, so a `who` rule cannot mask a bad role invocation.
+/// The invoked role resolves in the target module's lexical namespace through
+/// the dependency graph. Its audience context comes from the resolved physical
+/// parent depth, and `author` must hold an active role record for the owning
+/// module path in that context.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn verify_invoked_role<MessageStore>(
     tenant: &str,
     author: &str,
     invoked_role: Option<&str>,
-    module: &str,
+    graph: &ResolvedModuleGraph,
     context_id: Option<&str>,
-    definition: &Definition,
-    evaluation_timestamp: &str,
     message_store: &MessageStore,
 ) -> Result<Option<ResolvedModuleRole>, ModuleAuthorizationError>
 where
@@ -1116,68 +1130,15 @@ where
         return Ok(None);
     };
 
-    let parsed = module_types::parse_cross_module_ref(invoked_role);
-    let (role_module, role_path) = match &parsed {
-        Some(parsed) => {
-            let role_module = definition
-                .uses
-                .as_ref()
-                .and_then(|uses| uses.get(parsed.alias))
-                .ok_or_else(|| {
-                    DwnError::new(
-                        DwnErrorCode::ModuleAuthorizationNotARole,
-                        format!(
-                            "cross-module role alias '{}' in '{invoked_role}' does not exist in the module's uses map",
-                            parsed.alias
-                        ),
-                    )
-                })?
-                .clone();
-            (role_module, parsed.module_path.to_string())
-        }
-        None => (module.to_string(), invoked_role.to_string()),
-    };
-
-    // The role path must be a `$role` node in the definition that governs it:
-    // the composing definition for a local role, the referenced definition at
-    // the same evaluation timestamp for an `alias:path` role.
-    let is_role = match &parsed {
-        Some(_) => {
-            let referenced = fetch_module_definition(
-                tenant,
-                &role_module,
-                message_store,
-                Some(evaluation_timestamp),
-            )
-            .await
-            .map_err(|error| match error {
-                ModuleDefinitionLookupError::NotFound(_) => ModuleAuthorizationError::Code(
-                    DwnError::new(
-                        DwnErrorCode::ModuleAuthorizationModuleNotFound,
-                        format!(
-                            "referenced module '{role_module}' is not defined at {evaluation_timestamp}"
-                        ),
-                    ),
-                ),
-                other => ModuleAuthorizationError::internal(other.to_string()),
-            })?;
-            referenced
-                .rule_at(&role_path)
-                .is_some_and(|rule_set| rule_set.role == Some(true))
-        }
-        None => definition
-            .rule_at(&role_path)
-            .is_some_and(|rule_set| rule_set.role == Some(true)),
-    };
-    if !is_role {
-        return Err(DwnError::new(
+    let role = graph.resolve_invoked_role(invoked_role).map_err(|error| {
+        ModuleAuthorizationError::Code(DwnError::new(
             DwnErrorCode::ModuleAuthorizationNotARole,
-            format!("module path '{invoked_role}' does not match a role record type"),
-        )
-        .into());
-    }
+            format!("module path '{invoked_role}' does not resolve to a role record: {error}"),
+        ))
+    })?;
 
-    if role_audience_context_id(&role_path, context_id).is_none() {
+    let Some(audience_context) = role_audience_context_id(role.parent_physical_depth, context_id)
+    else {
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationMissingContextId,
             format!(
@@ -1185,14 +1146,14 @@ where
             ),
         )
         .into());
-    }
+    };
 
     let role_record = query_role_records(
         tenant,
         author,
-        &role_module,
-        &role_path,
-        context_id,
+        &role.owning_module_uri,
+        &role.owning_module_path,
+        &audience_context,
         message_store,
     )
     .await
@@ -1200,23 +1161,26 @@ where
     let Some(role_record) = role_record else {
         return Err(DwnError::new(
             DwnErrorCode::ModuleAuthorizationMatchingRoleRecordNotFound,
-            format!("no matching role record found for module path '{role_path}'"),
+            format!(
+                "no matching role record found for module path '{}'",
+                role.owning_module_path
+            ),
         )
         .into());
     };
 
     Ok(Some(ResolvedModuleRole {
-        module: role_module,
-        module_path: role_path,
-        context_id_prefix: context_id.map(str::to_string),
+        module: role.owning_module_uri.clone(),
+        module_path: role.owning_module_path.clone(),
+        context_id_prefix: (!audience_context.is_empty()).then_some(audience_context),
         role_record_id: record_id(&role_record).unwrap_or_default(),
     }))
 }
 
-/// Authorizes a role-invoking collection filter against the module
-/// definition governing `request_timestamp` (`DWN-PROTO-004`), never blindly
-/// the newest configuration. Every lookup failure denies: a missing
-/// definition cannot prove role authority.
+/// Authorizes a role-invoking collection filter against the module graph
+/// governing `request_timestamp` (`DWN-PROTO-004`), never blindly the newest
+/// configuration. Every lookup failure denies: a missing definition cannot
+/// prove role authority.
 pub(crate) async fn authorize_module_query_or_subscribe<MessageStore>(
     tenant: &str,
     filter: &RecordsFilter,
@@ -1243,10 +1207,24 @@ where
     )
     .await
     .map_err(|err| err.to_string())?;
+    let graph = crate::handlers::records::policy::load_definition_graph(
+        definition,
+        tenant,
+        message_store,
+        Some(request_timestamp),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
 
-    let rule_set = definition.rule_at(module_path).ok_or_else(|| {
-        format!("ModuleAuthorizationInvalidModulePath: {module_path} is not defined")
-    })?;
+    let node = graph
+        .record_node(module_path)
+        .filter(|node| node.kind == ResolvedModuleNodeKind::Record)
+        .ok_or_else(|| {
+            DwnError::new(
+                DwnErrorCode::ModuleAuthorizationMissingRuleSet,
+                format!("no local record type defined for modulePath {module_path}"),
+            )
+        })?;
 
     let invoked_role = auth_ctx
         .module_role()
@@ -1258,57 +1236,28 @@ where
         _ => Can::Read,
     };
 
-    resolve_query_or_subscribe_role(
-        tenant,
-        &auth_ctx.author,
-        invoked_role,
-        module,
-        filter.context_id.as_deref(),
-        can,
-        rule_set,
-        &definition,
-        request_timestamp,
-        message_store,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn resolve_query_or_subscribe_role<MessageStore>(
-    tenant: &str,
-    author: &str,
-    invoked_role: &str,
-    module: &str,
-    context_id_prefix: Option<&str>,
-    can: Can,
-    rule_set: &RuleSet,
-    definition: &Definition,
-    evaluation_timestamp: &str,
-    message_store: &MessageStore,
-) -> Result<ResolvedModuleRole, ModuleAuthorizationError>
-where
-    MessageStore: crate::stores::MessageStore + Sync,
-{
     // Verify the invoked role before matching action rules, so a malformed or
     // unheld role is rejected even when no rule would have authorized it.
     let resolved = verify_invoked_role(
         tenant,
-        author,
+        &auth_ctx.author,
         Some(invoked_role),
-        module,
-        context_id_prefix,
-        definition,
-        evaluation_timestamp,
+        &graph,
+        filter.context_id.as_deref(),
         message_store,
     )
     .await?
     .expect("invoked role is present");
 
-    let rule_allows = rule_set.actions.iter().any(|action| match action {
-        Action::Role(action) => action.role == invoked_role && action.can.contains(&can),
-        // An `anyone` rule authorizes regardless of the invoked role, matching
-        // the actor-independent evaluation used for the other methods.
-        Action::Who(action) => action.who == Who::Anyone && action.can.contains(&can),
+    let invoked = graph.resolve_invoked_role(invoked_role).ok();
+    let rule_allows = node.actions.iter().any(|action| {
+        if !action.rule.can().contains(&can) {
+            return false;
+        }
+        match &action.rule {
+            Action::Role(_) => same_role_address(invoked.as_ref(), action.resolved_role.as_ref()),
+            Action::Who(who) => who.who == Who::Anyone,
+        }
     });
     if !rule_allows {
         return Err(DwnError::new(
@@ -1317,8 +1266,21 @@ where
         )
         .into());
     }
-
+    let _ = resolved;
     Ok(resolved)
+}
+
+fn same_role_address(
+    left: Option<&ResolvedRoleReference>,
+    right: Option<&ResolvedRoleReference>,
+) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            left.owning_module_uri == right.owning_module_uri
+                && left.owning_module_path == right.owning_module_path
+        }
+        _ => false,
+    }
 }
 
 pub(crate) async fn authorize_against_module<MessageStore>(
@@ -1361,23 +1323,52 @@ where
         }
         other => ModuleAuthorizationError::internal(other.to_string()),
     })?;
-    let rule_set = definition.rule_at(module_path.as_str()).ok_or_else(|| {
-        DwnError::new(
-            DwnErrorCode::ModuleAuthorizationIncorrectModulePath,
-            format!("{module_path} is not defined"),
-        )
-    })?;
+    let graph = crate::handlers::records::policy::load_definition_graph(
+        definition,
+        tenant,
+        message_store,
+        Some(&evaluation_timestamp),
+    )
+    .await
+    .map_err(|err| ModuleAuthorizationError::internal(err.to_string()))?;
+
+    let for_write = matches!(kind, RecordsAuthorizationKind::Write);
+    let node = match graph.record_node(&module_path) {
+        Some(node) if node.kind == ResolvedModuleNodeKind::Record => node,
+        Some(_) => {
+            let code = if for_write {
+                DwnErrorCode::ModuleAuthorizationRefNodeWriteNotAllowed
+            } else {
+                DwnErrorCode::ModuleAuthorizationMissingRuleSet
+            };
+            return Err(DwnError::new(
+                code,
+                format!("modulePath '{module_path}' is a virtual reference, not a local record."),
+            )
+            .into());
+        }
+        None => {
+            let code = if for_write {
+                DwnErrorCode::ModuleAuthorizationInvalidType
+            } else {
+                DwnErrorCode::ModuleAuthorizationMissingRuleSet
+            };
+            return Err(DwnError::new(
+                code,
+                format!("no local record type defined for modulePath {module_path}"),
+            )
+            .into());
+        }
+    };
+
     let invoked_role = auth.module_role();
     if invoked_role.is_some() {
-        let context = context_id(message);
         verify_invoked_role(
             tenant,
             author,
             invoked_role,
-            &module,
-            context.as_deref(),
-            &definition,
-            &evaluation_timestamp,
+            &graph,
+            context_id(message).as_deref(),
             message_store,
         )
         .await?;
@@ -1386,39 +1377,38 @@ where
         .await
         .map_err(ModuleAuthorizationError::internal)?;
     let actions =
-        actions_for_message_kind(tenant, message, author, kind, rule_set, message_store).await?;
-    authorize_actions(
-        author,
-        invoked_role,
-        &actions,
-        rule_set,
-        &chain,
-        Some(&definition),
-    )?;
+        actions_for_message_kind(tenant, message, author, kind, &node.rule_set, message_store)
+            .await?;
+    authorize_actions(author, invoked_role, &graph, &actions, node, &chain)?;
     Ok(())
 }
 
+/// Matches the invoked rule against the node's declared actions.
 pub(crate) fn authorize_actions(
     author: &str,
     invoked_role: Option<&str>,
+    graph: &ResolvedModuleGraph,
     actions: &[Can],
-    rule_set: &RuleSet,
+    node: &ResolvedModuleNode,
     record_chain: &[Message<Descriptor>],
-    definition: Option<&Definition>,
 ) -> Result<(), DwnError> {
-    for action in &rule_set.actions {
-        match action {
-            Action::Who(action) => {
-                if !action.can.iter().any(|can| actions.contains(can)) {
+    let invoked = invoked_role.and_then(|raw| graph.resolve_invoked_role(raw).ok());
+    for action in &node.actions {
+        if !action.rule.can().iter().any(|can| actions.contains(can)) {
+            continue;
+        }
+        match &action.rule {
+            Action::Who(who_rule) => {
+                if who_rule.who == Who::Anyone {
+                    return Ok(());
+                }
+                // An invoked role replaces actor selection: only an `anyone`
+                // rule or an exactly matching `role` rule can authorize it.
+                if invoked.is_some() {
                     continue;
                 }
-                match action.who {
-                    Who::Anyone => return Ok(()),
-                    // An invoked role replaces actor selection: only an
-                    // `anyone` rule or an exactly matching `role` rule can
-                    // authorize it, never a `who` selection.
-                    Who::Author | Who::Recipient if invoked_role.is_some() => {}
-                    Who::Recipient if action.of.is_none() => {
+                match (&who_rule.who, &action.resolved_actor) {
+                    (Who::Recipient, None) => {
                         if record_chain
                             .last()
                             .and_then(|message| records_write_descriptor(message).ok())
@@ -1428,25 +1418,16 @@ pub(crate) fn authorize_actions(
                             return Ok(());
                         }
                     }
-                    Who::Author | Who::Recipient => {
-                        if check_actor(
-                            author,
-                            &action.who,
-                            action.of.as_deref(),
-                            record_chain,
-                            definition,
-                        ) {
-                            return Ok(());
-                        }
+                    (_, Some(actor))
+                        if actor_matches(author, &who_rule.who, actor, record_chain) =>
+                    {
+                        return Ok(());
                     }
+                    _ => {}
                 }
             }
-            Action::Role(action) => {
-                if !action.can.iter().any(|can| actions.contains(can)) {
-                    continue;
-                }
-                // The invoked role was verified before rule iteration.
-                if invoked_role == Some(action.role.as_str()) {
+            Action::Role(_) => {
+                if same_role_address(invoked.as_ref(), action.resolved_role.as_ref()) {
                     return Ok(());
                 }
             }
@@ -1456,6 +1437,35 @@ pub(crate) fn authorize_actions(
         DwnErrorCode::ModuleAuthorizationActionNotAllowed,
         format!("inbound message action for {author} is not allowed"),
     ))
+}
+
+/// Whether the record at the resolved actor's physical depth is the named
+/// ancestor and satisfies the actor selector.
+fn actor_matches(
+    author: &str,
+    who: &Who,
+    actor: &ResolvedActorReference,
+    record_chain: &[Message<Descriptor>],
+) -> bool {
+    let Some(index) = actor.physical_depth.checked_sub(1) else {
+        return false;
+    };
+    let Some(record) = record_chain.get(index) else {
+        return false;
+    };
+    let Ok(descriptor) = records_write_descriptor(record) else {
+        return false;
+    };
+    if descriptor.module != actor.owning_module_uri
+        || descriptor.module_path != actor.owning_module_path
+    {
+        return false;
+    }
+    match who {
+        Who::Author => extract_author(record).as_deref() == Some(author),
+        Who::Recipient => descriptor.recipient.as_deref() == Some(author),
+        Who::Anyone => true,
+    }
 }
 
 pub(crate) fn check_actor(
@@ -1495,19 +1505,18 @@ pub(crate) fn check_actor(
 }
 
 /// The retained, latest-state role record that gives `recipient` the role
-/// `role_path` in `module`, scoped by the context source `context_id`.
+/// `role_path` in `module`, scoped by the role-audience `audience_context`.
 ///
-/// The context dimension follows role depth: a root role has none, and a
-/// nested role is scoped by the ancestor context at its parent's depth. A
-/// nested role with no usable ancestor context is unaddressable, and no record
-/// can satisfy it — a negative answer, not an unscoped search that would match
-/// role holders in unrelated contexts.
+/// A root role has an empty audience context and applies tenant-wide; a nested
+/// role is scoped by the ancestor context at its physical parent depth. The
+/// caller resolves that context, so this lookup never defaults an unscoped
+/// search that would match role holders in unrelated contexts.
 pub(crate) async fn query_role_records<MessageStore>(
     tenant: &str,
     recipient: &str,
     module: &str,
     role_path: &str,
-    context_id: Option<&str>,
+    audience_context: &str,
     message_store: &MessageStore,
 ) -> Result<Option<Message<Descriptor>>, String>
 where
@@ -1521,14 +1530,11 @@ where
         ("recipient", string_filter(recipient)),
         ("isLatestBaseState", bool_filter(true)),
     ]);
-    let Some(context_prefix) = role_audience_context_id(role_path, context_id) else {
-        return Ok(None);
-    };
-    if !context_prefix.is_empty() {
+    if !audience_context.is_empty() {
         filter.insert(
             FilterKey::Index("contextId".to_string()),
             Filter::Subtree(SubtreeFilter {
-                subtree: context_prefix,
+                subtree: audience_context.to_string(),
             }),
         );
     }
@@ -1545,32 +1551,14 @@ where
         .map_err(|err| err.to_string())
 }
 
-/// The audience context shared by role authorization and encrypted-record
-/// admission. Root roles use an explicit empty context; nested roles use the
-/// ancestor prefix at their parent depth.
-pub(crate) fn role_audience_context_id(
-    role_path: &str,
-    context_id: Option<&str>,
-) -> Option<String> {
-    let ancestor_count = role_path.split('/').count().saturating_sub(1);
-    if ancestor_count == 0 {
-        return Some(String::new());
-    }
-    let segments: Vec<&str> = context_id?.split('/').collect();
-    if segments.len() < ancestor_count || segments.iter().any(|segment| segment.is_empty()) {
-        return None;
-    }
-    Some(segments[..ancestor_count].join("/"))
-}
-
-/// Whether `recipient` holds `role_path` in `module`, within the context
-/// named by `context_id`. See [`query_role_records`] for the context rules.
+/// Whether `recipient` holds `role_path` in `module`, within the resolved
+/// audience context. See [`query_role_records`].
 pub(crate) async fn role_record_exists<MessageStore>(
     tenant: &str,
     recipient: &str,
     module: &str,
     role_path: &str,
-    context_id: Option<&str>,
+    audience_context: &str,
     message_store: &MessageStore,
 ) -> Result<bool, String>
 where
@@ -1581,7 +1569,7 @@ where
         recipient,
         module,
         role_path,
-        context_id,
+        audience_context,
         message_store,
     )
     .await
@@ -2094,7 +2082,8 @@ impl DescriptorMethod for RecordsWriteDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interfaces::messages::modules::ActionRole;
+    use crate::interfaces::messages::modules::graph::resolve_module_graph;
+    use crate::interfaces::messages::modules::{RuleSet, Type};
     use crate::stores::{memory::MemoryMessageStore, MessageQueryResult, MessageStore};
     use serde_json::json;
 
@@ -2103,14 +2092,22 @@ mod tests {
     const ROLE_TEST_MODULE: &str = "https://example.com/module/chat";
     const ROLE_TEST_TIME: &str = "2025-01-01T00:00:00.000000Z";
 
-    fn role_rule(role: &str, can: Vec<Can>) -> RuleSet {
-        RuleSet {
-            actions: vec![Action::Role(ActionRole {
-                role: role.to_string(),
-                can,
-            })],
-            ..Default::default()
+    fn text_type() -> Type {
+        Type {
+            schema: None,
+            data_formats: None,
+            encryption_required: None,
         }
+    }
+
+    fn test_graph(definition: Definition, dependency: Option<Definition>) -> ResolvedModuleGraph {
+        let lookup = move |uri: &str| {
+            dependency
+                .as_ref()
+                .filter(|dependency| dependency.module == uri)
+                .cloned()
+        };
+        resolve_module_graph(definition, &lookup, true).expect("test graph must resolve")
     }
 
     fn role_definition(uses: Option<BTreeMap<String, String>>) -> Definition {
@@ -2119,7 +2116,10 @@ mod tests {
             published: false,
             uses,
             key_agreement: None,
-            types: BTreeMap::new(),
+            types: BTreeMap::from([
+                ("thread".to_string(), text_type()),
+                ("participant".to_string(), text_type()),
+            ]),
             structure: BTreeMap::from([(
                 "thread".to_string(),
                 RuleSet {
@@ -2208,46 +2208,37 @@ mod tests {
             "role-record-1",
         )
         .await;
+        let graph = test_graph(role_definition(None), None);
 
-        let resolved = resolve_query_or_subscribe_role(
+        let resolved = verify_invoked_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
-            "thread/participant",
-            ROLE_TEST_MODULE,
+            Some("thread/participant"),
+            &graph,
             Some("thread-1/message-1"),
-            Can::Read,
-            &role_rule("thread/participant", vec![Can::Read]),
-            &role_definition(None),
-            ROLE_TEST_TIME,
             &store,
         )
         .await
-        .expect("active role must authorize");
+        .expect("active role must authorize")
+        .expect("invoked role must resolve");
 
         assert_eq!(resolved.module, ROLE_TEST_MODULE);
         assert_eq!(resolved.module_path, "thread/participant");
-        assert_eq!(
-            resolved.context_id_prefix.as_deref(),
-            Some("thread-1/message-1")
-        );
+        assert_eq!(resolved.context_id_prefix.as_deref(), Some("thread-1"));
         assert_eq!(resolved.role_record_id, "role-record-1");
     }
 
     #[tokio::test]
     async fn query_role_resolution_rejects_missing_or_wrong_role() {
         let store = MemoryMessageStore::default();
-        let definition = role_definition(None);
+        let graph = test_graph(role_definition(None), None);
 
-        let missing_record = resolve_query_or_subscribe_role(
+        let missing_record = verify_invoked_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
-            "thread/participant",
-            ROLE_TEST_MODULE,
+            Some("thread/participant"),
+            &graph,
             Some("thread-1/message-1"),
-            Can::Read,
-            &role_rule("thread/participant", vec![Can::Read]),
-            &definition,
-            ROLE_TEST_TIME,
             &store,
         )
         .await;
@@ -2262,35 +2253,16 @@ mod tests {
         )
         .await;
 
-        let wrong_role = resolve_query_or_subscribe_role(
+        let wrong_role = verify_invoked_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
-            "thread/moderator",
-            ROLE_TEST_MODULE,
+            Some("thread/moderator"),
+            &graph,
             Some("thread-1/message-1"),
-            Can::Read,
-            &role_rule("thread/participant", vec![Can::Read]),
-            &definition,
-            ROLE_TEST_TIME,
             &store,
         )
         .await;
         assert!(wrong_role.is_err());
-
-        let wrong_action = resolve_query_or_subscribe_role(
-            ROLE_TEST_TENANT,
-            ROLE_TEST_AUTHOR,
-            "thread/participant",
-            ROLE_TEST_MODULE,
-            Some("thread-1/message-1"),
-            Can::Read,
-            &role_rule("thread/participant", vec![Can::Create]),
-            &definition,
-            ROLE_TEST_TIME,
-            &store,
-        )
-        .await;
-        assert!(wrong_action.is_err());
     }
 
     #[tokio::test]
@@ -2312,7 +2284,10 @@ mod tests {
             published: false,
             uses: None,
             key_agreement: None,
-            types: BTreeMap::new(),
+            types: BTreeMap::from([
+                ("team".to_string(), text_type()),
+                ("member".to_string(), text_type()),
+            ]),
             structure: BTreeMap::from([(
                 "team".to_string(),
                 RuleSet {
@@ -2330,7 +2305,7 @@ mod tests {
         crate::testing::put_module_definition(
             ROLE_TEST_TENANT,
             &store,
-            roles_definition,
+            roles_definition.clone(),
             ROLE_TEST_TIME,
         )
         .await;
@@ -2339,20 +2314,18 @@ mod tests {
             "roles".to_string(),
             ROLES_MODULE.to_string(),
         )])));
-        let resolved = resolve_query_or_subscribe_role(
+        let graph = test_graph(definition, Some(roles_definition));
+        let resolved = verify_invoked_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
-            "roles:team/member",
-            ROLE_TEST_MODULE,
+            Some("roles:team/member"),
+            &graph,
             Some("team-1/thread-1"),
-            Can::Read,
-            &role_rule("roles:team/member", vec![Can::Read]),
-            &definition,
-            ROLE_TEST_TIME,
             &store,
         )
         .await
-        .expect("cross-module role must resolve");
+        .expect("cross-module role must resolve")
+        .expect("invoked role must resolve");
 
         assert_eq!(resolved.module, ROLES_MODULE);
         assert_eq!(resolved.module_path, "team/member");
@@ -2370,35 +2343,28 @@ mod tests {
             "role-record-1",
         )
         .await;
+        let graph = test_graph(role_definition(None), None);
 
-        let unknown_alias = resolve_query_or_subscribe_role(
+        let unknown_alias = verify_invoked_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
-            "roles:team/member",
-            ROLE_TEST_MODULE,
+            Some("roles:team/member"),
+            &graph,
             Some("team-1/thread-1"),
-            Can::Read,
-            &role_rule("roles:team/member", vec![Can::Read]),
-            &role_definition(None),
-            ROLE_TEST_TIME,
             &store,
         )
         .await;
         assert!(unknown_alias
             .expect_err("unknown alias must fail")
             .to_string()
-            .contains("does not exist in the module's uses map"));
+            .contains("no alias 'roles'"));
 
-        let sibling_context = resolve_query_or_subscribe_role(
+        let sibling_context = verify_invoked_role(
             ROLE_TEST_TENANT,
             ROLE_TEST_AUTHOR,
-            "thread/participant",
-            ROLE_TEST_MODULE,
+            Some("thread/participant"),
+            &graph,
             Some("thread-2/message-1"),
-            Can::Read,
-            &role_rule("thread/participant", vec![Can::Read]),
-            &role_definition(None),
-            ROLE_TEST_TIME,
             &store,
         )
         .await;
@@ -2528,7 +2494,7 @@ mod tests {
                 "definition": {
                     "module": ROLE_TEST_MODULE,
                     "published": participant_read,
-                    "types": {},
+                    "types": { "thread": {}, "participant": {} },
                     "structure": { "thread": { "participant": participant } }
                 }
             }
@@ -2697,22 +2663,16 @@ mod tests {
 
     // Covers: DWN-PROTO-002
     #[test]
-    fn role_audience_context_uses_role_parent_depth() {
+    fn role_audience_context_uses_role_parent_physical_depth() {
+        assert_eq!(role_audience_context_id(0, None).as_deref(), Some(""));
         assert_eq!(
-            role_audience_context_id("member", None).as_deref(),
-            Some("")
-        );
-        assert_eq!(
-            role_audience_context_id("thread/participant", Some("thread-id/record-id")).as_deref(),
+            role_audience_context_id(1, Some("thread-id/record-id")).as_deref(),
             Some("thread-id")
         );
-        assert_eq!(
-            role_audience_context_id("a/b/c", Some("only-one-segment")),
-            None
-        );
-        assert_eq!(role_audience_context_id("a/b", Some("")), None);
-        assert_eq!(role_audience_context_id("a/b", Some("/")), None);
-        assert_eq!(role_audience_context_id("a/b", Some("a//b")), None);
+        assert_eq!(role_audience_context_id(3, Some("only-one-segment")), None);
+        assert_eq!(role_audience_context_id(1, Some("")), None);
+        assert_eq!(role_audience_context_id(1, Some("/")), None);
+        assert_eq!(role_audience_context_id(1, Some("a//b")), None);
     }
 
     // Covers: DWN-PROTO-001
@@ -3068,7 +3028,7 @@ mod tests {
                 "definition": {
                     "module": LIMITED_MODULE,
                     "published": false,
-                    "types": {},
+                    "types": { "post": {} },
                     "structure": {
                         "post": { "$recordLimit": { "max": max } }
                     }

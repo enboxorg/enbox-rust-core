@@ -79,10 +79,18 @@ fn threads_definition_with_participant_role(participant_role: bool) -> Definitio
                     (
                         "message".to_string(),
                         RuleSet {
-                            actions: vec![Action::Role(ActionRole {
-                                role: "thread/participant".to_string(),
-                                can: vec![Can::Create, Can::Read],
-                            })],
+                            actions: if participant_role {
+                                vec![Action::Role(ActionRole {
+                                    role: "thread/participant".to_string(),
+                                    can: vec![Can::Create, Can::Read],
+                                })]
+                            } else {
+                                vec![Action::Who(ActionWho {
+                                    who: Who::Anyone,
+                                    of: None,
+                                    can: vec![Can::Create, Can::Read],
+                                })]
+                            },
                             rules: BTreeMap::from([(
                                 "participant".to_string(),
                                 RuleSet {
@@ -539,39 +547,6 @@ async fn missing_local_parent_is_repairable() {
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&message), false),
         ReplicationApplyOutcome::Incomplete
-    );
-}
-
-// Covers: DWN-PROTO-005
-#[tokio::test]
-async fn parent_with_matching_id_in_composing_module_does_not_satisfy_cross_module_child() {
-    let fixture = composition_fixture().await;
-
-    // A record at the `$ref` attachment point is written under the composing
-    // module; a child of the referenced module must not accept it.
-    let (ref_record, ref_data) = write_record(COMMENTS, "thread", TS_THREAD, None, b"thread").await;
-    let reply = fixture
-        .write_handler
-        .run(TENANT, &ref_record, Some(ref_data))
-        .await;
-    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
-
-    let (comment, data) = write_record(
-        COMMENTS,
-        "thread/comment",
-        TS_COMMENT,
-        Some((&record_id(&ref_record), &context_id(&ref_record))),
-        b"comment",
-    )
-    .await;
-    let reply = fixture
-        .write_handler
-        .run(TENANT, &comment, Some(data))
-        .await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationParentRecordNotFound")
     );
 }
 
@@ -1468,10 +1443,17 @@ async fn cross_module_role_removed_from_referenced_definition_denies() {
         .write_handler
         .run(TENANT, &message, Some(data))
         .await;
-    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationNotARole")
+    // The consumer still references a role the stored provider no longer
+    // declares; that composition cannot resolve, so admission fails before
+    // role invocation is evaluated.
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert!(
+        reply
+            .status
+            .detail
+            .contains("ModulesConfigureRoleDoesNotExistAtGivenPath"),
+        "{}",
+        reply.status.detail
     );
 }
 
@@ -1512,9 +1494,11 @@ async fn cross_module_nested_role_query_without_context_denies() {
         let query = bob_query(COMMENTS, "thread", context_id, PARTICIPANT, TS_COMMENT).await;
         let reply = fixture.query_handler.run(TENANT, &query, None).await;
         assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+        // A `$ref` root is a virtual attachment point, never a local record
+        // with a rule set of its own.
         assert_eq!(
             reply.status.error_code.as_deref(),
-            Some("ModuleAuthorizationMissingContextId")
+            Some("ModuleAuthorizationMissingRuleSet")
         );
     }
 }
@@ -1562,7 +1546,7 @@ async fn referenced_definition_absent_is_repairable() {
     assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
     assert_eq!(
         reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationModuleNotFound")
+        Some("ModulesConfigureComposedModuleNotInstalled")
     );
     assert_eq!(
         classify_apply_reply(&reply.status, &parsed(&message), false),
@@ -1585,17 +1569,21 @@ async fn non_tenant_write_at_ref_position_is_unauthorized() {
         ..WriteSpec::new(TS_COMMENT)
     })
     .await;
-    // The `$ref` node carries no actions, so a non-tenant write is denied.
+    // A `$ref` attachment point never admits a record, for any author.
     let reply = fixture
         .write_handler
         .run(TENANT, &message, Some(bytes))
         .await;
-    assert_eq!(reply.status.code, 401, "{}", reply.status.detail);
+    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
+    assert_eq!(
+        reply.status.error_code.as_deref(),
+        Some("ModuleAuthorizationRefNodeWriteNotAllowed")
+    );
 }
 
 // Covers: DWN-PROTO-005
 #[tokio::test]
-async fn multi_segment_ref_target_makes_children_unattachable() {
+async fn multi_segment_ref_target_attaches_children_to_the_nested_target() {
     let mut message_store = TestMessageStore::default();
     let mut data_store = TestDataStore::default();
     message_store.open().await.unwrap();
@@ -1663,11 +1651,7 @@ async fn multi_segment_ref_target_makes_children_unattachable() {
     )
     .await;
     let reply = write_handler.run(TENANT, &comment, Some(data)).await;
-    assert_eq!(reply.status.code, 400, "{}", reply.status.detail);
-    assert_eq!(
-        reply.status.error_code.as_deref(),
-        Some("ModuleAuthorizationIncorrectModulePath")
-    );
+    assert_eq!(reply.status.code, 202, "{}", reply.status.detail);
 }
 
 /// The threads fixture with an encrypted `thread` type and key agreement.
@@ -1678,10 +1662,14 @@ fn encrypted_threads_definition() -> Definition {
         .get_mut("thread")
         .expect("thread type")
         .encryption_required = Some(true);
-    definition
-        .structure
-        .get_mut("thread")
-        .expect("thread rule")
+    let thread = definition.structure.get_mut("thread").expect("thread rule");
+    thread.key_agreement = Some(ModuleKeyAgreement {
+        public_key_jwk: path_key_jwk(),
+    });
+    thread
+        .rules
+        .get_mut("participant")
+        .expect("participant rule")
         .key_agreement = Some(ModuleKeyAgreement {
         public_key_jwk: path_key_jwk(),
     });
