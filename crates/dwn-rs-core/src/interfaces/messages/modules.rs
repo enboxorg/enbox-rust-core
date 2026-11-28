@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value as JsonValue;
 
@@ -12,8 +12,13 @@ use url::Url;
 use crate::encryption::ENCRYPTION_CONTROL_ROOT_PATH;
 use crate::errors::{DwnError, DwnErrorCode};
 
+pub mod graph;
+
 /// Upper bound on `$recordLimit.max`, matching the TypeScript `DwnConstant.maxRecordLimit`.
 const MAX_RECORD_LIMIT: u64 = 1_000;
+
+/// Upper bound on declared and resolved physical record nesting depth.
+pub const MAX_RECORD_NESTING_DEPTH: usize = 10;
 
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -463,6 +468,7 @@ fn validate_uses(
     uses: &BTreeMap<String, String>,
     own_module_uri: &str,
 ) -> Result<(), ModuleDefinitionError> {
+    let mut target_uris = BTreeSet::new();
     for (alias, module_uri) in uses {
         if !is_valid_uses_alias(alias) {
             return Err(module_error(
@@ -488,6 +494,13 @@ fn validate_uses(
                 ),
             ));
         }
+
+        if !target_uris.insert(module_uri.as_str()) {
+            return Err(module_error(
+                "ModulesConfigureDuplicateUsesModule",
+                format!("multiple aliases reference module '{module_uri}'; use one alias per module URI"),
+            ));
+        }
     }
     Ok(())
 }
@@ -506,6 +519,8 @@ fn validate_structure(definition: &Definition) -> Result<(), ModuleDefinitionErr
     let record_types = definition.types.keys().cloned().collect::<Vec<_>>();
     let mut roles = Vec::new();
     fetch_role_paths("", &definition.structure, &mut roles)?;
+    validate_structure_depth(&definition.structure, 0)?;
+    validate_ref_type_collisions(definition)?;
 
     validate_rule_map(
         "",
@@ -518,18 +533,65 @@ fn validate_structure(definition: &Definition) -> Result<(), ModuleDefinitionErr
     )
 }
 
+/// Rejects any declared record path deeper than the nesting cap.
+fn validate_structure_depth(
+    rules: &BTreeMap<String, RuleSet>,
+    depth: usize,
+) -> Result<(), ModuleDefinitionError> {
+    for (record_type, rule_set) in rules {
+        if record_type.starts_with('$') {
+            continue;
+        }
+        let child_depth = depth + 1;
+        if child_depth > MAX_RECORD_NESTING_DEPTH {
+            return Err(module_error(
+                "ModulesConfigureRecordNestingDepthExceeded",
+                format!("record nesting depth exceeded {MAX_RECORD_NESTING_DEPTH} levels."),
+            ));
+        }
+        validate_structure_depth(&rule_set.rules, child_depth)?;
+    }
+    Ok(())
+}
+
+/// An attachment name may not also be a declared type unless some local record
+/// node uses it, so a `$ref` node never silently rebinds a local type.
+fn validate_ref_type_collisions(definition: &Definition) -> Result<(), ModuleDefinitionError> {
+    let mut local_type_names = BTreeSet::new();
+    collect_local_type_names(&definition.structure, &mut local_type_names);
+    for (name, rule_set) in &definition.structure {
+        if rule_set.reference.is_some()
+            && definition.types.contains_key(name)
+            && !local_type_names.contains(name)
+        {
+            return Err(module_error(
+                "ModulesConfigureInvalidRefTypeCollision",
+                format!(
+                    "attachment '{name}' cannot declare a local type unless a local record node also uses that type"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn collect_local_type_names(rules: &BTreeMap<String, RuleSet>, names: &mut BTreeSet<String>) {
+    for (name, rule_set) in rules {
+        if name.starts_with('$') {
+            continue;
+        }
+        if rule_set.reference.is_none() {
+            names.insert(name.clone());
+        }
+        collect_local_type_names(&rule_set.rules, names);
+    }
+}
+
 fn fetch_role_paths(
     module_path: &str,
     rules: &BTreeMap<String, RuleSet>,
     roles: &mut Vec<String>,
 ) -> Result<(), ModuleDefinitionError> {
-    if !module_path.is_empty() && module_path.split('/').count() > 10 {
-        return Err(module_error(
-            "ModulesConfigureRecordNestingDepthExceeded",
-            "Record nesting depth exceeded 10 levels.",
-        ));
-    }
-
     for (record_type, rule_set) in rules {
         let child_path = child_module_path(module_path, record_type);
         if rule_set.role == Some(true) {
@@ -632,11 +694,21 @@ fn validate_rule_set(
         }
     }
 
-    validate_actions(module_path, &rule_set.actions, roles, uses)?;
+    validate_actions(module_path, &rule_set.actions, roles, uses, root_structure)?;
     validate_role_record_issuance(module_path, rule_set)?;
     validate_encrypted_path(module_path, rule_set, types, root_structure)?;
 
     Ok(())
+}
+
+/// Whether the rule set at `module_path` sits under a root `$ref` attachment,
+/// whose local declarations defer to graph resolution.
+fn path_starts_at_reference(module_path: &str, root_structure: &BTreeMap<String, RuleSet>) -> bool {
+    module_path
+        .split('/')
+        .next()
+        .and_then(|root| root_structure.get(root))
+        .is_some_and(|rule_set| rule_set.reference.is_some())
 }
 
 /// Rejects invalid encrypted-reader configurations for a path whose type
@@ -649,6 +721,9 @@ fn validate_encrypted_path(
     types: &BTreeMap<String, Type>,
     root_structure: &BTreeMap<String, RuleSet>,
 ) -> Result<(), ModuleDefinitionError> {
+    if module_path.is_empty() || rule_set.reference.is_some() {
+        return Ok(());
+    }
     let type_name = module_path.split('/').next_back().unwrap_or_default();
     let path_encrypted = types
         .get(type_name)
@@ -694,14 +769,12 @@ fn validate_encrypted_path(
         if !role.can.contains(&Can::Read) {
             continue;
         }
-        if parse_cross_module_ref(&role.role).is_some() {
-            return Err(module_error(
-                "ModulesConfigureInvalidEncryptedCrossModuleRole",
-                format!(
-                    "Encrypted module path '{module_path}' references cross-module read role '{}'.",
-                    role.role
-                ),
-            ));
+        // Composed and attached paths defer role key resolution to the graph.
+        if parse_cross_module_ref(&role.role).is_some()
+            || path_starts_at_reference(module_path, root_structure)
+            || path_starts_at_reference(&role.role, root_structure)
+        {
+            continue;
         }
         let role_keyed = get_rule_set_at_path(&role.role, root_structure)
             .and_then(|role_rule_set| role_rule_set.key_agreement.as_ref())
@@ -745,8 +818,7 @@ fn validate_ref_node(
         ));
     }
 
-    if !rule_set.actions.is_empty()
-        || rule_set.role.is_some()
+    if rule_set.role.is_some()
         || rule_set.size.is_some()
         || rule_set.tags.is_some()
         || rule_set.key_agreement.is_some()
@@ -761,6 +833,13 @@ fn validate_ref_node(
         ));
     }
 
+    if !rule_set.rules.keys().any(|name| !name.starts_with('$')) {
+        return Err(module_error(
+            "ModulesConfigureInvalidRefWithoutChildren",
+            format!("attachment '{module_path}' requires at least one local child record"),
+        ));
+    }
+
     Ok(())
 }
 
@@ -769,9 +848,11 @@ fn validate_actions(
     actions: &[Action],
     roles: &[String],
     uses: Option<&BTreeMap<String, String>>,
+    root_structure: &BTreeMap<String, RuleSet>,
 ) -> Result<(), ModuleDefinitionError> {
     let mut seen_roles = Vec::<String>::new();
     let mut seen_actors = Vec::<(Who, Option<String>)>::new();
+    let attached = path_starts_at_reference(module_path, root_structure);
 
     for action in actions {
         match action {
@@ -784,7 +865,10 @@ fn validate_actions(
                         "role",
                         "ModulesConfigureInvalidCrossModuleRole",
                     )?;
-                } else if !roles.iter().any(|role| role == &action.role) {
+                } else if !attached
+                    && !path_starts_at_reference(&action.role, root_structure)
+                    && !roles.iter().any(|role| role == &action.role)
+                {
                     return Err(module_error(
                         "ModulesConfigureRoleDoesNotExistAtGivenPath",
                         format!(
@@ -840,7 +924,9 @@ fn validate_actions(
                             "of",
                             "ModulesConfigureInvalidCrossModuleOf",
                         )?;
-                    } else if !module_path.is_empty()
+                    } else if !attached
+                        && !path_starts_at_reference(of, root_structure)
+                        && !module_path.is_empty()
                         && module_path != of
                         && !module_path.starts_with(&format!("{of}/"))
                     {
@@ -958,7 +1044,7 @@ fn validate_cross_module_alias(
     Ok(())
 }
 
-fn validate_normalized_module_url(value: &str) -> Result<(), ModuleDefinitionError> {
+pub(crate) fn validate_normalized_module_url(value: &str) -> Result<(), ModuleDefinitionError> {
     let normalized = normalize_module_url(value).map_err(|_| {
         module_error(
             "UrlModuleNotNormalized",

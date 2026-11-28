@@ -174,13 +174,8 @@ where
                 // A missing parent and a pruned parent are indistinguishable on the
                 // client-facing reply; the replication apply layer classifies a prune
                 // as terminal locally. See `record_has_prune`.
-                let code = if parent_module != descriptor.module {
-                    DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound
-                } else {
-                    DwnErrorCode::ModuleAuthorizationParentRecordNotFound
-                };
                 DwnError::new(
-                    code,
+                    DwnErrorCode::ModuleAuthorizationParentRecordNotFound,
                     format!(
                         "could not find parent record '{parent_id}' in module '{parent_module}'"
                     ),

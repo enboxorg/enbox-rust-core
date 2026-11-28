@@ -88,10 +88,9 @@ pub fn classify_apply_reply_with_parent_state(
             Some(DwnErrorCode::RecordsWriteNotAllowedAfterDelete) => {
                 ReplicationApplyOutcome::Superseded
             }
-            Some(
-                DwnErrorCode::ModuleAuthorizationParentRecordNotFound
-                | DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound,
-            ) if parent_pruned => ReplicationApplyOutcome::Superseded,
+            Some(DwnErrorCode::ModuleAuthorizationParentRecordNotFound) if parent_pruned => {
+                ReplicationApplyOutcome::Superseded
+            }
             Some(code) if code.is_missing_dependency() => ReplicationApplyOutcome::Incomplete,
             _ => ReplicationApplyOutcome::Invalid,
         },
@@ -117,7 +116,6 @@ where
             .as_deref()
             .and_then(|code| DwnErrorCode::try_from(code).ok()),
         Some(DwnErrorCode::ModuleAuthorizationParentRecordNotFound)
-            | Some(DwnErrorCode::ModuleAuthorizationCrossModuleParentNotFound)
     );
     if !parent_missing {
         return false;

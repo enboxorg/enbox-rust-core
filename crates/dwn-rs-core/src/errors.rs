@@ -13,8 +13,19 @@ pub enum DwnErrorCode {
     ModuleAuthorizationModuleNotFound,
     ModulesConfigureComposedModuleNotInstalled,
     ModulesConfigureReservedEncryptionControlPath,
+    ModulesConfigureDuplicateRefTarget,
+    ModulesConfigureDuplicateUsesModule,
+    ModulesConfigureIncompatibleContractUpdate,
+    ModulesConfigureInvalidRefWithoutChildren,
+    ModulesConfigureInvalidRefTypeCollision,
+    ModulesConfigureInvalidRefTargetSquash,
+    ModulesConfigureInvalidRoleAncestor,
+    ModulesConfigureInvalidUsesUpdate,
+    ModulesConfigureMaxDepthExceeded,
+    ModulesConfigureRecordNestingDepthExceeded,
     ModuleAuthorizationParentRecordNotFound,
-    ModuleAuthorizationCrossModuleParentNotFound,
+    ModuleAuthorizationRefNodeWriteNotAllowed,
+    ModuleAuthorizationMissingRuleSet,
     ModuleAuthorizationParentlessIncorrectModulePath,
     ModuleAuthorizationIncorrectModulePath,
     ModuleAuthorizationIncorrectContextId,
@@ -89,12 +100,33 @@ impl DwnErrorCode {
             Self::ModulesConfigureReservedEncryptionControlPath => {
                 "ModulesConfigureReservedEncryptionControlPath"
             }
+            Self::ModulesConfigureDuplicateRefTarget => "ModulesConfigureDuplicateRefTarget",
+            Self::ModulesConfigureDuplicateUsesModule => "ModulesConfigureDuplicateUsesModule",
+            Self::ModulesConfigureIncompatibleContractUpdate => {
+                "ModulesConfigureIncompatibleContractUpdate"
+            }
+            Self::ModulesConfigureInvalidRefWithoutChildren => {
+                "ModulesConfigureInvalidRefWithoutChildren"
+            }
+            Self::ModulesConfigureInvalidRefTypeCollision => {
+                "ModulesConfigureInvalidRefTypeCollision"
+            }
+            Self::ModulesConfigureInvalidRefTargetSquash => {
+                "ModulesConfigureInvalidRefTargetSquash"
+            }
+            Self::ModulesConfigureInvalidRoleAncestor => "ModulesConfigureInvalidRoleAncestor",
+            Self::ModulesConfigureInvalidUsesUpdate => "ModulesConfigureInvalidUsesUpdate",
+            Self::ModulesConfigureMaxDepthExceeded => "ModulesConfigureMaxDepthExceeded",
+            Self::ModulesConfigureRecordNestingDepthExceeded => {
+                "ModulesConfigureRecordNestingDepthExceeded"
+            }
             Self::ModuleAuthorizationParentRecordNotFound => {
                 "ModuleAuthorizationParentRecordNotFound"
             }
-            Self::ModuleAuthorizationCrossModuleParentNotFound => {
-                "ModuleAuthorizationCrossModuleParentNotFound"
+            Self::ModuleAuthorizationRefNodeWriteNotAllowed => {
+                "ModuleAuthorizationRefNodeWriteNotAllowed"
             }
+            Self::ModuleAuthorizationMissingRuleSet => "ModuleAuthorizationMissingRuleSet",
             Self::ModuleAuthorizationParentlessIncorrectModulePath => {
                 "ModuleAuthorizationParentlessIncorrectModulePath"
             }
@@ -255,7 +287,6 @@ impl DwnErrorCode {
             Self::ModuleAuthorizationModuleNotFound
                 | Self::ModulesConfigureComposedModuleNotInstalled
                 | Self::ModuleAuthorizationParentRecordNotFound
-                | Self::ModuleAuthorizationCrossModuleParentNotFound
                 | Self::ModuleAuthorizationParentNotFoundConstructingRecordChain
                 | Self::RecordsWriteGetInitialWriteNotFound
                 | Self::GrantAuthorizationGrantMissing
@@ -290,12 +321,33 @@ impl TryFrom<&str> for DwnErrorCode {
             "ModulesConfigureReservedEncryptionControlPath" => {
                 Ok(Self::ModulesConfigureReservedEncryptionControlPath)
             }
+            "ModulesConfigureDuplicateRefTarget" => Ok(Self::ModulesConfigureDuplicateRefTarget),
+            "ModulesConfigureDuplicateUsesModule" => Ok(Self::ModulesConfigureDuplicateUsesModule),
+            "ModulesConfigureIncompatibleContractUpdate" => {
+                Ok(Self::ModulesConfigureIncompatibleContractUpdate)
+            }
+            "ModulesConfigureInvalidRefWithoutChildren" => {
+                Ok(Self::ModulesConfigureInvalidRefWithoutChildren)
+            }
+            "ModulesConfigureInvalidRefTypeCollision" => {
+                Ok(Self::ModulesConfigureInvalidRefTypeCollision)
+            }
+            "ModulesConfigureInvalidRefTargetSquash" => {
+                Ok(Self::ModulesConfigureInvalidRefTargetSquash)
+            }
+            "ModulesConfigureInvalidRoleAncestor" => Ok(Self::ModulesConfigureInvalidRoleAncestor),
+            "ModulesConfigureInvalidUsesUpdate" => Ok(Self::ModulesConfigureInvalidUsesUpdate),
+            "ModulesConfigureMaxDepthExceeded" => Ok(Self::ModulesConfigureMaxDepthExceeded),
+            "ModulesConfigureRecordNestingDepthExceeded" => {
+                Ok(Self::ModulesConfigureRecordNestingDepthExceeded)
+            }
             "ModuleAuthorizationParentRecordNotFound" => {
                 Ok(Self::ModuleAuthorizationParentRecordNotFound)
             }
-            "ModuleAuthorizationCrossModuleParentNotFound" => {
-                Ok(Self::ModuleAuthorizationCrossModuleParentNotFound)
+            "ModuleAuthorizationRefNodeWriteNotAllowed" => {
+                Ok(Self::ModuleAuthorizationRefNodeWriteNotAllowed)
             }
+            "ModuleAuthorizationMissingRuleSet" => Ok(Self::ModuleAuthorizationMissingRuleSet),
             "ModuleAuthorizationParentlessIncorrectModulePath" => {
                 Ok(Self::ModuleAuthorizationParentlessIncorrectModulePath)
             }

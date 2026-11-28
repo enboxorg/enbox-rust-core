@@ -55,6 +55,7 @@ pub(crate) fn module_configure_filters(module: &str, latest_only: bool) -> Filte
     Filters::from(filters)
 }
 
+#[allow(dead_code)]
 pub(crate) fn latest_configure_filters() -> Filters {
     let mut filters = BTreeMap::new();
     filters.insert(
